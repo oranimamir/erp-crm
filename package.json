@@ -1,0 +1,10 @@
+{
+  "name": "erp-crm",
+  "private": true,
+  "scripts": {
+    "dev:server": "cd server && npx tsx watch src/index.ts",
+    "dev:client": "cd client && npx vite",
+    "build": "cd client && npm install && npx vite build && cd ../server && npm install",
+    "start": "cd server && npx tsx src/index.ts"
+  }
+}

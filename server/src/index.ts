@@ -1,0 +1,66 @@
+import express from 'express';
+import cors from 'cors';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { initializeDatabase } from './database.js';
+import { authenticateToken } from './middleware/auth.js';
+import authRoutes from './routes/auth.js';
+import customerRoutes from './routes/customers.js';
+import supplierRoutes from './routes/suppliers.js';
+import invoiceRoutes from './routes/invoices.js';
+import paymentRoutes from './routes/payments.js';
+import orderRoutes from './routes/orders.js';
+import shipmentRoutes from './routes/shipments.js';
+import dashboardRoutes from './routes/dashboard.js';
+import fileRoutes from './routes/files.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const app = express();
+const PORT = process.env.PORT || 3001;
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// Initialize database
+await initializeDatabase();
+
+// Public routes
+app.use('/api/auth', authRoutes);
+
+// Protected routes
+app.use('/api/customers', authenticateToken, customerRoutes);
+app.use('/api/suppliers', authenticateToken, supplierRoutes);
+app.use('/api/invoices', authenticateToken, invoiceRoutes);
+app.use('/api/payments', authenticateToken, paymentRoutes);
+app.use('/api/orders', authenticateToken, orderRoutes);
+app.use('/api/shipments', authenticateToken, shipmentRoutes);
+app.use('/api/dashboard', authenticateToken, dashboardRoutes);
+app.use('/api/files', authenticateToken, fileRoutes);
+
+// Serve built client in production
+const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');
+app.use(express.static(clientDist));
+
+// Error handling for multer
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    res.status(400).json({ error: 'File too large. Maximum size is 10MB.' });
+    return;
+  }
+  if (err.message?.includes('Only PDF')) {
+    res.status(400).json({ error: err.message });
+    return;
+  }
+  console.error(err);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
+// SPA fallback - serve index.html for non-API routes
+app.get('*', (_req, res) => {
+  res.sendFile(path.join(clientDist, 'index.html'));
+});
+
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+});
