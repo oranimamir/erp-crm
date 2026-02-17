@@ -237,7 +237,7 @@ export async function initializeDatabase() {
 
     CREATE TABLE IF NOT EXISTS status_history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      entity_type TEXT NOT NULL CHECK (entity_type IN ('invoice', 'order', 'shipment')),
+      entity_type TEXT NOT NULL CHECK (entity_type IN ('invoice', 'order', 'shipment', 'production')),
       entity_id INTEGER NOT NULL,
       old_status TEXT,
       new_status TEXT NOT NULL,
@@ -246,7 +246,84 @@ export async function initializeDatabase() {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (changed_by) REFERENCES users(id) ON DELETE SET NULL
     );
+
+    CREATE TABLE IF NOT EXISTS inventory_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      sku TEXT UNIQUE NOT NULL,
+      category TEXT NOT NULL CHECK (category IN ('raw_material', 'packaging', 'finished_product')),
+      quantity REAL NOT NULL DEFAULT 0,
+      unit TEXT NOT NULL DEFAULT 'pcs',
+      min_stock_level REAL NOT NULL DEFAULT 0,
+      supplier_id INTEGER,
+      unit_cost REAL NOT NULL DEFAULT 0,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS production_batches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      lot_number TEXT UNIQUE NOT NULL,
+      order_id INTEGER,
+      customer_id INTEGER,
+      product_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'new_order' CHECK (status IN ('new_order', 'stock_check', 'sufficient_stock', 'lot_issued', 'discussing_with_toller', 'supplying_toller', 'in_production', 'production_complete', 'sample_testing', 'to_warehousing', 'coa_received', 'delivered', 'cancelled')),
+      toller_supplier_id INTEGER,
+      ingredients_at_toller INTEGER NOT NULL DEFAULT 0,
+      quantity REAL NOT NULL DEFAULT 0,
+      unit TEXT NOT NULL DEFAULT 'kg',
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE SET NULL,
+      FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL,
+      FOREIGN KEY (toller_supplier_id) REFERENCES suppliers(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS wire_transfers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      invoice_id INTEGER NOT NULL,
+      amount REAL NOT NULL,
+      transfer_date TEXT NOT NULL,
+      bank_reference TEXT,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+      approved_by INTEGER,
+      approved_at TEXT,
+      rejection_reason TEXT,
+      file_path TEXT,
+      file_name TEXT,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE,
+      FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL
+    );
   `);
+
+  // Migrate status_history table to support 'production' entity_type
+  try {
+    const tableInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='status_history'").get() as any;
+    if (tableInfo?.sql && !tableInfo.sql.includes('production')) {
+      db.exec(`
+        ALTER TABLE status_history RENAME TO status_history_old;
+        CREATE TABLE status_history (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          entity_type TEXT NOT NULL CHECK (entity_type IN ('invoice', 'order', 'shipment', 'production')),
+          entity_id INTEGER NOT NULL,
+          old_status TEXT,
+          new_status TEXT NOT NULL,
+          changed_by INTEGER,
+          notes TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (changed_by) REFERENCES users(id) ON DELETE SET NULL
+        );
+        INSERT INTO status_history SELECT * FROM status_history_old;
+        DROP TABLE status_history_old;
+      `);
+    }
+  } catch (_) { /* table may not exist yet */ }
 
   // Seed admin user if not exists
   const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');

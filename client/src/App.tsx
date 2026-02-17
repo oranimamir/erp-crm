@@ -18,6 +18,9 @@ import OrderDetailPage from './pages/OrderDetailPage';
 import ShipmentsPage from './pages/ShipmentsPage';
 import ShipmentFormPage from './pages/ShipmentFormPage';
 import ShipmentDetailPage from './pages/ShipmentDetailPage';
+import InventoryPage from './pages/InventoryPage';
+import ProductionPage from './pages/ProductionPage';
+import AdminUsersPage from './pages/AdminUsersPage';
 import NotFoundPage from './pages/NotFoundPage';
 
 export default function App() {
@@ -46,6 +49,9 @@ export default function App() {
               <Route path="/shipments/new" element={<ShipmentFormPage />} />
               <Route path="/shipments/:id" element={<ShipmentDetailPage />} />
               <Route path="/shipments/:id/edit" element={<ShipmentFormPage />} />
+              <Route path="/inventory" element={<InventoryPage />} />
+              <Route path="/production" element={<ProductionPage />} />
+              <Route path="/admin/users" element={<AdminUsersPage />} />
               <Route path="*" element={<NotFoundPage />} />
             </Route>
           </Route>

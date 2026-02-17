@@ -57,4 +57,42 @@ router.get('/shipping-overview', (_req: Request, res: Response) => {
   res.json(shipments);
 });
 
+router.get('/monthly-payments', (_req: Request, res: Response) => {
+  // Last 12 months of payments grouped by month
+  const months = db.prepare(`
+    WITH RECURSIVE months(m) AS (
+      SELECT strftime('%Y-%m', 'now', '-11 months')
+      UNION ALL
+      SELECT strftime('%Y-%m', m || '-01', '+1 month') FROM months
+      WHERE m < strftime('%Y-%m', 'now')
+    )
+    SELECT
+      months.m as month,
+      COALESCE((
+        SELECT SUM(p.amount) FROM payments p
+        JOIN invoices i ON p.invoice_id = i.id
+        WHERE i.type = 'customer' AND strftime('%Y-%m', p.payment_date) = months.m
+      ), 0) as received,
+      COALESCE((
+        SELECT SUM(p.amount) FROM payments p
+        JOIN invoices i ON p.invoice_id = i.id
+        WHERE i.type = 'supplier' AND strftime('%Y-%m', p.payment_date) = months.m
+      ), 0) as paid_out
+    FROM months ORDER BY months.m
+  `).all();
+  res.json(months);
+});
+
+router.get('/in-transit', (_req: Request, res: Response) => {
+  const shipments = db.prepare(`
+    SELECT sh.*, c.name as customer_name, o.order_number
+    FROM shipments sh
+    LEFT JOIN customers c ON sh.customer_id = c.id
+    LEFT JOIN orders o ON sh.order_id = o.id
+    WHERE sh.type = 'customer' AND sh.status IN ('in_transit', 'out_for_delivery')
+    ORDER BY sh.estimated_delivery ASC
+  `).all();
+  res.json(shipments);
+});
+
 export default router;

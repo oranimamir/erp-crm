@@ -7,6 +7,8 @@ import Button from '../components/ui/Button';
 import Select from '../components/ui/Select';
 import Badge from '../components/ui/Badge';
 import StatusBadge from '../components/ui/StatusBadge';
+import Input from '../components/ui/Input';
+import Modal from '../components/ui/Modal';
 import {
   ArrowLeft,
   FileText,
@@ -21,6 +23,11 @@ import {
   Building,
   Hash,
   StickyNote,
+  Landmark,
+  Check,
+  XCircle,
+  Plus,
+  Upload,
 } from 'lucide-react';
 
 const statusOptions = [
@@ -43,6 +50,10 @@ export default function InvoiceDetailPage() {
   const [loading, setLoading] = useState(true);
   const [newStatus, setNewStatus] = useState('');
   const [updatingStatus, setUpdatingStatus] = useState(false);
+  const [showWireModal, setShowWireModal] = useState(false);
+  const [wireForm, setWireForm] = useState({ amount: '', transfer_date: '', bank_reference: '', notes: '' });
+  const [wireFile, setWireFile] = useState<File | null>(null);
+  const [wireSaving, setWireSaving] = useState(false);
 
   const fetchInvoice = () => {
     setLoading(true);
@@ -71,6 +82,45 @@ export default function InvoiceDetailPage() {
     } finally {
       setUpdatingStatus(false);
     }
+  };
+
+  const handleSubmitWire = async () => {
+    if (!wireForm.amount || !wireForm.transfer_date) { addToast('Amount and date are required', 'error'); return; }
+    setWireSaving(true);
+    try {
+      const formData = new FormData();
+      formData.append('amount', wireForm.amount);
+      formData.append('transfer_date', wireForm.transfer_date);
+      formData.append('bank_reference', wireForm.bank_reference);
+      formData.append('notes', wireForm.notes);
+      if (wireFile) formData.append('file', wireFile);
+      await api.post(`/invoices/${id}/wire-transfers`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      addToast('Wire transfer submitted', 'success');
+      setShowWireModal(false);
+      setWireForm({ amount: '', transfer_date: '', bank_reference: '', notes: '' });
+      setWireFile(null);
+      fetchInvoice();
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to submit', 'error');
+    } finally { setWireSaving(false); }
+  };
+
+  const handleApproveWire = async (transferId: number) => {
+    try {
+      await api.patch(`/invoices/${id}/wire-transfers/${transferId}/approve`, { mark_paid: true });
+      addToast('Wire transfer approved', 'success');
+      fetchInvoice();
+    } catch (err: any) { addToast(err.response?.data?.error || 'Failed to approve', 'error'); }
+  };
+
+  const handleRejectWire = async (transferId: number) => {
+    const reason = prompt('Rejection reason:');
+    if (reason === null) return;
+    try {
+      await api.patch(`/invoices/${id}/wire-transfers/${transferId}/reject`, { rejection_reason: reason });
+      addToast('Wire transfer rejected', 'success');
+      fetchInvoice();
+    } catch (err: any) { addToast(err.response?.data?.error || 'Failed to reject', 'error'); }
   };
 
   const formatDate = (dateStr: string) => {
@@ -108,6 +158,7 @@ export default function InvoiceDetailPage() {
 
   const payments: any[] = invoice.payments || [];
   const statusHistory: any[] = invoice.status_history || [];
+  const wireTransfers: any[] = invoice.wire_transfers || [];
 
   return (
     <div className="space-y-6">
@@ -256,6 +307,53 @@ export default function InvoiceDetailPage() {
           )}
         </Card>
 
+        {/* Wire Transfers Section */}
+        <Card>
+          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Landmark size={16} className="text-gray-400" />
+              <h2 className="font-semibold text-gray-900">Wire Transfers ({wireTransfers.length})</h2>
+            </div>
+            <Button size="sm" onClick={() => { setWireForm({ amount: String(invoice.amount || ''), transfer_date: new Date().toISOString().split('T')[0], bank_reference: '', notes: '' }); setWireFile(null); setShowWireModal(true); }}>
+              <Plus size={14} /> Submit Transfer
+            </Button>
+          </div>
+          {wireTransfers.length === 0 ? (
+            <p className="px-5 py-8 text-center text-sm text-gray-500">No wire transfers</p>
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {wireTransfers.map((wt: any) => (
+                <div key={wt.id} className="px-5 py-4">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-medium text-gray-900">{formatAmount(wt.amount, invoice.currency)}</span>
+                    <StatusBadge status={wt.status} />
+                  </div>
+                  <div className="flex items-center gap-3 text-xs text-gray-500 mb-1">
+                    <span>{formatDate(wt.transfer_date)}</span>
+                    {wt.bank_reference && <span>Ref: {wt.bank_reference}</span>}
+                    {wt.approved_by_name && <span>By: {wt.approved_by_name}</span>}
+                  </div>
+                  {wt.rejection_reason && <p className="text-xs text-red-600 mb-1">Reason: {wt.rejection_reason}</p>}
+                  {wt.notes && <p className="text-xs text-gray-500 mb-1">{wt.notes}</p>}
+                  <div className="flex items-center gap-2 mt-2">
+                    {wt.file_path && (
+                      <a href={`/api/files/wire-transfers/${wt.file_path}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 font-medium">
+                        <Download size={12} /> Download
+                      </a>
+                    )}
+                    {wt.status === 'pending' && (
+                      <>
+                        <button onClick={() => handleApproveWire(wt.id)} className="inline-flex items-center gap-1 text-xs text-green-600 hover:text-green-700 font-medium"><Check size={12} /> Approve</button>
+                        <button onClick={() => handleRejectWire(wt.id)} className="inline-flex items-center gap-1 text-xs text-red-600 hover:text-red-700 font-medium"><XCircle size={12} /> Reject</button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+
         {/* Status History Section */}
         <Card>
           <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
@@ -300,6 +398,29 @@ export default function InvoiceDetailPage() {
           )}
         </Card>
       </div>
+
+      {/* Wire Transfer Modal */}
+      <Modal open={showWireModal} onClose={() => setShowWireModal(false)} title="Submit Wire Transfer" size="md">
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <Input label="Amount *" type="number" step="0.01" value={wireForm.amount} onChange={e => setWireForm({ ...wireForm, amount: e.target.value })} />
+            <Input label="Transfer Date *" type="date" value={wireForm.transfer_date} onChange={e => setWireForm({ ...wireForm, transfer_date: e.target.value })} />
+          </div>
+          <Input label="Bank Reference" value={wireForm.bank_reference} onChange={e => setWireForm({ ...wireForm, bank_reference: e.target.value })} />
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-gray-700">Proof of Transfer</label>
+            <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" onChange={e => setWireFile(e.target.files?.[0] || null)} className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100" />
+          </div>
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-gray-700">Notes</label>
+            <textarea value={wireForm.notes} onChange={e => setWireForm({ ...wireForm, notes: e.target.value })} rows={2} className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="secondary" onClick={() => setShowWireModal(false)}>Cancel</Button>
+            <Button onClick={handleSubmitWire} disabled={wireSaving}>{wireSaving ? 'Submitting...' : 'Submit'}</Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

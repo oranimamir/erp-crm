@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import api from '../lib/api';
 import Card from '../components/ui/Card';
 import StatusBadge from '../components/ui/StatusBadge';
-import { Users, Truck, FileText, ShoppingCart, Package, DollarSign, TrendingUp, Clock } from 'lucide-react';
+import { Users, Truck, FileText, ShoppingCart, Package, DollarSign, TrendingUp, Clock, BarChart3, Navigation } from 'lucide-react';
 
 interface Stats {
   customers: number;
@@ -22,6 +22,8 @@ export default function DashboardPage() {
   const [recentOrders, setRecentOrders] = useState<any[]>([]);
   const [pendingInvoices, setPendingInvoices] = useState<any[]>([]);
   const [shippingOverview, setShippingOverview] = useState<any[]>([]);
+  const [monthlyPayments, setMonthlyPayments] = useState<any[]>([]);
+  const [inTransit, setInTransit] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -30,11 +32,15 @@ export default function DashboardPage() {
       api.get('/dashboard/recent-orders'),
       api.get('/dashboard/pending-invoices'),
       api.get('/dashboard/shipping-overview'),
-    ]).then(([s, o, i, sh]) => {
+      api.get('/dashboard/monthly-payments'),
+      api.get('/dashboard/in-transit'),
+    ]).then(([s, o, i, sh, mp, it]) => {
       setStats(s.data);
       setRecentOrders(o.data);
       setPendingInvoices(i.data);
       setShippingOverview(sh.data);
+      setMonthlyPayments(mp.data);
+      setInTransit(it.data);
     }).finally(() => setLoading(false));
   }, []);
 
@@ -135,6 +141,97 @@ export default function DashboardPage() {
           </div>
         </Card>
       </div>
+
+      {/* Monthly Payments Chart */}
+      <Card>
+        <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
+          <BarChart3 size={16} className="text-gray-400" />
+          <h2 className="font-semibold text-gray-900">Monthly Payments (Last 12 Months)</h2>
+        </div>
+        <div className="p-5">
+          {monthlyPayments.length === 0 ? (
+            <p className="text-center text-sm text-gray-500 py-8">No payment data available</p>
+          ) : (() => {
+            const maxVal = Math.max(...monthlyPayments.map(m => Math.max(m.received, m.paid_out)), 1);
+            return (
+              <div className="space-y-2">
+                <div className="flex items-center gap-4 text-xs text-gray-500 mb-4">
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-500 inline-block" /> Received</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-400 inline-block" /> Paid Out</span>
+                </div>
+                <div className="flex items-end gap-1" style={{ height: '200px' }}>
+                  {monthlyPayments.map((m: any) => (
+                    <div key={m.month} className="flex-1 flex flex-col items-center gap-1 h-full justify-end">
+                      <div className="w-full flex flex-col items-center gap-0.5 flex-1 justify-end">
+                        {m.received > 0 && (
+                          <div
+                            className="w-full max-w-[24px] bg-green-500 rounded-t"
+                            style={{ height: `${Math.max((m.received / maxVal) * 160, 2)}px` }}
+                            title={`Received: $${m.received.toLocaleString()}`}
+                          />
+                        )}
+                        {m.paid_out > 0 && (
+                          <div
+                            className="w-full max-w-[24px] bg-red-400 rounded-t"
+                            style={{ height: `${Math.max((m.paid_out / maxVal) * 160, 2)}px` }}
+                            title={`Paid Out: $${m.paid_out.toLocaleString()}`}
+                          />
+                        )}
+                        {m.received === 0 && m.paid_out === 0 && (
+                          <div className="w-full max-w-[24px] bg-gray-200 rounded-t" style={{ height: '2px' }} />
+                        )}
+                      </div>
+                      <span className="text-[10px] text-gray-500 whitespace-nowrap">
+                        {new Date(m.month + '-01').toLocaleDateString(undefined, { month: 'short' })}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      </Card>
+
+      {/* In Transit to Customers */}
+      <Card>
+        <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
+          <Navigation size={16} className="text-gray-400" />
+          <h2 className="font-semibold text-gray-900">In Transit to Customers ({inTransit.length})</h2>
+        </div>
+        {inTransit.length === 0 ? (
+          <p className="px-5 py-8 text-center text-sm text-gray-500">No shipments in transit</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100 bg-gray-50">
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Order #</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Customer</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Carrier</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Tracking #</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Status</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">ETA</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {inTransit.map((sh: any) => (
+                  <tr key={sh.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 font-medium text-gray-900">
+                      {sh.order_number ? <Link to={`/orders/${sh.order_id}`} className="text-primary-600 hover:text-primary-700">{sh.order_number}</Link> : '-'}
+                    </td>
+                    <td className="px-4 py-3 text-gray-600">{sh.customer_name || '-'}</td>
+                    <td className="px-4 py-3 text-gray-600">{sh.carrier || '-'}</td>
+                    <td className="px-4 py-3 text-gray-600 font-mono text-xs">{sh.tracking_number || '-'}</td>
+                    <td className="px-4 py-3"><StatusBadge status={sh.status} /></td>
+                    <td className="px-4 py-3 text-gray-600">{sh.estimated_delivery ? new Date(sh.estimated_delivery).toLocaleDateString() : '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
     </div>
   );
 }

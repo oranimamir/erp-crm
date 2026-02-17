@@ -25,5 +25,6 @@ function serveFile(subfolder: string) {
 
 router.get('/invoices/:filename', serveFile('invoices'));
 router.get('/payments/:filename', serveFile('payments'));
+router.get('/wire-transfers/:filename', serveFile('wire-transfers'));
 
 export default router;

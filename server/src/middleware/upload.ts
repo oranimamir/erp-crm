@@ -41,3 +41,9 @@ export const uploadPayment = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter,
 });
+
+export const uploadWireTransfer = multer({
+  storage: createStorage('wire-transfers'),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter,
+});

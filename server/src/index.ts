@@ -13,6 +13,9 @@ import orderRoutes from './routes/orders.js';
 import shipmentRoutes from './routes/shipments.js';
 import dashboardRoutes from './routes/dashboard.js';
 import fileRoutes from './routes/files.js';
+import userRoutes from './routes/users.js';
+import inventoryRoutes from './routes/inventory.js';
+import productionRoutes from './routes/production.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -37,6 +40,9 @@ app.use('/api/orders', authenticateToken, orderRoutes);
 app.use('/api/shipments', authenticateToken, shipmentRoutes);
 app.use('/api/dashboard', authenticateToken, dashboardRoutes);
 app.use('/api/files', authenticateToken, fileRoutes);
+app.use('/api/users', authenticateToken, userRoutes);
+app.use('/api/inventory', authenticateToken, inventoryRoutes);
+app.use('/api/production', authenticateToken, productionRoutes);
 
 // Serve built client in production
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');

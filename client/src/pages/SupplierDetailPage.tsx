@@ -4,7 +4,7 @@ import api from '../lib/api';
 import Card from '../components/ui/Card';
 import StatusBadge from '../components/ui/StatusBadge';
 import Badge from '../components/ui/Badge';
-import { ArrowLeft, Mail, Phone, MapPin, Tag, FileText, ShoppingCart, Package } from 'lucide-react';
+import { ArrowLeft, Mail, Phone, MapPin, Tag, FileText, ShoppingCart, Package, DollarSign } from 'lucide-react';
 
 const categoryColors: Record<string, 'blue' | 'purple' | 'orange' | 'green'> = {
   logistics: 'blue', blenders: 'purple', raw_materials: 'orange', shipping: 'green',
@@ -54,6 +54,40 @@ export default function SupplierDetailPage() {
         </div>
         {supplier.notes && <p className="mt-4 text-sm text-gray-600 bg-gray-50 rounded-lg p-3">{supplier.notes}</p>}
       </Card>
+
+      {/* Financial Summary */}
+      {invoices.length > 0 && (() => {
+        const totalCount = invoices.length;
+        const totalAmount = invoices.reduce((sum: number, inv: any) => sum + (inv.amount || 0), 0);
+        const paidAmount = invoices.filter((inv: any) => inv.status === 'paid').reduce((sum: number, inv: any) => sum + (inv.amount || 0), 0);
+        const outstanding = totalAmount - paidAmount;
+        return (
+          <Card className="p-5">
+            <div className="flex items-center gap-2 mb-4">
+              <DollarSign size={16} className="text-gray-400" />
+              <h2 className="font-semibold text-gray-900">Financial Summary</h2>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="bg-blue-50 rounded-lg p-3 text-center">
+                <p className="text-xs text-blue-600 font-medium">Total Invoices</p>
+                <p className="text-xl font-bold text-blue-700">{totalCount}</p>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3 text-center">
+                <p className="text-xs text-gray-600 font-medium">Total Amount</p>
+                <p className="text-xl font-bold text-gray-700">${totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+              </div>
+              <div className="bg-green-50 rounded-lg p-3 text-center">
+                <p className="text-xs text-green-600 font-medium">Paid</p>
+                <p className="text-xl font-bold text-green-700">${paidAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+              </div>
+              <div className="bg-yellow-50 rounded-lg p-3 text-center">
+                <p className="text-xs text-yellow-600 font-medium">Outstanding</p>
+                <p className="text-xl font-bold text-yellow-700">${outstanding.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+              </div>
+            </div>
+          </Card>
+        );
+      })()}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card>

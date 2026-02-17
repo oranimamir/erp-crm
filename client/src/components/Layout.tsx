@@ -3,7 +3,7 @@ import { Outlet, NavLink } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import {
   LayoutDashboard, Users, Truck, FileText, ShoppingCart, Package,
-  LogOut, Menu, X, ChevronDown
+  LogOut, Menu, X, ChevronDown, Shield, Warehouse, Factory
 } from 'lucide-react';
 
 const navItems = [
@@ -12,7 +12,9 @@ const navItems = [
   { to: '/suppliers', icon: Truck, label: 'Suppliers' },
   { to: '/invoices', icon: FileText, label: 'Invoices' },
   { to: '/orders', icon: ShoppingCart, label: 'Orders' },
+  { to: '/production', icon: Factory, label: 'Production' },
   { to: '/shipments', icon: Package, label: 'Shipping' },
+  { to: '/inventory', icon: Warehouse, label: 'Inventory' },
 ];
 
 export default function Layout() {
@@ -48,6 +50,20 @@ export default function Layout() {
               {item.label}
             </NavLink>
           ))}
+          {user?.role === 'admin' && (
+            <NavLink
+              to="/admin/users"
+              onClick={() => setSidebarOpen(false)}
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  isActive ? 'bg-primary-600 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+                }`
+              }
+            >
+              <Shield size={20} />
+              User Management
+            </NavLink>
+          )}
         </nav>
       </aside>
 
