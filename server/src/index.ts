@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
@@ -8,6 +9,7 @@ import authRoutes from './routes/auth.js';
 import customerRoutes from './routes/customers.js';
 import supplierRoutes from './routes/suppliers.js';
 import invoiceRoutes from './routes/invoices.js';
+import invoiceScanRoutes from './routes/invoice-scan.js';
 import paymentRoutes from './routes/payments.js';
 import orderRoutes from './routes/orders.js';
 import shipmentRoutes from './routes/shipments.js';
@@ -34,6 +36,7 @@ app.use('/api/auth', authRoutes);
 // Protected routes
 app.use('/api/customers', authenticateToken, customerRoutes);
 app.use('/api/suppliers', authenticateToken, supplierRoutes);
+app.use('/api/invoices/scan', authenticateToken, invoiceScanRoutes);
 app.use('/api/invoices', authenticateToken, invoiceRoutes);
 app.use('/api/payments', authenticateToken, paymentRoutes);
 app.use('/api/orders', authenticateToken, orderRoutes);

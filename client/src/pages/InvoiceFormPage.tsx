@@ -7,7 +7,7 @@ import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
 import FileUpload from '../components/ui/FileUpload';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Loader2 } from 'lucide-react';
 
 const typeOptions = [
   { value: 'customer', label: 'Customer' },
@@ -65,6 +65,7 @@ export default function InvoiceFormPage() {
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [scanning, setScanning] = useState(false);
 
   useEffect(() => {
     const loadData = async () => {
@@ -107,6 +108,46 @@ export default function InvoiceFormPage() {
 
   const updateField = (field: keyof InvoiceForm, value: string) => {
     setForm(prev => ({ ...prev, [field]: value }));
+  };
+
+  const scanFile = async (uploadedFile: File) => {
+    setScanning(true);
+    try {
+      const scanData = new FormData();
+      scanData.append('file', uploadedFile);
+      const res = await api.post('/invoices/scan', scanData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      const data = res.data;
+
+      setForm(prev => {
+        const updated = { ...prev };
+        if (data.invoice_number && !prev.invoice_number) updated.invoice_number = data.invoice_number;
+        if (data.amount != null && !prev.amount) updated.amount = String(data.amount);
+        if (data.currency && prev.currency === 'USD') updated.currency = data.currency;
+        if (data.due_date && !prev.due_date) updated.due_date = data.due_date;
+        if (data.notes && !prev.notes) updated.notes = data.notes;
+        if (data.type) {
+          updated.type = data.type;
+          if (data.customer_id) updated.customer_id = String(data.customer_id);
+          if (data.supplier_id) updated.supplier_id = String(data.supplier_id);
+        }
+        return updated;
+      });
+
+      addToast('Invoice scanned and fields auto-filled', 'success');
+    } catch {
+      // Silently ignore scan errors - user can fill fields manually
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const handleFileSelect = (selectedFile: File | null) => {
+    setFile(selectedFile);
+    if (selectedFile && !isEdit) {
+      scanFile(selectedFile);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -271,9 +312,15 @@ export default function InvoiceFormPage() {
           <div className="space-y-1">
             <label className="block text-sm font-medium text-gray-700">Invoice File</label>
             <FileUpload
-              onFileSelect={setFile}
+              onFileSelect={handleFileSelect}
               currentFile={currentFile}
             />
+            {scanning && (
+              <div className="flex items-center gap-2 text-sm text-primary-600 mt-2">
+                <Loader2 size={16} className="animate-spin" />
+                Scanning invoice with AI...
+              </div>
+            )}
           </div>
 
           <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
