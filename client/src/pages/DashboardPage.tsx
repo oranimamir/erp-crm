@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import api from '../lib/api';
 import Card from '../components/ui/Card';
 import StatusBadge from '../components/ui/StatusBadge';
-import { Users, Truck, FileText, ShoppingCart, Package, DollarSign, TrendingUp, Clock, BarChart3, Navigation } from 'lucide-react';
+import { Users, Truck, FileText, ShoppingCart, Package, DollarSign, TrendingUp, Clock, BarChart3, Navigation, AlertTriangle } from 'lucide-react';
 
 interface Stats {
   customers: number;
@@ -24,6 +24,7 @@ export default function DashboardPage() {
   const [shippingOverview, setShippingOverview] = useState<any[]>([]);
   const [monthlyPayments, setMonthlyPayments] = useState<any[]>([]);
   const [inTransit, setInTransit] = useState<any[]>([]);
+  const [overdueInvoices, setOverdueInvoices] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -34,13 +35,15 @@ export default function DashboardPage() {
       api.get('/dashboard/shipping-overview'),
       api.get('/dashboard/monthly-payments'),
       api.get('/dashboard/in-transit'),
-    ]).then(([s, o, i, sh, mp, it]) => {
+      api.get('/dashboard/overdue-invoices'),
+    ]).then(([s, o, i, sh, mp, it, ov]) => {
       setStats(s.data);
       setRecentOrders(o.data);
       setPendingInvoices(i.data);
       setShippingOverview(sh.data);
       setMonthlyPayments(mp.data);
       setInTransit(it.data);
+      setOverdueInvoices(ov.data);
     }).finally(() => setLoading(false));
   }, []);
 
@@ -58,6 +61,38 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+
+      {overdueInvoices.length > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <AlertTriangle size={20} className="text-red-600" />
+            <h2 className="text-lg font-semibold text-red-800">
+              {overdueInvoices.length} Overdue Invoice{overdueInvoices.length !== 1 ? 's' : ''}
+            </h2>
+          </div>
+          <div className="divide-y divide-red-100">
+            {overdueInvoices.map((inv: any) => {
+              const daysOverdue = Math.floor((Date.now() - new Date(inv.due_date).getTime()) / (1000 * 60 * 60 * 24));
+              return (
+                <Link key={inv.id} to={`/invoices/${inv.id}`} className="flex items-center justify-between py-2 hover:bg-red-100 rounded px-2 -mx-2">
+                  <div>
+                    <span className="text-sm font-medium text-red-900">{inv.invoice_number}</span>
+                    <span className="text-sm text-red-700 ml-2">{inv.customer_name || inv.supplier_name}</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm font-medium text-red-900">
+                      ${inv.amount?.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    </span>
+                    <span className="text-xs text-red-600 font-medium bg-red-100 px-2 py-0.5 rounded-full">
+                      {daysOverdue} day{daysOverdue !== 1 ? 's' : ''} overdue
+                    </span>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {statCards.map(card => (

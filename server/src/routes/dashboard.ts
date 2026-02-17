@@ -95,4 +95,16 @@ router.get('/in-transit', (_req: Request, res: Response) => {
   res.json(shipments);
 });
 
+router.get('/overdue-invoices', (_req: Request, res: Response) => {
+  const invoices = db.prepare(`
+    SELECT i.*, c.name as customer_name, s.name as supplier_name
+    FROM invoices i
+    LEFT JOIN customers c ON i.customer_id = c.id
+    LEFT JOIN suppliers s ON i.supplier_id = s.id
+    WHERE i.due_date IS NOT NULL AND i.due_date < date('now') AND i.status NOT IN ('paid', 'cancelled')
+    ORDER BY i.due_date ASC
+  `).all();
+  res.json(invoices);
+});
+
 export default router;

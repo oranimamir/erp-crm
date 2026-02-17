@@ -26,6 +26,7 @@ const EXTRACTION_PROMPT = `You are an invoice data extraction assistant. Analyze
   "invoice_number": "string or null",
   "amount": "number or null (total amount due)",
   "currency": "string or null (3-letter ISO code like USD, EUR, GBP)",
+  "invoice_date": "string or null (YYYY-MM-DD format, the date the invoice was issued)",
   "due_date": "string or null (YYYY-MM-DD format)",
   "vendor_or_customer_name": "string or null (the company/person who issued or received the invoice)",
   "notes": "string or null (brief summary of line items or purpose)"
@@ -57,9 +58,15 @@ async function extractWithClaude(file: Express.Multer.File): Promise<Record<stri
   let response;
 
   if (isPdf) {
-    const parser = new PDFParse({ data: new Uint8Array(file.buffer) });
-    const textResult = await parser.getText();
-    const text = textResult.text.slice(0, 8000);
+    let text = '';
+    try {
+      const parser = new PDFParse({ data: new Uint8Array(file.buffer) });
+      const textResult = await parser.getText();
+      text = textResult.text.slice(0, 8000);
+    } catch (pdfErr) {
+      console.warn('PDF text extraction failed, sending minimal info to Claude:', pdfErr);
+      text = `[PDF file: ${file.originalname}, size: ${file.size} bytes. Text extraction failed. Please extract what you can.]`;
+    }
 
     response = await client.messages.create({
       model: 'claude-sonnet-4-5-20250929',
@@ -148,6 +155,7 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
       invoice_number: extracted.invoice_number || null,
       amount: extracted.amount != null ? Number(extracted.amount) : null,
       currency: extracted.currency || null,
+      invoice_date: extracted.invoice_date || null,
       due_date: extracted.due_date || null,
       notes: extracted.notes || null,
       vendor_or_customer_name: extracted.vendor_or_customer_name || null,

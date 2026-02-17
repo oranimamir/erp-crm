@@ -325,6 +325,10 @@ export async function initializeDatabase() {
     }
   } catch (_) { /* table may not exist yet */ }
 
+  // Add invoice_date and payment_date columns to invoices
+  try { db.exec(`ALTER TABLE invoices ADD COLUMN invoice_date TEXT`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE invoices ADD COLUMN payment_date TEXT`); } catch (_) { /* column may already exist */ }
+
   // Seed admin user if not exists
   const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');
   if (!adminExists) {

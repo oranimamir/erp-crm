@@ -210,8 +210,18 @@ export default function InvoiceDetailPage() {
           </div>
           <div className="flex items-center gap-2 text-gray-600">
             <Calendar size={16} className="text-gray-400 shrink-0" />
+            <span className="font-medium text-gray-500">Invoice Date:</span>
+            <span>{formatDate(invoice.invoice_date)}</span>
+          </div>
+          <div className="flex items-center gap-2 text-gray-600">
+            <Calendar size={16} className="text-gray-400 shrink-0" />
             <span className="font-medium text-gray-500">Due Date:</span>
             <span>{formatDate(invoice.due_date)}</span>
+          </div>
+          <div className="flex items-center gap-2 text-gray-600">
+            <Calendar size={16} className="text-gray-400 shrink-0" />
+            <span className="font-medium text-gray-500">Payment Date:</span>
+            <span>{formatDate(invoice.payment_date)}</span>
           </div>
         </div>
 

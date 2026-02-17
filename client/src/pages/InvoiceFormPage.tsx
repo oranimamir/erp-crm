@@ -36,7 +36,9 @@ interface InvoiceForm {
   amount: string;
   currency: string;
   status: string;
+  invoice_date: string;
   due_date: string;
+  payment_date: string;
   notes: string;
 }
 
@@ -48,7 +50,9 @@ const emptyForm: InvoiceForm = {
   amount: '',
   currency: 'USD',
   status: 'draft',
+  invoice_date: '',
   due_date: '',
+  payment_date: '',
   notes: '',
 };
 
@@ -89,7 +93,9 @@ export default function InvoiceFormPage() {
             amount: inv.amount != null ? String(inv.amount) : '',
             currency: inv.currency || 'USD',
             status: inv.status || 'draft',
+            invoice_date: inv.invoice_date ? inv.invoice_date.slice(0, 10) : '',
             due_date: inv.due_date ? inv.due_date.slice(0, 10) : '',
+            payment_date: inv.payment_date ? inv.payment_date.slice(0, 10) : '',
             notes: inv.notes || '',
           });
           if (inv.file_path) {
@@ -125,6 +131,7 @@ export default function InvoiceFormPage() {
         if (data.invoice_number && !prev.invoice_number) updated.invoice_number = data.invoice_number;
         if (data.amount != null && !prev.amount) updated.amount = String(data.amount);
         if (data.currency && prev.currency === 'USD') updated.currency = data.currency;
+        if (data.invoice_date && !prev.invoice_date) updated.invoice_date = data.invoice_date;
         if (data.due_date && !prev.due_date) updated.due_date = data.due_date;
         if (data.notes && !prev.notes) updated.notes = data.notes;
         if (data.type) {
@@ -137,7 +144,7 @@ export default function InvoiceFormPage() {
 
       addToast('Invoice scanned and fields auto-filled', 'success');
     } catch {
-      // Silently ignore scan errors - user can fill fields manually
+      addToast('Could not auto-scan invoice. You can fill in the fields manually.', 'warning');
     } finally {
       setScanning(false);
     }
@@ -183,7 +190,9 @@ export default function InvoiceFormPage() {
       formData.append('amount', form.amount);
       formData.append('currency', form.currency);
       formData.append('status', form.status);
+      if (form.invoice_date) formData.append('invoice_date', form.invoice_date);
       if (form.due_date) formData.append('due_date', form.due_date);
+      if (form.payment_date) formData.append('payment_date', form.payment_date);
       if (form.notes) formData.append('notes', form.notes);
       if (file) formData.append('file', file);
 
@@ -274,7 +283,7 @@ export default function InvoiceFormPage() {
             />
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Input
               label="Amount *"
               type="number"
@@ -290,11 +299,26 @@ export default function InvoiceFormPage() {
               onChange={e => updateField('currency', e.target.value)}
               options={currencyOptions}
             />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Input
+              label="Invoice Date"
+              type="date"
+              value={form.invoice_date}
+              onChange={e => updateField('invoice_date', e.target.value)}
+            />
             <Input
               label="Due Date"
               type="date"
               value={form.due_date}
               onChange={e => updateField('due_date', e.target.value)}
+            />
+            <Input
+              label="Payment Date"
+              type="date"
+              value={form.payment_date}
+              onChange={e => updateField('payment_date', e.target.value)}
             />
           </div>
 
