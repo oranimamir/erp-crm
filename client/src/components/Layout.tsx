@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Outlet, NavLink } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  LayoutDashboard, Users, Truck, FileText, ShoppingCart, Package,
+  LayoutDashboard, Users, Truck, FileText, ShoppingCart,
   LogOut, Menu, X, ChevronDown, Shield, Warehouse, Factory
 } from 'lucide-react';
 
@@ -13,7 +13,6 @@ const navItems = [
   { to: '/invoices', icon: FileText, label: 'Invoices' },
   { to: '/orders', icon: ShoppingCart, label: 'Orders' },
   { to: '/production', icon: Factory, label: 'Production' },
-  { to: '/shipments', icon: Package, label: 'Shipping' },
   { to: '/inventory', icon: Warehouse, label: 'Inventory' },
 ];
 
