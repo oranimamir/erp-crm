@@ -1,5 +1,7 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
+import { Resend } from 'resend';
 import db from '../database.js';
 
 const router = Router();
@@ -124,6 +126,92 @@ router.delete('/:id', requireAdmin, (req: Request, res: Response) => {
     return;
   }
   res.json({ message: 'User deleted' });
+});
+
+// Invite user via email
+router.post('/invite', requireAdmin, async (req: Request, res: Response) => {
+  const { email, display_name, role } = req.body;
+
+  if (!email) {
+    res.status(400).json({ error: 'Email is required' });
+    return;
+  }
+  if (role && !['admin', 'user'].includes(role)) {
+    res.status(400).json({ error: 'Role must be admin or user' });
+    return;
+  }
+
+  // Check for existing pending invite
+  const existingInvite = db.prepare(
+    'SELECT id FROM user_invitations WHERE email = ? AND accepted_at IS NULL AND expires_at > datetime(?)'
+  ).get(email, new Date().toISOString());
+  if (existingInvite) {
+    res.status(409).json({ error: 'A pending invitation already exists for this email' });
+    return;
+  }
+
+  const token = crypto.randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(); // 7 days
+
+  const result = db.prepare(
+    'INSERT INTO user_invitations (email, display_name, role, token, invited_by, expires_at) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(email, display_name || null, role || 'user', token, req.user!.userId, expiresAt);
+
+  const appUrl = process.env.APP_URL || `http://localhost:${process.env.PORT || 3001}`;
+  const inviteLink = `${appUrl}/accept-invite?token=${token}`;
+
+  // Send email via Resend
+  if (process.env.RESEND_API_KEY) {
+    try {
+      const resend = new Resend(process.env.RESEND_API_KEY);
+      await resend.emails.send({
+        from: process.env.RESEND_FROM_EMAIL || 'ERP System <onboarding@resend.dev>',
+        to: email,
+        subject: 'You\'ve been invited to the ERP/CRM System',
+        html: `
+          <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
+            <h2>You're Invited!</h2>
+            <p>${display_name ? `Hi ${display_name},` : 'Hi,'}</p>
+            <p>You've been invited to join the ERP/CRM System. Click the link below to set up your account:</p>
+            <p style="margin: 24px 0;">
+              <a href="${inviteLink}" style="background: #4f46e5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: 500;">
+                Accept Invitation
+              </a>
+            </p>
+            <p style="color: #6b7280; font-size: 14px;">This invitation expires in 7 days.</p>
+            <p style="color: #6b7280; font-size: 14px;">If you didn't expect this invitation, you can ignore this email.</p>
+          </div>
+        `,
+      });
+    } catch (emailErr: any) {
+      console.error('Failed to send invite email:', emailErr.message || emailErr);
+      // Don't fail the invite — it's created, admin can share the link manually
+    }
+  }
+
+  const invitation = db.prepare('SELECT * FROM user_invitations WHERE id = ?').get(result.lastInsertRowid);
+  res.status(201).json({ ...invitation, invite_link: inviteLink });
+});
+
+// List pending invitations
+router.get('/invitations', requireAdmin, (_req: Request, res: Response) => {
+  const invitations = db.prepare(
+    `SELECT ui.*, u.display_name as invited_by_name
+     FROM user_invitations ui
+     LEFT JOIN users u ON ui.invited_by = u.id
+     ORDER BY ui.created_at DESC`
+  ).all();
+  res.json(invitations);
+});
+
+// Revoke invitation
+router.delete('/invitations/:id', requireAdmin, (req: Request, res: Response) => {
+  const result = db.prepare('DELETE FROM user_invitations WHERE id = ? AND accepted_at IS NULL').run(Number(req.params.id));
+  if (result.changes === 0) {
+    res.status(404).json({ error: 'Invitation not found or already accepted' });
+    return;
+  }
+  res.json({ message: 'Invitation revoked' });
 });
 
 export default router;

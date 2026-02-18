@@ -13,7 +13,7 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
-import { Plus, Users, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Users, Pencil, Trash2, Mail, Clock, XCircle, Copy, Check } from 'lucide-react';
 
 const roleOptions = [
   { value: 'user', label: 'User' },
@@ -36,6 +36,11 @@ export default function AdminUsersPage() {
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [form, setForm] = useState({ username: '', display_name: '', password: '', role: 'user' });
   const [saving, setSaving] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteForm, setInviteForm] = useState({ email: '', display_name: '', role: 'user' });
+  const [inviteSaving, setInviteSaving] = useState(false);
+  const [invitations, setInvitations] = useState<any[]>([]);
+  const [inviteLink, setInviteLink] = useState<string | null>(null);
 
   // Admin guard
   useEffect(() => {
@@ -52,7 +57,13 @@ export default function AdminUsersPage() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchUsers(); }, [page, search, roleFilter]);
+  const fetchInvitations = () => {
+    api.get('/users/invitations')
+      .then(res => setInvitations(res.data))
+      .catch(() => {});
+  };
+
+  useEffect(() => { fetchUsers(); fetchInvitations(); }, [page, search, roleFilter]);
 
   const openCreate = () => {
     setEditing(null);
@@ -103,13 +114,46 @@ export default function AdminUsersPage() {
     setDeleteId(null);
   };
 
+  const handleInvite = async () => {
+    if (!inviteForm.email.trim()) { addToast('Email is required', 'error'); return; }
+    setInviteSaving(true);
+    try {
+      const res = await api.post('/users/invite', inviteForm);
+      addToast('Invitation sent', 'success');
+      setInviteLink(res.data.invite_link);
+      fetchInvitations();
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to send invite', 'error');
+    } finally {
+      setInviteSaving(false);
+    }
+  };
+
+  const handleRevokeInvite = async (inviteId: number) => {
+    try {
+      await api.delete(`/users/invitations/${inviteId}`);
+      addToast('Invitation revoked', 'success');
+      fetchInvitations();
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to revoke', 'error');
+    }
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    addToast('Link copied to clipboard', 'success');
+  };
+
   if (currentUser?.role !== 'admin') return null;
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">User Management</h1>
-        <Button onClick={openCreate}><Plus size={16} /> Add User</Button>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" onClick={openCreate}><Plus size={16} /> Add User</Button>
+          <Button onClick={() => { setInviteForm({ email: '', display_name: '', role: 'user' }); setInviteLink(null); setShowInviteModal(true); }}><Mail size={16} /> Invite via Email</Button>
+        </div>
       </div>
 
       <Card>
@@ -194,6 +238,98 @@ export default function AdminUsersPage() {
       </Modal>
 
       <ConfirmDialog open={deleteId !== null} onClose={() => setDeleteId(null)} onConfirm={handleDelete} title="Delete User" message="Are you sure you want to delete this user? This action cannot be undone." confirmLabel="Delete" />
+
+      {/* Pending Invitations Section */}
+      {invitations.filter(i => !i.accepted_at).length > 0 && (
+        <Card>
+          <div className="p-4 border-b border-gray-100">
+            <div className="flex items-center gap-2">
+              <Clock size={16} className="text-gray-400" />
+              <h2 className="font-semibold text-gray-900">Pending Invitations ({invitations.filter(i => !i.accepted_at).length})</h2>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100 bg-gray-50">
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Email</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Name</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Role</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Invited</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Expires</th>
+                  <th className="text-right px-4 py-3 font-medium text-gray-600">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {invitations.filter(i => !i.accepted_at).map(inv => {
+                  const expired = new Date(inv.expires_at) < new Date();
+                  return (
+                    <tr key={inv.id} className={`hover:bg-gray-50 ${expired ? 'opacity-50' : ''}`}>
+                      <td className="px-4 py-3 font-medium text-gray-900">{inv.email}</td>
+                      <td className="px-4 py-3 text-gray-600">{inv.display_name || '-'}</td>
+                      <td className="px-4 py-3"><Badge variant={inv.role === 'admin' ? 'purple' : 'blue'}>{inv.role}</Badge></td>
+                      <td className="px-4 py-3 text-gray-600">{new Date(inv.created_at).toLocaleDateString()}</td>
+                      <td className="px-4 py-3 text-gray-600">
+                        {expired ? <span className="text-red-500 text-xs font-medium">Expired</span> : new Date(inv.expires_at).toLocaleDateString()}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center justify-end gap-1">
+                          <button onClick={() => handleRevokeInvite(inv.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded" title="Revoke"><XCircle size={16} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      {/* Invite User Modal */}
+      <Modal open={showInviteModal} onClose={() => setShowInviteModal(false)} title="Invite User via Email" size="lg">
+        <div className="space-y-4">
+          {inviteLink ? (
+            <div className="space-y-3">
+              <div className="bg-green-50 border border-green-200 text-green-700 text-sm rounded-lg px-4 py-3">
+                Invitation created! An email has been sent (if Resend is configured).
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-gray-700">Invite Link</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value={inviteLink}
+                    className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm bg-gray-50"
+                  />
+                  <button
+                    onClick={() => copyToClipboard(inviteLink)}
+                    className="p-2 text-gray-500 hover:text-primary-600 rounded-lg border border-gray-300 hover:border-primary-300"
+                    title="Copy link"
+                  >
+                    <Copy size={16} />
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500">You can share this link directly if email delivery fails.</p>
+              </div>
+              <div className="flex justify-end pt-2">
+                <Button onClick={() => setShowInviteModal(false)}>Done</Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <Input label="Email *" type="email" value={inviteForm.email} onChange={e => setInviteForm({ ...inviteForm, email: e.target.value })} placeholder="user@example.com" />
+              <Input label="Display Name" value={inviteForm.display_name} onChange={e => setInviteForm({ ...inviteForm, display_name: e.target.value })} placeholder="John Doe" />
+              <Select label="Role" value={inviteForm.role} onChange={e => setInviteForm({ ...inviteForm, role: e.target.value })} options={roleOptions} />
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="secondary" onClick={() => setShowInviteModal(false)}>Cancel</Button>
+                <Button onClick={handleInvite} disabled={inviteSaving}>{inviteSaving ? 'Sending...' : 'Send Invitation'}</Button>
+              </div>
+            </>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 }

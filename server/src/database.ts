@@ -282,6 +282,19 @@ export async function initializeDatabase() {
       FOREIGN KEY (toller_supplier_id) REFERENCES suppliers(id) ON DELETE SET NULL
     );
 
+    CREATE TABLE IF NOT EXISTS user_invitations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL,
+      display_name TEXT,
+      role TEXT NOT NULL DEFAULT 'user',
+      token TEXT UNIQUE NOT NULL,
+      invited_by INTEGER,
+      expires_at TEXT NOT NULL,
+      accepted_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (invited_by) REFERENCES users(id) ON DELETE SET NULL
+    );
+
     CREATE TABLE IF NOT EXISTS wire_transfers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       invoice_id INTEGER NOT NULL,
@@ -324,6 +337,9 @@ export async function initializeDatabase() {
       `);
     }
   } catch (_) { /* table may not exist yet */ }
+
+  // Add email column to users
+  try { db.exec(`ALTER TABLE users ADD COLUMN email TEXT`); } catch (_) { /* column may already exist */ }
 
   // Add invoice_date and payment_date columns to invoices
   try { db.exec(`ALTER TABLE invoices ADD COLUMN invoice_date TEXT`); } catch (_) { /* column may already exist */ }

@@ -18,6 +18,7 @@ import fileRoutes from './routes/files.js';
 import userRoutes from './routes/users.js';
 import inventoryRoutes from './routes/inventory.js';
 import productionRoutes from './routes/production.js';
+import wireTransferScanRoutes from './routes/wire-transfer-scan.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -46,6 +47,7 @@ app.use('/api/files', authenticateToken, fileRoutes);
 app.use('/api/users', authenticateToken, userRoutes);
 app.use('/api/inventory', authenticateToken, inventoryRoutes);
 app.use('/api/production', authenticateToken, productionRoutes);
+app.use('/api/wire-transfers/scan', authenticateToken, wireTransferScanRoutes);
 
 // Serve built client in production
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');

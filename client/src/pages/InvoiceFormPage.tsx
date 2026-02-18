@@ -143,8 +143,9 @@ export default function InvoiceFormPage() {
       });
 
       addToast('Invoice scanned and fields auto-filled', 'success');
-    } catch {
-      addToast('Could not auto-scan invoice. You can fill in the fields manually.', 'warning');
+    } catch (err: any) {
+      const detail = err.response?.data?.error || 'Could not auto-scan invoice';
+      addToast(`${detail}. You can fill in the fields manually.`, 'info');
     } finally {
       setScanning(false);
     }

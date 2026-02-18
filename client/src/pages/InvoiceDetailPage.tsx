@@ -9,6 +9,7 @@ import Badge from '../components/ui/Badge';
 import StatusBadge from '../components/ui/StatusBadge';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
+import FileUpload from '../components/ui/FileUpload';
 import {
   ArrowLeft,
   FileText,
@@ -28,6 +29,7 @@ import {
   XCircle,
   Plus,
   Upload,
+  Loader2,
 } from 'lucide-react';
 
 const statusOptions = [
@@ -54,6 +56,39 @@ export default function InvoiceDetailPage() {
   const [wireForm, setWireForm] = useState({ amount: '', transfer_date: '', bank_reference: '', notes: '' });
   const [wireFile, setWireFile] = useState<File | null>(null);
   const [wireSaving, setWireSaving] = useState(false);
+  const [wireScanning, setWireScanning] = useState(false);
+
+  const scanWireTransfer = async (file: File) => {
+    setWireScanning(true);
+    try {
+      const scanData = new FormData();
+      scanData.append('file', file);
+      const res = await api.post('/wire-transfers/scan', scanData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      const data = res.data;
+      setWireForm(prev => ({
+        ...prev,
+        ...(data.amount != null ? { amount: String(data.amount) } : {}),
+        ...(data.transfer_date ? { transfer_date: data.transfer_date } : {}),
+        ...(data.bank_reference ? { bank_reference: data.bank_reference } : {}),
+        ...(data.notes ? { notes: data.notes } : {}),
+      }));
+      addToast('Wire transfer scanned and fields auto-filled', 'success');
+    } catch (err: any) {
+      const detail = err.response?.data?.error || 'Could not auto-scan wire transfer';
+      addToast(`${detail}. You can fill in the fields manually.`, 'info');
+    } finally {
+      setWireScanning(false);
+    }
+  };
+
+  const handleWireFileSelect = (file: File | null) => {
+    setWireFile(file);
+    if (file) {
+      scanWireTransfer(file);
+    }
+  };
 
   const fetchInvoice = () => {
     setLoading(true);
@@ -419,7 +454,13 @@ export default function InvoiceDetailPage() {
           <Input label="Bank Reference" value={wireForm.bank_reference} onChange={e => setWireForm({ ...wireForm, bank_reference: e.target.value })} />
           <div className="space-y-1">
             <label className="block text-sm font-medium text-gray-700">Proof of Transfer</label>
-            <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" onChange={e => setWireFile(e.target.files?.[0] || null)} className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100" />
+            <FileUpload onFileSelect={handleWireFileSelect} />
+            {wireScanning && (
+              <div className="flex items-center gap-2 text-sm text-primary-600 mt-2">
+                <Loader2 size={16} className="animate-spin" />
+                Scanning with AI...
+              </div>
+            )}
           </div>
           <div className="space-y-1">
             <label className="block text-sm font-medium text-gray-700">Notes</label>

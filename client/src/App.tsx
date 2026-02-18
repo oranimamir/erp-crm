@@ -21,6 +21,7 @@ import ShipmentDetailPage from './pages/ShipmentDetailPage';
 import InventoryPage from './pages/InventoryPage';
 import ProductionPage from './pages/ProductionPage';
 import AdminUsersPage from './pages/AdminUsersPage';
+import AcceptInvitePage from './pages/AcceptInvitePage';
 import NotFoundPage from './pages/NotFoundPage';
 
 export default function App() {
@@ -29,6 +30,7 @@ export default function App() {
       <ToastProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/accept-invite" element={<AcceptInvitePage />} />
           <Route element={<ProtectedRoute />}>
             <Route element={<Layout />}>
               <Route path="/" element={<Navigate to="/dashboard" replace />} />

@@ -2,7 +2,6 @@ import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import Anthropic from '@anthropic-ai/sdk';
 import { PDFParse } from 'pdf-parse';
-import db from '../database.js';
 
 const router = Router();
 
@@ -20,16 +19,13 @@ const upload = multer({
   },
 });
 
-const EXTRACTION_PROMPT = `You are an invoice data extraction assistant. Analyze the provided invoice and extract the following fields. Return ONLY valid JSON with no extra text.
+const EXTRACTION_PROMPT = `You are a wire transfer data extraction assistant. Analyze the provided wire transfer proof/receipt and extract the following fields. Return ONLY valid JSON with no extra text.
 
 {
-  "invoice_number": "string or null",
-  "amount": "number or null (total amount due)",
-  "currency": "string or null (3-letter ISO code like USD, EUR, GBP)",
-  "invoice_date": "string or null (YYYY-MM-DD format, the date the invoice was issued)",
-  "due_date": "string or null (YYYY-MM-DD format)",
-  "vendor_or_customer_name": "string or null (the company/person who issued or received the invoice)",
-  "notes": "string or null (brief summary of line items or purpose)"
+  "amount": "number or null (transfer amount)",
+  "transfer_date": "string or null (YYYY-MM-DD format)",
+  "bank_reference": "string or null (bank reference/confirmation number)",
+  "notes": "string or null (brief summary of the transfer, sender/receiver info)"
 }
 
 Rules:
@@ -37,7 +33,7 @@ Rules:
 - For amounts, return the numeric value only (no currency symbols)
 - For dates, convert to YYYY-MM-DD format
 - If a field cannot be determined, use null
-- For notes, summarize the main line items or purpose briefly (max 200 chars)`;
+- For notes, summarize key details like sender, receiver, bank names (max 200 chars)`;
 
 function getMediaType(originalname: string): 'image/jpeg' | 'image/png' | 'image/webp' {
   const ext = originalname.toLowerCase().slice(originalname.lastIndexOf('.'));
@@ -64,8 +60,8 @@ async function extractWithClaude(file: Express.Multer.File): Promise<Record<stri
       const textResult = await parser.getText();
       text = textResult.text.slice(0, 8000);
     } catch (pdfErr) {
-      console.warn('PDF text extraction failed, sending minimal info to Claude:', pdfErr);
-      text = `[PDF file: ${file.originalname}, size: ${file.size} bytes. Text extraction failed. Please extract what you can.]`;
+      console.warn('PDF text extraction failed:', pdfErr);
+      text = `[PDF file: ${file.originalname}, size: ${file.size} bytes. Text extraction failed.]`;
     }
 
     response = await client.messages.create({
@@ -74,7 +70,7 @@ async function extractWithClaude(file: Express.Multer.File): Promise<Record<stri
       messages: [
         {
           role: 'user',
-          content: `${EXTRACTION_PROMPT}\n\nInvoice text content:\n${text}`,
+          content: `${EXTRACTION_PROMPT}\n\nWire transfer document text:\n${text}`,
         },
       ],
     });
@@ -108,7 +104,7 @@ async function extractWithClaude(file: Express.Multer.File): Promise<Record<stri
     throw new Error('No text response from Claude');
   }
 
-  // Strip markdown code fences that Claude sometimes wraps around JSON
+  // Strip markdown code fences
   let rawText = textBlock.text.trim();
   const fenceMatch = rawText.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```$/);
   if (fenceMatch) {
@@ -118,34 +114,10 @@ async function extractWithClaude(file: Express.Multer.File): Promise<Record<stri
   return JSON.parse(rawText);
 }
 
-function fuzzyMatchEntity(name: string): { customer_id?: number; supplier_id?: number; type?: string } {
-  if (!name) return {};
-
-  const searchTerm = `%${name}%`;
-
-  const customer = db.prepare(
-    `SELECT id FROM customers WHERE name LIKE ? LIMIT 1`
-  ).get(searchTerm) as any;
-
-  if (customer) {
-    return { customer_id: customer.id, type: 'customer' };
-  }
-
-  const supplier = db.prepare(
-    `SELECT id FROM suppliers WHERE name LIKE ? LIMIT 1`
-  ).get(searchTerm) as any;
-
-  if (supplier) {
-    return { supplier_id: supplier.id, type: 'supplier' };
-  }
-
-  return {};
-}
-
 router.post('/', upload.single('file'), async (req: Request, res: Response) => {
   try {
     if (!process.env.ANTHROPIC_API_KEY) {
-      res.status(501).json({ error: 'Invoice scanning is not configured (missing API key)' });
+      res.status(501).json({ error: 'AI scanning is not configured (missing API key)' });
       return;
     }
 
@@ -156,27 +128,21 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
 
     const extracted = await extractWithClaude(req.file);
 
-    const entityMatch = fuzzyMatchEntity(extracted.vendor_or_customer_name);
-
     const result = {
-      invoice_number: extracted.invoice_number || null,
       amount: extracted.amount != null ? Number(extracted.amount) : null,
-      currency: extracted.currency || null,
-      invoice_date: extracted.invoice_date || null,
-      due_date: extracted.due_date || null,
+      transfer_date: extracted.transfer_date || null,
+      bank_reference: extracted.bank_reference || null,
       notes: extracted.notes || null,
-      vendor_or_customer_name: extracted.vendor_or_customer_name || null,
-      ...entityMatch,
     };
 
     res.json(result);
   } catch (err: any) {
     if (err.message === 'NO_API_KEY') {
-      res.status(501).json({ error: 'Invoice scanning is not configured' });
+      res.status(501).json({ error: 'AI scanning is not configured' });
       return;
     }
-    console.error('Invoice scan error:', err.message || err);
-    res.status(500).json({ error: `Failed to scan invoice: ${err.message || 'Unknown error'}` });
+    console.error('Wire transfer scan error:', err.message || err);
+    res.status(500).json({ error: `Failed to scan wire transfer: ${err.message || 'Unknown error'}` });
   }
 });
 
