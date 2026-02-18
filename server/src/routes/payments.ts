@@ -6,6 +6,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
 const router = Router();
 
 router.get('/', (req: Request, res: Response) => {
@@ -78,7 +79,7 @@ router.put('/:id', uploadPayment.single('file'), (req: Request, res: Response) =
   let file_name = existing.file_name;
   if (req.file) {
     if (existing.file_path) {
-      const oldPath = path.join(__dirname, '..', '..', 'uploads', 'payments', existing.file_path);
+      const oldPath = path.join(uploadsBase, 'payments', existing.file_path);
       if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
     }
     file_path = req.file.filename;
@@ -103,7 +104,7 @@ router.delete('/:id', (req: Request, res: Response) => {
   if (!existing) { res.status(404).json({ error: 'Payment not found' }); return; }
 
   if (existing.file_path) {
-    const filePath = path.join(__dirname, '..', '..', 'uploads', 'payments', existing.file_path);
+    const filePath = path.join(uploadsBase, 'payments', existing.file_path);
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
   }
 

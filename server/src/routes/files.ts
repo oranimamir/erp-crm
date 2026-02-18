@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
 const router = Router();
 
 function serveFile(subfolder: string) {
@@ -14,7 +15,7 @@ function serveFile(subfolder: string) {
       res.status(400).json({ error: 'Invalid filename' });
       return;
     }
-    const filePath = path.join(__dirname, '..', '..', 'uploads', subfolder, filename);
+    const filePath = path.join(uploadsBase, subfolder, filename);
     if (!fs.existsSync(filePath)) {
       res.status(404).json({ error: 'File not found' });
       return;

@@ -6,8 +6,10 @@ import crypto from 'crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
+
 function createStorage(subfolder: string) {
-  const uploadDir = path.join(__dirname, '..', '..', 'uploads', subfolder);
+  const uploadDir = path.join(uploadsBase, subfolder);
   fs.mkdirSync(uploadDir, { recursive: true });
 
   return multer.diskStorage({

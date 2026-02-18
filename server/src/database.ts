@@ -5,7 +5,7 @@ import fs from 'fs';
 import bcrypt from 'bcryptjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dbPath = path.join(__dirname, '..', 'data', 'erp.db');
+const dbPath = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'erp.db');
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
 // Wrapper to provide better-sqlite3-like API over sql.js
