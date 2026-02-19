@@ -381,6 +381,8 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE orders ADD COLUMN operation_number TEXT`); } catch (_) { /* column may already exist */ }
   // Add email to users (for admin notifications)
   try { db.exec(`ALTER TABLE users ADD COLUMN email TEXT`); } catch (_) { /* column may already exist */ }
+  // Add notify_on_changes flag to users
+  try { db.exec(`ALTER TABLE users ADD COLUMN notify_on_changes INTEGER NOT NULL DEFAULT 0`); } catch (_) { /* column may already exist */ }
 
   // Seed admin user if not exists
   const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');

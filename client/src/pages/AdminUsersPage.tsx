@@ -13,7 +13,7 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
-import { Plus, Users, Pencil, Trash2, Mail, Clock, XCircle, Copy, Check } from 'lucide-react';
+import { Plus, Users, Pencil, Trash2, Mail, Clock, XCircle, Copy, Bell, BellOff } from 'lucide-react';
 
 const roleOptions = [
   { value: 'user', label: 'User' },
@@ -130,6 +130,15 @@ export default function AdminUsersPage() {
     }
   };
 
+  const handleToggleNotify = async (userId: number) => {
+    try {
+      const res = await api.patch(`/users/${userId}/notify`, {});
+      setUsers(prev => prev.map(u => u.id === userId ? { ...u, notify_on_changes: res.data.notify_on_changes } : u));
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to update notification setting', 'error');
+    }
+  };
+
   const handleRevokeInvite = async (inviteId: number) => {
     try {
       await api.delete(`/users/invitations/${inviteId}`);
@@ -189,6 +198,7 @@ export default function AdminUsersPage() {
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Display Name</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Email</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Role</th>
+                  <th className="text-center px-4 py-3 font-medium text-gray-600" title="Receive email notifications on changes">Notify</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Created At</th>
                   <th className="text-right px-4 py-3 font-medium text-gray-600">Actions</th>
                 </tr>
@@ -208,6 +218,20 @@ export default function AdminUsersPage() {
                     </td>
                     <td className="px-4 py-3">
                       <Badge variant={u.role === 'admin' ? 'purple' : 'blue'}>{u.role}</Badge>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <button
+                        onClick={() => handleToggleNotify(u.id)}
+                        title={u.notify_on_changes ? 'Notifications ON — click to disable' : 'Notifications OFF — click to enable'}
+                        className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium transition-colors ${
+                          u.notify_on_changes
+                            ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                            : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                        }`}
+                      >
+                        {u.notify_on_changes ? <Bell size={12} /> : <BellOff size={12} />}
+                        {u.notify_on_changes ? 'On' : 'Off'}
+                      </button>
                     </td>
                     <td className="px-4 py-3 text-gray-600">{new Date(u.created_at).toLocaleDateString()}</td>
                     <td className="px-4 py-3">

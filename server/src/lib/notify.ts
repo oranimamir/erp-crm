@@ -23,7 +23,7 @@ async function _send(payload: NotifyPayload): Promise<void> {
   if (!apiKey) return;
 
   const admins = db.prepare(
-    `SELECT email FROM users WHERE role = 'admin' AND email IS NOT NULL AND email != ''`
+    `SELECT email FROM users WHERE notify_on_changes = 1 AND email IS NOT NULL AND email != ''`
   ).all() as Array<{ email: string }>;
 
   if (admins.length === 0) return;

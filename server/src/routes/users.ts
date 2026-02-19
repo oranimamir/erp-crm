@@ -39,7 +39,7 @@ router.get('/', requireAdmin, (req: Request, res: Response) => {
 
   const total = (db.prepare(`SELECT COUNT(*) as count FROM users ${where}`).get(...params) as any).count;
   const users = db.prepare(
-    `SELECT id, username, display_name, email, role, created_at, updated_at FROM users ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`
+    `SELECT id, username, display_name, email, role, notify_on_changes, created_at, updated_at FROM users ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`
   ).all(...params, limit, offset);
 
   res.json({ data: users, total, page, limit, totalPages: Math.ceil(total / limit) });
@@ -73,7 +73,7 @@ router.post('/', requireAdmin, (req: Request, res: Response) => {
     'INSERT INTO users (username, password_hash, display_name, email, role) VALUES (?, ?, ?, ?, ?)'
   ).run(username, password_hash, display_name || username, email || null, role || 'user');
 
-  const user = db.prepare('SELECT id, username, display_name, email, role, created_at, updated_at FROM users WHERE id = ?').get(result.lastInsertRowid);
+  const user = db.prepare('SELECT id, username, display_name, email, role, notify_on_changes, created_at, updated_at FROM users WHERE id = ?').get(result.lastInsertRowid);
   res.status(201).json(user);
 });
 
@@ -107,7 +107,7 @@ router.put('/:id', requireAdmin, (req: Request, res: Response) => {
     ).run(display_name || null, email || null, role || 'user', req.params.id);
   }
 
-  const user = db.prepare('SELECT id, username, display_name, email, role, created_at, updated_at FROM users WHERE id = ?').get(req.params.id);
+  const user = db.prepare('SELECT id, username, display_name, email, role, notify_on_changes, created_at, updated_at FROM users WHERE id = ?').get(req.params.id);
   res.json(user);
 });
 
@@ -126,6 +126,15 @@ router.delete('/:id', requireAdmin, (req: Request, res: Response) => {
     return;
   }
   res.json({ message: 'User deleted' });
+});
+
+// Toggle notify_on_changes for a user
+router.patch('/:id/notify', requireAdmin, (req: Request, res: Response) => {
+  const existing = db.prepare('SELECT id, notify_on_changes FROM users WHERE id = ?').get(req.params.id) as any;
+  if (!existing) { res.status(404).json({ error: 'User not found' }); return; }
+  const newValue = existing.notify_on_changes ? 0 : 1;
+  db.prepare(`UPDATE users SET notify_on_changes = ?, updated_at = datetime('now') WHERE id = ?`).run(newValue, req.params.id);
+  res.json({ notify_on_changes: newValue });
 });
 
 // Invite user via email
