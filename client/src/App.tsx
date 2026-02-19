@@ -21,6 +21,7 @@ import ShipmentDetailPage from './pages/ShipmentDetailPage';
 import InventoryPage from './pages/InventoryPage';
 import ProductionPage from './pages/ProductionPage';
 import ProductsPage from './pages/ProductsPage';
+import InvoiceGeneratorPage from './pages/InvoiceGeneratorPage';
 import AdminUsersPage from './pages/AdminUsersPage';
 import AcceptInvitePage from './pages/AcceptInvitePage';
 import NotFoundPage from './pages/NotFoundPage';
@@ -42,6 +43,7 @@ export default function App() {
               <Route path="/suppliers/:id" element={<SupplierDetailPage />} />
               <Route path="/invoices" element={<InvoicesPage />} />
               <Route path="/invoices/new" element={<InvoiceFormPage />} />
+              <Route path="/invoices/generate" element={<InvoiceGeneratorPage />} />
               <Route path="/invoices/:id" element={<InvoiceDetailPage />} />
               <Route path="/invoices/:id/edit" element={<InvoiceFormPage />} />
               <Route path="/orders" element={<OrdersPage />} />

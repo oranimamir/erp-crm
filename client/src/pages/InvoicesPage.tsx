@@ -10,7 +10,7 @@ import SearchBar from '../components/ui/SearchBar';
 import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
-import { Plus, FileText, Eye, Trash2 } from 'lucide-react';
+import { Plus, FileText, Eye, Trash2, FileDown } from 'lucide-react';
 
 const statusOptions = [
   { value: 'draft', label: 'Draft' },
@@ -90,9 +90,14 @@ export default function InvoicesPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Invoices</h1>
-        <Link to="/invoices/new">
-          <Button><Plus size={16} /> New Invoice</Button>
-        </Link>
+        <div className="flex gap-2">
+          <Link to="/invoices/generate">
+            <Button variant="secondary"><FileDown size={16} /> Generate Invoice PDF</Button>
+          </Link>
+          <Link to="/invoices/new">
+            <Button><Plus size={16} /> New Invoice</Button>
+          </Link>
+        </div>
       </div>
 
       <Card>

@@ -21,6 +21,8 @@ import inventoryRoutes from './routes/inventory.js';
 import productionRoutes from './routes/production.js';
 import wireTransferScanRoutes from './routes/wire-transfer-scan.js';
 import productRoutes from './routes/products.js';
+import invoiceGenerateRoutes from './routes/invoice-generate.js';
+import invoiceTemplateRoutes from './routes/invoice-template.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -52,6 +54,8 @@ app.use('/api/inventory', authenticateToken, inventoryRoutes);
 app.use('/api/production', authenticateToken, productionRoutes);
 app.use('/api/wire-transfers/scan', authenticateToken, wireTransferScanRoutes);
 app.use('/api/products', authenticateToken, productRoutes);
+app.use('/api/invoice-generate', authenticateToken, invoiceGenerateRoutes);
+app.use('/api/invoice-template', authenticateToken, invoiceTemplateRoutes);
 
 // Serve built client in production
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');
