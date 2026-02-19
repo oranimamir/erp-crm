@@ -14,32 +14,16 @@ import Badge from '../components/ui/Badge';
 import { Plus, Package, Pencil, Trash2 } from 'lucide-react';
 
 const categoryOptions = [
-  { value: 'raw_material', label: 'Raw Material' },
-  { value: 'packaging', label: 'Packaging' },
-  { value: 'finished_product', label: 'Finished Product' },
+  { value: 'Circulac', label: 'Circulac' },
+  { value: 'Naturlac', label: 'Naturlac' },
 ];
 
-const unitOptions = [
-  { value: 'tons', label: 'tons' },
-  { value: 'kg', label: 'kg' },
-  { value: 'L', label: 'L' },
-  { value: 'pcs', label: 'pcs' },
-  { value: 'boxes', label: 'boxes' },
-];
-
-const categoryColors: Record<string, 'orange' | 'blue' | 'green'> = {
-  raw_material: 'orange',
-  packaging: 'blue',
-  finished_product: 'green',
+const categoryColors: Record<string, 'blue' | 'green' | 'gray'> = {
+  Circulac: 'blue',
+  Naturlac: 'green',
 };
 
-const categoryLabels: Record<string, string> = {
-  raw_material: 'Raw Material',
-  packaging: 'Packaging',
-  finished_product: 'Finished Product',
-};
-
-const emptyForm = { name: '', sku: '', category: 'raw_material', unit: 'tons', notes: '' };
+const emptyForm = { name: '', sku: '', category: 'Circulac', notes: '' };
 
 export default function ProductsPage() {
   const { addToast } = useToast();
@@ -80,8 +64,7 @@ export default function ProductsPage() {
     setForm({
       name: item.name || '',
       sku: item.sku || '',
-      category: item.category || 'raw_material',
-      unit: item.unit || 'tons',
+      category: item.category || 'Circulac',
       notes: item.notes || '',
     });
     setShowModal(true);
@@ -166,7 +149,6 @@ export default function ProductsPage() {
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Name</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">SKU</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Category</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Unit</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Notes</th>
                   <th className="text-right px-4 py-3 font-medium text-gray-600">Actions</th>
                 </tr>
@@ -178,11 +160,10 @@ export default function ProductsPage() {
                     <td className="px-4 py-3 text-gray-600 font-mono text-xs">{item.sku}</td>
                     <td className="px-4 py-3">
                       <Badge variant={categoryColors[item.category] || 'gray'}>
-                        {categoryLabels[item.category] || item.category}
+                        {item.category}
                       </Badge>
                     </td>
-                    <td className="px-4 py-3 text-gray-600">{item.unit}</td>
-                    <td className="px-4 py-3 text-gray-500 max-w-[200px] truncate">{item.notes || '-'}</td>
+                    <td className="px-4 py-3 text-gray-500 max-w-[250px] truncate">{item.notes || '-'}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
                         <button onClick={() => openEdit(item)} className="p-1.5 text-gray-400 hover:text-primary-600 rounded"><Pencil size={16} /></button>
@@ -204,10 +185,7 @@ export default function ProductsPage() {
             <Input label="Name *" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
             <Input label="SKU *" value={form.sku} onChange={e => setForm({ ...form, sku: e.target.value })} />
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <Select label="Category" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} options={categoryOptions} />
-            <Select label="Unit" value={form.unit} onChange={e => setForm({ ...form, unit: e.target.value })} options={unitOptions} />
-          </div>
+          <Select label="Category" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} options={categoryOptions} />
           <div className="space-y-1">
             <label className="block text-sm font-medium text-gray-700">Notes</label>
             <textarea

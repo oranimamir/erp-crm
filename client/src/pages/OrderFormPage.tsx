@@ -6,7 +6,8 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
-import { ArrowLeft, Plus, X } from 'lucide-react';
+import FileUpload from '../components/ui/FileUpload';
+import { ArrowLeft, Plus, X, Loader2 } from 'lucide-react';
 
 interface OrderItem {
   productId: string;
@@ -46,6 +47,7 @@ export default function OrderFormPage() {
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [scanning, setScanning] = useState(false);
   const [customers, setCustomers] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
@@ -62,23 +64,14 @@ export default function OrderFormPage() {
   const [items, setItems] = useState<OrderItem[]>([emptyItem()]);
 
   useEffect(() => {
-    Promise.all([
+    Promise.allSettled([
       api.get('/customers', { params: { limit: 1000 } }),
       api.get('/suppliers', { params: { limit: 1000 } }),
       api.get('/products', { params: { limit: 1000 } }),
     ]).then(([cRes, sRes, pRes]) => {
-      setCustomers(cRes.data.data || []);
-      setSuppliers(sRes.data.data || []);
-      setProducts(pRes.data.data || []);
-    }).catch(() => {
-      // products may not exist yet, still load customers/suppliers
-      Promise.all([
-        api.get('/customers', { params: { limit: 1000 } }),
-        api.get('/suppliers', { params: { limit: 1000 } }),
-      ]).then(([cRes, sRes]) => {
-        setCustomers(cRes.data.data || []);
-        setSuppliers(sRes.data.data || []);
-      });
+      if (cRes.status === 'fulfilled') setCustomers(cRes.value.data.data || []);
+      if (sRes.status === 'fulfilled') setSuppliers(sRes.value.data.data || []);
+      if (pRes.status === 'fulfilled') setProducts(pRes.value.data.data || []);
     });
   }, []);
 
@@ -128,8 +121,7 @@ export default function OrderFormPage() {
       return {
         ...item,
         productId,
-        description: product ? product.name : item.description,
-        unit: product ? product.unit : item.unit,
+        description: product ? product.name : '',
       };
     }));
   };
@@ -148,6 +140,47 @@ export default function OrderFormPage() {
   const formatCurrency = (amount: number) =>
     `$${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+  const handleScanFile = async (file: File | null) => {
+    if (!file) return;
+    setScanning(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await api.post('/orders/scan', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const data = res.data;
+
+      // Auto-fill header fields
+      if (data.order_number && !form.order_number) updateField('order_number', data.order_number);
+      if (data.type) {
+        updateField('type', data.type);
+        if (data.customer_id) updateField('customer_id', String(data.customer_id));
+        if (data.supplier_id) updateField('supplier_id', String(data.supplier_id));
+      }
+      if (data.notes && !form.notes) updateField('notes', data.notes);
+
+      // Auto-fill items
+      if (data.items && data.items.length > 0) {
+        setItems(data.items.map((item: any) => ({
+          productId: item.product_id ? String(item.product_id) : '',
+          description: item.description || '',
+          quantity: item.quantity || 1,
+          unit: item.unit || 'tons',
+          unit_price: item.unit_price || 0,
+        })));
+      }
+
+      addToast('Order scanned and fields auto-filled', 'success');
+    } catch (err: any) {
+      const detail = err.response?.data?.error || '';
+      const msg = detail.toLowerCase().includes('credit balance')
+        ? 'AI scanning unavailable: Anthropic API credits depleted. Fill in fields manually.'
+        : detail || 'Could not auto-scan. Fill in fields manually.';
+      addToast(msg, 'info');
+    } finally {
+      setScanning(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -155,7 +188,7 @@ export default function OrderFormPage() {
     if (form.type === 'customer' && !form.customer_id) { addToast('Please select a customer', 'error'); return; }
     if (form.type === 'supplier' && !form.supplier_id) { addToast('Please select a supplier', 'error'); return; }
     if (!items.some(item => item.description.trim())) {
-      addToast('Please add at least one line item with a description', 'error');
+      addToast('Please select at least one product', 'error');
       return;
     }
 
@@ -283,39 +316,40 @@ export default function OrderFormPage() {
             </Button>
           </div>
 
+          {/* AI Scan Section */}
+          <div className="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-100">
+            <p className="text-sm font-medium text-gray-700 mb-2">Auto-fill from order document</p>
+            <FileUpload onFileSelect={handleScanFile} />
+            {scanning && (
+              <div className="flex items-center gap-2 text-sm text-primary-600 mt-2">
+                <Loader2 size={16} className="animate-spin" />
+                Scanning order with AI...
+              </div>
+            )}
+          </div>
+
           <div className="space-y-4">
             {items.map((item, index) => (
               <div key={index} className="p-4 bg-gray-50 rounded-lg border border-gray-200 space-y-3">
-                {/* Row 1: Product selector + Description */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {products.length > 0 && (
-                    <div className="space-y-1">
-                      <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide">Product (optional)</label>
-                      <select
-                        value={item.productId}
-                        onChange={e => selectProduct(index, e.target.value)}
-                        className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                      >
-                        <option value="">Select product to auto-fill...</option>
-                        {products.map((p: any) => (
-                          <option key={p.id} value={String(p.id)}>{p.name} ({p.sku})</option>
-                        ))}
-                      </select>
-                    </div>
+                {/* Product selector */}
+                <div className="space-y-1">
+                  <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide">Product *</label>
+                  <select
+                    value={item.productId}
+                    onChange={e => selectProduct(index, e.target.value)}
+                    className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  >
+                    <option value="">— Select a product —</option>
+                    {products.map((p: any) => (
+                      <option key={p.id} value={String(p.id)}>{p.name} ({p.sku})</option>
+                    ))}
+                  </select>
+                  {!item.productId && item.description && (
+                    <p className="text-xs text-amber-600 mt-1">Scanned: "{item.description}" — please confirm product above</p>
                   )}
-                  <div className="space-y-1">
-                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide">Description *</label>
-                    <input
-                      type="text"
-                      value={item.description}
-                      onChange={e => updateItem(index, 'description', e.target.value)}
-                      placeholder="Item description..."
-                      className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                    />
-                  </div>
                 </div>
 
-                {/* Row 2: Qty, Unit, MT, Unit Price, Total, Remove */}
+                {/* Qty, Unit, MT display, Price, Total, Remove */}
                 <div className="flex flex-wrap gap-3 items-end">
                   <div className="space-y-1">
                     <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide">Quantity</label>
@@ -340,7 +374,7 @@ export default function OrderFormPage() {
                   </div>
                   <div className="space-y-1">
                     <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide">= Metric Tons</label>
-                    <div className="flex items-center h-[38px] px-3 rounded-lg bg-white border border-gray-200 text-sm font-medium text-gray-700 min-w-[80px]">
+                    <div className="flex items-center h-[38px] px-3 rounded-lg bg-white border border-gray-200 text-sm font-medium text-gray-700 min-w-[90px]">
                       {toMetricTons(Number(item.quantity), item.unit)} MT
                     </div>
                   </div>
