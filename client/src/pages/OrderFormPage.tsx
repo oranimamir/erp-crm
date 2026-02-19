@@ -14,7 +14,9 @@ interface OrderItem {
   description: string;
   quantity: number;
   unit: string;
+  currency: string;
   unit_price: number;
+  packaging: string;
 }
 
 const typeOptions = [
@@ -37,7 +39,12 @@ function toMetricTons(quantity: number, unit: string): string {
   return mt.toLocaleString(undefined, { maximumFractionDigits: 3 });
 }
 
-const emptyItem = (): OrderItem => ({ productId: '', description: '', quantity: 1, unit: 'tons', unit_price: 0 });
+const currencyOptions = [
+  { value: 'USD', label: 'USD' },
+  { value: 'EUR', label: 'EUR' },
+];
+
+const emptyItem = (): OrderItem => ({ productId: '', description: '', quantity: 1, unit: 'tons', currency: 'USD', unit_price: 0, packaging: '' });
 
 export default function OrderFormPage() {
   const { id } = useParams();
@@ -95,7 +102,9 @@ export default function OrderFormPage() {
             description: item.description || '',
             quantity: item.quantity ?? 1,
             unit: item.unit || 'tons',
+            currency: item.currency || 'USD',
             unit_price: item.unit_price ?? 0,
+            packaging: item.packaging || '',
           })));
         }
       })
@@ -165,7 +174,9 @@ export default function OrderFormPage() {
           description: item.description || '',
           quantity: item.quantity || 1,
           unit: item.unit || 'tons',
+          currency: item.currency || 'USD',
           unit_price: item.unit_price || 0,
+          packaging: item.packaging || '',
         })));
       }
 
@@ -207,7 +218,9 @@ export default function OrderFormPage() {
             description: item.description,
             quantity: Number(item.quantity) || 0,
             unit: item.unit,
+            currency: item.currency,
             unit_price: Number(item.unit_price) || 0,
+            packaging: item.packaging || null,
           })),
       };
 
@@ -349,7 +362,19 @@ export default function OrderFormPage() {
                   )}
                 </div>
 
-                {/* Qty, Unit, MT display, Price, Total, Remove */}
+                {/* Packaging */}
+                <div className="space-y-1">
+                  <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide">Packaging</label>
+                  <input
+                    type="text"
+                    value={item.packaging}
+                    onChange={e => updateItem(index, 'packaging', e.target.value)}
+                    placeholder="e.g. 25kg bags, bulk, drums..."
+                    className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                </div>
+
+                {/* Qty / Unit / MT / Price / Currency / Total / Remove */}
                 <div className="flex flex-wrap gap-3 items-end">
                   <div className="space-y-1">
                     <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide">Quantity</label>
@@ -379,20 +404,29 @@ export default function OrderFormPage() {
                     </div>
                   </div>
                   <div className="space-y-1">
-                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide">Unit Price ($)</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={item.unit_price}
-                      onChange={e => updateItem(index, 'unit_price', Number(e.target.value))}
-                      className="block w-28 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                    />
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide">Price per unit</label>
+                    <div className="flex gap-1">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={item.unit_price}
+                        onChange={e => updateItem(index, 'unit_price', Number(e.target.value))}
+                        className="block w-28 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                      />
+                      <select
+                        value={item.currency}
+                        onChange={e => updateItem(index, 'currency', e.target.value)}
+                        className="block rounded-lg border border-gray-300 px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                      >
+                        {currencyOptions.map(o => <option key={o.value} value={o.value}>{o.label}/unit</option>)}
+                      </select>
+                    </div>
                   </div>
                   <div className="space-y-1">
                     <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide">Total</label>
                     <div className="flex items-center h-[38px] px-3 rounded-lg bg-white border border-gray-200 text-sm font-semibold text-gray-900 min-w-[100px]">
-                      {formatCurrency(itemTotal(item))}
+                      {item.currency === 'EUR' ? '€' : '$'}{(itemTotal(item)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </div>
                   </div>
                   <button

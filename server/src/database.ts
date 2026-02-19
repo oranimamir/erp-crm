@@ -358,6 +358,9 @@ export async function initializeDatabase() {
 
   // Add unit column to order_items
   try { db.exec(`ALTER TABLE order_items ADD COLUMN unit TEXT NOT NULL DEFAULT 'tons'`); } catch (_) { /* column may already exist */ }
+  // Add packaging and currency columns to order_items
+  try { db.exec(`ALTER TABLE order_items ADD COLUMN packaging TEXT`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE order_items ADD COLUMN currency TEXT NOT NULL DEFAULT 'USD'`); } catch (_) { /* column may already exist */ }
 
   // Seed admin user if not exists
   const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');

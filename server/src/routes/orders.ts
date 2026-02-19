@@ -85,9 +85,9 @@ router.post('/', (req: Request, res: Response) => {
     const orderId = result.lastInsertRowid;
 
     if (items && Array.isArray(items)) {
-      const insertItem = db.prepare('INSERT INTO order_items (order_id, description, quantity, unit, unit_price, total) VALUES (?, ?, ?, ?, ?, ?)');
+      const insertItem = db.prepare('INSERT INTO order_items (order_id, description, quantity, unit, unit_price, currency, packaging, total) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
       for (const item of items) {
-        insertItem.run(orderId, item.description, item.quantity, item.unit || 'tons', item.unit_price, item.quantity * item.unit_price);
+        insertItem.run(orderId, item.description, item.quantity, item.unit || 'tons', item.unit_price, item.currency || 'USD', item.packaging || null, item.quantity * item.unit_price);
       }
     }
 
@@ -122,9 +122,9 @@ router.put('/:id', (req: Request, res: Response) => {
     if (items && Array.isArray(items)) {
       total_amount = items.reduce((sum: number, item: any) => sum + (item.quantity * item.unit_price), 0);
       db.prepare('DELETE FROM order_items WHERE order_id = ?').run(req.params.id);
-      const insertItem = db.prepare('INSERT INTO order_items (order_id, description, quantity, unit, unit_price, total) VALUES (?, ?, ?, ?, ?, ?)');
+      const insertItem = db.prepare('INSERT INTO order_items (order_id, description, quantity, unit, unit_price, currency, packaging, total) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
       for (const item of items) {
-        insertItem.run(req.params.id, item.description, item.quantity, item.unit || 'tons', item.unit_price, item.quantity * item.unit_price);
+        insertItem.run(req.params.id, item.description, item.quantity, item.unit || 'tons', item.unit_price, item.currency || 'USD', item.packaging || null, item.quantity * item.unit_price);
       }
     }
 

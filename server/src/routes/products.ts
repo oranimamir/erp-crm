@@ -49,7 +49,7 @@ router.post('/', (req, res) => {
 // PUT /:id — update
 router.put('/:id', (req, res) => {
   const { id } = req.params;
-  const { name, sku, category, unit, notes } = req.body;
+  const { name, sku, category, notes } = req.body;
   if (!name?.trim() || !sku?.trim()) {
     return res.status(400).json({ error: 'Name and SKU are required' });
   }
@@ -57,8 +57,8 @@ router.put('/:id', (req, res) => {
   if (!existing) return res.status(404).json({ error: 'Product not found' });
   try {
     db.prepare(
-      'UPDATE products SET name=?, sku=?, category=?, unit=?, notes=?, updated_at=datetime(\'now\') WHERE id=?'
-    ).run(name.trim(), sku.trim(), category, unit, notes, id);
+      "UPDATE products SET name=?, sku=?, category=?, notes=?, updated_at=datetime('now') WHERE id=?"
+    ).run(name.trim(), sku.trim(), category, notes ?? null, id);
     res.json(db.prepare('SELECT * FROM products WHERE id = ?').get(id));
   } catch (err: any) {
     if (err.message?.includes('UNIQUE')) {

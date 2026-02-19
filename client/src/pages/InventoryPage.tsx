@@ -44,7 +44,7 @@ export default function InventoryPage() {
   const [selectedProduct, setSelectedProduct] = useState('');
   const [form, setForm] = useState({
     name: '', sku: '', category: '', quantity: '0', unit: 'tons',
-    min_stock_level: '0', supplier_id: '', unit_cost: '0', notes: '',
+    min_stock_level: '0', supplier_id: '', notes: '',
   });
   const [saving, setSaving] = useState(false);
   const [adjustModal, setAdjustModal] = useState<any>(null);
@@ -73,20 +73,19 @@ export default function InventoryPage() {
   const openCreate = () => {
     setEditing(null);
     setSelectedProduct('');
-    setForm({ name: '', sku: '', category: '', quantity: '0', unit: 'tons', min_stock_level: '0', supplier_id: '', unit_cost: '0', notes: '' });
+    setForm({ name: '', sku: '', category: '', quantity: '0', unit: 'tons', min_stock_level: '0', supplier_id: '', notes: '' });
     setShowModal(true);
   };
 
   const openEdit = (item: any) => {
     setEditing(item);
-    // Try to find matching product by SKU
     const matched = products.find((p: any) => p.sku === item.sku);
     setSelectedProduct(matched ? String(matched.id) : '');
     setForm({
       name: item.name || '', sku: item.sku || '', category: item.category || '',
       quantity: String(item.quantity ?? 0), unit: item.unit || 'tons',
       min_stock_level: String(item.min_stock_level ?? 0), supplier_id: String(item.supplier_id || ''),
-      unit_cost: String(item.unit_cost ?? 0), notes: item.notes || '',
+      notes: item.notes || '',
     });
     setShowModal(true);
   };
@@ -179,7 +178,6 @@ export default function InventoryPage() {
                   <th className="text-right px-4 py-3 font-medium text-gray-600">Qty</th>
                   <th className="text-right px-4 py-3 font-medium text-gray-600">Min Stock</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Supplier</th>
-                  <th className="text-right px-4 py-3 font-medium text-gray-600">Unit Cost</th>
                   <th className="text-right px-4 py-3 font-medium text-gray-600">Actions</th>
                 </tr>
               </thead>
@@ -194,7 +192,6 @@ export default function InventoryPage() {
                       <td className={`px-4 py-3 text-right font-medium ${lowStock ? 'text-red-600' : 'text-gray-900'}`}>{item.quantity} {item.unit}</td>
                       <td className="px-4 py-3 text-right text-gray-600">{item.min_stock_level} {item.unit}</td>
                       <td className="px-4 py-3 text-gray-600">{item.supplier_name || '-'}</td>
-                      <td className="px-4 py-3 text-right text-gray-900">${Number(item.unit_cost).toFixed(2)}</td>
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-end gap-1">
                           <button onClick={() => { setAdjustModal(item); setAdjustAmount(''); setAdjustReason(''); }} className="p-1.5 text-gray-400 hover:text-green-600 rounded" title="Adjust stock"><PackagePlus size={16} /></button>
@@ -257,17 +254,14 @@ export default function InventoryPage() {
             <Input label="Min Stock Level" type="number" value={form.min_stock_level} onChange={e => setForm({ ...form, min_stock_level: e.target.value })} />
           </div>
 
-          {/* Supplier and unit cost */}
-          <div className="grid grid-cols-2 gap-4">
-            <Select
-              label="Supplier"
-              value={form.supplier_id}
-              onChange={e => setForm({ ...form, supplier_id: e.target.value })}
-              options={suppliers.map((s: any) => ({ value: String(s.id), label: s.name }))}
-              placeholder="Select supplier..."
-            />
-            <Input label="Unit Cost ($)" type="number" step="0.01" value={form.unit_cost} onChange={e => setForm({ ...form, unit_cost: e.target.value })} />
-          </div>
+          {/* Supplier */}
+          <Select
+            label="Supplier"
+            value={form.supplier_id}
+            onChange={e => setForm({ ...form, supplier_id: e.target.value })}
+            options={suppliers.map((s: any) => ({ value: String(s.id), label: s.name }))}
+            placeholder="Select supplier..."
+          />
 
           <div className="space-y-1">
             <label className="block text-sm font-medium text-gray-700">Notes</label>
