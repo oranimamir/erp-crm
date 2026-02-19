@@ -97,14 +97,48 @@ router.get('/in-transit', (_req: Request, res: Response) => {
 
 router.get('/overdue-invoices', (_req: Request, res: Response) => {
   const invoices = db.prepare(`
-    SELECT i.*, c.name as customer_name, s.name as supplier_name
+    SELECT i.*, c.name as customer_name
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
-    LEFT JOIN suppliers s ON i.supplier_id = s.id
-    WHERE i.due_date IS NOT NULL AND i.due_date < date('now') AND i.status NOT IN ('paid', 'cancelled')
+    WHERE i.type = 'customer'
+      AND i.due_date IS NOT NULL
+      AND i.due_date < date('now')
+      AND i.status NOT IN ('paid', 'cancelled')
     ORDER BY i.due_date ASC
   `).all();
   res.json(invoices);
+});
+
+router.get('/supplier-payments', (_req: Request, res: Response) => {
+  const data = db.prepare(`
+    SELECT
+      strftime('%Y-%m', p.payment_date) as month,
+      s.name as supplier_name,
+      SUM(p.amount) as total
+    FROM payments p
+    JOIN invoices i ON p.invoice_id = i.id AND i.type = 'supplier'
+    JOIN suppliers s ON i.supplier_id = s.id
+    WHERE p.payment_date >= date('now', '-6 months')
+    GROUP BY month, s.id
+    ORDER BY month, total DESC
+  `).all();
+  res.json(data);
+});
+
+router.get('/customer-payments', (_req: Request, res: Response) => {
+  const data = db.prepare(`
+    SELECT
+      strftime('%Y-%m', p.payment_date) as month,
+      c.name as customer_name,
+      SUM(p.amount) as total
+    FROM payments p
+    JOIN invoices i ON p.invoice_id = i.id AND i.type = 'customer'
+    JOIN customers c ON i.customer_id = c.id
+    WHERE p.payment_date >= date('now', '-6 months')
+    GROUP BY month, c.id
+    ORDER BY month, total DESC
+  `).all();
+  res.json(data);
 });
 
 export default router;

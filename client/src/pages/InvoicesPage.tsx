@@ -12,6 +12,14 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import { Plus, FileText, Eye, Trash2, FileDown } from 'lucide-react';
 
+const statusBadgeClasses: Record<string, string> = {
+  draft:     'bg-gray-100 text-gray-700 border-gray-200',
+  sent:      'bg-blue-100 text-blue-700 border-blue-200',
+  paid:      'bg-green-100 text-green-700 border-green-200',
+  overdue:   'bg-red-100 text-red-700 border-red-200',
+  cancelled: 'bg-gray-100 text-gray-500 border-gray-200',
+};
+
 const statusOptions = [
   { value: 'draft', label: 'Draft' },
   { value: 'sent', label: 'Sent' },
@@ -73,6 +81,16 @@ export default function InvoicesPage() {
       addToast(err.response?.data?.error || 'Failed to delete invoice', 'error');
     }
     setDeleteId(null);
+  };
+
+  const handleStatusChange = async (invoiceId: number, newStatus: string) => {
+    try {
+      await api.patch(`/invoices/${invoiceId}/status`, { status: newStatus });
+      setInvoices(prev => prev.map(inv => inv.id === invoiceId ? { ...inv, status: newStatus } : inv));
+      addToast('Status updated', 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to update status', 'error');
+    }
   };
 
   const formatDate = (dateStr: string) => {
@@ -164,7 +182,15 @@ export default function InvoicesPage() {
                     <td className="px-4 py-3 text-right text-gray-900 font-medium">
                       {formatAmount(inv.amount, inv.currency)}
                     </td>
-                    <td className="px-4 py-3"><StatusBadge status={inv.status} /></td>
+                    <td className="px-4 py-3">
+                      <select
+                        value={inv.status}
+                        onChange={e => handleStatusChange(inv.id, e.target.value)}
+                        className={`text-xs rounded-full px-2 py-0.5 font-medium border cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary-500 ${statusBadgeClasses[inv.status] || 'bg-gray-100 text-gray-700 border-gray-200'}`}
+                      >
+                        {statusOptions.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                      </select>
+                    </td>
                     <td className="px-4 py-3 text-gray-600">{formatDate(inv.due_date)}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">

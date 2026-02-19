@@ -10,7 +10,7 @@ import SearchBar from '../components/ui/SearchBar';
 import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
-import { Plus, ShoppingCart, Eye, Trash2 } from 'lucide-react';
+import { Plus, ShoppingCart, Eye, Trash2, Download } from 'lucide-react';
 
 const statusOptions = [
   { value: 'order_placed', label: 'Order Placed' },
@@ -96,6 +96,22 @@ export default function OrdersPage() {
     return `$${Number(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
+  const downloadFile = async (apiPath: string, filename: string) => {
+    try {
+      const res = await api.get(apiPath, { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      addToast('Failed to download file', 'error');
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -168,6 +184,15 @@ export default function OrdersPage() {
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
                         <Link to={`/orders/${o.id}`} className="p-1.5 text-gray-400 hover:text-primary-600 rounded"><Eye size={16} /></Link>
+                        {o.file_path && (
+                          <button
+                            onClick={() => downloadFile(`/files/orders/${o.file_path}`, o.file_name || o.file_path)}
+                            className="p-1.5 text-gray-400 hover:text-primary-600 rounded"
+                            title="Download order document"
+                          >
+                            <Download size={16} />
+                          </button>
+                        )}
                         <button onClick={() => setDeleteId(o.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded"><Trash2 size={16} /></button>
                       </div>
                     </td>

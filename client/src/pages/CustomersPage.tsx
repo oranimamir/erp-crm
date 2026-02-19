@@ -10,7 +10,13 @@ import SearchBar from '../components/ui/SearchBar';
 import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
-import { Plus, Users, Eye, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Users, Eye, Pencil, Trash2, BarChart3 } from 'lucide-react';
+
+const CHART_COLORS = [
+  'bg-blue-500', 'bg-teal-500', 'bg-orange-400', 'bg-purple-500',
+  'bg-green-500', 'bg-red-400', 'bg-pink-400', 'bg-indigo-500',
+];
+const DOT_COLORS = CHART_COLORS;
 
 export default function CustomersPage() {
   const { addToast } = useToast();
@@ -25,6 +31,7 @@ export default function CustomersPage() {
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [form, setForm] = useState({ name: '', email: '', phone: '', address: '', company: '', notes: '' });
   const [saving, setSaving] = useState(false);
+  const [paymentData, setPaymentData] = useState<any[]>([]);
 
   const fetchCustomers = () => {
     setLoading(true);
@@ -34,6 +41,10 @@ export default function CustomersPage() {
   };
 
   useEffect(() => { fetchCustomers(); }, [page, search]);
+
+  useEffect(() => {
+    api.get('/dashboard/customer-payments').then(r => setPaymentData(r.data)).catch(() => {});
+  }, []);
 
   const openCreate = () => {
     setEditing(null);
@@ -156,6 +167,73 @@ export default function CustomersPage() {
       </Modal>
 
       <ConfirmDialog open={deleteId !== null} onClose={() => setDeleteId(null)} onConfirm={handleDelete} title="Delete Customer" message="Are you sure you want to delete this customer? This action cannot be undone." confirmLabel="Delete" />
+
+      {/* Customer Payments Chart */}
+      {(() => {
+        const months = [...new Set(paymentData.map((d: any) => d.month))].sort() as string[];
+        const names = [...new Set(paymentData.map((d: any) => d.customer_name))] as string[];
+        if (months.length === 0) return null;
+        const lookup: Record<string, Record<string, number>> = {};
+        paymentData.forEach((d: any) => {
+          if (!lookup[d.month]) lookup[d.month] = {};
+          lookup[d.month][d.customer_name] = d.total;
+        });
+        const monthTotals = months.map(m => Object.values(lookup[m] || {}).reduce((s: number, v: any) => s + v, 0));
+        const maxTotal = Math.max(...monthTotals, 1);
+        return (
+          <Card>
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
+              <BarChart3 size={16} className="text-gray-400" />
+              <h2 className="font-semibold text-gray-900">Payments Received from Customers (Last 6 Months)</h2>
+            </div>
+            <div className="p-5">
+              {/* Legend */}
+              <div className="flex flex-wrap gap-3 mb-4">
+                {names.map((name, i) => (
+                  <span key={name} className="flex items-center gap-1.5 text-xs text-gray-600">
+                    <span className={`w-3 h-3 rounded ${DOT_COLORS[i % DOT_COLORS.length]}`} />
+                    {name}
+                  </span>
+                ))}
+              </div>
+              {/* Stacked bar chart */}
+              <div className="flex items-end gap-2" style={{ height: '200px' }}>
+                {months.map(m => {
+                  const monthData = lookup[m] || {};
+                  const monthTotal = monthTotals[months.indexOf(m)];
+                  return (
+                    <div key={m} className="flex-1 flex flex-col items-center gap-1 h-full justify-end">
+                      <span className="text-xs text-gray-500 font-medium mb-1">
+                        ${monthTotal > 0 ? (monthTotal >= 1000 ? `${(monthTotal/1000).toFixed(0)}k` : monthTotal.toFixed(0)) : ''}
+                      </span>
+                      <div
+                        className="w-full flex flex-col-reverse rounded-t overflow-hidden"
+                        style={{ height: `${Math.max((monthTotal / maxTotal) * 155, monthTotal > 0 ? 4 : 0)}px` }}
+                      >
+                        {names.map((name, i) => {
+                          const val = monthData[name] || 0;
+                          const pct = monthTotal > 0 ? (val / monthTotal) * 100 : 0;
+                          return pct > 0 ? (
+                            <div
+                              key={name}
+                              className={`w-full ${CHART_COLORS[i % CHART_COLORS.length]}`}
+                              style={{ height: `${pct}%` }}
+                              title={`${name}: $${val.toLocaleString()}`}
+                            />
+                          ) : null;
+                        })}
+                      </div>
+                      <span className="text-[10px] text-gray-400 whitespace-nowrap">
+                        {new Date(m + '-01').toLocaleDateString(undefined, { month: 'short', year: '2-digit' })}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </Card>
+        );
+      })()}
     </div>
   );
 }
