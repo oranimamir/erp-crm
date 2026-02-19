@@ -57,7 +57,9 @@ router.get('/shipping-overview', (_req: Request, res: Response) => {
 });
 
 router.get('/monthly-payments', (_req: Request, res: Response) => {
-  // Months from January of current year up to current month
+  // Months from January of current year up to current month.
+  // Counts both explicit payment records AND invoices marked as paid (status='paid')
+  // without a payment record, using payment_date falling back to invoice_date / created_at.
   const months = db.prepare(`
     WITH RECURSIVE months(m) AS (
       SELECT strftime('%Y-01', 'now')
@@ -68,14 +70,30 @@ router.get('/monthly-payments', (_req: Request, res: Response) => {
     SELECT
       months.m as month,
       COALESCE((
-        SELECT SUM(p.amount) FROM payments p
-        JOIN invoices i ON p.invoice_id = i.id
-        WHERE i.type = 'customer' AND strftime('%Y-%m', p.payment_date) = months.m
+        SELECT SUM(amount) FROM (
+          SELECT p.amount FROM payments p
+          JOIN invoices i ON p.invoice_id = i.id
+          WHERE i.type = 'customer'
+            AND strftime('%Y-%m', p.payment_date) = months.m
+          UNION ALL
+          SELECT i.amount FROM invoices i
+          WHERE i.type = 'customer' AND i.status = 'paid'
+            AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
+            AND strftime('%Y-%m', COALESCE(i.payment_date, i.invoice_date, i.created_at)) = months.m
+        )
       ), 0) as received,
       COALESCE((
-        SELECT SUM(p.amount) FROM payments p
-        JOIN invoices i ON p.invoice_id = i.id
-        WHERE i.type = 'supplier' AND strftime('%Y-%m', p.payment_date) = months.m
+        SELECT SUM(amount) FROM (
+          SELECT p.amount FROM payments p
+          JOIN invoices i ON p.invoice_id = i.id
+          WHERE i.type = 'supplier'
+            AND strftime('%Y-%m', p.payment_date) = months.m
+          UNION ALL
+          SELECT i.amount FROM invoices i
+          WHERE i.type = 'supplier' AND i.status = 'paid'
+            AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
+            AND strftime('%Y-%m', COALESCE(i.payment_date, i.invoice_date, i.created_at)) = months.m
+        )
       ), 0) as paid_out
     FROM months ORDER BY months.m
   `).all();
