@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
@@ -56,6 +56,12 @@ const emptyForm: InvoiceForm = {
   notes: '',
 };
 
+function addDays(dateStr: string, days: number): string {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 export default function InvoiceFormPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -63,6 +69,8 @@ export default function InvoiceFormPage() {
   const isEdit = Boolean(id);
 
   const [form, setForm] = useState<InvoiceForm>({ ...emptyForm });
+  const [paymentTerms, setPaymentTerms] = useState('');
+  const dueDateManuallySet = useRef(false);
   const [file, setFile] = useState<File | null>(null);
   const [currentFile, setCurrentFile] = useState<{ name: string; path?: string } | null>(null);
   const [customers, setCustomers] = useState<any[]>([]);
@@ -112,7 +120,18 @@ export default function InvoiceFormPage() {
     loadData();
   }, [id]);
 
+  // Auto-calculate due date from invoice_date + payment_terms
+  useEffect(() => {
+    if (form.invoice_date && paymentTerms && !dueDateManuallySet.current) {
+      const days = parseInt(paymentTerms, 10);
+      if (!isNaN(days) && days >= 0) {
+        setForm(prev => ({ ...prev, due_date: addDays(form.invoice_date, days) }));
+      }
+    }
+  }, [form.invoice_date, paymentTerms]);
+
   const updateField = (field: keyof InvoiceForm, value: string) => {
+    if (field === 'due_date') dueDateManuallySet.current = true;
     setForm(prev => ({ ...prev, [field]: value }));
   };
 
@@ -144,8 +163,13 @@ export default function InvoiceFormPage() {
 
       addToast('Invoice scanned and fields auto-filled', 'success');
     } catch (err: any) {
-      const detail = err.response?.data?.error || 'Could not auto-scan invoice';
-      addToast(`${detail}. You can fill in the fields manually.`, 'info');
+      const detail = err.response?.data?.error || '';
+      const msg = detail.toLowerCase().includes('credit balance')
+        ? 'AI scanning unavailable: Anthropic API credits depleted. Fill in fields manually.'
+        : detail
+          ? `${detail}. You can fill in the fields manually.`
+          : 'Could not auto-scan invoice. You can fill in the fields manually.';
+      addToast(msg, 'info');
     } finally {
       setScanning(false);
     }
@@ -302,12 +326,20 @@ export default function InvoiceFormPage() {
             />
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <Input
               label="Invoice Date"
               type="date"
               value={form.invoice_date}
-              onChange={e => updateField('invoice_date', e.target.value)}
+              onChange={e => { dueDateManuallySet.current = false; updateField('invoice_date', e.target.value); }}
+            />
+            <Input
+              label="Payment Terms (days)"
+              type="number"
+              min="0"
+              value={paymentTerms}
+              onChange={e => { dueDateManuallySet.current = false; setPaymentTerms(e.target.value); }}
+              placeholder="e.g. 30"
             />
             <Input
               label="Due Date"

@@ -20,6 +20,7 @@ import ShipmentFormPage from './pages/ShipmentFormPage';
 import ShipmentDetailPage from './pages/ShipmentDetailPage';
 import InventoryPage from './pages/InventoryPage';
 import ProductionPage from './pages/ProductionPage';
+import ProductsPage from './pages/ProductsPage';
 import AdminUsersPage from './pages/AdminUsersPage';
 import AcceptInvitePage from './pages/AcceptInvitePage';
 import NotFoundPage from './pages/NotFoundPage';
@@ -53,6 +54,7 @@ export default function App() {
               <Route path="/shipments/:id/edit" element={<ShipmentFormPage />} />
               <Route path="/inventory" element={<InventoryPage />} />
               <Route path="/production" element={<ProductionPage />} />
+              <Route path="/products" element={<ProductsPage />} />
               <Route path="/admin/users" element={<AdminUsersPage />} />
               <Route path="*" element={<NotFoundPage />} />
             </Route>

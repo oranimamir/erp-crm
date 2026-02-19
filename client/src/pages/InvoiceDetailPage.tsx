@@ -76,8 +76,13 @@ export default function InvoiceDetailPage() {
       }));
       addToast('Wire transfer scanned and fields auto-filled', 'success');
     } catch (err: any) {
-      const detail = err.response?.data?.error || 'Could not auto-scan wire transfer';
-      addToast(`${detail}. You can fill in the fields manually.`, 'info');
+      const detail = err.response?.data?.error || '';
+      const msg = detail.toLowerCase().includes('credit balance')
+        ? 'AI scanning unavailable: Anthropic API credits depleted. Fill in fields manually.'
+        : detail
+          ? `${detail}. You can fill in the fields manually.`
+          : 'Could not auto-scan wire transfer. You can fill in the fields manually.';
+      addToast(msg, 'info');
     } finally {
       setWireScanning(false);
     }
@@ -174,9 +179,18 @@ export default function InvoiceDetailPage() {
     return `${symbol}${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
-  const getFileDownloadUrl = (filePath: string) => {
-    const filename = filePath.split('/').pop();
-    return `/api/files/invoices/${filename}`;
+  const downloadFile = async (apiPath: string, filename: string) => {
+    try {
+      const res = await api.get(apiPath, { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      addToast('Failed to download file', 'error');
+    }
   };
 
   if (loading) {
@@ -269,15 +283,16 @@ export default function InvoiceDetailPage() {
 
         {invoice.file_path && (
           <div className="mt-4 pt-4 border-t border-gray-100">
-            <a
-              href={getFileDownloadUrl(invoice.file_path)}
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              onClick={() => {
+                const filename = invoice.file_path.split('/').pop() || 'invoice';
+                downloadFile(`/files/invoices/${filename}`, filename);
+              }}
               className="inline-flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700 font-medium"
             >
               <Download size={16} />
               Download Invoice File
-            </a>
+            </button>
           </div>
         )}
       </Card>
@@ -336,15 +351,16 @@ export default function InvoiceDetailPage() {
                     )}
                   </div>
                   {payment.proof_path && (
-                    <a
-                      href={`/api/files/payments/${payment.proof_path.split('/').pop()}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <button
+                      onClick={() => {
+                        const fn = payment.proof_path.split('/').pop() || 'proof';
+                        downloadFile(`/files/payments/${fn}`, fn);
+                      }}
                       className="inline-flex items-center gap-1 mt-2 text-xs text-primary-600 hover:text-primary-700 font-medium"
                     >
                       <Download size={12} />
                       Download Proof
-                    </a>
+                    </button>
                   )}
                 </div>
               ))}
@@ -382,9 +398,15 @@ export default function InvoiceDetailPage() {
                   {wt.notes && <p className="text-xs text-gray-500 mb-1">{wt.notes}</p>}
                   <div className="flex items-center gap-2 mt-2">
                     {wt.file_path && (
-                      <a href={`/api/files/wire-transfers/${wt.file_path}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 font-medium">
+                      <button
+                        onClick={() => {
+                          const fn = wt.file_path.split('/').pop() || 'transfer';
+                          downloadFile(`/files/wire-transfers/${fn}`, fn);
+                        }}
+                        className="inline-flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 font-medium"
+                      >
                         <Download size={12} /> Download
-                      </a>
+                      </button>
                     )}
                     {wt.status === 'pending' && (
                       <>

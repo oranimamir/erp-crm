@@ -19,6 +19,14 @@ const categoryOptions = [
   { value: 'finished_product', label: 'Finished Product' },
 ];
 
+const unitOptions = [
+  { value: 'tons', label: 'tons' },
+  { value: 'kg', label: 'kg' },
+  { value: 'L', label: 'L' },
+  { value: 'pcs', label: 'pcs' },
+  { value: 'boxes', label: 'boxes' },
+];
+
 const categoryColors: Record<string, 'orange' | 'blue' | 'green'> = {
   raw_material: 'orange',
   packaging: 'blue',
@@ -45,9 +53,11 @@ export default function InventoryPage() {
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [form, setForm] = useState({
-    name: '', sku: '', category: 'raw_material', quantity: '0', unit: 'pcs',
+    name: '', sku: '', category: 'raw_material', quantity: '0', unit: 'tons',
     min_stock_level: '0', supplier_id: '', unit_cost: '0', notes: '',
   });
+  const [products, setProducts] = useState<any[]>([]);
+  const [selectedProduct, setSelectedProduct] = useState('');
   const [saving, setSaving] = useState(false);
   const [adjustModal, setAdjustModal] = useState<any>(null);
   const [adjustAmount, setAdjustAmount] = useState('');
@@ -63,19 +73,22 @@ export default function InventoryPage() {
   useEffect(() => { fetchItems(); }, [page, search, filterCategory]);
   useEffect(() => {
     api.get('/suppliers', { params: { limit: 100 } }).then(res => setSuppliers(res.data.data || []));
+    api.get('/products', { params: { limit: 1000 } }).then(res => setProducts(res.data.data || [])).catch(() => {});
   }, []);
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ name: '', sku: '', category: 'raw_material', quantity: '0', unit: 'pcs', min_stock_level: '0', supplier_id: '', unit_cost: '0', notes: '' });
+    setSelectedProduct('');
+    setForm({ name: '', sku: '', category: 'raw_material', quantity: '0', unit: 'tons', min_stock_level: '0', supplier_id: '', unit_cost: '0', notes: '' });
     setShowModal(true);
   };
 
   const openEdit = (item: any) => {
     setEditing(item);
+    setSelectedProduct('');
     setForm({
       name: item.name || '', sku: item.sku || '', category: item.category || 'raw_material',
-      quantity: String(item.quantity ?? 0), unit: item.unit || 'pcs',
+      quantity: String(item.quantity ?? 0), unit: item.unit || 'tons',
       min_stock_level: String(item.min_stock_level ?? 0), supplier_id: String(item.supplier_id || ''),
       unit_cost: String(item.unit_cost ?? 0), notes: item.notes || '',
     });
@@ -201,6 +214,30 @@ export default function InventoryPage() {
 
       <Modal open={showModal} onClose={() => setShowModal(false)} title={editing ? 'Edit Item' : 'New Inventory Item'} size="lg">
         <div className="space-y-4">
+          {products.length > 0 && (
+            <Select
+              label="Select Product (optional)"
+              value={selectedProduct}
+              onChange={e => {
+                const pid = e.target.value;
+                setSelectedProduct(pid);
+                if (pid) {
+                  const p = products.find((x: any) => String(x.id) === pid);
+                  if (p) {
+                    setForm(prev => ({
+                      ...prev,
+                      name: p.name,
+                      sku: p.sku,
+                      category: p.category,
+                      unit: p.unit,
+                    }));
+                  }
+                }
+              }}
+              options={products.map((p: any) => ({ value: String(p.id), label: `${p.name} (${p.sku})` }))}
+              placeholder="Choose a product to auto-fill..."
+            />
+          )}
           <div className="grid grid-cols-2 gap-4">
             <Input label="Name *" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
             <Input label="SKU *" value={form.sku} onChange={e => setForm({ ...form, sku: e.target.value })} />
@@ -208,7 +245,7 @@ export default function InventoryPage() {
           <Select label="Category" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} options={categoryOptions} />
           <div className="grid grid-cols-3 gap-4">
             <Input label="Quantity" type="number" value={form.quantity} onChange={e => setForm({ ...form, quantity: e.target.value })} />
-            <Input label="Unit" value={form.unit} onChange={e => setForm({ ...form, unit: e.target.value })} />
+            <Select label="Unit" value={form.unit} onChange={e => setForm({ ...form, unit: e.target.value })} options={unitOptions} />
             <Input label="Min Stock Level" type="number" value={form.min_stock_level} onChange={e => setForm({ ...form, min_stock_level: e.target.value })} />
           </div>
           <div className="grid grid-cols-2 gap-4">

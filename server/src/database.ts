@@ -295,6 +295,17 @@ export async function initializeDatabase() {
       FOREIGN KEY (invited_by) REFERENCES users(id) ON DELETE SET NULL
     );
 
+    CREATE TABLE IF NOT EXISTS products (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      sku TEXT UNIQUE NOT NULL,
+      category TEXT NOT NULL DEFAULT 'raw_material',
+      unit TEXT NOT NULL DEFAULT 'tons',
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS wire_transfers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       invoice_id INTEGER NOT NULL,
