@@ -9,8 +9,8 @@ router.get('/stats', (_req: Request, res: Response) => {
   const totalOrders = (db.prepare('SELECT COUNT(*) as count FROM orders').get() as any).count;
   const activeOrders = (db.prepare("SELECT COUNT(*) as count FROM orders WHERE status NOT IN ('completed', 'cancelled')").get() as any).count;
   const totalInvoices = (db.prepare('SELECT COUNT(*) as count FROM invoices').get() as any).count;
-  const pendingInvoiceAmount = (db.prepare("SELECT COALESCE(SUM(amount), 0) as total FROM invoices WHERE status IN ('draft', 'sent', 'overdue')").get() as any).total;
-  const paidInvoiceAmount = (db.prepare("SELECT COALESCE(SUM(amount), 0) as total FROM invoices WHERE status = 'paid'").get() as any).total;
+  const pendingInvoiceAmount = (db.prepare("SELECT COALESCE(SUM(amount), 0) as total FROM invoices WHERE type = 'customer' AND status IN ('draft', 'sent', 'overdue')").get() as any).total;
+  const paidInvoiceAmount = (db.prepare("SELECT COALESCE(SUM(amount), 0) as total FROM invoices WHERE type = 'customer' AND status = 'paid'").get() as any).total;
   const totalPayments = (db.prepare('SELECT COALESCE(SUM(amount), 0) as total FROM payments').get() as any).total;
   const activeShipments = (db.prepare("SELECT COUNT(*) as count FROM shipments WHERE status NOT IN ('delivered', 'returned', 'failed')").get() as any).count;
 
