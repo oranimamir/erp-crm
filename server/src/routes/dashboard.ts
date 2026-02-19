@@ -34,11 +34,10 @@ router.get('/recent-orders', (_req: Request, res: Response) => {
 
 router.get('/pending-invoices', (_req: Request, res: Response) => {
   const invoices = db.prepare(`
-    SELECT i.*, c.name as customer_name, s.name as supplier_name
+    SELECT i.*, c.name as customer_name
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
-    LEFT JOIN suppliers s ON i.supplier_id = s.id
-    WHERE i.status IN ('draft', 'sent', 'overdue')
+    WHERE i.type = 'customer' AND i.status IN ('draft', 'sent', 'overdue')
     ORDER BY i.created_at DESC LIMIT 10
   `).all();
   res.json(invoices);
@@ -58,10 +57,10 @@ router.get('/shipping-overview', (_req: Request, res: Response) => {
 });
 
 router.get('/monthly-payments', (_req: Request, res: Response) => {
-  // Last 12 months of payments grouped by month
+  // Months from January of current year up to current month
   const months = db.prepare(`
     WITH RECURSIVE months(m) AS (
-      SELECT strftime('%Y-%m', 'now', '-11 months')
+      SELECT strftime('%Y-01', 'now')
       UNION ALL
       SELECT strftime('%Y-%m', m || '-01', '+1 month') FROM months
       WHERE m < strftime('%Y-%m', 'now')

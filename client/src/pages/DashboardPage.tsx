@@ -181,7 +181,7 @@ export default function DashboardPage() {
       <Card>
         <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
           <BarChart3 size={16} className="text-gray-400" />
-          <h2 className="font-semibold text-gray-900">Monthly Cash Flow (Last 12 Months)</h2>
+          <h2 className="font-semibold text-gray-900">Monthly Cash Flow ({new Date().getFullYear()})</h2>
         </div>
         <div className="p-5">
           {monthlyPayments.length === 0 ? (
