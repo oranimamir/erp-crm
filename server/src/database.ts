@@ -356,6 +356,9 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE invoices ADD COLUMN invoice_date TEXT`); } catch (_) { /* column may already exist */ }
   try { db.exec(`ALTER TABLE invoices ADD COLUMN payment_date TEXT`); } catch (_) { /* column may already exist */ }
 
+  // Add unit column to order_items
+  try { db.exec(`ALTER TABLE order_items ADD COLUMN unit TEXT NOT NULL DEFAULT 'tons'`); } catch (_) { /* column may already exist */ }
+
   // Seed admin user if not exists
   const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');
   if (!adminExists) {

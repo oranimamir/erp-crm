@@ -9,8 +9,10 @@ import Select from '../components/ui/Select';
 import { ArrowLeft, Plus, X } from 'lucide-react';
 
 interface OrderItem {
+  productId: string;
   description: string;
   quantity: number;
+  unit: string;
   unit_price: number;
 }
 
@@ -18,6 +20,23 @@ const typeOptions = [
   { value: 'customer', label: 'Customer Order' },
   { value: 'supplier', label: 'Supplier Order' },
 ];
+
+const unitOptions = [
+  { value: 'tons', label: 'MT (metric tons)' },
+  { value: 'kg', label: 'kg' },
+  { value: 'lbs', label: 'lbs' },
+];
+
+function toMetricTons(quantity: number, unit: string): string {
+  if (!quantity) return '0';
+  let mt: number;
+  if (unit === 'kg') mt = quantity / 1000;
+  else if (unit === 'lbs') mt = quantity / 2204.623;
+  else mt = quantity;
+  return mt.toLocaleString(undefined, { maximumFractionDigits: 3 });
+}
+
+const emptyItem = (): OrderItem => ({ productId: '', description: '', quantity: 1, unit: 'tons', unit_price: 0 });
 
 export default function OrderFormPage() {
   const { id } = useParams();
@@ -29,6 +48,7 @@ export default function OrderFormPage() {
   const [saving, setSaving] = useState(false);
   const [customers, setCustomers] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
+  const [products, setProducts] = useState<any[]>([]);
 
   const [form, setForm] = useState({
     order_number: '',
@@ -39,22 +59,29 @@ export default function OrderFormPage() {
     notes: '',
   });
 
-  const [items, setItems] = useState<OrderItem[]>([
-    { description: '', quantity: 1, unit_price: 0 },
-  ]);
+  const [items, setItems] = useState<OrderItem[]>([emptyItem()]);
 
-  // Load customers and suppliers for dropdowns
   useEffect(() => {
     Promise.all([
       api.get('/customers', { params: { limit: 1000 } }),
       api.get('/suppliers', { params: { limit: 1000 } }),
-    ]).then(([cRes, sRes]) => {
+      api.get('/products', { params: { limit: 1000 } }),
+    ]).then(([cRes, sRes, pRes]) => {
       setCustomers(cRes.data.data || []);
       setSuppliers(sRes.data.data || []);
+      setProducts(pRes.data.data || []);
+    }).catch(() => {
+      // products may not exist yet, still load customers/suppliers
+      Promise.all([
+        api.get('/customers', { params: { limit: 1000 } }),
+        api.get('/suppliers', { params: { limit: 1000 } }),
+      ]).then(([cRes, sRes]) => {
+        setCustomers(cRes.data.data || []);
+        setSuppliers(sRes.data.data || []);
+      });
     });
   }, []);
 
-  // If editing, load existing order
   useEffect(() => {
     if (!id) return;
     setLoading(true);
@@ -71,8 +98,10 @@ export default function OrderFormPage() {
         });
         if (o.items && o.items.length > 0) {
           setItems(o.items.map((item: any) => ({
+            productId: '',
             description: item.description || '',
             quantity: item.quantity ?? 1,
+            unit: item.unit || 'tons',
             unit_price: item.unit_price ?? 0,
           })));
         }
@@ -92,50 +121,40 @@ export default function OrderFormPage() {
     setItems(prev => prev.map((item, i) => i === index ? { ...item, [field]: value } : item));
   };
 
-  const addItem = () => {
-    setItems(prev => [...prev, { description: '', quantity: 1, unit_price: 0 }]);
+  const selectProduct = (index: number, productId: string) => {
+    const product = products.find(p => String(p.id) === productId);
+    setItems(prev => prev.map((item, i) => {
+      if (i !== index) return item;
+      return {
+        ...item,
+        productId,
+        description: product ? product.name : item.description,
+        unit: product ? product.unit : item.unit,
+      };
+    }));
   };
+
+  const addItem = () => setItems(prev => [...prev, emptyItem()]);
 
   const removeItem = (index: number) => {
     if (items.length <= 1) return;
     setItems(prev => prev.filter((_, i) => i !== index));
   };
 
-  const itemTotal = (item: OrderItem) => {
-    return (Number(item.quantity) || 0) * (Number(item.unit_price) || 0);
-  };
+  const itemTotal = (item: OrderItem) => (Number(item.quantity) || 0) * (Number(item.unit_price) || 0);
 
-  const grandTotal = useMemo(() => {
-    return items.reduce((sum, item) => sum + itemTotal(item), 0);
-  }, [items]);
+  const grandTotal = useMemo(() => items.reduce((sum, item) => sum + itemTotal(item), 0), [items]);
 
-  const formatCurrency = (amount: number) => {
-    return `$${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  };
-
-  const customerOptions = customers.map(c => ({ value: String(c.id), label: c.name }));
-  const supplierOptions = suppliers.map(s => ({ value: String(s.id), label: s.name }));
+  const formatCurrency = (amount: number) =>
+    `$${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!form.order_number.trim()) {
-      addToast('Order number is required', 'error');
-      return;
-    }
-
-    if (form.type === 'customer' && !form.customer_id) {
-      addToast('Please select a customer', 'error');
-      return;
-    }
-
-    if (form.type === 'supplier' && !form.supplier_id) {
-      addToast('Please select a supplier', 'error');
-      return;
-    }
-
-    const hasValidItem = items.some(item => item.description.trim());
-    if (!hasValidItem) {
+    if (!form.order_number.trim()) { addToast('Order number is required', 'error'); return; }
+    if (form.type === 'customer' && !form.customer_id) { addToast('Please select a customer', 'error'); return; }
+    if (form.type === 'supplier' && !form.supplier_id) { addToast('Please select a supplier', 'error'); return; }
+    if (!items.some(item => item.description.trim())) {
       addToast('Please add at least one line item with a description', 'error');
       return;
     }
@@ -154,6 +173,7 @@ export default function OrderFormPage() {
           .map(item => ({
             description: item.description,
             quantity: Number(item.quantity) || 0,
+            unit: item.unit,
             unit_price: Number(item.unit_price) || 0,
           })),
       };
@@ -217,7 +237,7 @@ export default function OrderFormPage() {
                 label="Customer *"
                 value={form.customer_id}
                 onChange={e => updateField('customer_id', e.target.value)}
-                options={customerOptions}
+                options={customers.map(c => ({ value: String(c.id), label: c.name }))}
                 placeholder="Select a customer..."
               />
             ) : (
@@ -225,7 +245,7 @@ export default function OrderFormPage() {
                 label="Supplier *"
                 value={form.supplier_id}
                 onChange={e => updateField('supplier_id', e.target.value)}
-                options={supplierOptions}
+                options={suppliers.map(s => ({ value: String(s.id), label: s.name }))}
                 placeholder="Select a supplier..."
               />
             )}
@@ -236,7 +256,7 @@ export default function OrderFormPage() {
               <textarea
                 value={form.description}
                 onChange={e => updateField('description', e.target.value)}
-                rows={3}
+                rows={2}
                 className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
                 placeholder="Order description..."
               />
@@ -263,62 +283,89 @@ export default function OrderFormPage() {
             </Button>
           </div>
 
-          <div className="space-y-3">
-            {/* Header row */}
-            <div className="hidden md:grid md:grid-cols-12 gap-3 text-xs font-medium text-gray-500 uppercase tracking-wider px-1">
-              <div className="col-span-5">Description</div>
-              <div className="col-span-2">Quantity</div>
-              <div className="col-span-2">Unit Price</div>
-              <div className="col-span-2 text-right">Total</div>
-              <div className="col-span-1" />
-            </div>
-
+          <div className="space-y-4">
             {items.map((item, index) => (
-              <div key={index} className="grid grid-cols-1 md:grid-cols-12 gap-3 items-start p-3 bg-gray-50 rounded-lg">
-                <div className="md:col-span-5">
-                  <label className="md:hidden block text-xs font-medium text-gray-500 mb-1">Description</label>
-                  <input
-                    type="text"
-                    value={item.description}
-                    onChange={e => updateItem(index, 'description', e.target.value)}
-                    placeholder="Item description..."
-                    className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  />
+              <div key={index} className="p-4 bg-gray-50 rounded-lg border border-gray-200 space-y-3">
+                {/* Row 1: Product selector + Description */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {products.length > 0 && (
+                    <div className="space-y-1">
+                      <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide">Product (optional)</label>
+                      <select
+                        value={item.productId}
+                        onChange={e => selectProduct(index, e.target.value)}
+                        className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                      >
+                        <option value="">Select product to auto-fill...</option>
+                        {products.map((p: any) => (
+                          <option key={p.id} value={String(p.id)}>{p.name} ({p.sku})</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <div className="space-y-1">
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide">Description *</label>
+                    <input
+                      type="text"
+                      value={item.description}
+                      onChange={e => updateItem(index, 'description', e.target.value)}
+                      placeholder="Item description..."
+                      className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
+                  </div>
                 </div>
-                <div className="md:col-span-2">
-                  <label className="md:hidden block text-xs font-medium text-gray-500 mb-1">Quantity</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={item.quantity}
-                    onChange={e => updateItem(index, 'quantity', Number(e.target.value))}
-                    className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  />
-                </div>
-                <div className="md:col-span-2">
-                  <label className="md:hidden block text-xs font-medium text-gray-500 mb-1">Unit Price</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={item.unit_price}
-                    onChange={e => updateItem(index, 'unit_price', Number(e.target.value))}
-                    className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  />
-                </div>
-                <div className="md:col-span-2 flex items-center md:justify-end">
-                  <label className="md:hidden block text-xs font-medium text-gray-500 mr-2">Total:</label>
-                  <span className="text-sm font-medium text-gray-900 py-2">
-                    {formatCurrency(itemTotal(item))}
-                  </span>
-                </div>
-                <div className="md:col-span-1 flex items-center justify-end">
+
+                {/* Row 2: Qty, Unit, MT, Unit Price, Total, Remove */}
+                <div className="flex flex-wrap gap-3 items-end">
+                  <div className="space-y-1">
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide">Quantity</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={item.quantity}
+                      onChange={e => updateItem(index, 'quantity', Number(e.target.value))}
+                      className="block w-24 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide">Unit</label>
+                    <select
+                      value={item.unit}
+                      onChange={e => updateItem(index, 'unit', e.target.value)}
+                      className="block rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    >
+                      {unitOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide">= Metric Tons</label>
+                    <div className="flex items-center h-[38px] px-3 rounded-lg bg-white border border-gray-200 text-sm font-medium text-gray-700 min-w-[80px]">
+                      {toMetricTons(Number(item.quantity), item.unit)} MT
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide">Unit Price ($)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={item.unit_price}
+                      onChange={e => updateItem(index, 'unit_price', Number(e.target.value))}
+                      className="block w-28 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide">Total</label>
+                    <div className="flex items-center h-[38px] px-3 rounded-lg bg-white border border-gray-200 text-sm font-semibold text-gray-900 min-w-[100px]">
+                      {formatCurrency(itemTotal(item))}
+                    </div>
+                  </div>
                   <button
                     type="button"
                     onClick={() => removeItem(index)}
                     disabled={items.length <= 1}
-                    className="p-1.5 text-gray-400 hover:text-red-600 rounded disabled:opacity-30 disabled:cursor-not-allowed"
+                    className="p-2 text-gray-400 hover:text-red-600 rounded disabled:opacity-30 disabled:cursor-not-allowed self-end"
                     title="Remove item"
                   >
                     <X size={16} />
