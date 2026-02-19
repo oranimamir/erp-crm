@@ -12,33 +12,39 @@ const upload = multer({
   fileFilter: (_req, file, cb) => {
     const allowed = ['.pdf', '.jpg', '.jpeg', '.png', '.webp'];
     const ext = file.originalname.toLowerCase().slice(file.originalname.lastIndexOf('.'));
-    if (allowed.includes(ext)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only PDF, JPEG, PNG, and WebP files are allowed'));
-    }
+    if (allowed.includes(ext)) cb(null, true);
+    else cb(new Error('Only PDF, JPEG, PNG, and WebP files are allowed'));
   },
 });
 
-const EXTRACTION_PROMPT = `You are an order document extraction assistant. Analyze the provided purchase order or sales order document and extract the following fields. Return ONLY valid JSON with no extra text or markdown fences.
+const EXTRACTION_PROMPT = `You are an order document extraction assistant. Analyze the provided purchase order or sales order document and extract as many fields as possible. Return ONLY valid JSON with no extra text or markdown fences.
 
 {
   "order_number": "string or null",
   "customer_or_supplier_name": "string or null (the company name of the buyer or seller)",
-  "order_date": "string or null (YYYY-MM-DD format)",
+  "order_date": "string or null (YYYY-MM-DD format — the date the order was placed)",
+  "inco_terms": "string or null (e.g. FOB, CIF, DAP, DDP, EXW, CFR, FCA — extract the Incoterm if mentioned)",
+  "destination": "string or null (delivery destination port, city, or country)",
+  "transport": "string or null (mode of transport: Sea, Air, Road, Rail, or Multimodal)",
+  "delivery_date": "string or null (YYYY-MM-DD format — requested or estimated delivery date)",
+  "payment_terms": "string or null (e.g. Net 30, 30% advance 70% on BL, LC at sight)",
   "items": [
     {
-      "product_name": "string (name of the product ordered)",
+      "product_name": "string (the TripleW catalog product name if identifiable, otherwise the product name as written)",
+      "client_product_name": "string or null (the exact product name as written in the customer's order document, if different from catalog name)",
       "quantity": "number",
       "unit": "string (use 'tons' for metric tons, 'kg' for kilograms, 'lbs' for pounds — default to 'tons' if unclear)",
-      "unit_price": "number or null"
+      "unit_price": "number or null",
+      "currency": "string or null (USD or EUR)",
+      "packaging": "string or null (e.g. 25kg bags, bulk, drums)"
     }
   ],
-  "notes": "string or null (any relevant notes or special instructions)"
+  "notes": "string or null (any relevant notes, special instructions, or remarks)"
 }
 
 Rules:
 - Return only the JSON object, no markdown fences or extra text
+- Extract every field you can find — each order format is different, do your best
 - For quantities, return the numeric value only
 - If items cannot be determined, return an empty array
 - For units, only use: tons, kg, or lbs`;
@@ -69,7 +75,7 @@ async function extractWithClaude(file: Express.Multer.File): Promise<Record<stri
     }
     response = await client.messages.create({
       model: 'claude-sonnet-4-5-20250929',
-      max_tokens: 1024,
+      max_tokens: 1500,
       messages: [{ role: 'user', content: `${EXTRACTION_PROMPT}\n\nOrder document text:\n${text}` }],
     });
   } else {
@@ -77,7 +83,7 @@ async function extractWithClaude(file: Express.Multer.File): Promise<Record<stri
     const mediaType = getMediaType(file.originalname);
     response = await client.messages.create({
       model: 'claude-sonnet-4-5-20250929',
-      max_tokens: 1024,
+      max_tokens: 1500,
       messages: [{
         role: 'user',
         content: [
@@ -133,15 +139,24 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
     const items = Array.isArray(extracted.items)
       ? extracted.items.map((item: any) => ({
           ...fuzzyMatchProduct(item.product_name || ''),
+          client_product_name: item.client_product_name || item.product_name || null,
           quantity: item.quantity != null ? Number(item.quantity) : 1,
           unit: ['tons', 'kg', 'lbs'].includes(item.unit) ? item.unit : 'tons',
           unit_price: item.unit_price != null ? Number(item.unit_price) : 0,
+          currency: item.currency || 'USD',
+          packaging: item.packaging || null,
         }))
       : [];
 
     res.json({
-      order_number: extracted.order_number || null,
-      notes: extracted.notes || null,
+      order_number:   extracted.order_number   || null,
+      order_date:     extracted.order_date     || null,
+      inco_terms:     extracted.inco_terms     || null,
+      destination:    extracted.destination    || null,
+      transport:      extracted.transport      || null,
+      delivery_date:  extracted.delivery_date  || null,
+      payment_terms:  extracted.payment_terms  || null,
+      notes:          extracted.notes          || null,
       ...entityMatch,
       items,
     });

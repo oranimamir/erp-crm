@@ -128,7 +128,10 @@ export default function InvoiceGeneratorPage() {
   const handleTemplateUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.type !== 'application/pdf') { addToast('Only PDF files allowed', 'error'); return; }
+    const allowed = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+    if (!allowed.includes(file.type) && !file.name.endsWith('.docx')) {
+      addToast('Only PDF or Word (.docx) files allowed', 'error'); return;
+    }
 
     setTemplateUploading(true);
     try {
@@ -266,14 +269,13 @@ export default function InvoiceGeneratorPage() {
         <div className="p-5">
           <SectionTitle>Invoice Template</SectionTitle>
           <p className="text-sm text-gray-500 mb-4">
-            Upload your company invoice template (PDF). The system will use it as the visual base and
-            auto-extract company &amp; bank details. If no template is uploaded, a standard format is generated.
+            Upload your invoice template (Word .docx or PDF). The system auto-extracts your company name, address, VAT, bank &amp; IBAN details and pre-fills them below. When generating, your PDF template is used as the visual base (logo &amp; branding preserved). If no template is uploaded, a standard format is generated.
           </p>
 
           <input
             ref={fileInputRef}
             type="file"
-            accept="application/pdf"
+            accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             className="hidden"
             onChange={handleTemplateUpload}
           />

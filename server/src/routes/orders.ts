@@ -60,7 +60,11 @@ router.get('/:id', (req: Request, res: Response) => {
 });
 
 router.post('/', (req: Request, res: Response) => {
-  const { order_number, customer_id, supplier_id, type, status, description, notes, items } = req.body;
+  const {
+    order_number, customer_id, supplier_id, type, status, description, notes, items,
+    order_date, inco_terms, destination, transport, delivery_date, payment_terms,
+  } = req.body;
+
   if (!order_number || !type) {
     res.status(400).json({ error: 'order_number and type are required' });
     return;
@@ -73,21 +77,30 @@ router.post('/', (req: Request, res: Response) => {
     }
 
     const result = db.prepare(`
-      INSERT INTO orders (order_number, customer_id, supplier_id, type, status, total_amount, description, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO orders (order_number, customer_id, supplier_id, type, status, total_amount, description, notes,
+        order_date, inco_terms, destination, transport, delivery_date, payment_terms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       order_number,
       type === 'customer' ? (customer_id || null) : null,
       type === 'supplier' ? (supplier_id || null) : null,
-      type, status || 'order_placed', total_amount, description || null, notes || null
+      type, status || 'order_placed', total_amount, description || null, notes || null,
+      order_date || null, inco_terms || null, destination || null,
+      transport || null, delivery_date || null, payment_terms || null
     );
 
     const orderId = result.lastInsertRowid;
 
     if (items && Array.isArray(items)) {
-      const insertItem = db.prepare('INSERT INTO order_items (order_id, description, quantity, unit, unit_price, currency, packaging, total) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+      const insertItem = db.prepare(
+        'INSERT INTO order_items (order_id, description, quantity, unit, unit_price, currency, packaging, total, client_product_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      );
       for (const item of items) {
-        insertItem.run(orderId, item.description, item.quantity, item.unit || 'tons', item.unit_price, item.currency || 'USD', item.packaging || null, item.quantity * item.unit_price);
+        insertItem.run(
+          orderId, item.description, item.quantity, item.unit || 'tons',
+          item.unit_price, item.currency || 'USD', item.packaging || null,
+          item.quantity * item.unit_price, item.client_product_name || null
+        );
       }
     }
 
@@ -115,28 +128,43 @@ router.put('/:id', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Order not found' }); return; }
 
-  const { order_number, customer_id, supplier_id, type, status, description, notes, items } = req.body;
+  const {
+    order_number, customer_id, supplier_id, type, status, description, notes, items,
+    order_date, inco_terms, destination, transport, delivery_date, payment_terms,
+  } = req.body;
 
   const updateOrder = db.transaction(() => {
     let total_amount = existing.total_amount;
     if (items && Array.isArray(items)) {
       total_amount = items.reduce((sum: number, item: any) => sum + (item.quantity * item.unit_price), 0);
       db.prepare('DELETE FROM order_items WHERE order_id = ?').run(req.params.id);
-      const insertItem = db.prepare('INSERT INTO order_items (order_id, description, quantity, unit, unit_price, currency, packaging, total) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+      const insertItem = db.prepare(
+        'INSERT INTO order_items (order_id, description, quantity, unit, unit_price, currency, packaging, total, client_product_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      );
       for (const item of items) {
-        insertItem.run(req.params.id, item.description, item.quantity, item.unit || 'tons', item.unit_price, item.currency || 'USD', item.packaging || null, item.quantity * item.unit_price);
+        insertItem.run(
+          req.params.id, item.description, item.quantity, item.unit || 'tons',
+          item.unit_price, item.currency || 'USD', item.packaging || null,
+          item.quantity * item.unit_price, item.client_product_name || null
+        );
       }
     }
 
     db.prepare(`
-      UPDATE orders SET order_number=?, customer_id=?, supplier_id=?, type=?, status=?, total_amount=?, description=?, notes=?, updated_at=datetime('now')
+      UPDATE orders SET order_number=?, customer_id=?, supplier_id=?, type=?, status=?, total_amount=?,
+        description=?, notes=?, order_date=?, inco_terms=?, destination=?, transport=?,
+        delivery_date=?, payment_terms=?, updated_at=datetime('now')
       WHERE id=?
     `).run(
       order_number || existing.order_number,
       (type || existing.type) === 'customer' ? (customer_id || existing.customer_id) : null,
       (type || existing.type) === 'supplier' ? (supplier_id || existing.supplier_id) : null,
       type || existing.type, status || existing.status, total_amount,
-      description ?? existing.description, notes ?? existing.notes, req.params.id
+      description ?? existing.description, notes ?? existing.notes,
+      order_date ?? existing.order_date, inco_terms ?? existing.inco_terms,
+      destination ?? existing.destination, transport ?? existing.transport,
+      delivery_date ?? existing.delivery_date, payment_terms ?? existing.payment_terms,
+      req.params.id
     );
   });
 

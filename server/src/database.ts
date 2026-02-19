@@ -361,6 +361,16 @@ export async function initializeDatabase() {
   // Add packaging and currency columns to order_items
   try { db.exec(`ALTER TABLE order_items ADD COLUMN packaging TEXT`); } catch (_) { /* column may already exist */ }
   try { db.exec(`ALTER TABLE order_items ADD COLUMN currency TEXT NOT NULL DEFAULT 'USD'`); } catch (_) { /* column may already exist */ }
+  // Add client_product_name to order_items
+  try { db.exec(`ALTER TABLE order_items ADD COLUMN client_product_name TEXT`); } catch (_) { /* column may already exist */ }
+
+  // Add new order-level fields
+  try { db.exec(`ALTER TABLE orders ADD COLUMN order_date TEXT`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE orders ADD COLUMN inco_terms TEXT`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE orders ADD COLUMN destination TEXT`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE orders ADD COLUMN transport TEXT`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE orders ADD COLUMN delivery_date TEXT`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE orders ADD COLUMN payment_terms TEXT`); } catch (_) { /* column may already exist */ }
 
   // Seed admin user if not exists
   const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');

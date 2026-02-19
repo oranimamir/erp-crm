@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
-import { templatePdfPath } from './invoice-template.js';
+import { getTemplatePdfPath } from './invoice-template.js';
 
 const router = Router();
 
@@ -63,12 +63,12 @@ function hexToRgbFraction(hex: string): [number, number, number] {
 router.post('/', async (req: Request, res: Response) => {
   const data: InvoiceData = req.body;
 
-  const templateExists = fs.existsSync(templatePdfPath);
-  const useTemplate = data.use_template && templateExists;
+  const templatePdfPath = getTemplatePdfPath();
+  const useTemplate = data.use_template && !!templatePdfPath;
 
   try {
     if (useTemplate) {
-      await generateWithTemplate(req, res, data);
+      await generateWithTemplate(req, res, data, templatePdfPath!);
     } else {
       await generateFromScratch(req, res, data);
     }
@@ -83,11 +83,11 @@ router.post('/', async (req: Request, res: Response) => {
 // ══════════════════════════════════════════════════════════════════════════
 // MODE A: template overlay via pdf-lib
 // ══════════════════════════════════════════════════════════════════════════
-async function generateWithTemplate(_req: Request, res: Response, data: InvoiceData) {
+async function generateWithTemplate(_req: Request, res: Response, data: InvoiceData, tmplPath: string) {
   // Lazy-load pdf-lib to avoid startup errors if package missing
   const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
 
-  const templateBytes = fs.readFileSync(templatePdfPath);
+  const templateBytes = fs.readFileSync(tmplPath);
   const pdfDoc = await PDFDocument.load(templateBytes);
 
   const pages = pdfDoc.getPages();
