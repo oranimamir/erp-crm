@@ -84,9 +84,11 @@ export default function OrderFormPage() {
   const { addToast } = useToast();
   const isEditing   = Boolean(id);
 
-  const [loading,  setLoading]  = useState(false);
-  const [saving,   setSaving]   = useState(false);
-  const [scanning, setScanning] = useState(false);
+  const [loading,      setLoading]      = useState(false);
+  const [saving,       setSaving]       = useState(false);
+  const [scanning,     setScanning]     = useState(false);
+  const [scanFilePath, setScanFilePath] = useState<string | null>(null);
+  const [scanFileName, setScanFileName] = useState<string | null>(null);
 
   const [customers, setCustomers] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
@@ -225,6 +227,8 @@ export default function OrderFormPage() {
         })));
       }
 
+      if (data.scan_file_path) setScanFilePath(data.scan_file_path);
+      if (data.scan_file_name) setScanFileName(data.scan_file_name);
       addToast('Order scanned — please review and confirm all fields', 'success');
     } catch (err: any) {
       const detail = err.response?.data?.error || '';
@@ -260,6 +264,8 @@ export default function OrderFormPage() {
         payment_terms: form.payment_terms || null,
         description:   form.description,
         notes:         form.notes,
+        file_path:     scanFilePath || null,
+        file_name:     scanFileName || null,
         items: items
           .filter(item => item.description.trim())
           .map(item => ({

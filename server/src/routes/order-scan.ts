@@ -3,6 +3,10 @@ import multer from 'multer';
 import Anthropic from '@anthropic-ai/sdk';
 import { PDFParse } from 'pdf-parse';
 import db from '../database.js';
+import path from 'path';
+import fs from 'fs';
+
+const uploadsBase = process.env.UPLOADS_PATH || path.join(process.cwd(), 'uploads');
 
 const router = Router();
 
@@ -148,6 +152,19 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
         }))
       : [];
 
+    // Save the uploaded file to disk so it can be downloaded later
+    let scan_file_path: string | null = null;
+    let scan_file_name: string | null = null;
+    try {
+      const ordersDir = path.join(uploadsBase, 'orders');
+      fs.mkdirSync(ordersDir, { recursive: true });
+      const fileExt = path.extname(req.file.originalname).toLowerCase();
+      const savedFilename = `order-${Date.now()}${fileExt}`;
+      fs.writeFileSync(path.join(ordersDir, savedFilename), req.file.buffer);
+      scan_file_path = savedFilename;
+      scan_file_name = req.file.originalname;
+    } catch { /* file save is best-effort */ }
+
     res.json({
       order_number:   extracted.order_number   || null,
       order_date:     extracted.order_date     || null,
@@ -157,6 +174,8 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
       delivery_date:  extracted.delivery_date  || null,
       payment_terms:  extracted.payment_terms  || null,
       notes:          extracted.notes          || null,
+      scan_file_path,
+      scan_file_name,
       ...entityMatch,
       items,
     });

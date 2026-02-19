@@ -40,6 +40,8 @@ interface InvoiceForm {
   due_date: string;
   payment_date: string;
   notes: string;
+  our_ref: string;
+  po_number: string;
 }
 
 const emptyForm: InvoiceForm = {
@@ -54,6 +56,8 @@ const emptyForm: InvoiceForm = {
   due_date: '',
   payment_date: '',
   notes: '',
+  our_ref: '',
+  po_number: '',
 };
 
 function addDays(dateStr: string, days: number): string {
@@ -105,6 +109,8 @@ export default function InvoiceFormPage() {
             due_date: inv.due_date ? inv.due_date.slice(0, 10) : '',
             payment_date: inv.payment_date ? inv.payment_date.slice(0, 10) : '',
             notes: inv.notes || '',
+            our_ref: inv.our_ref || '',
+            po_number: inv.po_number || '',
           });
           if (inv.file_path) {
             const filename = inv.file_path.split('/').pop() || inv.file_path;
@@ -219,6 +225,8 @@ export default function InvoiceFormPage() {
       if (form.due_date) formData.append('due_date', form.due_date);
       if (form.payment_date) formData.append('payment_date', form.payment_date);
       if (form.notes) formData.append('notes', form.notes);
+      if (form.our_ref) formData.append('our_ref', form.our_ref);
+      if (form.po_number) formData.append('po_number', form.po_number);
       if (file) formData.append('file', file);
 
       if (isEdit) {
@@ -323,6 +331,21 @@ export default function InvoiceFormPage() {
               value={form.currency}
               onChange={e => updateField('currency', e.target.value)}
               options={currencyOptions}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Input
+              label="Our Reference"
+              value={form.our_ref}
+              onChange={e => updateField('our_ref', e.target.value)}
+              placeholder="e.g. Ref-001"
+            />
+            <Input
+              label="PO Number"
+              value={form.po_number}
+              onChange={e => updateField('po_number', e.target.value)}
+              placeholder="e.g. PO-123"
             />
           </div>
 

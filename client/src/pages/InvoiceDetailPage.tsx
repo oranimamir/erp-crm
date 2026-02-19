@@ -274,6 +274,20 @@ export default function InvoiceDetailPage() {
             <span className="font-medium text-gray-500">Payment Date:</span>
             <span>{formatDate(invoice.payment_date)}</span>
           </div>
+          {invoice.our_ref && (
+            <div className="flex items-center gap-2 text-gray-600">
+              <Hash size={16} className="text-gray-400 shrink-0" />
+              <span className="font-medium text-gray-500">Our Ref:</span>
+              <span>{invoice.our_ref}</span>
+            </div>
+          )}
+          {invoice.po_number && (
+            <div className="flex items-center gap-2 text-gray-600">
+              <Hash size={16} className="text-gray-400 shrink-0" />
+              <span className="font-medium text-gray-500">PO Number:</span>
+              <span>{invoice.po_number}</span>
+            </div>
+          )}
         </div>
 
         {invoice.notes && (

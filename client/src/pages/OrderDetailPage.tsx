@@ -6,7 +6,7 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import StatusBadge from '../components/ui/StatusBadge';
-import { ArrowLeft, Package, Truck, Clock, ArrowRight, Pencil } from 'lucide-react';
+import { ArrowLeft, Package, Truck, Clock, ArrowRight, Pencil, Download } from 'lucide-react';
 
 const statusOptions = [
   { value: 'order_placed', label: 'Order Placed' },
@@ -76,9 +76,26 @@ export default function OrderDetailPage() {
     });
   };
 
-  const formatCurrency = (amount: number | null | undefined) => {
-    if (amount == null) return '$0.00';
-    return `$${Number(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const formatCurrency = (amount: number | null | undefined, currency?: string) => {
+    if (amount == null) return '—';
+    const sym = currency === 'EUR' ? '€' : currency === 'GBP' ? '£' : '$';
+    return `${sym}${Number(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+
+  const downloadFile = async (apiPath: string, filename: string) => {
+    try {
+      const res = await api.get(apiPath, { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      addToast('Failed to download file', 'error');
+    }
   };
 
   if (loading) {
@@ -97,10 +114,14 @@ export default function OrderDetailPage() {
   const shipments: any[] = order.shipments || [];
   const statusHistory: any[] = order.status_history || [];
 
-  const itemsTotal = items.reduce(
-    (sum: number, item: any) => sum + (Number(item.quantity) || 0) * (Number(item.unit_price) || 0),
-    0
-  );
+  // Compute per-currency totals
+  const currencyTotals: Record<string, number> = {};
+  items.forEach((item: any) => {
+    const cur = item.currency || 'USD';
+    const lineTotal = (Number(item.quantity) || 0) * (Number(item.unit_price) || 0);
+    currencyTotals[cur] = (currencyTotals[cur] || 0) + lineTotal;
+  });
+  const currencyEntries = Object.entries(currencyTotals);
 
   return (
     <div className="space-y-6">
@@ -130,7 +151,17 @@ export default function OrderDetailPage() {
           </div>
           <div>
             <p className="text-gray-500 mb-1">Total Amount</p>
-            <p className="font-medium text-gray-900 text-lg">{formatCurrency(order.total_amount)}</p>
+            {currencyEntries.length > 0 ? (
+              <div className="space-y-0.5">
+                {currencyEntries.map(([cur, total]) => (
+                  <p key={cur} className="font-medium text-gray-900 text-lg">
+                    {cur} {Number(total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
+                ))}
+              </div>
+            ) : (
+              <p className="font-medium text-gray-900 text-lg">{formatCurrency(order.total_amount)}</p>
+            )}
           </div>
           <div>
             <p className="text-gray-500 mb-1">Created</p>
@@ -149,6 +180,18 @@ export default function OrderDetailPage() {
           <div className="mt-4">
             <p className="text-sm text-gray-500 mb-1">Notes</p>
             <p className="text-sm text-gray-700 bg-gray-50 rounded-lg p-3">{order.notes}</p>
+          </div>
+        )}
+
+        {order.file_path && (
+          <div className="mt-4 pt-4 border-t border-gray-100">
+            <button
+              onClick={() => downloadFile(`/files/orders/${order.file_path}`, order.file_name || order.file_path)}
+              className="inline-flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700 font-medium"
+            >
+              <Download size={16} />
+              Download Order Document ({order.file_name || order.file_path})
+            </button>
           </div>
         )}
       </Card>
@@ -192,29 +235,47 @@ export default function OrderDetailPage() {
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
                   <th className="text-left px-6 py-3 font-medium text-gray-600">Description</th>
-                  <th className="text-right px-6 py-3 font-medium text-gray-600">Quantity</th>
-                  <th className="text-right px-6 py-3 font-medium text-gray-600">Unit Price</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Client Name</th>
+                  <th className="text-right px-4 py-3 font-medium text-gray-600">Quantity</th>
+                  <th className="text-right px-4 py-3 font-medium text-gray-600">Unit Price</th>
                   <th className="text-right px-6 py-3 font-medium text-gray-600">Total</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {items.map((item: any, index: number) => {
+                  const cur = item.currency || 'USD';
                   const lineTotal = (Number(item.quantity) || 0) * (Number(item.unit_price) || 0);
                   return (
                     <tr key={item.id || index} className="hover:bg-gray-50">
-                      <td className="px-6 py-3 text-gray-900">{item.description}</td>
-                      <td className="px-6 py-3 text-right text-gray-600">{item.quantity}</td>
-                      <td className="px-6 py-3 text-right text-gray-600">{formatCurrency(item.unit_price)}</td>
-                      <td className="px-6 py-3 text-right font-medium text-gray-900">{formatCurrency(lineTotal)}</td>
+                      <td className="px-6 py-3 text-gray-900">
+                        <div>{item.description}</div>
+                        {item.packaging && <div className="text-xs text-gray-400">{item.packaging}</div>}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-500">{item.client_product_name || '—'}</td>
+                      <td className="px-4 py-3 text-right text-gray-600">{item.quantity} {item.unit || ''}</td>
+                      <td className="px-4 py-3 text-right text-gray-600">{formatCurrency(item.unit_price, cur)}/{item.unit || 'unit'}</td>
+                      <td className="px-6 py-3 text-right font-medium text-gray-900">{cur} {Number(lineTotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                     </tr>
                   );
                 })}
               </tbody>
               <tfoot>
-                <tr className="border-t-2 border-gray-200 bg-gray-50">
-                  <td colSpan={3} className="px-6 py-3 text-right font-semibold text-gray-700">Total</td>
-                  <td className="px-6 py-3 text-right font-bold text-gray-900">{formatCurrency(itemsTotal)}</td>
-                </tr>
+                {currencyEntries.map(([cur, total], i) => (
+                  <tr key={cur} className={i === 0 ? 'border-t-2 border-gray-200 bg-gray-50' : 'bg-gray-50'}>
+                    <td colSpan={4} className="px-6 py-2 text-right font-semibold text-gray-700">
+                      Total ({cur})
+                    </td>
+                    <td className="px-6 py-2 text-right font-bold text-gray-900">
+                      {cur} {Number(total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                  </tr>
+                ))}
+                {currencyEntries.length === 0 && (
+                  <tr className="border-t-2 border-gray-200 bg-gray-50">
+                    <td colSpan={4} className="px-6 py-3 text-right font-semibold text-gray-700">Total</td>
+                    <td className="px-6 py-3 text-right font-bold text-gray-900">—</td>
+                  </tr>
+                )}
               </tfoot>
             </table>
           </div>

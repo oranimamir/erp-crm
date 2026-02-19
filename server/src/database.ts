@@ -371,6 +371,12 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE orders ADD COLUMN transport TEXT`); } catch (_) { /* column may already exist */ }
   try { db.exec(`ALTER TABLE orders ADD COLUMN delivery_date TEXT`); } catch (_) { /* column may already exist */ }
   try { db.exec(`ALTER TABLE orders ADD COLUMN payment_terms TEXT`); } catch (_) { /* column may already exist */ }
+  // Add file attachment columns to orders
+  try { db.exec(`ALTER TABLE orders ADD COLUMN file_path TEXT`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE orders ADD COLUMN file_name TEXT`); } catch (_) { /* column may already exist */ }
+  // Add our_ref and po_number to invoices
+  try { db.exec(`ALTER TABLE invoices ADD COLUMN our_ref TEXT`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE invoices ADD COLUMN po_number TEXT`); } catch (_) { /* column may already exist */ }
 
   // Seed admin user if not exists
   const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');

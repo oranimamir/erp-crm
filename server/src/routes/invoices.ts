@@ -65,7 +65,7 @@ router.get('/:id', (req: Request, res: Response) => {
 });
 
 router.post('/', uploadInvoice.single('file'), (req: Request, res: Response) => {
-  const { invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, invoice_date, payment_date, notes } = req.body;
+  const { invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, invoice_date, payment_date, notes, our_ref, po_number } = req.body;
   if (!invoice_number || !type || !amount) {
     res.status(400).json({ error: 'invoice_number, type, and amount are required' });
     return;
@@ -76,14 +76,14 @@ router.post('/', uploadInvoice.single('file'), (req: Request, res: Response) => 
 
   try {
     const result = db.prepare(`
-      INSERT INTO invoices (invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, invoice_date, payment_date, notes, file_path, file_name)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO invoices (invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, invoice_date, payment_date, notes, file_path, file_name, our_ref, po_number)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       invoice_number,
       type === 'customer' ? (customer_id || null) : null,
       type === 'supplier' ? (supplier_id || null) : null,
       type, parseFloat(amount), currency || 'USD', status || 'draft', due_date || null, invoice_date || null, payment_date || null, notes || null,
-      file_path, file_name
+      file_path, file_name, our_ref || null, po_number || null
     );
 
     // Record initial status
@@ -105,7 +105,7 @@ router.put('/:id', uploadInvoice.single('file'), (req: Request, res: Response) =
   const existing = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
-  const { invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, invoice_date, payment_date, notes } = req.body;
+  const { invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, invoice_date, payment_date, notes, our_ref, po_number } = req.body;
 
   // Delete old file if new one uploaded
   let file_path = existing.file_path;
@@ -121,7 +121,7 @@ router.put('/:id', uploadInvoice.single('file'), (req: Request, res: Response) =
 
   try {
     db.prepare(`
-      UPDATE invoices SET invoice_number=?, customer_id=?, supplier_id=?, type=?, amount=?, currency=?, status=?, due_date=?, invoice_date=?, payment_date=?, notes=?, file_path=?, file_name=?, updated_at=datetime('now')
+      UPDATE invoices SET invoice_number=?, customer_id=?, supplier_id=?, type=?, amount=?, currency=?, status=?, due_date=?, invoice_date=?, payment_date=?, notes=?, file_path=?, file_name=?, our_ref=?, po_number=?, updated_at=datetime('now')
       WHERE id=?
     `).run(
       invoice_number || existing.invoice_number,
@@ -129,7 +129,7 @@ router.put('/:id', uploadInvoice.single('file'), (req: Request, res: Response) =
       type === 'supplier' ? (supplier_id || null) : null,
       type || existing.type, parseFloat(amount) || existing.amount, currency || existing.currency,
       status || existing.status, due_date || existing.due_date, invoice_date ?? existing.invoice_date, payment_date ?? existing.payment_date, notes ?? existing.notes,
-      file_path, file_name, req.params.id
+      file_path, file_name, our_ref ?? existing.our_ref, po_number ?? existing.po_number, req.params.id
     );
 
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id);

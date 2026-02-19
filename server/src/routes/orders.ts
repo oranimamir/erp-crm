@@ -63,6 +63,7 @@ router.post('/', (req: Request, res: Response) => {
   const {
     order_number, customer_id, supplier_id, type, status, description, notes, items,
     order_date, inco_terms, destination, transport, delivery_date, payment_terms,
+    file_path, file_name,
   } = req.body;
 
   if (!order_number || !type) {
@@ -78,15 +79,16 @@ router.post('/', (req: Request, res: Response) => {
 
     const result = db.prepare(`
       INSERT INTO orders (order_number, customer_id, supplier_id, type, status, total_amount, description, notes,
-        order_date, inco_terms, destination, transport, delivery_date, payment_terms)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        order_date, inco_terms, destination, transport, delivery_date, payment_terms, file_path, file_name)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       order_number,
       type === 'customer' ? (customer_id || null) : null,
       type === 'supplier' ? (supplier_id || null) : null,
       type, status || 'order_placed', total_amount, description || null, notes || null,
       order_date || null, inco_terms || null, destination || null,
-      transport || null, delivery_date || null, payment_terms || null
+      transport || null, delivery_date || null, payment_terms || null,
+      file_path || null, file_name || null
     );
 
     const orderId = result.lastInsertRowid;
