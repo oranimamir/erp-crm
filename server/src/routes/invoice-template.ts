@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import pdfParse from 'pdf-parse';
+import { PDFParse } from 'pdf-parse';
 
 const router = Router();
 
@@ -80,8 +80,9 @@ router.post('/', upload.single('template'), async (req: Request, res: Response) 
   let config: Record<string, string> = {};
   try {
     const buffer = fs.readFileSync(templatePdfPath);
-    const parsed = await pdfParse(buffer);
-    config = extractConfig(parsed.text);
+    const parser = new PDFParse({ data: new Uint8Array(buffer) });
+    const result = await parser.getText();
+    config = extractConfig(result.text);
   } catch { /* extraction optional – proceed without it */ }
 
   fs.writeFileSync(templateCfgPath, JSON.stringify(config, null, 2));
