@@ -34,7 +34,7 @@ export default function AdminUsersPage() {
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<any>(null);
   const [deleteId, setDeleteId] = useState<number | null>(null);
-  const [form, setForm] = useState({ username: '', display_name: '', password: '', role: 'user' });
+  const [form, setForm] = useState({ username: '', display_name: '', email: '', password: '', role: 'user' });
   const [saving, setSaving] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [inviteForm, setInviteForm] = useState({ email: '', display_name: '', role: 'user' });
@@ -67,13 +67,13 @@ export default function AdminUsersPage() {
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ username: '', display_name: '', password: '', role: 'user' });
+    setForm({ username: '', display_name: '', email: '', password: '', role: 'user' });
     setShowModal(true);
   };
 
   const openEdit = (u: any) => {
     setEditing(u);
-    setForm({ username: u.username || '', display_name: u.display_name || '', password: '', role: u.role || 'user' });
+    setForm({ username: u.username || '', display_name: u.display_name || '', email: u.email || '', password: '', role: u.role || 'user' });
     setShowModal(true);
   };
 
@@ -85,6 +85,7 @@ export default function AdminUsersPage() {
       if (editing) {
         await api.put(`/users/${editing.id}`, {
           display_name: form.display_name,
+          email: form.email,
           role: form.role,
           ...(form.password ? { password: form.password } : {}),
         });
@@ -186,6 +187,7 @@ export default function AdminUsersPage() {
                 <tr className="border-b border-gray-100 bg-gray-50">
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Username</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Display Name</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Email</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Role</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Created At</th>
                   <th className="text-right px-4 py-3 font-medium text-gray-600">Actions</th>
@@ -196,6 +198,14 @@ export default function AdminUsersPage() {
                   <tr key={u.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3 font-medium text-gray-900">{u.username}</td>
                     <td className="px-4 py-3 text-gray-600">{u.display_name || '-'}</td>
+                    <td className="px-4 py-3 text-gray-600">
+                      {u.email ? (
+                        <span className="flex items-center gap-1">
+                          <Mail size={13} className="text-gray-400" />
+                          {u.email}
+                        </span>
+                      ) : <span className="text-gray-300">—</span>}
+                    </td>
                     <td className="px-4 py-3">
                       <Badge variant={u.role === 'admin' ? 'purple' : 'blue'}>{u.role}</Badge>
                     </td>
@@ -223,6 +233,7 @@ export default function AdminUsersPage() {
             <Input label="Username *" value={form.username} onChange={e => setForm({ ...form, username: e.target.value })} />
           )}
           <Input label="Display Name" value={form.display_name} onChange={e => setForm({ ...form, display_name: e.target.value })} />
+          <Input label="Email" type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="user@example.com" />
           <Input
             label={editing ? 'Password (leave blank to keep current)' : 'Password *'}
             type="password"

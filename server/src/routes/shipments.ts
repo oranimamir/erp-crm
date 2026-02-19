@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
+import { notifyAdmin } from '../lib/notify.js';
 
 const router = Router();
 
@@ -78,7 +79,8 @@ router.post('/', (req: Request, res: Response) => {
     db.prepare(`INSERT INTO status_history (entity_type, entity_id, new_status, changed_by) VALUES ('shipment', ?, ?, ?)`)
       .run(result.lastInsertRowid, status || 'pending', req.user!.userId);
 
-    const shipment = db.prepare('SELECT * FROM shipments WHERE id = ?').get(result.lastInsertRowid);
+    const shipment = db.prepare('SELECT * FROM shipments WHERE id = ?').get(result.lastInsertRowid) as any;
+    notifyAdmin({ action: 'created', entity: 'Shipment', label: shipment.tracking_number || `Shipment #${shipment.id}`, performedBy: req.user?.display_name || 'Unknown' });
     res.status(201).json(shipment);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -104,7 +106,8 @@ router.put('/:id', (req: Request, res: Response) => {
       estimated_delivery ?? existing.estimated_delivery, notes ?? existing.notes, req.params.id
     );
 
-    const shipment = db.prepare('SELECT * FROM shipments WHERE id = ?').get(req.params.id);
+    const shipment = db.prepare('SELECT * FROM shipments WHERE id = ?').get(req.params.id) as any;
+    notifyAdmin({ action: 'updated', entity: 'Shipment', label: shipment.tracking_number || `Shipment #${shipment.id}`, performedBy: req.user?.display_name || 'Unknown' });
     res.json(shipment);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -127,8 +130,10 @@ router.patch('/:id/status', (req: Request, res: Response) => {
 });
 
 router.delete('/:id', (req: Request, res: Response) => {
+  const existing = db.prepare('SELECT tracking_number FROM shipments WHERE id = ?').get(req.params.id) as any;
   const result = db.prepare('DELETE FROM shipments WHERE id = ?').run(req.params.id);
   if (result.changes === 0) { res.status(404).json({ error: 'Shipment not found' }); return; }
+  notifyAdmin({ action: 'deleted', entity: 'Shipment', label: existing?.tracking_number || `Shipment #${req.params.id}`, performedBy: req.user?.display_name || 'Unknown' });
   res.json({ message: 'Shipment deleted' });
 });
 

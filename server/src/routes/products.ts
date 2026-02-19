@@ -1,5 +1,6 @@
-import { Router } from 'express';
+import { Router, Request } from 'express';
 import db from '../database.js';
+import { notifyAdmin } from '../lib/notify.js';
 
 const router = Router();
 
@@ -36,7 +37,8 @@ router.post('/', (req, res) => {
     const result = db.prepare(
       'INSERT INTO products (name, sku, category, unit, notes) VALUES (?, ?, ?, ?, ?)'
     ).run(name.trim(), sku.trim(), category, unit, notes);
-    const product = db.prepare('SELECT * FROM products WHERE id = ?').get(result.lastInsertRowid);
+    const product = db.prepare('SELECT * FROM products WHERE id = ?').get(result.lastInsertRowid) as any;
+    notifyAdmin({ action: 'created', entity: 'Product', label: `${product.name} (${product.sku})`, performedBy: (req as Request).user?.display_name || 'Unknown' });
     res.status(201).json(product);
   } catch (err: any) {
     if (err.message?.includes('UNIQUE')) {
@@ -59,7 +61,9 @@ router.put('/:id', (req, res) => {
     db.prepare(
       "UPDATE products SET name=?, sku=?, category=?, notes=?, updated_at=datetime('now') WHERE id=?"
     ).run(name.trim(), sku.trim(), category, notes ?? null, id);
-    res.json(db.prepare('SELECT * FROM products WHERE id = ?').get(id));
+    const updated = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as any;
+    notifyAdmin({ action: 'updated', entity: 'Product', label: `${updated.name} (${updated.sku})`, performedBy: (req as Request).user?.display_name || 'Unknown' });
+    res.json(updated);
   } catch (err: any) {
     if (err.message?.includes('UNIQUE')) {
       return res.status(400).json({ error: 'SKU already exists' });
@@ -71,9 +75,10 @@ router.put('/:id', (req, res) => {
 // DELETE /:id
 router.delete('/:id', (req, res) => {
   const { id } = req.params;
-  const existing = db.prepare('SELECT id FROM products WHERE id = ?').get(id);
+  const existing = db.prepare('SELECT name, sku FROM products WHERE id = ?').get(id) as any;
   if (!existing) return res.status(404).json({ error: 'Product not found' });
   db.prepare('DELETE FROM products WHERE id = ?').run(id);
+  notifyAdmin({ action: 'deleted', entity: 'Product', label: `${existing.name} (${existing.sku})`, performedBy: (req as Request).user?.display_name || 'Unknown' });
   res.json({ success: true });
 });
 

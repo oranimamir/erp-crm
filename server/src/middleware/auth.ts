@@ -6,6 +6,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'erp-crm-secret-key-change-in-produ
 export interface AuthPayload {
   userId: number;
   username: string;
+  display_name: string;
   role: string;
 }
 

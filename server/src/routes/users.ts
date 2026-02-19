@@ -39,7 +39,7 @@ router.get('/', requireAdmin, (req: Request, res: Response) => {
 
   const total = (db.prepare(`SELECT COUNT(*) as count FROM users ${where}`).get(...params) as any).count;
   const users = db.prepare(
-    `SELECT id, username, display_name, role, created_at, updated_at FROM users ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`
+    `SELECT id, username, display_name, email, role, created_at, updated_at FROM users ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`
   ).all(...params, limit, offset);
 
   res.json({ data: users, total, page, limit, totalPages: Math.ceil(total / limit) });
@@ -47,7 +47,7 @@ router.get('/', requireAdmin, (req: Request, res: Response) => {
 
 // Create user
 router.post('/', requireAdmin, (req: Request, res: Response) => {
-  const { username, display_name, password, role } = req.body;
+  const { username, display_name, email, password, role } = req.body;
 
   if (!username || !password) {
     res.status(400).json({ error: 'Username and password are required' });
@@ -70,10 +70,10 @@ router.post('/', requireAdmin, (req: Request, res: Response) => {
 
   const password_hash = bcrypt.hashSync(password, 10);
   const result = db.prepare(
-    'INSERT INTO users (username, password_hash, display_name, role) VALUES (?, ?, ?, ?)'
-  ).run(username, password_hash, display_name || username, role || 'user');
+    'INSERT INTO users (username, password_hash, display_name, email, role) VALUES (?, ?, ?, ?, ?)'
+  ).run(username, password_hash, display_name || username, email || null, role || 'user');
 
-  const user = db.prepare('SELECT id, username, display_name, role, created_at, updated_at FROM users WHERE id = ?').get(result.lastInsertRowid);
+  const user = db.prepare('SELECT id, username, display_name, email, role, created_at, updated_at FROM users WHERE id = ?').get(result.lastInsertRowid);
   res.status(201).json(user);
 });
 
@@ -85,7 +85,7 @@ router.put('/:id', requireAdmin, (req: Request, res: Response) => {
     return;
   }
 
-  const { display_name, role, password } = req.body;
+  const { display_name, email, role, password } = req.body;
 
   if (role && !['admin', 'user'].includes(role)) {
     res.status(400).json({ error: 'Role must be admin or user' });
@@ -99,15 +99,15 @@ router.put('/:id', requireAdmin, (req: Request, res: Response) => {
   if (password) {
     const password_hash = bcrypt.hashSync(password, 10);
     db.prepare(
-      `UPDATE users SET display_name=?, role=?, password_hash=?, updated_at=datetime('now') WHERE id=?`
-    ).run(display_name || null, role || 'user', password_hash, req.params.id);
+      `UPDATE users SET display_name=?, email=?, role=?, password_hash=?, updated_at=datetime('now') WHERE id=?`
+    ).run(display_name || null, email || null, role || 'user', password_hash, req.params.id);
   } else {
     db.prepare(
-      `UPDATE users SET display_name=?, role=?, updated_at=datetime('now') WHERE id=?`
-    ).run(display_name || null, role || 'user', req.params.id);
+      `UPDATE users SET display_name=?, email=?, role=?, updated_at=datetime('now') WHERE id=?`
+    ).run(display_name || null, email || null, role || 'user', req.params.id);
   }
 
-  const user = db.prepare('SELECT id, username, display_name, role, created_at, updated_at FROM users WHERE id = ?').get(req.params.id);
+  const user = db.prepare('SELECT id, username, display_name, email, role, created_at, updated_at FROM users WHERE id = ?').get(req.params.id);
   res.json(user);
 });
 

@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
+import { notifyAdmin } from '../lib/notify.js';
 
 const router = Router();
 
@@ -115,9 +116,10 @@ router.post('/', (req: Request, res: Response) => {
 
   try {
     const orderId = insertOrder();
-    const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
+    const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as any;
     const orderItems = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(orderId as number);
-    res.status(201).json({ ...(order as any), items: orderItems });
+    notifyAdmin({ action: 'created', entity: 'Order', label: order.order_number, performedBy: req.user?.display_name || 'Unknown' });
+    res.status(201).json({ ...order, items: orderItems });
   } catch (err: any) {
     if (err.message?.includes('UNIQUE')) {
       res.status(409).json({ error: 'Order number already exists' });
@@ -175,9 +177,10 @@ router.put('/:id', (req: Request, res: Response) => {
 
   try {
     updateOrder();
-    const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id);
+    const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id) as any;
     const orderItems = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(req.params.id as any);
-    res.json({ ...(order as any), items: orderItems });
+    notifyAdmin({ action: 'updated', entity: 'Order', label: order.order_number, performedBy: req.user?.display_name || 'Unknown' });
+    res.json({ ...order, items: orderItems });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -199,8 +202,10 @@ router.patch('/:id/status', (req: Request, res: Response) => {
 });
 
 router.delete('/:id', (req: Request, res: Response) => {
+  const existing = db.prepare('SELECT order_number FROM orders WHERE id = ?').get(req.params.id) as any;
   const result = db.prepare('DELETE FROM orders WHERE id = ?').run(req.params.id);
   if (result.changes === 0) { res.status(404).json({ error: 'Order not found' }); return; }
+  notifyAdmin({ action: 'deleted', entity: 'Order', label: existing?.order_number || `#${req.params.id}`, performedBy: req.user?.display_name || 'Unknown' });
   res.json({ message: 'Order deleted' });
 });
 

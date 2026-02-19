@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
+import { notifyAdmin } from '../lib/notify.js';
 
 const router = Router();
 
@@ -48,7 +49,8 @@ router.post('/', (req: Request, res: Response) => {
     'INSERT INTO suppliers (name, email, phone, address, category, notes) VALUES (?, ?, ?, ?, ?, ?)'
   ).run(name, email || null, phone || null, address || null, category, notes || null);
 
-  const supplier = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(result.lastInsertRowid);
+  const supplier = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(result.lastInsertRowid) as any;
+  notifyAdmin({ action: 'created', entity: 'Supplier', label: supplier.name, performedBy: req.user?.display_name || 'Unknown' });
   res.status(201).json(supplier);
 });
 
@@ -63,13 +65,16 @@ router.put('/:id', (req: Request, res: Response) => {
     `UPDATE suppliers SET name=?, email=?, phone=?, address=?, category=?, notes=?, updated_at=datetime('now') WHERE id=?`
   ).run(name, email || null, phone || null, address || null, category, notes || null, req.params.id);
 
-  const supplier = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(req.params.id);
+  const supplier = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(req.params.id) as any;
+  notifyAdmin({ action: 'updated', entity: 'Supplier', label: supplier.name, performedBy: req.user?.display_name || 'Unknown' });
   res.json(supplier);
 });
 
 router.delete('/:id', (req: Request, res: Response) => {
+  const existing = db.prepare('SELECT name FROM suppliers WHERE id = ?').get(req.params.id) as any;
   const result = db.prepare('DELETE FROM suppliers WHERE id = ?').run(req.params.id);
   if (result.changes === 0) { res.status(404).json({ error: 'Supplier not found' }); return; }
+  notifyAdmin({ action: 'deleted', entity: 'Supplier', label: existing?.name || `#${req.params.id}`, performedBy: req.user?.display_name || 'Unknown' });
   res.json({ message: 'Supplier deleted' });
 });
 

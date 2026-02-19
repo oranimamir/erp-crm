@@ -18,7 +18,7 @@ router.post('/login', (req: Request, res: Response) => {
     return;
   }
 
-  const token = generateToken({ userId: user.id, username: user.username, role: user.role });
+  const token = generateToken({ userId: user.id, username: user.username, display_name: user.display_name || user.username, role: user.role });
   res.json({
     token,
     user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role },
@@ -43,7 +43,7 @@ router.post('/register', (req: Request, res: Response) => {
     username, hash, display_name
   );
 
-  const token = generateToken({ userId: result.lastInsertRowid as number, username, role: 'user' });
+  const token = generateToken({ userId: result.lastInsertRowid as number, username, display_name, role: 'user' });
   res.status(201).json({
     token,
     user: { id: result.lastInsertRowid, username, display_name, role: 'user' },
@@ -137,6 +137,7 @@ router.post('/accept-invite', (req: Request, res: Response) => {
   const jwtToken = generateToken({
     userId: result.lastInsertRowid as number,
     username,
+    display_name: finalDisplayName,
     role: invitation.role || 'user',
   });
 

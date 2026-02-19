@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
 import { uploadPayment } from '../middleware/upload.js';
+import { notifyAdmin } from '../lib/notify.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -65,7 +66,9 @@ router.post('/', uploadPayment.single('file'), (req: Request, res: Response) => 
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(invoice_id, parseFloat(amount), payment_date, payment_method, reference || null, notes || null, file_path, file_name);
 
-  const payment = db.prepare('SELECT * FROM payments WHERE id = ?').get(result.lastInsertRowid);
+  const payment = db.prepare('SELECT * FROM payments WHERE id = ?').get(result.lastInsertRowid) as any;
+  const inv = db.prepare('SELECT invoice_number FROM invoices WHERE id = ?').get(invoice_id) as any;
+  notifyAdmin({ action: 'created', entity: 'Payment', label: `$${parseFloat(amount).toLocaleString()} on ${inv?.invoice_number || `Invoice #${invoice_id}`}`, performedBy: req.user?.display_name || 'Unknown' });
   res.status(201).json(payment);
 });
 
@@ -109,6 +112,7 @@ router.delete('/:id', (req: Request, res: Response) => {
   }
 
   db.prepare('DELETE FROM payments WHERE id = ?').run(req.params.id);
+  notifyAdmin({ action: 'deleted', entity: 'Payment', label: `$${existing.amount?.toLocaleString()} (Payment #${req.params.id})`, performedBy: req.user?.display_name || 'Unknown' });
   res.json({ message: 'Payment deleted' });
 });
 
