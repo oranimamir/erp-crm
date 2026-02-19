@@ -30,8 +30,8 @@ export default function Layout() {
       {/* Sidebar */}
       <aside className={`fixed lg:static inset-y-0 left-0 z-50 w-64 bg-gray-900 text-white transform transition-transform lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="flex items-center gap-3 px-6 py-5 border-b border-gray-800">
-          <div className="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center font-bold text-sm">E</div>
-          <span className="text-lg font-bold">ERP/CRM</span>
+          <div className="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center font-bold text-sm">C</div>
+          <span className="text-lg font-bold">CirculERP</span>
         </div>
         <nav className="px-3 py-4 space-y-1">
           {navItems.map(item => (
