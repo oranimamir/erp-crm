@@ -24,6 +24,7 @@ const upload = multer({
 const EXTRACTION_PROMPT = `You are an order document extraction assistant. Analyze the provided purchase order or sales order document and extract as many fields as possible. Return ONLY valid JSON with no extra text or markdown fences.
 
 {
+  "operation_number": "string or null (internal operation or reference number, if present)",
   "order_number": "string or null",
   "customer_or_supplier_name": "string or null (the company name of the buyer or seller)",
   "order_date": "string or null (YYYY-MM-DD format — the date the order was placed)",
@@ -166,6 +167,7 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
     } catch { /* file save is best-effort */ }
 
     res.json({
+      operation_number: extracted.operation_number || null,
       order_number:   extracted.order_number   || null,
       order_date:     extracted.order_date     || null,
       inco_terms:     extracted.inco_terms     || null,

@@ -377,6 +377,8 @@ export async function initializeDatabase() {
   // Add our_ref and po_number to invoices
   try { db.exec(`ALTER TABLE invoices ADD COLUMN our_ref TEXT`); } catch (_) { /* column may already exist */ }
   try { db.exec(`ALTER TABLE invoices ADD COLUMN po_number TEXT`); } catch (_) { /* column may already exist */ }
+  // Add operation_number to orders
+  try { db.exec(`ALTER TABLE orders ADD COLUMN operation_number TEXT`); } catch (_) { /* column may already exist */ }
 
   // Seed admin user if not exists
   const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');

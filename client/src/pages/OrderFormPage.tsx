@@ -96,6 +96,7 @@ export default function OrderFormPage() {
 
   // ── Form state ───────────────────────────────────────────────────────
   const [form, setForm] = useState({
+    operation_number: '',
     order_number:  '',
     order_date:    new Date().toISOString().slice(0, 10),
     type:          'customer',
@@ -135,6 +136,7 @@ export default function OrderFormPage() {
       .then(res => {
         const o = res.data;
         setForm({
+          operation_number: o.operation_number || '',
           order_number:  o.order_number  || '',
           order_date:    o.order_date    || new Date().toISOString().slice(0, 10),
           type:          o.type          || 'customer',
@@ -202,6 +204,7 @@ export default function OrderFormPage() {
       // Auto-fill header fields (only if not already filled)
       setForm(prev => ({
         ...prev,
+        operation_number: data.operation_number || prev.operation_number,
         order_number:  data.order_number  || prev.order_number,
         order_date:    data.order_date    || prev.order_date,
         inco_terms:    data.inco_terms    || prev.inco_terms,
@@ -252,6 +255,7 @@ export default function OrderFormPage() {
     setSaving(true);
     try {
       const payload = {
+        operation_number: form.operation_number || null,
         order_number:  form.order_number,
         order_date:    form.order_date    || null,
         type:          form.type,
@@ -345,6 +349,8 @@ export default function OrderFormPage() {
         <Card className="p-5">
           <h2 className="text-base font-semibold text-gray-900 mb-4">Order Details</h2>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <Input label="Operation #" value={form.operation_number}
+              onChange={e => updateField('operation_number', e.target.value)} placeholder="e.g. OP-2026-001" />
             <Input label="Order Number *" value={form.order_number}
               onChange={e => updateField('order_number', e.target.value)} placeholder="e.g. ORD-001" />
             <Input label="Date of Order" type="date" value={form.order_date}

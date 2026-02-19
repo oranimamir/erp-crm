@@ -28,7 +28,8 @@ router.get('/', (req: Request, res: Response) => {
   `).get(...params) as any).count;
 
   const orders = db.prepare(`
-    SELECT o.*, c.name as customer_name, s.name as supplier_name
+    SELECT o.*, c.name as customer_name, s.name as supplier_name,
+      (SELECT GROUP_CONCAT(DISTINCT currency) FROM order_items WHERE order_id = o.id) as item_currencies
     FROM orders o
     LEFT JOIN customers c ON o.customer_id = c.id
     LEFT JOIN suppliers s ON o.supplier_id = s.id
@@ -63,7 +64,7 @@ router.post('/', (req: Request, res: Response) => {
   const {
     order_number, customer_id, supplier_id, type, status, description, notes, items,
     order_date, inco_terms, destination, transport, delivery_date, payment_terms,
-    file_path, file_name,
+    file_path, file_name, operation_number,
   } = req.body;
 
   if (!order_number || !type) {
@@ -79,8 +80,8 @@ router.post('/', (req: Request, res: Response) => {
 
     const result = db.prepare(`
       INSERT INTO orders (order_number, customer_id, supplier_id, type, status, total_amount, description, notes,
-        order_date, inco_terms, destination, transport, delivery_date, payment_terms, file_path, file_name)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        order_date, inco_terms, destination, transport, delivery_date, payment_terms, file_path, file_name, operation_number)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       order_number,
       type === 'customer' ? (customer_id || null) : null,
@@ -88,7 +89,7 @@ router.post('/', (req: Request, res: Response) => {
       type, status || 'order_placed', total_amount, description || null, notes || null,
       order_date || null, inco_terms || null, destination || null,
       transport || null, delivery_date || null, payment_terms || null,
-      file_path || null, file_name || null
+      file_path || null, file_name || null, operation_number || null
     );
 
     const orderId = result.lastInsertRowid;
@@ -133,6 +134,7 @@ router.put('/:id', (req: Request, res: Response) => {
   const {
     order_number, customer_id, supplier_id, type, status, description, notes, items,
     order_date, inco_terms, destination, transport, delivery_date, payment_terms,
+    operation_number,
   } = req.body;
 
   const updateOrder = db.transaction(() => {
@@ -155,7 +157,7 @@ router.put('/:id', (req: Request, res: Response) => {
     db.prepare(`
       UPDATE orders SET order_number=?, customer_id=?, supplier_id=?, type=?, status=?, total_amount=?,
         description=?, notes=?, order_date=?, inco_terms=?, destination=?, transport=?,
-        delivery_date=?, payment_terms=?, updated_at=datetime('now')
+        delivery_date=?, payment_terms=?, operation_number=?, updated_at=datetime('now')
       WHERE id=?
     `).run(
       order_number || existing.order_number,
@@ -166,6 +168,7 @@ router.put('/:id', (req: Request, res: Response) => {
       order_date ?? existing.order_date, inco_terms ?? existing.inco_terms,
       destination ?? existing.destination, transport ?? existing.transport,
       delivery_date ?? existing.delivery_date, payment_terms ?? existing.payment_terms,
+      operation_number ?? existing.operation_number,
       req.params.id
     );
   });

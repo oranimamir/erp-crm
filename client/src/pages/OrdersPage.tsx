@@ -91,9 +91,12 @@ export default function OrdersPage() {
     });
   };
 
-  const formatCurrency = (amount: number | null | undefined) => {
-    if (amount == null) return '$0.00';
-    return `$${Number(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const formatCurrency = (amount: number | null | undefined, currencies?: string | null) => {
+    if (amount == null) return '—';
+    const primaryCur = currencies?.split(',')[0] || 'USD';
+    const sym = primaryCur === 'EUR' ? '€' : primaryCur === 'GBP' ? '£' : '$';
+    const suffix = currencies && currencies.includes(',') ? ' (mixed)' : '';
+    return `${sym}${Number(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${suffix}`;
   };
 
   const downloadFile = async (apiPath: string, filename: string) => {
@@ -173,12 +176,15 @@ export default function OrdersPage() {
               <tbody className="divide-y divide-gray-100">
                 {orders.map(o => (
                   <tr key={o.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 font-medium text-gray-900">{o.order_number}</td>
+                    <td className="px-4 py-3">
+                      <p className="font-medium text-gray-900">{o.order_number}</p>
+                      {o.operation_number && <p className="text-xs text-gray-400">Op# {o.operation_number}</p>}
+                    </td>
                     <td className="px-4 py-3 text-gray-600">{o.customer_name || o.supplier_name || '-'}</td>
                     <td className="px-4 py-3">
                       <Badge variant={typeColors[o.type] || 'gray'}>{typeLabels[o.type] || o.type}</Badge>
                     </td>
-                    <td className="px-4 py-3 text-right text-gray-900 font-medium">{formatCurrency(o.total_amount)}</td>
+                    <td className="px-4 py-3 text-right text-gray-900 font-medium">{formatCurrency(o.total_amount, o.item_currencies)}</td>
                     <td className="px-4 py-3"><StatusBadge status={o.status} /></td>
                     <td className="px-4 py-3 text-gray-500">{formatDate(o.created_at)}</td>
                     <td className="px-4 py-3">

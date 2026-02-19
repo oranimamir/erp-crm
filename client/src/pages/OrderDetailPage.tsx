@@ -135,6 +135,11 @@ export default function OrderDetailPage() {
           <div>
             <div className="flex items-center gap-3 mb-2">
               <h1 className="text-2xl font-bold text-gray-900">{order.order_number}</h1>
+              {order.operation_number && (
+                <span className="text-sm font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
+                  Op# {order.operation_number}
+                </span>
+              )}
               <Badge variant={typeColors[order.type] || 'gray'}>{typeLabels[order.type] || order.type}</Badge>
             </div>
             <StatusBadge status={order.status} />
