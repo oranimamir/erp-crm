@@ -83,7 +83,8 @@ router.get('/monthly-payments', (_req: Request, res: Response) => {
           WHERE i.type = 'customer' AND i.status = 'paid'
             AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
             AND NOT EXISTS (SELECT 1 FROM wire_transfers wt WHERE wt.invoice_id = i.id)
-            AND strftime('%Y-%m', COALESCE(i.payment_date, i.invoice_date, i.created_at)) = months.m
+            AND i.payment_date IS NOT NULL
+            AND strftime('%Y-%m', i.payment_date) = months.m
         )
       ), 0) as received,
       COALESCE((
@@ -102,7 +103,8 @@ router.get('/monthly-payments', (_req: Request, res: Response) => {
           WHERE i.type = 'supplier' AND i.status = 'paid'
             AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
             AND NOT EXISTS (SELECT 1 FROM wire_transfers wt WHERE wt.invoice_id = i.id)
-            AND strftime('%Y-%m', COALESCE(i.payment_date, i.invoice_date, i.created_at)) = months.m
+            AND i.payment_date IS NOT NULL
+            AND strftime('%Y-%m', i.payment_date) = months.m
         )
       ), 0) as paid_out
     FROM months ORDER BY months.m
