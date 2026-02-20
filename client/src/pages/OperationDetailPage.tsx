@@ -1,14 +1,18 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import {
   ArrowLeft, Briefcase, ShoppingCart, FileText, Upload, Trash2,
-  Download, Eye, X, Plus, Receipt, ExternalLink
+  Download, Eye, X, Plus, Receipt, ExternalLink, CheckCircle,
+  AlertCircle, Loader2
 } from 'lucide-react';
 
+// ── Types ─────────────────────────────────────────────────────────────────────
+
 interface Category { id: number; name: string; }
-interface Document {
+
+interface OperationDoc {
   id: number;
   file_path: string;
   file_name: string;
@@ -17,6 +21,7 @@ interface Document {
   notes: string | null;
   created_at: string;
 }
+
 interface Invoice {
   id: number;
   invoice_number: string;
@@ -24,9 +29,12 @@ interface Invoice {
   amount: number;
   currency: string;
   status: string;
+  file_path: string | null;
+  file_name: string | null;
   customer_name?: string;
   supplier_name?: string;
 }
+
 interface OrderItem {
   id: number;
   description: string;
@@ -36,6 +44,7 @@ interface OrderItem {
   currency: string;
   total: number;
 }
+
 interface Operation {
   id: number;
   operation_number: string;
@@ -58,10 +67,31 @@ interface Operation {
   status: string;
   notes?: string;
   created_at: string;
-  documents: Document[];
+  documents: OperationDoc[];
   invoices: Invoice[];
   order_items: OrderItem[];
 }
+
+// Generic preview target — works for all file sources
+interface PreviewItem {
+  fileName: string;
+  filePath: string;
+  subfolder: string;
+  label?: string;
+}
+
+// A file waiting to be uploaded (multi-file queue)
+interface PendingUpload {
+  id: string;           // local unique id
+  file: File;
+  categoryId: string;
+  notes: string;
+  status: 'pending' | 'uploading' | 'done' | 'error';
+  progress: number;     // 0-100
+  error?: string;
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────────
 
 const STATUS_OPTIONS = ['active', 'completed', 'on_hold', 'cancelled'];
 const STATUS_COLORS: Record<string, string> = {
@@ -77,6 +107,10 @@ const INVOICE_STATUS_COLORS: Record<string, string> = {
   overdue: 'bg-red-100 text-red-800',
   cancelled: 'bg-gray-100 text-gray-500',
 };
+const ACCEPTED_EXTS = '.pdf,.jpg,.jpeg,.png,.webp';
+const ACCEPTED_MIME = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function formatCurrency(amount: number, currency = 'USD') {
   const sym = currency === 'EUR' ? '€' : currency === 'GBP' ? '£' : '$';
@@ -87,37 +121,44 @@ function isImage(filename: string) {
   return /\.(jpg|jpeg|png|webp)$/i.test(filename);
 }
 
+function uid() {
+  return Math.random().toString(36).slice(2);
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
 export default function OperationDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { addToast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dropZoneRef = useRef<HTMLDivElement>(null);
 
   const [operation, setOperation] = useState<Operation | null>(null);
   const [loading, setLoading] = useState(true);
   const [categories, setCategories] = useState<Category[]>([]);
 
-  // Upload state
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploadCategoryId, setUploadCategoryId] = useState('');
-  const [uploadNotes, setUploadNotes] = useState('');
-  const [uploading, setUploading] = useState(false);
-  const [showUpload, setShowUpload] = useState(false);
+  // Multi-file upload queue
+  const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const [uploadingAll, setUploadingAll] = useState(false);
 
-  // New category
+  // Add-category inline
   const [newCatName, setNewCatName] = useState('');
   const [addingCat, setAddingCat] = useState(false);
   const [showAddCat, setShowAddCat] = useState(false);
 
-  // Preview
-  const [previewDoc, setPreviewDoc] = useState<Document | null>(null);
+  // Generic preview
+  const [previewItem, setPreviewItem] = useState<PreviewItem | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
-  // Status editing
+  // Status
   const [savingStatus, setSavingStatus] = useState(false);
 
-  async function fetchOperation() {
+  // ── Data fetching ───────────────────────────────────────────────────────────
+
+  const fetchOperation = useCallback(async () => {
     try {
       const { data } = await api.get(`/operations/${id}`);
       setOperation(data);
@@ -127,7 +168,7 @@ export default function OperationDetailPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [id]);
 
   async function fetchCategories() {
     try {
@@ -141,18 +182,19 @@ export default function OperationDetailPage() {
     fetchCategories();
   }, [id]);
 
-  // Preview helpers
-  async function openPreview(doc: Document) {
-    setPreviewDoc(doc);
+  // ── Preview ─────────────────────────────────────────────────────────────────
+
+  async function openPreview(item: PreviewItem) {
+    setPreviewItem(item);
     setPreviewUrl(null);
     setPreviewLoading(true);
     try {
-      const resp = await api.get(`/files/operation-docs/${doc.file_path}`, { responseType: 'blob' });
+      const resp = await api.get(`/files/${item.subfolder}/${item.filePath}`, { responseType: 'blob' });
       const blob = new Blob([resp.data], { type: resp.headers['content-type'] || 'application/octet-stream' });
       setPreviewUrl(URL.createObjectURL(blob));
     } catch {
       addToast('Failed to load preview', 'error');
-      setPreviewDoc(null);
+      setPreviewItem(null);
     } finally {
       setPreviewLoading(false);
     }
@@ -160,9 +202,11 @@ export default function OperationDetailPage() {
 
   function closePreview() {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setPreviewDoc(null);
+    setPreviewItem(null);
     setPreviewUrl(null);
   }
+
+  // ── Download ────────────────────────────────────────────────────────────────
 
   async function downloadFile(filePath: string, fileName: string, subfolder = 'operation-docs') {
     try {
@@ -178,36 +222,118 @@ export default function OperationDetailPage() {
     }
   }
 
-  async function downloadOrderFile() {
-    if (!operation?.order_file_path || !operation?.order_file_name) return;
-    await downloadFile(operation.order_file_path, operation.order_file_name, 'orders');
+  // ── Drag-and-drop ───────────────────────────────────────────────────────────
+
+  function addFilesToQueue(files: FileList | File[]) {
+    const arr = Array.from(files);
+    const valid = arr.filter(f => ACCEPTED_MIME.includes(f.type) || ACCEPTED_EXTS.split(',').some(ext => f.name.toLowerCase().endsWith(ext.replace('.', '.'))));
+    const invalid = arr.length - valid.length;
+    if (invalid > 0) addToast(`${invalid} file(s) skipped — only PDF, JPEG, PNG, WebP allowed`, 'error');
+    if (valid.length === 0) return;
+    setPendingUploads(prev => [
+      ...prev,
+      ...valid.map(f => ({
+        id: uid(),
+        file: f,
+        categoryId: categories[0] ? String(categories[0].id) : '',
+        notes: '',
+        status: 'pending' as const,
+        progress: 0,
+      })),
+    ]);
   }
 
-  // Upload document
-  async function handleUpload(e: React.FormEvent) {
+  function handleDragOver(e: React.DragEvent) {
     e.preventDefault();
-    if (!uploadFile) { addToast('Please select a file', 'error'); return; }
-    if (!uploadCategoryId) { addToast('Please select a category', 'error'); return; }
-    setUploading(true);
-    try {
-      const fd = new FormData();
-      fd.append('file', uploadFile);
-      fd.append('category_id', uploadCategoryId);
-      if (uploadNotes) fd.append('notes', uploadNotes);
-      await api.post(`/operations/${id}/documents`, fd);
-      addToast('Document uploaded', 'success');
-      setUploadFile(null);
-      setUploadCategoryId('');
-      setUploadNotes('');
-      setShowUpload(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      fetchOperation();
-    } catch (err: any) {
-      addToast(err.response?.data?.error || 'Upload failed', 'error');
-    } finally {
-      setUploading(false);
+    setIsDragging(true);
+  }
+  function handleDragLeave(e: React.DragEvent) {
+    // Only clear if leaving the drop zone entirely
+    if (!dropZoneRef.current?.contains(e.relatedTarget as Node)) {
+      setIsDragging(false);
     }
   }
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragging(false);
+    addFilesToQueue(e.dataTransfer.files);
+  }
+
+  function handleFileInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    if (e.target.files) addFilesToQueue(e.target.files);
+    e.target.value = '';
+  }
+
+  function updatePending(uid: string, patch: Partial<PendingUpload>) {
+    setPendingUploads(prev => prev.map(p => p.id === uid ? { ...p, ...patch } : p));
+  }
+
+  function removePending(uid: string) {
+    setPendingUploads(prev => prev.filter(p => p.id !== uid));
+  }
+
+  // Upload a single pending file
+  async function uploadOne(pending: PendingUpload): Promise<void> {
+    if (!pending.categoryId) {
+      updatePending(pending.id, { status: 'error', error: 'Category required' });
+      return;
+    }
+    updatePending(pending.id, { status: 'uploading', progress: 0 });
+    try {
+      const fd = new FormData();
+      fd.append('file', pending.file);
+      fd.append('category_id', pending.categoryId);
+      if (pending.notes) fd.append('notes', pending.notes);
+      await api.post(`/operations/${id}/documents`, fd, {
+        onUploadProgress: (evt) => {
+          const pct = evt.total ? Math.round((evt.loaded / evt.total) * 100) : 0;
+          updatePending(pending.id, { progress: pct });
+        },
+      });
+      updatePending(pending.id, { status: 'done', progress: 100 });
+    } catch (err: any) {
+      updatePending(pending.id, {
+        status: 'error',
+        error: err.response?.data?.error || 'Upload failed',
+      });
+    }
+  }
+
+  async function handleUploadAll() {
+    const toUpload = pendingUploads.filter(p => p.status === 'pending' || p.status === 'error');
+    if (toUpload.length === 0) return;
+    setUploadingAll(true);
+    // Upload concurrently
+    await Promise.all(toUpload.map(uploadOne));
+    setUploadingAll(false);
+    // Refresh and clear done items
+    await fetchOperation();
+    setPendingUploads(prev => prev.filter(p => p.status !== 'done'));
+  }
+
+  // ── Add category ────────────────────────────────────────────────────────────
+
+  async function handleAddCategory(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newCatName.trim()) return;
+    setAddingCat(true);
+    try {
+      const { data } = await api.post('/operations/categories', { name: newCatName.trim() });
+      const sorted = [...categories, data].sort((a, b) => a.name.localeCompare(b.name));
+      setCategories(sorted);
+      // Auto-assign to pending uploads that have no category yet
+      setPendingUploads(prev => prev.map(p => p.categoryId ? p : { ...p, categoryId: String(data.id) }));
+      setNewCatName('');
+      setShowAddCat(false);
+      addToast('Category added', 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to add category', 'error');
+    } finally {
+      setAddingCat(false);
+    }
+  }
+
+  // ── Delete doc ──────────────────────────────────────────────────────────────
 
   async function handleDeleteDoc(docId: number) {
     if (!confirm('Delete this document?')) return;
@@ -220,23 +346,7 @@ export default function OperationDetailPage() {
     }
   }
 
-  async function handleAddCategory(e: React.FormEvent) {
-    e.preventDefault();
-    if (!newCatName.trim()) return;
-    setAddingCat(true);
-    try {
-      const { data } = await api.post('/operations/categories', { name: newCatName.trim() });
-      setCategories(prev => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)));
-      setUploadCategoryId(String(data.id));
-      setNewCatName('');
-      setShowAddCat(false);
-      addToast('Category added', 'success');
-    } catch (err: any) {
-      addToast(err.response?.data?.error || 'Failed to add category', 'error');
-    } finally {
-      setAddingCat(false);
-    }
-  }
+  // ── Status ──────────────────────────────────────────────────────────────────
 
   async function handleStatusChange(newStatus: string) {
     setSavingStatus(true);
@@ -250,6 +360,8 @@ export default function OperationDetailPage() {
     }
   }
 
+  // ── Render ──────────────────────────────────────────────────────────────────
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-24">
@@ -257,12 +369,13 @@ export default function OperationDetailPage() {
       </div>
     );
   }
-
   if (!operation) return null;
+
+  const pendingCount = pendingUploads.filter(p => p.status === 'pending' || p.status === 'error').length;
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
-      {/* Header */}
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-start gap-4">
         <button onClick={() => navigate('/operations')} className="p-2 hover:bg-gray-100 rounded-lg text-gray-500">
           <ArrowLeft size={20} />
@@ -290,7 +403,7 @@ export default function OperationDetailPage() {
         </div>
       </div>
 
-      {/* Linked Order */}
+      {/* ── Linked Order ───────────────────────────────────────────────────── */}
       {operation.order_id && (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
@@ -298,71 +411,32 @@ export default function OperationDetailPage() {
               <ShoppingCart size={16} className="text-gray-500" />
               Linked Order
             </h2>
-            <Link
-              to={`/orders/${operation.order_id}`}
-              className="flex items-center gap-1 text-sm text-primary-600 hover:underline"
-            >
+            <Link to={`/orders/${operation.order_id}`} className="flex items-center gap-1 text-sm text-primary-600 hover:underline">
               View order <ExternalLink size={13} />
             </Link>
           </div>
+
           <div className="px-5 py-4 grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
-            <div>
-              <p className="text-xs text-gray-500 mb-0.5">Order #</p>
-              <p className="font-medium text-gray-900">{operation.order_number}</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 mb-0.5">Type</p>
-              <p className="font-medium text-gray-900 capitalize">{operation.order_type}</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 mb-0.5">Status</p>
-              <p className="font-medium text-gray-900 capitalize">{operation.order_status?.replace(/_/g, ' ')}</p>
-            </div>
-            {operation.order_date && (
-              <div>
-                <p className="text-xs text-gray-500 mb-0.5">Order Date</p>
-                <p className="font-medium text-gray-900">{operation.order_date}</p>
+            {[
+              ['Order #', operation.order_number],
+              ['Type', operation.order_type],
+              ['Status', operation.order_status?.replace(/_/g, ' ')],
+              operation.order_date    ? ['Order Date', operation.order_date] : null,
+              operation.destination   ? ['Destination', operation.destination] : null,
+              operation.inco_terms    ? ['Inco Terms', operation.inco_terms] : null,
+              operation.transport     ? ['Transport', operation.transport] : null,
+              operation.delivery_date ? ['Delivery Date', operation.delivery_date] : null,
+              operation.payment_terms ? ['Payment Terms', operation.payment_terms] : null,
+              operation.order_total !== undefined ? ['Total', formatCurrency(operation.order_total)] : null,
+            ].filter((x): x is [string, string] => Boolean(x)).map(([label, value]) => (
+              <div key={label}>
+                <p className="text-xs text-gray-500 mb-0.5">{label}</p>
+                <p className="font-medium text-gray-900 capitalize">{value || '—'}</p>
               </div>
-            )}
-            {operation.destination && (
-              <div>
-                <p className="text-xs text-gray-500 mb-0.5">Destination</p>
-                <p className="font-medium text-gray-900">{operation.destination}</p>
-              </div>
-            )}
-            {operation.inco_terms && (
-              <div>
-                <p className="text-xs text-gray-500 mb-0.5">Inco Terms</p>
-                <p className="font-medium text-gray-900">{operation.inco_terms}</p>
-              </div>
-            )}
-            {operation.transport && (
-              <div>
-                <p className="text-xs text-gray-500 mb-0.5">Transport</p>
-                <p className="font-medium text-gray-900">{operation.transport}</p>
-              </div>
-            )}
-            {operation.delivery_date && (
-              <div>
-                <p className="text-xs text-gray-500 mb-0.5">Delivery Date</p>
-                <p className="font-medium text-gray-900">{operation.delivery_date}</p>
-              </div>
-            )}
-            {operation.payment_terms && (
-              <div>
-                <p className="text-xs text-gray-500 mb-0.5">Payment Terms</p>
-                <p className="font-medium text-gray-900">{operation.payment_terms}</p>
-              </div>
-            )}
-            {operation.order_total !== undefined && (
-              <div>
-                <p className="text-xs text-gray-500 mb-0.5">Total Amount</p>
-                <p className="font-semibold text-gray-900">{formatCurrency(operation.order_total)}</p>
-              </div>
-            )}
+            ))}
           </div>
 
-          {/* Order Items */}
+          {/* Order items */}
           {operation.order_items.length > 0 && (
             <div className="border-t border-gray-100">
               <table className="w-full text-sm">
@@ -388,13 +462,19 @@ export default function OperationDetailPage() {
             </div>
           )}
 
-          {/* Order file download */}
+          {/* Order file row */}
           {operation.order_file_path && (
             <div className="px-5 py-3 border-t border-gray-100 flex items-center gap-3">
-              <FileText size={15} className="text-gray-400" />
+              <FileText size={15} className="text-gray-400 flex-shrink-0" />
               <span className="text-sm text-gray-700 flex-1 truncate">{operation.order_file_name}</span>
               <button
-                onClick={downloadOrderFile}
+                onClick={() => openPreview({ fileName: operation.order_file_name!, filePath: operation.order_file_path!, subfolder: 'orders', label: 'Order document' })}
+                className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700"
+              >
+                <Eye size={14} /> View
+              </button>
+              <button
+                onClick={() => downloadFile(operation.order_file_path!, operation.order_file_name!, 'orders')}
                 className="flex items-center gap-1 text-sm text-primary-600 hover:text-primary-700"
               >
                 <Download size={14} /> Download
@@ -404,7 +484,7 @@ export default function OperationDetailPage() {
         </div>
       )}
 
-      {/* Linked Invoices */}
+      {/* ── Linked Invoices ─────────────────────────────────────────────────── */}
       {operation.invoices.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-100">
@@ -420,7 +500,7 @@ export default function OperationDetailPage() {
                 <th className="text-left px-4 py-2 text-xs font-medium text-gray-500">Party</th>
                 <th className="text-right px-4 py-2 text-xs font-medium text-gray-500">Amount</th>
                 <th className="text-left px-4 py-2 text-xs font-medium text-gray-500">Status</th>
-                <th className="px-4 py-2" />
+                <th className="text-right px-4 py-2 text-xs font-medium text-gray-500">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -428,16 +508,34 @@ export default function OperationDetailPage() {
                 <tr key={inv.id} className="hover:bg-gray-50">
                   <td className="px-5 py-2.5 font-medium text-primary-700">{inv.invoice_number}</td>
                   <td className="px-4 py-2.5 text-gray-700">{inv.customer_name || inv.supplier_name || '—'}</td>
-                  <td className="px-4 py-2.5 text-right text-gray-900 font-medium">{formatCurrency(inv.amount, inv.currency)}</td>
+                  <td className="px-4 py-2.5 text-right font-medium text-gray-900">{formatCurrency(inv.amount, inv.currency)}</td>
                   <td className="px-4 py-2.5">
                     <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${INVOICE_STATUS_COLORS[inv.status] || 'bg-gray-100 text-gray-700'}`}>
                       {inv.status}
                     </span>
                   </td>
-                  <td className="px-4 py-2.5 text-right">
-                    <Link to={`/invoices/${inv.id}`} className="text-xs text-primary-600 hover:underline flex items-center justify-end gap-1">
-                      View <ExternalLink size={11} />
-                    </Link>
+                  <td className="px-4 py-2.5">
+                    <div className="flex items-center justify-end gap-2">
+                      {inv.file_path && (
+                        <>
+                          <button
+                            onClick={() => openPreview({ fileName: inv.file_name!, filePath: inv.file_path!, subfolder: 'invoices', label: inv.invoice_number })}
+                            className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
+                          >
+                            <Eye size={13} /> View
+                          </button>
+                          <button
+                            onClick={() => downloadFile(inv.file_path!, inv.file_name!, 'invoices')}
+                            className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
+                          >
+                            <Download size={13} />
+                          </button>
+                        </>
+                      )}
+                      <Link to={`/invoices/${inv.id}`} className="flex items-center gap-1 text-xs text-primary-600 hover:underline">
+                        Open <ExternalLink size={11} />
+                      </Link>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -446,113 +544,172 @@ export default function OperationDetailPage() {
         </div>
       )}
 
-      {/* Documents */}
+      {/* ── Documents ──────────────────────────────────────────────────────── */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
           <h2 className="font-semibold text-gray-800 flex items-center gap-2">
             <FileText size={16} className="text-gray-500" />
             Documents ({operation.documents.length})
           </h2>
+          {/* Add category button lives here so it's always accessible */}
           <button
-            onClick={() => setShowUpload(v => !v)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+            type="button"
+            onClick={() => setShowAddCat(v => !v)}
+            className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2 py-1"
           >
-            <Upload size={14} /> Upload
+            <Plus size={12} /> Add category
           </button>
         </div>
 
-        {/* Upload form */}
-        {showUpload && (
-          <form onSubmit={handleUpload} className="px-5 py-4 bg-gray-50 border-b border-gray-200 space-y-3">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">File *</label>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".pdf,.jpg,.jpeg,.png,.webp"
-                  required
-                  onChange={e => setUploadFile(e.target.files?.[0] || null)}
-                  className="block w-full text-sm text-gray-700 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-sm file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Category *</label>
-                <div className="flex gap-2">
-                  <select
-                    value={uploadCategoryId}
-                    onChange={e => setUploadCategoryId(e.target.value)}
-                    required
-                    className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  >
-                    <option value="">Select category…</option>
-                    {categories.map(c => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => setShowAddCat(v => !v)}
-                    className="p-2 border border-gray-300 rounded-lg hover:bg-gray-100 text-gray-600"
-                    title="Add new category"
-                  >
-                    <Plus size={16} />
-                  </button>
-                </div>
-                {showAddCat && (
-                  <div className="mt-2 flex gap-2">
-                    <input
-                      value={newCatName}
-                      onChange={e => setNewCatName(e.target.value)}
-                      placeholder="New category name"
-                      className="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleAddCategory}
-                      disabled={addingCat || !newCatName.trim()}
-                      className="px-3 py-1.5 bg-gray-800 text-white text-sm rounded-lg hover:bg-gray-700 disabled:opacity-50"
-                    >
-                      Add
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Notes</label>
-              <input
-                value={uploadNotes}
-                onChange={e => setUploadNotes(e.target.value)}
-                placeholder="Optional notes"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-              />
-            </div>
-            <div className="flex gap-2 justify-end">
-              <button
-                type="button"
-                onClick={() => setShowUpload(false)}
-                className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={uploading}
-                className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-60"
-              >
-                {uploading ? 'Uploading…' : 'Upload'}
-              </button>
-            </div>
+        {/* Add-category inline */}
+        {showAddCat && (
+          <form onSubmit={handleAddCategory} className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex gap-2 items-center">
+            <input
+              value={newCatName}
+              onChange={e => setNewCatName(e.target.value)}
+              placeholder="New category name…"
+              className="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+              autoFocus
+            />
+            <button
+              type="submit"
+              disabled={addingCat || !newCatName.trim()}
+              className="px-3 py-1.5 bg-gray-800 text-white text-sm rounded-lg hover:bg-gray-700 disabled:opacity-50"
+            >
+              {addingCat ? 'Adding…' : 'Add'}
+            </button>
+            <button type="button" onClick={() => setShowAddCat(false)} className="p-1.5 text-gray-400 hover:text-gray-600">
+              <X size={16} />
+            </button>
           </form>
         )}
 
-        {/* Documents list */}
-        {operation.documents.length === 0 ? (
-          <div className="text-center py-10 text-gray-400 text-sm">
-            No documents yet. Click Upload to add files.
+        {/* ── Drop zone ─────────────────────────────────────────────────────── */}
+        <div
+          ref={dropZoneRef}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          className={`mx-5 my-4 border-2 border-dashed rounded-xl flex flex-col items-center justify-center gap-2 py-6 cursor-pointer transition-colors ${
+            isDragging
+              ? 'border-primary-400 bg-primary-50'
+              : 'border-gray-200 hover:border-gray-300 bg-gray-50 hover:bg-gray-100'
+          }`}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <Upload size={22} className={isDragging ? 'text-primary-500' : 'text-gray-400'} />
+          <p className="text-sm font-medium text-gray-600">
+            {isDragging ? 'Drop files here' : 'Drag & drop files here, or click to browse'}
+          </p>
+          <p className="text-xs text-gray-400">PDF, JPEG, PNG, WebP · max 10 MB each</p>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={ACCEPTED_EXTS}
+            multiple
+            className="hidden"
+            onChange={handleFileInputChange}
+          />
+        </div>
+
+        {/* ── Pending uploads queue ──────────────────────────────────────────── */}
+        {pendingUploads.length > 0 && (
+          <div className="px-5 pb-4 space-y-2">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Upload queue</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPendingUploads([])}
+                  className="text-xs text-gray-400 hover:text-gray-600"
+                >
+                  Clear all
+                </button>
+                {pendingCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleUploadAll}
+                    disabled={uploadingAll}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-60"
+                  >
+                    {uploadingAll ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+                    Upload {pendingCount} file{pendingCount !== 1 ? 's' : ''}
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {pendingUploads.map(p => (
+              <div key={p.id} className="border border-gray-200 rounded-lg px-3 py-2.5 bg-white space-y-2">
+                {/* File name + status icon + remove */}
+                <div className="flex items-center gap-2">
+                  {p.status === 'done'      && <CheckCircle size={15} className="text-green-500 flex-shrink-0" />}
+                  {p.status === 'error'     && <AlertCircle size={15} className="text-red-500 flex-shrink-0" />}
+                  {p.status === 'uploading' && <Loader2 size={15} className="text-primary-500 animate-spin flex-shrink-0" />}
+                  {p.status === 'pending'   && <FileText size={15} className="text-gray-400 flex-shrink-0" />}
+
+                  <span className="text-sm text-gray-800 truncate flex-1">{p.file.name}</span>
+                  <span className="text-xs text-gray-400 flex-shrink-0">{(p.file.size / 1024).toFixed(0)} KB</span>
+
+                  {p.status !== 'uploading' && (
+                    <button onClick={() => removePending(p.id)} className="p-0.5 text-gray-300 hover:text-gray-500">
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+
+                {/* Progress bar (while uploading) */}
+                {p.status === 'uploading' && (
+                  <div className="w-full bg-gray-200 rounded-full h-1.5">
+                    <div
+                      className="bg-primary-500 h-1.5 rounded-full transition-all duration-200"
+                      style={{ width: `${p.progress}%` }}
+                    />
+                  </div>
+                )}
+
+                {/* Error message */}
+                {p.status === 'error' && p.error && (
+                  <p className="text-xs text-red-600">{p.error}</p>
+                )}
+
+                {/* Category + notes (only when pending or error) */}
+                {(p.status === 'pending' || p.status === 'error') && (
+                  <div className="flex gap-2">
+                    <select
+                      value={p.categoryId}
+                      onChange={e => updatePending(p.id, { categoryId: e.target.value })}
+                      className="flex-1 border border-gray-300 rounded-md px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    >
+                      <option value="">Select category *</option>
+                      {categories.map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                    <input
+                      value={p.notes}
+                      onChange={e => updatePending(p.id, { notes: e.target.value })}
+                      placeholder="Notes (optional)"
+                      className="flex-1 border border-gray-300 rounded-md px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
+                  </div>
+                )}
+
+                {/* Done badge */}
+                {p.status === 'done' && (
+                  <p className="text-xs text-green-600 font-medium">Uploaded successfully</p>
+                )}
+              </div>
+            ))}
           </div>
-        ) : (
+        )}
+
+        {/* ── Saved documents list ───────────────────────────────────────────── */}
+        {operation.documents.length === 0 && pendingUploads.length === 0 ? (
+          <div className="text-center pb-8 pt-2 text-gray-400 text-sm">
+            No documents yet — drag files above or click to upload.
+          </div>
+        ) : operation.documents.length > 0 ? (
           <ul className="divide-y divide-gray-100">
             {operation.documents.map(doc => (
               <li key={doc.id} className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50">
@@ -565,15 +722,13 @@ export default function OperationDetailPage() {
                         {doc.category_name}
                       </span>
                     )}
-                    {doc.notes && (
-                      <span className="text-xs text-gray-500 truncate">{doc.notes}</span>
-                    )}
+                    {doc.notes && <span className="text-xs text-gray-500 truncate">{doc.notes}</span>}
                     <span className="text-xs text-gray-400">{new Date(doc.created_at).toLocaleDateString()}</span>
                   </div>
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
                   <button
-                    onClick={() => openPreview(doc)}
+                    onClick={() => openPreview({ fileName: doc.file_name, filePath: doc.file_path, subfolder: 'operation-docs', label: doc.category_name || undefined })}
                     className="p-1.5 rounded-lg hover:bg-gray-200 text-gray-500 hover:text-gray-700"
                     title="Preview"
                   >
@@ -597,12 +752,15 @@ export default function OperationDetailPage() {
               </li>
             ))}
           </ul>
-        )}
+        ) : null}
       </div>
 
-      {/* Preview Modal */}
-      {previewDoc && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={closePreview}>
+      {/* ── Preview Modal ──────────────────────────────────────────────────── */}
+      {previewItem && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+          onClick={closePreview}
+        >
           <div
             className="bg-white rounded-xl shadow-2xl w-full max-w-4xl mx-4 flex flex-col overflow-hidden"
             style={{ maxHeight: '90vh' }}
@@ -611,24 +769,21 @@ export default function OperationDetailPage() {
             {/* Modal header */}
             <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
               <div className="min-w-0">
-                <p className="font-medium text-gray-900 truncate">{previewDoc.file_name}</p>
-                {previewDoc.category_name && (
+                <p className="font-medium text-gray-900 truncate">{previewItem.fileName}</p>
+                {previewItem.label && (
                   <span className="text-xs bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded font-medium">
-                    {previewDoc.category_name}
+                    {previewItem.label}
                   </span>
                 )}
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
                 <button
-                  onClick={() => downloadFile(previewDoc.file_path, previewDoc.file_name)}
+                  onClick={() => downloadFile(previewItem.filePath, previewItem.fileName, previewItem.subfolder)}
                   className="flex items-center gap-1 px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
                 >
                   <Download size={14} /> Download
                 </button>
-                <button
-                  onClick={closePreview}
-                  className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"
-                >
+                <button onClick={closePreview} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
                   <X size={18} />
                 </button>
               </div>
@@ -639,16 +794,16 @@ export default function OperationDetailPage() {
               {previewLoading ? (
                 <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600" />
               ) : previewUrl ? (
-                isImage(previewDoc.file_name) ? (
+                isImage(previewItem.fileName) ? (
                   <img
                     src={previewUrl}
-                    alt={previewDoc.file_name}
+                    alt={previewItem.fileName}
                     className="max-w-full max-h-full object-contain rounded-lg shadow"
                   />
                 ) : (
                   <iframe
                     src={previewUrl}
-                    title={previewDoc.file_name}
+                    title={previewItem.fileName}
                     className="w-full rounded-lg shadow bg-white"
                     style={{ height: '70vh' }}
                   />

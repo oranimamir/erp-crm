@@ -110,6 +110,7 @@ router.get('/:id', (req: Request, res: Response) => {
 
   const invoices = db.prepare(`
     SELECT i.id, i.invoice_number, i.type, i.amount, i.currency, i.status, i.due_date, i.invoice_date,
+      i.file_path, i.file_name,
       c.name as customer_name, s.name as supplier_name
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
