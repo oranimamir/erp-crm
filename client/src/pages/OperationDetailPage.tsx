@@ -94,12 +94,11 @@ interface PendingUpload {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const STATUS_OPTIONS = ['active', 'completed', 'on_hold', 'cancelled'];
+const STATUS_OPTIONS = ['ordered', 'shipped', 'delivered'];
 const STATUS_COLORS: Record<string, string> = {
-  active: 'bg-green-100 text-green-800',
-  completed: 'bg-blue-100 text-blue-800',
-  cancelled: 'bg-red-100 text-red-800',
-  on_hold: 'bg-yellow-100 text-yellow-800',
+  ordered:   'bg-yellow-100 text-yellow-800',
+  shipped:   'bg-blue-100 text-blue-800',
+  delivered: 'bg-green-100 text-green-800',
 };
 const INVOICE_STATUS_COLORS: Record<string, string> = {
   draft: 'bg-gray-100 text-gray-700',
@@ -352,7 +351,7 @@ export default function OperationDetailPage() {
   async function handleStatusChange(newStatus: string) {
     setSavingStatus(true);
     try {
-      await api.put(`/operations/${id}`, { status: newStatus });
+      await api.patch(`/operations/${id}/status`, { status: newStatus });
       setOperation(prev => prev ? { ...prev, status: newStatus } : prev);
     } catch {
       addToast('Failed to update status', 'error');
@@ -394,7 +393,7 @@ export default function OperationDetailPage() {
               className={`text-xs font-medium px-2 py-1 rounded-full border-0 focus:ring-2 focus:ring-primary-500 cursor-pointer ${STATUS_COLORS[operation.status] || 'bg-gray-100 text-gray-700'}`}
             >
               {STATUS_OPTIONS.map(s => (
-                <option key={s} value={s}>{s.replace('_', ' ')}</option>
+                <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
               ))}
             </select>
           </div>
