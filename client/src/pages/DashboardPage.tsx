@@ -26,6 +26,7 @@ export default function DashboardPage() {
   const [monthlyPayments, setMonthlyPayments] = useState<any[]>([]);
   const [inTransit, setInTransit] = useState<any[]>([]);
   const [overdueInvoices, setOverdueInvoices] = useState<any[]>([]);
+  const [paidInvoices, setPaidInvoices] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -37,7 +38,8 @@ export default function DashboardPage() {
       api.get('/dashboard/monthly-payments'),
       api.get('/dashboard/in-transit'),
       api.get('/dashboard/overdue-invoices'),
-    ]).then(([s, o, i, sh, mp, it, ov]) => {
+      api.get('/dashboard/paid-invoices'),
+    ]).then(([s, o, i, sh, mp, it, ov, pi]) => {
       setStats(s.data);
       setRecentOrders(o.data);
       setPendingInvoices(i.data);
@@ -45,6 +47,7 @@ export default function DashboardPage() {
       setMonthlyPayments(mp.data);
       setInTransit(it.data);
       setOverdueInvoices(ov.data);
+      setPaidInvoices(pi.data);
     }).finally(() => setLoading(false));
   }, []);
 
@@ -243,6 +246,31 @@ export default function DashboardPage() {
               </div>
             );
           })()}
+
+          {/* Paid invoices list */}
+          {paidInvoices.length > 0 && (
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Paid Invoices</h3>
+              <div className="divide-y divide-gray-100">
+                {paidInvoices.map((inv: any) => (
+                  <Link key={inv.id} to={`/invoices/${inv.id}`} className="flex items-center justify-between py-2 hover:bg-gray-50 rounded px-1 -mx-1">
+                    <div>
+                      <span className="text-sm font-medium text-gray-900">{inv.invoice_number}</span>
+                      {inv.customer_name && (
+                        <span className="text-sm text-gray-500 ml-2">{inv.customer_name}</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0 ml-2">
+                      <span className="text-xs text-gray-400">{formatDate(inv.paid_date) || '-'}</span>
+                      <span className="text-sm font-semibold text-green-700">
+                        €{Number(inv.eur_val).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </Card>
 

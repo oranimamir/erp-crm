@@ -10,7 +10,7 @@ import SearchBar from '../components/ui/SearchBar';
 import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
-import { Plus, FileText, Eye, Trash2, FileDown } from 'lucide-react';
+import { Plus, FileText, Eye, Trash2, FileDown, ChevronUp, ChevronDown } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 
 const statusBadgeClasses: Record<string, string> = {
@@ -48,8 +48,25 @@ export default function InvoicesPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
+  const [sortBy, setSortBy] = useState('date');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [loading, setLoading] = useState(true);
   const [deleteId, setDeleteId] = useState<number | null>(null);
+
+  const handleSort = (field: string) => {
+    if (sortBy === field) {
+      setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortBy(field);
+      setSortDir('desc');
+    }
+    setPage(1);
+  };
+
+  const SortIcon = ({ field }: { field: string }) => {
+    if (sortBy !== field) return <ChevronDown size={12} className="opacity-30" />;
+    return sortDir === 'asc' ? <ChevronUp size={12} className="text-primary-600" /> : <ChevronDown size={12} className="text-primary-600" />;
+  };
 
   const fetchInvoices = () => {
     setLoading(true);
@@ -60,6 +77,8 @@ export default function InvoicesPage() {
         search,
         status: statusFilter || undefined,
         type: typeFilter || undefined,
+        sort_by: sortBy,
+        sort_dir: sortDir,
       },
     })
       .then(res => {
@@ -70,7 +89,7 @@ export default function InvoicesPage() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchInvoices(); }, [page, search, statusFilter, typeFilter]);
+  useEffect(() => { fetchInvoices(); }, [page, search, statusFilter, typeFilter, sortBy, sortDir]);
 
   const handleDelete = async () => {
     if (!deleteId) return;
@@ -157,11 +176,26 @@ export default function InvoicesPage() {
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Invoice #</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Customer / Supplier</th>
+                  <th
+                    className="text-left px-4 py-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900 select-none"
+                    onClick={() => handleSort('name')}
+                  >
+                    <span className="flex items-center gap-1">Customer / Supplier <SortIcon field="name" /></span>
+                  </th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Type</th>
-                  <th className="text-right px-4 py-3 font-medium text-gray-600">Amount</th>
+                  <th
+                    className="text-right px-4 py-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900 select-none"
+                    onClick={() => handleSort('amount')}
+                  >
+                    <span className="flex items-center justify-end gap-1">Amount <SortIcon field="amount" /></span>
+                  </th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Status</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Due Date</th>
+                  <th
+                    className="text-left px-4 py-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900 select-none"
+                    onClick={() => handleSort('date')}
+                  >
+                    <span className="flex items-center gap-1">Date <SortIcon field="date" /></span>
+                  </th>
                   <th className="text-right px-4 py-3 font-medium text-gray-600">Actions</th>
                 </tr>
               </thead>
@@ -189,7 +223,7 @@ export default function InvoicesPage() {
                         {statusOptions.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                       </select>
                     </td>
-                    <td className="px-4 py-3 text-gray-600">{formatDateOrDash(inv.due_date)}</td>
+                    <td className="px-4 py-3 text-gray-600">{formatDateOrDash(inv.invoice_date || inv.due_date)}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
                         <Link to={`/invoices/${inv.id}`} className="p-1.5 text-gray-400 hover:text-primary-600 rounded"><Eye size={16} /></Link>

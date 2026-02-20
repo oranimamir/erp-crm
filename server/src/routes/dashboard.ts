@@ -138,6 +138,28 @@ router.get('/overdue-invoices', (_req: Request, res: Response) => {
   res.json(invoices);
 });
 
+router.get('/paid-invoices', (_req: Request, res: Response) => {
+  const invoices = db.prepare(`
+    SELECT
+      i.id, i.invoice_number, i.currency,
+      c.name as customer_name,
+      COALESCE(wt.transfer_date, i.payment_date, i.created_at) as paid_date,
+      COALESCE(wt.eur_amount, i.eur_amount, i.amount) as eur_val
+    FROM invoices i
+    LEFT JOIN customers c ON i.customer_id = c.id
+    LEFT JOIN (
+      SELECT invoice_id,
+             MAX(transfer_date) as transfer_date,
+             SUM(COALESCE(eur_amount, amount)) as eur_amount
+      FROM wire_transfers GROUP BY invoice_id
+    ) wt ON wt.invoice_id = i.id
+    WHERE i.type = 'customer' AND i.status = 'paid'
+    ORDER BY COALESCE(wt.transfer_date, i.payment_date, i.created_at) DESC
+    LIMIT 30
+  `).all();
+  res.json(invoices);
+});
+
 router.get('/supplier-payments', (_req: Request, res: Response) => {
   const data = db.prepare(`
     SELECT

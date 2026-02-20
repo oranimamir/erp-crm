@@ -19,6 +19,15 @@ router.get('/', (req: Request, res: Response) => {
   const type = (req.query.type as string) || '';
   const offset = (page - 1) * limit;
 
+  const sortFieldMap: Record<string, string> = {
+    date: 'COALESCE(i.invoice_date, i.created_at)',
+    amount: 'i.amount',
+    name: 'COALESCE(c.name, s.name)',
+  };
+  const sortBy = (req.query.sort_by as string) || 'date';
+  const sortDir = (req.query.sort_dir as string) === 'asc' ? 'ASC' : 'DESC';
+  const orderBy = `${sortFieldMap[sortBy] || sortFieldMap.date} ${sortDir}`;
+
   const conditions: string[] = [];
   const params: any[] = [];
   if (search) {
@@ -35,7 +44,7 @@ router.get('/', (req: Request, res: Response) => {
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
     LEFT JOIN suppliers s ON i.supplier_id = s.id
-    ${where} ORDER BY i.created_at DESC LIMIT ? OFFSET ?
+    ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?
   `).all(...params, limit, offset);
 
   res.json({ data: invoices, total, page, limit, totalPages: Math.ceil(total / limit) });
