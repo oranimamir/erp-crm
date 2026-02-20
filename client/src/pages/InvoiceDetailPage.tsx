@@ -59,8 +59,10 @@ export default function InvoiceDetailPage() {
 
   // Wire transfer inline form
   const [wirePaymentDate, setWirePaymentDate] = useState(new Date().toISOString().split('T')[0]);
+  const [wireDateManuallySet, setWireDateManuallySet] = useState(false);
   const [wireBankRef, setWireBankRef] = useState('');
   const [wireUploading, setWireUploading] = useState(false);
+  const [wireUploadStatus, setWireUploadStatus] = useState('');
   const [isDragging, setIsDragging] = useState(false);
 
   // Preview modal
@@ -103,21 +105,44 @@ export default function InvoiceDetailPage() {
 
   const handleWireUpload = async (file: File) => {
     setWireUploading(true);
+    let paymentDate = wirePaymentDate;
+
+    // Auto-detect date from document unless user typed one manually
+    if (!wireDateManuallySet) {
+      setWireUploadStatus('Reading date from document...');
+      try {
+        const scanForm = new FormData();
+        scanForm.append('file', file);
+        const scanRes = await api.post('/wire-transfers/scan', scanForm, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+        if (scanRes.data.transfer_date) {
+          paymentDate = scanRes.data.transfer_date;
+          setWirePaymentDate(paymentDate);
+        }
+      } catch {
+        // scan failed — fall back to current date value
+      }
+    }
+
+    setWireUploadStatus('Uploading & converting to EUR...');
     try {
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('payment_date', wirePaymentDate);
+      formData.append('payment_date', paymentDate);
       if (wireBankRef) formData.append('bank_reference', wireBankRef);
       await api.post(`/invoices/${id}/wire-transfers`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       addToast('Wire transfer uploaded — invoice marked as Paid', 'success');
       setWireBankRef('');
+      setWireDateManuallySet(false);
       fetchInvoice();
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Upload failed', 'error');
     } finally {
       setWireUploading(false);
+      setWireUploadStatus('');
     }
   };
 
@@ -397,7 +422,7 @@ export default function InvoiceDetailPage() {
                   <input
                     type="date"
                     value={wirePaymentDate}
-                    onChange={e => setWirePaymentDate(e.target.value)}
+                    onChange={e => { setWirePaymentDate(e.target.value); setWireDateManuallySet(true); }}
                     className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
                   />
                 </div>
@@ -430,7 +455,7 @@ export default function InvoiceDetailPage() {
                 {wireUploading ? (
                   <>
                     <Loader2 size={22} className="text-primary-500 animate-spin" />
-                    <p className="text-sm font-medium text-primary-600">Uploading & converting to EUR...</p>
+                    <p className="text-sm font-medium text-primary-600">{wireUploadStatus || 'Processing...'}</p>
                   </>
                 ) : (
                   <>
