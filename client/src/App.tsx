@@ -27,6 +27,7 @@ import AcceptInvitePage from './pages/AcceptInvitePage';
 import NotFoundPage from './pages/NotFoundPage';
 import OperationsPage from './pages/OperationsPage';
 import OperationDetailPage from './pages/OperationDetailPage';
+import AnalyticsPage from './pages/AnalyticsPage';
 
 export default function App() {
   return (
@@ -61,6 +62,7 @@ export default function App() {
               <Route path="/products" element={<ProductsPage />} />
               <Route path="/operations" element={<OperationsPage />} />
               <Route path="/operations/:id" element={<OperationDetailPage />} />
+              <Route path="/analytics" element={<AnalyticsPage />} />
               <Route path="/admin/users" element={<AdminUsersPage />} />
               <Route path="*" element={<NotFoundPage />} />
             </Route>

@@ -74,6 +74,11 @@ export default function InvoiceDetailPage() {
       .then(res => {
         setInvoice(res.data);
         setNewStatus(res.data.status);
+        // Pre-fill payment date with invoice_date so historical uploads land in the right month
+        if (res.data.invoice_date) {
+          const match = res.data.invoice_date.match(/^(\d{4}-\d{2}-\d{2})/);
+          if (match) setWirePaymentDate(match[1]);
+        }
       })
       .finally(() => setLoading(false));
   };

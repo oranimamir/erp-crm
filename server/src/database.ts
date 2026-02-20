@@ -418,6 +418,22 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE users ADD COLUMN notify_on_changes INTEGER NOT NULL DEFAULT 0`); } catch (_) { /* column may already exist */ }
   // Add operation_id to invoices
   try { db.exec(`ALTER TABLE invoices ADD COLUMN operation_id INTEGER`); } catch (_) { /* column may already exist */ }
+  // One-time fix: wire transfers uploaded in 2026-02 for invoices dated in 2025
+  // (historical bookkeeping uploads that got today's date instead of the actual payment date)
+  try {
+    db.exec(`
+      UPDATE wire_transfers
+      SET transfer_date = (
+        SELECT invoice_date FROM invoices
+        WHERE id = wire_transfers.invoice_id AND invoice_date IS NOT NULL
+      )
+      WHERE strftime('%Y-%m', transfer_date) = '2026-02'
+        AND (
+          SELECT invoice_date FROM invoices WHERE id = wire_transfers.invoice_id
+        ) LIKE '2025-%'
+    `);
+  } catch (_) { /* safe to ignore */ }
+
   // Add EUR FX columns to invoices and wire_transfers
   try { db.exec(`ALTER TABLE invoices ADD COLUMN fx_rate REAL`); } catch (_) { /* column may already exist */ }
   try { db.exec(`ALTER TABLE invoices ADD COLUMN eur_amount REAL`); } catch (_) { /* column may already exist */ }
