@@ -29,6 +29,7 @@ const EXTRACTION_PROMPT = `You are an invoice data extraction assistant. Analyze
   "invoice_date": "string or null (YYYY-MM-DD format, the date the invoice was issued)",
   "due_date": "string or null (YYYY-MM-DD format)",
   "vendor_or_customer_name": "string or null (the company/person who issued or received the invoice)",
+  "po_number": "string or null (PO number, purchase order number, or order reference, if present)",
   "notes": "string or null (brief summary of line items or purpose)"
 }
 
@@ -164,6 +165,7 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
       currency: extracted.currency || null,
       invoice_date: extracted.invoice_date || null,
       due_date: extracted.due_date || null,
+      po_number: extracted.po_number || null,
       notes: extracted.notes || null,
       vendor_or_customer_name: extracted.vendor_or_customer_name || null,
       ...entityMatch,

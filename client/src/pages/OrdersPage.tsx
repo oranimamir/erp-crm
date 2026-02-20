@@ -11,6 +11,7 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import { Plus, ShoppingCart, Eye, Trash2, Download } from 'lucide-react';
+import { formatDate } from '../lib/dates';
 
 const statusOptions = [
   { value: 'order_placed', label: 'Order Placed' },
@@ -82,14 +83,7 @@ export default function OrdersPage() {
     setDeleteId(null);
   };
 
-  const formatDate = (dateStr: string) => {
-    if (!dateStr) return '-';
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  };
+  const formatDateOrDash = (dateStr: string) => formatDate(dateStr) || '-';
 
   const formatCurrency = (amount: number | null | undefined, currencies?: string | null) => {
     if (amount == null) return '—';
@@ -186,7 +180,7 @@ export default function OrdersPage() {
                     </td>
                     <td className="px-4 py-3 text-right text-gray-900 font-medium">{formatCurrency(o.total_amount, o.item_currencies)}</td>
                     <td className="px-4 py-3"><StatusBadge status={o.status} /></td>
-                    <td className="px-4 py-3 text-gray-500">{formatDate(o.created_at)}</td>
+                    <td className="px-4 py-3 text-gray-500">{formatDateOrDash(o.created_at)}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
                         <Link to={`/orders/${o.id}`} className="p-1.5 text-gray-400 hover:text-primary-600 rounded"><Eye size={16} /></Link>

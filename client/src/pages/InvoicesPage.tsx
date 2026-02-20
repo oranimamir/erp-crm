@@ -11,6 +11,7 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import { Plus, FileText, Eye, Trash2, FileDown } from 'lucide-react';
+import { formatDate } from '../lib/dates';
 
 const statusBadgeClasses: Record<string, string> = {
   draft:     'bg-gray-100 text-gray-700 border-gray-200',
@@ -93,10 +94,7 @@ export default function InvoicesPage() {
     }
   };
 
-  const formatDate = (dateStr: string) => {
-    if (!dateStr) return '-';
-    return new Date(dateStr).toLocaleDateString();
-  };
+  const formatDateOrDash = (dateStr: string) => formatDate(dateStr) || '-';
 
   const formatAmount = (amount: number, currency?: string) => {
     if (amount == null) return '-';
@@ -191,7 +189,7 @@ export default function InvoicesPage() {
                         {statusOptions.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                       </select>
                     </td>
-                    <td className="px-4 py-3 text-gray-600">{formatDate(inv.due_date)}</td>
+                    <td className="px-4 py-3 text-gray-600">{formatDateOrDash(inv.due_date)}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
                         <Link to={`/invoices/${inv.id}`} className="p-1.5 text-gray-400 hover:text-primary-600 rounded"><Eye size={16} /></Link>

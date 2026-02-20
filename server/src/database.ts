@@ -418,6 +418,11 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE users ADD COLUMN notify_on_changes INTEGER NOT NULL DEFAULT 0`); } catch (_) { /* column may already exist */ }
   // Add operation_id to invoices
   try { db.exec(`ALTER TABLE invoices ADD COLUMN operation_id INTEGER`); } catch (_) { /* column may already exist */ }
+  // Add EUR FX columns to invoices and wire_transfers
+  try { db.exec(`ALTER TABLE invoices ADD COLUMN fx_rate REAL`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE invoices ADD COLUMN eur_amount REAL`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE wire_transfers ADD COLUMN fx_rate REAL`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE wire_transfers ADD COLUMN eur_amount REAL`); } catch (_) { /* column may already exist */ }
 
   // Seed default document categories
   const defaultCategories = [

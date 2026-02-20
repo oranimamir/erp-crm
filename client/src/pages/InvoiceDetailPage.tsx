@@ -1,15 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
+import { formatDate } from '../lib/dates';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Select from '../components/ui/Select';
 import Badge from '../components/ui/Badge';
 import StatusBadge from '../components/ui/StatusBadge';
-import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
-import FileUpload from '../components/ui/FileUpload';
 import {
   ArrowLeft,
   FileText,
@@ -18,18 +17,16 @@ import {
   Clock,
   ArrowRight,
   Pencil,
-  DollarSign,
   Calendar,
   User,
   Building,
   Hash,
   StickyNote,
   Landmark,
-  Check,
-  XCircle,
-  Plus,
   Upload,
   Loader2,
+  Eye,
+  Trash2,
 } from 'lucide-react';
 
 const statusOptions = [
@@ -45,55 +42,31 @@ const typeColors: Record<string, 'blue' | 'purple'> = {
   supplier: 'purple',
 };
 
+function isImage(filename: string) {
+  return /\.(jpg|jpeg|png|webp)$/i.test(filename);
+}
+
 export default function InvoiceDetailPage() {
   const { id } = useParams();
   const { addToast } = useToast();
+  const dropZoneRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const [invoice, setInvoice] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [newStatus, setNewStatus] = useState('');
   const [updatingStatus, setUpdatingStatus] = useState(false);
-  const [showWireModal, setShowWireModal] = useState(false);
-  const [wireForm, setWireForm] = useState({ amount: '', transfer_date: '', bank_reference: '', notes: '' });
-  const [wireFile, setWireFile] = useState<File | null>(null);
-  const [wireSaving, setWireSaving] = useState(false);
-  const [wireScanning, setWireScanning] = useState(false);
 
-  const scanWireTransfer = async (file: File) => {
-    setWireScanning(true);
-    try {
-      const scanData = new FormData();
-      scanData.append('file', file);
-      const res = await api.post('/wire-transfers/scan', scanData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      const data = res.data;
-      setWireForm(prev => ({
-        ...prev,
-        ...(data.amount != null ? { amount: String(data.amount) } : {}),
-        ...(data.transfer_date ? { transfer_date: data.transfer_date } : {}),
-        ...(data.bank_reference ? { bank_reference: data.bank_reference } : {}),
-        ...(data.notes ? { notes: data.notes } : {}),
-      }));
-      addToast('Wire transfer scanned and fields auto-filled', 'success');
-    } catch (err: any) {
-      const detail = err.response?.data?.error || '';
-      const msg = detail.toLowerCase().includes('credit balance')
-        ? 'AI scanning unavailable: Anthropic API credits depleted. Fill in fields manually.'
-        : detail
-          ? `${detail}. You can fill in the fields manually.`
-          : 'Could not auto-scan wire transfer. You can fill in the fields manually.';
-      addToast(msg, 'info');
-    } finally {
-      setWireScanning(false);
-    }
-  };
+  // Wire transfer inline form
+  const [wirePaymentDate, setWirePaymentDate] = useState(new Date().toISOString().split('T')[0]);
+  const [wireBankRef, setWireBankRef] = useState('');
+  const [wireUploading, setWireUploading] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
 
-  const handleWireFileSelect = (file: File | null) => {
-    setWireFile(file);
-    if (file) {
-      scanWireTransfer(file);
-    }
-  };
+  // Preview modal
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewFileName, setPreviewFileName] = useState('');
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   const fetchInvoice = () => {
     setLoading(true);
@@ -106,6 +79,8 @@ export default function InvoiceDetailPage() {
   };
 
   useEffect(() => { fetchInvoice(); }, [id]);
+
+  // ── Status update ──────────────────────────────────────────────────────────
 
   const handleStatusUpdate = async () => {
     if (newStatus === invoice.status) {
@@ -124,59 +99,87 @@ export default function InvoiceDetailPage() {
     }
   };
 
-  const handleSubmitWire = async () => {
-    if (!wireForm.amount || !wireForm.transfer_date) { addToast('Amount and date are required', 'error'); return; }
-    setWireSaving(true);
+  // ── Wire transfer upload ───────────────────────────────────────────────────
+
+  const handleWireUpload = async (file: File) => {
+    setWireUploading(true);
     try {
       const formData = new FormData();
-      formData.append('amount', wireForm.amount);
-      formData.append('transfer_date', wireForm.transfer_date);
-      formData.append('bank_reference', wireForm.bank_reference);
-      formData.append('notes', wireForm.notes);
-      if (wireFile) formData.append('file', wireFile);
-      await api.post(`/invoices/${id}/wire-transfers`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
-      addToast('Wire transfer submitted', 'success');
-      setShowWireModal(false);
-      setWireForm({ amount: '', transfer_date: '', bank_reference: '', notes: '' });
-      setWireFile(null);
+      formData.append('file', file);
+      formData.append('payment_date', wirePaymentDate);
+      if (wireBankRef) formData.append('bank_reference', wireBankRef);
+      await api.post(`/invoices/${id}/wire-transfers`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      addToast('Wire transfer uploaded — invoice marked as Paid', 'success');
+      setWireBankRef('');
       fetchInvoice();
     } catch (err: any) {
-      addToast(err.response?.data?.error || 'Failed to submit', 'error');
-    } finally { setWireSaving(false); }
+      addToast(err.response?.data?.error || 'Upload failed', 'error');
+    } finally {
+      setWireUploading(false);
+    }
   };
 
-  const handleApproveWire = async (transferId: number) => {
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (!dropZoneRef.current?.contains(e.relatedTarget as Node)) {
+      setIsDragging(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files[0];
+    if (file) handleWireUpload(file);
+  };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) handleWireUpload(file);
+    e.target.value = '';
+  };
+
+  // ── Wire transfer delete ───────────────────────────────────────────────────
+
+  const handleDeleteWire = async (transferId: number) => {
+    if (!confirm('Delete this wire transfer? The invoice will revert to Sent.')) return;
     try {
-      await api.patch(`/invoices/${id}/wire-transfers/${transferId}/approve`, { mark_paid: true });
-      addToast('Wire transfer approved', 'success');
+      await api.delete(`/invoices/${id}/wire-transfers/${transferId}`);
+      addToast('Wire transfer deleted — invoice reverted to Sent', 'success');
       fetchInvoice();
-    } catch (err: any) { addToast(err.response?.data?.error || 'Failed to approve', 'error'); }
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to delete', 'error');
+    }
   };
 
-  const handleRejectWire = async (transferId: number) => {
-    const reason = prompt('Rejection reason:');
-    if (reason === null) return;
+  // ── File preview ──────────────────────────────────────────────────────────
+
+  const openPreview = async (filePath: string, fileName: string, subfolder: string) => {
+    setPreviewFileName(fileName);
+    setPreviewUrl(null);
+    setPreviewLoading(true);
     try {
-      await api.patch(`/invoices/${id}/wire-transfers/${transferId}/reject`, { rejection_reason: reason });
-      addToast('Wire transfer rejected', 'success');
-      fetchInvoice();
-    } catch (err: any) { addToast(err.response?.data?.error || 'Failed to reject', 'error'); }
+      const resp = await api.get(`/files/${subfolder}/${filePath}`, { responseType: 'blob' });
+      const blob = new Blob([resp.data], { type: resp.headers['content-type'] || 'application/octet-stream' });
+      setPreviewUrl(URL.createObjectURL(blob));
+    } catch {
+      addToast('Failed to load preview', 'error');
+      setPreviewFileName('');
+    } finally {
+      setPreviewLoading(false);
+    }
   };
 
-  const formatDate = (dateStr: string) => {
-    if (!dateStr) return '-';
-    return new Date(dateStr).toLocaleDateString();
-  };
-
-  const formatDateTime = (dateStr: string) => {
-    if (!dateStr) return '-';
-    return new Date(dateStr).toLocaleString();
-  };
-
-  const formatAmount = (amount: number, currency?: string) => {
-    if (amount == null) return '-';
-    const symbol = currency === 'EUR' ? '\u20AC' : currency === 'GBP' ? '\u00A3' : '$';
-    return `${symbol}${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const closePreview = () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl(null);
+    setPreviewFileName('');
   };
 
   const downloadFile = async (apiPath: string, filename: string) => {
@@ -193,6 +196,18 @@ export default function InvoiceDetailPage() {
     } catch {
       addToast('Failed to download file', 'error');
     }
+  };
+
+  const formatDateTime = (dateStr: string) => {
+    if (!dateStr) return '-';
+    const d = formatDate(dateStr);
+    return d || '-';
+  };
+
+  const formatAmount = (amount: number, currency?: string) => {
+    if (amount == null) return '-';
+    const symbol = currency === 'EUR' ? '€' : currency === 'GBP' ? '£' : '$';
+    return `${symbol}${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
   if (loading) {
@@ -239,6 +254,9 @@ export default function InvoiceDetailPage() {
               {formatAmount(invoice.amount, invoice.currency)}
             </p>
             <p className="text-sm text-gray-500">{invoice.currency || 'USD'}</p>
+            {invoice.eur_amount != null && invoice.currency !== 'EUR' && (
+              <p className="text-sm text-gray-400">≈ €{invoice.eur_amount.toFixed(2)}</p>
+            )}
           </div>
         </div>
 
@@ -262,17 +280,17 @@ export default function InvoiceDetailPage() {
           <div className="flex items-center gap-2 text-gray-600">
             <Calendar size={16} className="text-gray-400 shrink-0" />
             <span className="font-medium text-gray-500">Invoice Date:</span>
-            <span>{formatDate(invoice.invoice_date)}</span>
+            <span>{formatDate(invoice.invoice_date) || '-'}</span>
           </div>
           <div className="flex items-center gap-2 text-gray-600">
             <Calendar size={16} className="text-gray-400 shrink-0" />
             <span className="font-medium text-gray-500">Due Date:</span>
-            <span>{formatDate(invoice.due_date)}</span>
+            <span>{formatDate(invoice.due_date) || '-'}</span>
           </div>
           <div className="flex items-center gap-2 text-gray-600">
             <Calendar size={16} className="text-gray-400 shrink-0" />
             <span className="font-medium text-gray-500">Payment Date:</span>
-            <span>{formatDate(invoice.payment_date)}</span>
+            <span>{formatDate(invoice.payment_date) || '-'}</span>
           </div>
           {invoice.our_ref && (
             <div className="flex items-center gap-2 text-gray-600">
@@ -298,16 +316,20 @@ export default function InvoiceDetailPage() {
         )}
 
         {invoice.file_path && (
-          <div className="mt-4 pt-4 border-t border-gray-100">
+          <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-3">
+            <FileText size={16} className="text-gray-400 shrink-0" />
+            <span className="text-sm text-gray-700 flex-1 truncate">{invoice.file_name || invoice.file_path}</span>
             <button
-              onClick={() => {
-                const filename = invoice.file_path.split('/').pop() || 'invoice';
-                downloadFile(`/files/invoices/${filename}`, filename);
-              }}
-              className="inline-flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700 font-medium"
+              onClick={() => openPreview(invoice.file_path, invoice.file_name || invoice.file_path, 'invoices')}
+              className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 font-medium"
             >
-              <Download size={16} />
-              Download Invoice File
+              <Eye size={14} /> View
+            </button>
+            <button
+              onClick={() => downloadFile(`/files/invoices/${invoice.file_path}`, invoice.file_name || invoice.file_path)}
+              className="inline-flex items-center gap-1 text-sm text-primary-600 hover:text-primary-700 font-medium"
+            >
+              <Download size={14} /> Download
             </button>
           </div>
         )}
@@ -338,14 +360,12 @@ export default function InvoiceDetailPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Payments Section */}
-        <Card>
-          <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
-            <CreditCard size={16} className="text-gray-400" />
-            <h2 className="font-semibold text-gray-900">Payments ({payments.length})</h2>
-          </div>
-          {payments.length === 0 ? (
-            <p className="px-5 py-8 text-center text-sm text-gray-500">No payments recorded</p>
-          ) : (
+        {payments.length > 0 && (
+          <Card>
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
+              <CreditCard size={16} className="text-gray-400" />
+              <h2 className="font-semibold text-gray-900">Payments ({payments.length})</h2>
+            </div>
             <div className="divide-y divide-gray-100">
               {payments.map((payment: any, idx: number) => (
                 <div key={payment.id || idx} className="px-5 py-4">
@@ -353,83 +373,133 @@ export default function InvoiceDetailPage() {
                     <span className="text-sm font-medium text-gray-900">
                       {formatAmount(payment.amount, invoice.currency)}
                     </span>
-                    <span className="text-xs text-gray-500">{formatDate(payment.date || payment.payment_date)}</span>
+                    <span className="text-xs text-gray-500">{formatDate(payment.date || payment.payment_date) || '-'}</span>
                   </div>
-                  <div className="flex items-center gap-3 text-xs text-gray-500">
-                    {payment.method && (
-                      <span className="flex items-center gap-1">
-                        <DollarSign size={12} />
-                        {payment.method}
-                      </span>
-                    )}
-                    {payment.reference && (
-                      <span>Ref: {payment.reference}</span>
-                    )}
-                  </div>
-                  {payment.proof_path && (
-                    <button
-                      onClick={() => {
-                        const fn = payment.proof_path.split('/').pop() || 'proof';
-                        downloadFile(`/files/payments/${fn}`, fn);
-                      }}
-                      className="inline-flex items-center gap-1 mt-2 text-xs text-primary-600 hover:text-primary-700 font-medium"
-                    >
-                      <Download size={12} />
-                      Download Proof
-                    </button>
-                  )}
                 </div>
               ))}
             </div>
-          )}
-        </Card>
+          </Card>
+        )}
 
         {/* Wire Transfers Section */}
-        <Card>
-          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Landmark size={16} className="text-gray-400" />
-              <h2 className="font-semibold text-gray-900">Wire Transfers ({wireTransfers.length})</h2>
-            </div>
-            <Button size="sm" onClick={() => { setWireForm({ amount: String(invoice.amount || ''), transfer_date: new Date().toISOString().split('T')[0], bank_reference: '', notes: '' }); setWireFile(null); setShowWireModal(true); }}>
-              <Plus size={14} /> Submit Transfer
-            </Button>
+        <Card className={payments.length > 0 ? '' : 'lg:col-span-2'}>
+          <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
+            <Landmark size={16} className="text-gray-400" />
+            <h2 className="font-semibold text-gray-900">Wire Transfers ({wireTransfers.length})</h2>
           </div>
+
+          {/* Drag-drop upload zone — visible when invoice is 'sent' */}
+          {invoice.status === 'sent' && (
+            <div className="px-5 pt-4 pb-2 space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Payment Date</label>
+                  <input
+                    type="date"
+                    value={wirePaymentDate}
+                    onChange={e => setWirePaymentDate(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Bank Reference <span className="text-gray-400">(optional)</span></label>
+                  <input
+                    type="text"
+                    value={wireBankRef}
+                    onChange={e => setWireBankRef(e.target.value)}
+                    placeholder="e.g. TXN-12345"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                </div>
+              </div>
+
+              <div
+                ref={dropZoneRef}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                onClick={() => !wireUploading && fileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-xl flex flex-col items-center justify-center gap-2 py-6 transition-colors ${
+                  wireUploading
+                    ? 'border-primary-300 bg-primary-50 cursor-wait'
+                    : isDragging
+                      ? 'border-primary-400 bg-primary-50 cursor-copy'
+                      : 'border-gray-200 hover:border-gray-300 bg-gray-50 hover:bg-gray-100 cursor-pointer'
+                }`}
+              >
+                {wireUploading ? (
+                  <>
+                    <Loader2 size={22} className="text-primary-500 animate-spin" />
+                    <p className="text-sm font-medium text-primary-600">Uploading & converting to EUR...</p>
+                  </>
+                ) : (
+                  <>
+                    <Upload size={22} className={isDragging ? 'text-primary-500' : 'text-gray-400'} />
+                    <p className="text-sm font-medium text-gray-600">
+                      {isDragging ? 'Drop file to upload' : 'Drag & drop wire transfer proof, or click to browse'}
+                    </p>
+                    <p className="text-xs text-gray-400">PDF, JPEG, PNG, WebP · Immediately marks invoice as Paid</p>
+                  </>
+                )}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png,.webp"
+                  className="hidden"
+                  onChange={handleFileInputChange}
+                />
+              </div>
+            </div>
+          )}
+
           {wireTransfers.length === 0 ? (
-            <p className="px-5 py-8 text-center text-sm text-gray-500">No wire transfers</p>
+            <p className="px-5 py-6 text-center text-sm text-gray-500">No wire transfers yet</p>
           ) : (
             <div className="divide-y divide-gray-100">
               {wireTransfers.map((wt: any) => (
                 <div key={wt.id} className="px-5 py-4">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-medium text-gray-900">{formatAmount(wt.amount, invoice.currency)}</span>
-                    <StatusBadge status={wt.status} />
+                  <div className="flex items-start justify-between gap-2 mb-1">
+                    <div>
+                      <span className="text-sm font-medium text-gray-900">
+                        {formatAmount(wt.amount, invoice.currency)}
+                      </span>
+                      {wt.eur_amount != null && (
+                        <span className="ml-2 text-xs text-gray-500">
+                          → €{wt.eur_amount.toFixed(2)}
+                          {wt.fx_rate != null && wt.fx_rate !== 1 && (
+                            <span className="ml-1 text-gray-400">(rate: {wt.fx_rate.toFixed(4)})</span>
+                          )}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-3 text-xs text-gray-500 mb-1">
-                    <span>{formatDate(wt.transfer_date)}</span>
+                  <div className="flex items-center gap-3 text-xs text-gray-500 mb-2">
+                    <span>{formatDate(wt.transfer_date) || '-'}</span>
                     {wt.bank_reference && <span>Ref: {wt.bank_reference}</span>}
-                    {wt.approved_by_name && <span>By: {wt.approved_by_name}</span>}
                   </div>
-                  {wt.rejection_reason && <p className="text-xs text-red-600 mb-1">Reason: {wt.rejection_reason}</p>}
-                  {wt.notes && <p className="text-xs text-gray-500 mb-1">{wt.notes}</p>}
-                  <div className="flex items-center gap-2 mt-2">
+                  <div className="flex items-center gap-3">
                     {wt.file_path && (
-                      <button
-                        onClick={() => {
-                          const fn = wt.file_path.split('/').pop() || 'transfer';
-                          downloadFile(`/files/wire-transfers/${fn}`, fn);
-                        }}
-                        className="inline-flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 font-medium"
-                      >
-                        <Download size={12} /> Download
-                      </button>
-                    )}
-                    {wt.status === 'pending' && (
                       <>
-                        <button onClick={() => handleApproveWire(wt.id)} className="inline-flex items-center gap-1 text-xs text-green-600 hover:text-green-700 font-medium"><Check size={12} /> Approve</button>
-                        <button onClick={() => handleRejectWire(wt.id)} className="inline-flex items-center gap-1 text-xs text-red-600 hover:text-red-700 font-medium"><XCircle size={12} /> Reject</button>
+                        <button
+                          onClick={() => openPreview(wt.file_path, wt.file_name || wt.file_path, 'wire-transfers')}
+                          className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 font-medium"
+                        >
+                          <Eye size={12} /> View
+                        </button>
+                        <button
+                          onClick={() => downloadFile(`/files/wire-transfers/${wt.file_path}`, wt.file_name || wt.file_path)}
+                          className="inline-flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 font-medium"
+                        >
+                          <Download size={12} /> Download
+                        </button>
                       </>
                     )}
+                    <button
+                      onClick={() => handleDeleteWire(wt.id)}
+                      className="inline-flex items-center gap-1 text-xs text-red-500 hover:text-red-700 font-medium"
+                    >
+                      <Trash2 size={12} /> Delete
+                    </button>
                   </div>
                 </div>
               ))}
@@ -438,7 +508,7 @@ export default function InvoiceDetailPage() {
         </Card>
 
         {/* Status History Section */}
-        <Card>
+        <Card className="lg:col-span-2">
           <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
             <FileText size={16} className="text-gray-400" />
             <h2 className="font-semibold text-gray-900">Status History ({statusHistory.length})</h2>
@@ -448,15 +518,11 @@ export default function InvoiceDetailPage() {
           ) : (
             <div className="p-5">
               <div className="relative">
-                {/* Timeline line */}
                 <div className="absolute left-[7px] top-2 bottom-2 w-0.5 bg-gray-200" />
-
                 <div className="space-y-5">
                   {statusHistory.map((entry: any, idx: number) => (
                     <div key={entry.id || idx} className="relative flex gap-3">
-                      {/* Timeline dot */}
                       <div className="relative z-10 mt-1.5 w-[15px] h-[15px] rounded-full bg-white border-2 border-primary-500 shrink-0" />
-
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <StatusBadge status={entry.old_status} />
@@ -482,32 +548,36 @@ export default function InvoiceDetailPage() {
         </Card>
       </div>
 
-      {/* Wire Transfer Modal */}
-      <Modal open={showWireModal} onClose={() => setShowWireModal(false)} title="Submit Wire Transfer" size="md">
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <Input label="Amount *" type="number" step="0.01" value={wireForm.amount} onChange={e => setWireForm({ ...wireForm, amount: e.target.value })} />
-            <Input label="Transfer Date *" type="date" value={wireForm.transfer_date} onChange={e => setWireForm({ ...wireForm, transfer_date: e.target.value })} />
-          </div>
-          <Input label="Bank Reference" value={wireForm.bank_reference} onChange={e => setWireForm({ ...wireForm, bank_reference: e.target.value })} />
-          <div className="space-y-1">
-            <label className="block text-sm font-medium text-gray-700">Proof of Transfer</label>
-            <FileUpload onFileSelect={handleWireFileSelect} />
-            {wireScanning && (
-              <div className="flex items-center gap-2 text-sm text-primary-600 mt-2">
-                <Loader2 size={16} className="animate-spin" />
-                Scanning with AI...
-              </div>
-            )}
-          </div>
-          <div className="space-y-1">
-            <label className="block text-sm font-medium text-gray-700">Notes</label>
-            <textarea value={wireForm.notes} onChange={e => setWireForm({ ...wireForm, notes: e.target.value })} rows={2} className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
-          </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="secondary" onClick={() => setShowWireModal(false)}>Cancel</Button>
-            <Button onClick={handleSubmitWire} disabled={wireSaving}>{wireSaving ? 'Submitting...' : 'Submit'}</Button>
-          </div>
+      {/* Preview Modal */}
+      <Modal
+        open={!!previewFileName}
+        onClose={closePreview}
+        title={previewFileName}
+        size="lg"
+      >
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-sm text-gray-500 truncate">{previewFileName}</span>
+          {previewUrl && (
+            <button
+              onClick={() => downloadFile(previewUrl, previewFileName)}
+              className="flex items-center gap-1 px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 shrink-0"
+            >
+              <Download size={14} /> Download
+            </button>
+          )}
+        </div>
+        <div className="flex items-center justify-center bg-gray-100 rounded-lg overflow-hidden" style={{ minHeight: '400px' }}>
+          {previewLoading ? (
+            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600" />
+          ) : previewUrl ? (
+            isImage(previewFileName) ? (
+              <img src={previewUrl} alt={previewFileName} className="max-w-full max-h-[60vh] object-contain" />
+            ) : (
+              <iframe src={previewUrl} title={previewFileName} className="w-full rounded bg-white" style={{ height: '60vh' }} />
+            )
+          ) : (
+            <p className="text-gray-500 text-sm">Unable to preview this file.</p>
+          )}
         </div>
       </Modal>
     </div>

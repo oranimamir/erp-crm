@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import db from '../database.js';
 import { uploadInvoice, uploadWireTransfer } from '../middleware/upload.js';
 import { notifyAdmin } from '../lib/notify.js';
+import { getEurRate } from '../lib/fx.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -187,65 +188,56 @@ router.get('/:id/wire-transfers', (req: Request, res: Response) => {
   res.json(transfers);
 });
 
-router.post('/:id/wire-transfers', uploadWireTransfer.single('file'), (req: Request, res: Response) => {
-  const invoice = db.prepare('SELECT id FROM invoices WHERE id = ?').get(req.params.id) as any;
+router.post('/:id/wire-transfers', uploadWireTransfer.single('file'), async (req: Request, res: Response) => {
+  const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id) as any;
   if (!invoice) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
-  const { amount, transfer_date, bank_reference, notes } = req.body;
-  if (!amount || !transfer_date) {
-    res.status(400).json({ error: 'amount and transfer_date are required' });
-    return;
-  }
+  const payment_date = req.body.payment_date || req.body.transfer_date || new Date().toISOString().split('T')[0];
+  const bank_reference = req.body.bank_reference || null;
+  const amount = req.body.amount ? parseFloat(req.body.amount) : invoice.amount;
 
   const file_path = req.file ? req.file.filename : null;
   const file_name = req.file ? req.file.originalname : null;
 
-  const result = db.prepare(`
-    INSERT INTO wire_transfers (invoice_id, amount, transfer_date, bank_reference, file_path, file_name, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(req.params.id, parseFloat(amount), transfer_date, bank_reference || null, file_path, file_name, notes || null);
+  try {
+    const fx_rate = await getEurRate(invoice.currency || 'USD', payment_date);
+    const eur_amount = amount * fx_rate;
 
-  const transfer = db.prepare('SELECT * FROM wire_transfers WHERE id = ?').get(result.lastInsertRowid);
-  res.status(201).json(transfer);
+    const result = db.prepare(`
+      INSERT INTO wire_transfers (invoice_id, amount, transfer_date, bank_reference, fx_rate, eur_amount, status, file_path, file_name)
+      VALUES (?, ?, ?, ?, ?, ?, 'approved', ?, ?)
+    `).run(req.params.id, amount, payment_date, bank_reference, fx_rate, eur_amount, file_path, file_name);
+
+    // Immediately mark invoice as paid
+    const prevStatus = invoice.status;
+    db.prepare(`UPDATE invoices SET status='paid', updated_at=datetime('now') WHERE id=?`).run(req.params.id);
+    db.prepare(`INSERT INTO status_history (entity_type, entity_id, old_status, new_status, changed_by, notes) VALUES ('invoice', ?, ?, 'paid', ?, 'Auto-paid via wire transfer upload')`)
+      .run(req.params.id, prevStatus, req.user!.userId);
+
+    const transfer = db.prepare('SELECT * FROM wire_transfers WHERE id = ?').get(result.lastInsertRowid);
+    res.status(201).json(transfer);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to process wire transfer' });
+  }
 });
 
-router.patch('/:id/wire-transfers/:transferId/approve', (req: Request, res: Response) => {
+router.delete('/:id/wire-transfers/:transferId', (req: Request, res: Response) => {
   const transfer = db.prepare('SELECT * FROM wire_transfers WHERE id = ? AND invoice_id = ?').get(req.params.transferId, req.params.id) as any;
   if (!transfer) { res.status(404).json({ error: 'Wire transfer not found' }); return; }
-  if (transfer.status !== 'pending') { res.status(400).json({ error: 'Only pending transfers can be approved' }); return; }
 
-  db.prepare(`UPDATE wire_transfers SET status='approved', approved_by=?, approved_at=datetime('now'), updated_at=datetime('now') WHERE id=?`)
-    .run(req.user!.userId, transfer.id);
-
-  // Optionally mark invoice as paid
-  if (req.body.mark_paid) {
-    const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id) as any;
-    if (invoice && invoice.status !== 'paid') {
-      db.prepare(`UPDATE invoices SET status='paid', updated_at=datetime('now') WHERE id=?`).run(req.params.id);
-      db.prepare(`INSERT INTO status_history (entity_type, entity_id, old_status, new_status, changed_by, notes) VALUES ('invoice', ?, ?, 'paid', ?, 'Auto-marked paid via wire transfer approval')`)
-        .run(req.params.id, invoice.status, req.user!.userId);
-    }
+  if (transfer.file_path) {
+    const filePath = path.join(uploadsBase, 'wire-transfers', transfer.file_path);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
   }
 
-  const updated = db.prepare(`
-    SELECT wt.*, u.display_name as approved_by_name
-    FROM wire_transfers wt LEFT JOIN users u ON wt.approved_by = u.id
-    WHERE wt.id = ?
-  `).get(transfer.id);
-  res.json(updated);
-});
+  db.prepare('DELETE FROM wire_transfers WHERE id = ?').run(transfer.id);
 
-router.patch('/:id/wire-transfers/:transferId/reject', (req: Request, res: Response) => {
-  const transfer = db.prepare('SELECT * FROM wire_transfers WHERE id = ? AND invoice_id = ?').get(req.params.transferId, req.params.id) as any;
-  if (!transfer) { res.status(404).json({ error: 'Wire transfer not found' }); return; }
-  if (transfer.status !== 'pending') { res.status(400).json({ error: 'Only pending transfers can be rejected' }); return; }
+  // Revert invoice to sent
+  db.prepare(`UPDATE invoices SET status='sent', updated_at=datetime('now') WHERE id=?`).run(req.params.id);
+  db.prepare(`INSERT INTO status_history (entity_type, entity_id, old_status, new_status, changed_by, notes) VALUES ('invoice', ?, 'paid', 'sent', ?, 'Wire transfer deleted — reverted to sent')`)
+    .run(req.params.id, req.user!.userId);
 
-  const { rejection_reason } = req.body;
-  db.prepare(`UPDATE wire_transfers SET status='rejected', rejection_reason=?, approved_by=?, approved_at=datetime('now'), updated_at=datetime('now') WHERE id=?`)
-    .run(rejection_reason || null, req.user!.userId, transfer.id);
-
-  const updated = db.prepare('SELECT * FROM wire_transfers WHERE id = ?').get(transfer.id);
-  res.json(updated);
+  res.json({ message: 'Wire transfer deleted' });
 });
 
 export default router;

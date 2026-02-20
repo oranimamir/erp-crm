@@ -9,8 +9,8 @@ router.get('/stats', (_req: Request, res: Response) => {
   const totalOrders = (db.prepare('SELECT COUNT(*) as count FROM orders').get() as any).count;
   const activeOrders = (db.prepare("SELECT COUNT(*) as count FROM orders WHERE status NOT IN ('completed', 'cancelled')").get() as any).count;
   const totalInvoices = (db.prepare('SELECT COUNT(*) as count FROM invoices').get() as any).count;
-  const pendingInvoiceAmount = (db.prepare("SELECT COALESCE(SUM(amount), 0) as total FROM invoices WHERE type = 'customer' AND status IN ('draft', 'sent', 'overdue')").get() as any).total;
-  const paidInvoiceAmount = (db.prepare("SELECT COALESCE(SUM(amount), 0) as total FROM invoices WHERE type = 'customer' AND status = 'paid'").get() as any).total;
+  const pendingInvoiceAmount = (db.prepare("SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total FROM invoices WHERE type = 'customer' AND status IN ('draft', 'sent', 'overdue')").get() as any).total;
+  const paidInvoiceAmount = (db.prepare("SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total FROM invoices WHERE type = 'customer' AND status = 'paid'").get() as any).total;
   const totalPayments = (db.prepare('SELECT COALESCE(SUM(amount), 0) as total FROM payments').get() as any).total;
   const activeShipments = (db.prepare("SELECT COUNT(*) as count FROM shipments WHERE status NOT IN ('delivered', 'returned', 'failed')").get() as any).count;
 
@@ -18,6 +18,7 @@ router.get('/stats', (_req: Request, res: Response) => {
     customers, suppliers, totalOrders, activeOrders,
     totalInvoices, pendingInvoiceAmount, paidInvoiceAmount,
     totalPayments, activeShipments,
+    currency: 'EUR',
   });
 });
 
@@ -57,9 +58,6 @@ router.get('/shipping-overview', (_req: Request, res: Response) => {
 });
 
 router.get('/monthly-payments', (_req: Request, res: Response) => {
-  // Months from January of current year up to current month.
-  // Counts both explicit payment records AND invoices marked as paid (status='paid')
-  // without a payment record, using payment_date falling back to invoice_date / created_at.
   const months = db.prepare(`
     WITH RECURSIVE months(m) AS (
       SELECT strftime('%Y-01', 'now')
@@ -70,28 +68,40 @@ router.get('/monthly-payments', (_req: Request, res: Response) => {
     SELECT
       months.m as month,
       COALESCE((
-        SELECT SUM(amount) FROM (
+        SELECT SUM(eur_val) FROM (
+          SELECT COALESCE(wt.eur_amount, wt.amount) as eur_val FROM wire_transfers wt
+          JOIN invoices i ON wt.invoice_id = i.id
+          WHERE i.type = 'customer'
+            AND strftime('%Y-%m', wt.transfer_date) = months.m
+          UNION ALL
           SELECT p.amount FROM payments p
           JOIN invoices i ON p.invoice_id = i.id
           WHERE i.type = 'customer'
             AND strftime('%Y-%m', p.payment_date) = months.m
           UNION ALL
-          SELECT i.amount FROM invoices i
+          SELECT COALESCE(i.eur_amount, i.amount) FROM invoices i
           WHERE i.type = 'customer' AND i.status = 'paid'
             AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
+            AND NOT EXISTS (SELECT 1 FROM wire_transfers wt WHERE wt.invoice_id = i.id)
             AND strftime('%Y-%m', COALESCE(i.payment_date, i.invoice_date, i.created_at)) = months.m
         )
       ), 0) as received,
       COALESCE((
-        SELECT SUM(amount) FROM (
+        SELECT SUM(eur_val) FROM (
+          SELECT COALESCE(wt.eur_amount, wt.amount) as eur_val FROM wire_transfers wt
+          JOIN invoices i ON wt.invoice_id = i.id
+          WHERE i.type = 'supplier'
+            AND strftime('%Y-%m', wt.transfer_date) = months.m
+          UNION ALL
           SELECT p.amount FROM payments p
           JOIN invoices i ON p.invoice_id = i.id
           WHERE i.type = 'supplier'
             AND strftime('%Y-%m', p.payment_date) = months.m
           UNION ALL
-          SELECT i.amount FROM invoices i
+          SELECT COALESCE(i.eur_amount, i.amount) FROM invoices i
           WHERE i.type = 'supplier' AND i.status = 'paid'
             AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
+            AND NOT EXISTS (SELECT 1 FROM wire_transfers wt WHERE wt.invoice_id = i.id)
             AND strftime('%Y-%m', COALESCE(i.payment_date, i.invoice_date, i.created_at)) = months.m
         )
       ), 0) as paid_out

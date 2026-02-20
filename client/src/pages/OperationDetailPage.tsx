@@ -7,6 +7,7 @@ import {
   Download, Eye, X, Plus, Receipt, ExternalLink, CheckCircle,
   AlertCircle, Loader2
 } from 'lucide-react';
+import { formatDate } from '../lib/dates';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -398,7 +399,7 @@ export default function OperationDetailPage() {
             </select>
           </div>
           <p className="text-sm text-gray-500 mt-1">
-            {operation.customer_name || operation.supplier_name || '—'} · Created {new Date(operation.created_at).toLocaleDateString()}
+            {operation.customer_name || operation.supplier_name || '—'} · Created {formatDate(operation.created_at) || '-'}
           </p>
         </div>
       </div>
@@ -723,7 +724,7 @@ export default function OperationDetailPage() {
                       </span>
                     )}
                     {doc.notes && <span className="text-xs text-gray-500 truncate">{doc.notes}</span>}
-                    <span className="text-xs text-gray-400">{new Date(doc.created_at).toLocaleDateString()}</span>
+                    <span className="text-xs text-gray-400">{formatDate(doc.created_at) || '-'}</span>
                   </div>
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">

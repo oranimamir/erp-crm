@@ -4,6 +4,7 @@ import api from '../lib/api';
 import Card from '../components/ui/Card';
 import StatusBadge from '../components/ui/StatusBadge';
 import { Users, Truck, FileText, ShoppingCart, Package, DollarSign, TrendingUp, Clock, BarChart3, Navigation, AlertTriangle } from 'lucide-react';
+import { formatDate } from '../lib/dates';
 
 interface Stats {
   customers: number;
@@ -54,8 +55,8 @@ export default function DashboardPage() {
     { label: 'Suppliers', value: stats?.suppliers ?? 0, icon: Truck, color: 'text-purple-600 bg-purple-100', to: '/suppliers' },
     { label: 'Active Orders', value: stats?.activeOrders ?? 0, icon: ShoppingCart, color: 'text-orange-600 bg-orange-100', to: '/orders' },
     { label: 'Active Shipments', value: stats?.activeShipments ?? 0, icon: Package, color: 'text-green-600 bg-green-100', to: '/shipments' },
-    { label: 'Pending Invoices', value: `$${(stats?.pendingInvoiceAmount ?? 0).toLocaleString()}`, icon: Clock, color: 'text-yellow-600 bg-yellow-100', to: '/invoices' },
-    { label: 'Paid Invoices', value: `$${(stats?.paidInvoiceAmount ?? 0).toLocaleString()}`, icon: DollarSign, color: 'text-green-600 bg-green-100', to: '/invoices' },
+    { label: 'Pending Receivable (EUR)', value: `€${(stats?.pendingInvoiceAmount ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: Clock, color: 'text-yellow-600 bg-yellow-100', to: '/invoices' },
+    { label: 'Paid Invoices (EUR)', value: `€${(stats?.paidInvoiceAmount ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: DollarSign, color: 'text-green-600 bg-green-100', to: '/invoices' },
   ];
 
   return (
@@ -81,7 +82,7 @@ export default function DashboardPage() {
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="text-sm font-medium text-red-900">
-                      ${inv.amount?.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      €{(inv.eur_amount ?? inv.amount)?.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                     </span>
                     <span className="text-xs text-red-600 font-medium bg-red-100 px-2 py-0.5 rounded-full">
                       {daysOverdue} day{daysOverdue !== 1 ? 's' : ''} overdue
@@ -127,7 +128,7 @@ export default function DashboardPage() {
                   <p className="text-xs text-gray-500">{order.customer_name || order.supplier_name}</p>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="text-sm font-medium text-gray-900">${order.total_amount?.toLocaleString()}</span>
+                  <span className="text-sm font-medium text-gray-900">€{order.total_amount?.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                   <StatusBadge status={order.status} />
                 </div>
               </Link>
@@ -149,7 +150,7 @@ export default function DashboardPage() {
                   <p className="text-xs text-gray-500">{inv.customer_name || inv.supplier_name}</p>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="text-sm font-medium text-gray-900">${inv.amount?.toLocaleString()}</span>
+                  <span className="text-sm font-medium text-gray-900">€{(inv.eur_amount ?? inv.amount)?.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                   <StatusBadge status={inv.status} />
                 </div>
               </Link>
@@ -181,7 +182,7 @@ export default function DashboardPage() {
       <Card>
         <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
           <BarChart3 size={16} className="text-gray-400" />
-          <h2 className="font-semibold text-gray-900">Monthly Cash Flow ({new Date().getFullYear()})</h2>
+          <h2 className="font-semibold text-gray-900">Monthly Cash Flow — EUR ({new Date().getFullYear()})</h2>
         </div>
         <div className="p-5">
           {monthlyPayments.length === 0 ? (
@@ -196,16 +197,16 @@ export default function DashboardPage() {
                 <div className="grid grid-cols-3 gap-4 pb-4 border-b border-gray-100">
                   <div className="text-center">
                     <p className="text-xs text-gray-500 mb-0.5">Received (this month)</p>
-                    <p className="text-lg font-bold text-green-600">${(latest?.received ?? 0).toLocaleString()}</p>
+                    <p className="text-lg font-bold text-green-600">€{(latest?.received ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                   </div>
                   <div className="text-center">
                     <p className="text-xs text-gray-500 mb-0.5">Paid Out (this month)</p>
-                    <p className="text-lg font-bold text-red-500">${(latest?.paid_out ?? 0).toLocaleString()}</p>
+                    <p className="text-lg font-bold text-red-500">€{(latest?.paid_out ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                   </div>
                   <div className="text-center">
                     <p className="text-xs text-gray-500 mb-0.5">Net (this month)</p>
                     <p className={`text-lg font-bold ${net >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                      {net >= 0 ? '+' : ''}${net.toLocaleString()}
+                      {net >= 0 ? '+' : ''}€{Math.abs(net).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                     </p>
                   </div>
                 </div>
@@ -222,12 +223,12 @@ export default function DashboardPage() {
                         <div
                           className="flex-1 max-w-[14px] bg-green-500 rounded-t transition-all"
                           style={{ height: `${Math.max(m.received > 0 ? (m.received / maxVal) * 155 : 0, m.received > 0 ? 2 : 0)}px` }}
-                          title={`Received: $${m.received.toLocaleString()}`}
+                          title={`Received: €${m.received.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
                         />
                         <div
                           className="flex-1 max-w-[14px] bg-red-400 rounded-t transition-all"
                           style={{ height: `${Math.max(m.paid_out > 0 ? (m.paid_out / maxVal) * 155 : 0, m.paid_out > 0 ? 2 : 0)}px` }}
-                          title={`Paid Out: $${m.paid_out.toLocaleString()}`}
+                          title={`Paid Out: €${m.paid_out.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
                         />
                         {m.received === 0 && m.paid_out === 0 && (
                           <div className="w-full max-w-[28px] bg-gray-100 rounded-t" style={{ height: '2px' }} />
@@ -276,7 +277,7 @@ export default function DashboardPage() {
                     <td className="px-4 py-3 text-gray-600">{sh.carrier || '-'}</td>
                     <td className="px-4 py-3 text-gray-600 font-mono text-xs">{sh.tracking_number || '-'}</td>
                     <td className="px-4 py-3"><StatusBadge status={sh.status} /></td>
-                    <td className="px-4 py-3 text-gray-600">{sh.estimated_delivery ? new Date(sh.estimated_delivery).toLocaleDateString() : '-'}</td>
+                    <td className="px-4 py-3 text-gray-600">{formatDate(sh.estimated_delivery) || '-'}</td>
                   </tr>
                 ))}
               </tbody>

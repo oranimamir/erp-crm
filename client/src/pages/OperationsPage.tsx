@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import { Briefcase, Search, Plus, ChevronLeft, ChevronRight, FileText, Receipt } from 'lucide-react';
+import { formatDate } from '../lib/dates';
 
 interface Operation {
   id: number;
@@ -145,7 +146,7 @@ export default function OperationsPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-gray-500">
-                    {new Date(op.created_at).toLocaleDateString()}
+                    {formatDate(op.created_at) || '-'}
                   </td>
                 </tr>
               ))}
