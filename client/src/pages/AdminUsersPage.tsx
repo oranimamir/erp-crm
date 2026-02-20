@@ -13,7 +13,7 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
-import { Plus, Users, Pencil, Trash2, Mail, Clock, XCircle, Copy, Bell, BellOff } from 'lucide-react';
+import { Plus, Users, Pencil, Trash2, Mail, Clock, XCircle, Copy, Bell, BellOff, RefreshCw, CheckCircle, AlertTriangle } from 'lucide-react';
 
 const roleOptions = [
   { value: 'user', label: 'User' },
@@ -41,6 +41,8 @@ export default function AdminUsersPage() {
   const [inviteSaving, setInviteSaving] = useState(false);
   const [invitations, setInvitations] = useState<any[]>([]);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
+  const [inviteEmailResult, setInviteEmailResult] = useState<{ sent: boolean; error?: string | null; not_configured?: boolean } | null>(null);
+  const [resendingId, setResendingId] = useState<number | null>(null);
 
   // Admin guard
   useEffect(() => {
@@ -120,13 +122,35 @@ export default function AdminUsersPage() {
     setInviteSaving(true);
     try {
       const res = await api.post('/users/invite', inviteForm);
-      addToast('Invitation sent', 'success');
       setInviteLink(res.data.invite_link);
+      setInviteEmailResult({
+        sent: res.data.email_sent,
+        error: res.data.email_error,
+        not_configured: res.data.email_not_configured,
+      });
       fetchInvitations();
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Failed to send invite', 'error');
     } finally {
       setInviteSaving(false);
+    }
+  };
+
+  const handleResendInvite = async (inviteId: number) => {
+    setResendingId(inviteId);
+    try {
+      const res = await api.post(`/users/invitations/${inviteId}/resend`, {});
+      if (res.data.email_sent) {
+        addToast('Invitation email resent successfully', 'success');
+      } else if (res.data.email_not_configured) {
+        addToast('Email not configured on server (RESEND_API_KEY missing)', 'error');
+      } else {
+        addToast(`Email failed: ${res.data.email_error || 'Unknown error'}`, 'error');
+      }
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to resend', 'error');
+    } finally {
+      setResendingId(null);
     }
   };
 
@@ -162,7 +186,7 @@ export default function AdminUsersPage() {
         <h1 className="text-2xl font-bold text-gray-900">User Management</h1>
         <div className="flex items-center gap-2">
           <Button variant="secondary" onClick={openCreate}><Plus size={16} /> Add User</Button>
-          <Button onClick={() => { setInviteForm({ email: '', display_name: '', role: 'user' }); setInviteLink(null); setShowInviteModal(true); }}><Mail size={16} /> Invite via Email</Button>
+          <Button onClick={() => { setInviteForm({ email: '', display_name: '', role: 'user' }); setInviteLink(null); setInviteEmailResult(null); setShowInviteModal(true); }}><Mail size={16} /> Invite via Email</Button>
         </div>
       </div>
 
@@ -298,6 +322,8 @@ export default function AdminUsersPage() {
               <tbody className="divide-y divide-gray-100">
                 {invitations.filter(i => !i.accepted_at).map(inv => {
                   const expired = new Date(inv.expires_at) < new Date();
+                  const appUrl = window.location.origin;
+                  const invLink = `${appUrl}/accept-invite?token=${inv.token}`;
                   return (
                     <tr key={inv.id} className={`hover:bg-gray-50 ${expired ? 'opacity-50' : ''}`}>
                       <td className="px-4 py-3 font-medium text-gray-900">{inv.email}</td>
@@ -309,6 +335,25 @@ export default function AdminUsersPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-end gap-1">
+                          {!expired && (
+                            <>
+                              <button
+                                onClick={() => copyToClipboard(invLink)}
+                                className="p-1.5 text-gray-400 hover:text-primary-600 rounded"
+                                title="Copy invite link"
+                              >
+                                <Copy size={16} />
+                              </button>
+                              <button
+                                onClick={() => handleResendInvite(inv.id)}
+                                disabled={resendingId === inv.id}
+                                className="p-1.5 text-gray-400 hover:text-primary-600 rounded disabled:opacity-50"
+                                title="Resend invitation email"
+                              >
+                                <RefreshCw size={16} className={resendingId === inv.id ? 'animate-spin' : ''} />
+                              </button>
+                            </>
+                          )}
                           <button onClick={() => handleRevokeInvite(inv.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded" title="Revoke"><XCircle size={16} /></button>
                         </div>
                       </td>
@@ -326,9 +371,36 @@ export default function AdminUsersPage() {
         <div className="space-y-4">
           {inviteLink ? (
             <div className="space-y-3">
-              <div className="bg-green-50 border border-green-200 text-green-700 text-sm rounded-lg px-4 py-3">
-                Invitation created! An email has been sent (if Resend is configured).
-              </div>
+              {/* Email delivery status */}
+              {inviteEmailResult?.sent ? (
+                <div className="flex items-start gap-2 bg-green-50 border border-green-200 text-green-800 text-sm rounded-lg px-4 py-3">
+                  <CheckCircle size={16} className="mt-0.5 flex-shrink-0" />
+                  <span>Invitation email sent successfully to <strong>{inviteForm.email}</strong>.</span>
+                </div>
+              ) : inviteEmailResult?.not_configured ? (
+                <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg px-4 py-3">
+                  <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="font-medium">Email not configured — invitation was created but no email was sent.</p>
+                    <p className="mt-1 text-xs text-amber-700">Set <code className="bg-amber-100 px-1 rounded">RESEND_API_KEY</code> and <code className="bg-amber-100 px-1 rounded">RESEND_FROM_EMAIL</code> (a verified domain address) in your Railway environment variables, then use the Resend button below.</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-800 text-sm rounded-lg px-4 py-3">
+                  <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="font-medium">Email delivery failed — invitation was created.</p>
+                    {inviteEmailResult?.error && (
+                      <p className="mt-1 text-xs text-red-700 font-mono break-all">{inviteEmailResult.error}</p>
+                    )}
+                    <p className="mt-1 text-xs text-red-700">
+                      Note: Resend's <code className="bg-red-100 px-1 rounded">onboarding@resend.dev</code> from-address only delivers to your own verified Resend account email. Set <code className="bg-red-100 px-1 rounded">RESEND_FROM_EMAIL</code> to an address on a domain you've verified in Resend.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Invite link */}
               <div className="space-y-1">
                 <label className="block text-sm font-medium text-gray-700">Invite Link</label>
                 <div className="flex items-center gap-2">
@@ -346,7 +418,7 @@ export default function AdminUsersPage() {
                     <Copy size={16} />
                   </button>
                 </div>
-                <p className="text-xs text-gray-500">You can share this link directly if email delivery fails.</p>
+                <p className="text-xs text-gray-500">Share this link directly with the recipient if email delivery fails.</p>
               </div>
               <div className="flex justify-end pt-2">
                 <Button onClick={() => setShowInviteModal(false)}>Done</Button>

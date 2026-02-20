@@ -137,7 +137,59 @@ router.patch('/:id/notify', requireAdmin, (req: Request, res: Response) => {
   res.json({ notify_on_changes: newValue });
 });
 
-// Invite user via email
+// ── Shared email helper ───────────────────────────────────────────────────────
+
+async function sendInviteEmail(
+  to: string,
+  displayName: string | null,
+  inviteLink: string,
+): Promise<{ sent: boolean; error?: string; not_configured?: boolean }> {
+  if (!process.env.RESEND_API_KEY) {
+    return { sent: false, not_configured: true, error: 'RESEND_API_KEY is not set on the server' };
+  }
+
+  const fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
+  const greeting = displayName ? `Hi ${displayName},` : 'Hi,';
+
+  try {
+    const resend = new Resend(process.env.RESEND_API_KEY);
+    const result = await resend.emails.send({
+      from: fromEmail,
+      to,
+      subject: "You've been invited to CirculERP",
+      html: `
+        <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
+          <h2>You're Invited!</h2>
+          <p>${greeting}</p>
+          <p>You've been invited to join CirculERP. Click the button below to set up your account:</p>
+          <p style="margin: 24px 0;">
+            <a href="${inviteLink}" style="background: #4f46e5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: 500;">
+              Accept Invitation
+            </a>
+          </p>
+          <p style="color: #6b7280; font-size: 14px;">This invitation expires in 7 days.</p>
+          <p style="color: #6b7280; font-size: 14px;">If you didn't expect this invitation, you can ignore this email.</p>
+        </div>
+      `,
+    });
+
+    // Resend returns an error object instead of throwing in some cases
+    if ((result as any).error) {
+      const msg = (result as any).error?.message || JSON.stringify((result as any).error);
+      console.error('[invite] Resend API error:', msg);
+      return { sent: false, error: msg };
+    }
+
+    return { sent: true };
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+    console.error('[invite] Failed to send invite email:', msg);
+    return { sent: false, error: msg };
+  }
+}
+
+// ── Invite user via email ─────────────────────────────────────────────────────
+
 router.post('/invite', requireAdmin, async (req: Request, res: Response) => {
   const { email, display_name, role } = req.body;
 
@@ -160,7 +212,7 @@ router.post('/invite', requireAdmin, async (req: Request, res: Response) => {
   }
 
   const token = crypto.randomBytes(32).toString('hex');
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(); // 7 days
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
   const result = db.prepare(
     'INSERT INTO user_invitations (email, display_name, role, token, invited_by, expires_at) VALUES (?, ?, ?, ?, ?, ?)'
@@ -169,40 +221,20 @@ router.post('/invite', requireAdmin, async (req: Request, res: Response) => {
   const appUrl = process.env.APP_URL || `http://localhost:${process.env.PORT || 3001}`;
   const inviteLink = `${appUrl}/accept-invite?token=${token}`;
 
-  // Send email via Resend
-  if (process.env.RESEND_API_KEY) {
-    try {
-      const resend = new Resend(process.env.RESEND_API_KEY);
-      await resend.emails.send({
-        from: process.env.RESEND_FROM_EMAIL || 'ERP System <onboarding@resend.dev>',
-        to: email,
-        subject: 'You\'ve been invited to the ERP/CRM System',
-        html: `
-          <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
-            <h2>You're Invited!</h2>
-            <p>${display_name ? `Hi ${display_name},` : 'Hi,'}</p>
-            <p>You've been invited to join the ERP/CRM System. Click the link below to set up your account:</p>
-            <p style="margin: 24px 0;">
-              <a href="${inviteLink}" style="background: #4f46e5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: 500;">
-                Accept Invitation
-              </a>
-            </p>
-            <p style="color: #6b7280; font-size: 14px;">This invitation expires in 7 days.</p>
-            <p style="color: #6b7280; font-size: 14px;">If you didn't expect this invitation, you can ignore this email.</p>
-          </div>
-        `,
-      });
-    } catch (emailErr: any) {
-      console.error('Failed to send invite email:', emailErr.message || emailErr);
-      // Don't fail the invite — it's created, admin can share the link manually
-    }
-  }
+  const emailResult = await sendInviteEmail(email, display_name || null, inviteLink);
 
   const invitation = db.prepare('SELECT * FROM user_invitations WHERE id = ?').get(result.lastInsertRowid);
-  res.status(201).json({ ...invitation, invite_link: inviteLink });
+  res.status(201).json({
+    ...invitation,
+    invite_link: inviteLink,
+    email_sent: emailResult.sent,
+    email_error: emailResult.error || null,
+    email_not_configured: emailResult.not_configured || false,
+  });
 });
 
-// List pending invitations
+// ── List invitations ──────────────────────────────────────────────────────────
+
 router.get('/invitations', requireAdmin, (_req: Request, res: Response) => {
   const invitations = db.prepare(
     `SELECT ui.*, u.display_name as invited_by_name
@@ -213,7 +245,37 @@ router.get('/invitations', requireAdmin, (_req: Request, res: Response) => {
   res.json(invitations);
 });
 
-// Revoke invitation
+// ── Resend invitation email ───────────────────────────────────────────────────
+
+router.post('/invitations/:id/resend', requireAdmin, async (req: Request, res: Response) => {
+  const invitation = db.prepare(
+    'SELECT * FROM user_invitations WHERE id = ? AND accepted_at IS NULL'
+  ).get(Number(req.params.id)) as any;
+
+  if (!invitation) {
+    res.status(404).json({ error: 'Invitation not found or already accepted' });
+    return;
+  }
+  if (new Date(invitation.expires_at) < new Date()) {
+    res.status(410).json({ error: 'This invitation has expired. Revoke it and create a new one.' });
+    return;
+  }
+
+  const appUrl = process.env.APP_URL || `http://localhost:${process.env.PORT || 3001}`;
+  const inviteLink = `${appUrl}/accept-invite?token=${invitation.token}`;
+
+  const emailResult = await sendInviteEmail(invitation.email, invitation.display_name || null, inviteLink);
+
+  res.json({
+    invite_link: inviteLink,
+    email_sent: emailResult.sent,
+    email_error: emailResult.error || null,
+    email_not_configured: emailResult.not_configured || false,
+  });
+});
+
+// ── Revoke invitation ─────────────────────────────────────────────────────────
+
 router.delete('/invitations/:id', requireAdmin, (req: Request, res: Response) => {
   const result = db.prepare('DELETE FROM user_invitations WHERE id = ? AND accepted_at IS NULL').run(Number(req.params.id));
   if (result.changes === 0) {
