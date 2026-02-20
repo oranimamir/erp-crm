@@ -6,22 +6,12 @@ import { BarChart3, TrendingUp, TrendingDown, DollarSign, Clock, RefreshCw } fro
 interface MonthData { month: string; received: number; paid_out: number; }
 interface CustomerData { customer_id: number; customer_name: string; total: number; invoice_count: number; }
 interface SupplierData { supplier_id: number; supplier_name: string; total: number; invoice_count: number; }
-interface StatusData { status: string; count: number; total: number; }
 interface Summary {
   monthly: MonthData[];
   by_customer: CustomerData[];
   by_supplier: SupplierData[];
-  status_breakdown: StatusData[];
   totals: { received: number; paid_out: number; net: number; outstanding: number };
 }
-
-const STATUS_COLORS: Record<string, string> = {
-  paid: 'bg-green-500', sent: 'bg-blue-400', draft: 'bg-gray-400',
-  overdue: 'bg-red-500', cancelled: 'bg-gray-300',
-};
-const STATUS_LABELS: Record<string, string> = {
-  paid: 'Paid', sent: 'Sent', draft: 'Draft', overdue: 'Overdue', cancelled: 'Cancelled',
-};
 
 const QUARTER_LABELS = ['', 'Q1 (Jan–Mar)', 'Q2 (Apr–Jun)', 'Q3 (Jul–Sep)', 'Q4 (Oct–Dec)'];
 
@@ -78,8 +68,6 @@ export default function AnalyticsPage() {
   const maxBar = data ? Math.max(...data.monthly.map(m => Math.max(m.received, m.paid_out)), 1) : 1;
   const hasData = data && data.monthly.some(m => m.received > 0 || m.paid_out > 0);
   const isFiltered = year !== currentYear || quarter !== '' || customerId !== '' || supplierId !== '';
-
-  const statusTotal = data?.status_breakdown.reduce((s, r) => s + r.total, 0) || 1;
 
   return (
     <div className="space-y-6">
@@ -347,39 +335,6 @@ export default function AnalyticsPage() {
             </Card>
           </div>
 
-          {/* Invoice status breakdown */}
-          {data.status_breakdown.length > 0 && (
-            <Card>
-              <div className="px-5 py-4 border-b border-gray-100">
-                <h2 className="font-semibold text-gray-900">Customer Invoice Pipeline</h2>
-              </div>
-              <div className="p-5">
-                {/* Stacked progress bar */}
-                <div className="flex rounded-full overflow-hidden h-4 mb-4">
-                  {data.status_breakdown.map(s => (
-                    <div
-                      key={s.status}
-                      className={`${STATUS_COLORS[s.status] || 'bg-gray-300'} transition-all`}
-                      style={{ width: `${(s.total / statusTotal) * 100}%` }}
-                      title={`${STATUS_LABELS[s.status] || s.status}: ${fmt(s.total)}`}
-                    />
-                  ))}
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                  {data.status_breakdown.map(s => (
-                    <div key={s.status} className="flex items-center gap-2">
-                      <span className={`w-3 h-3 rounded-full shrink-0 ${STATUS_COLORS[s.status] || 'bg-gray-300'}`} />
-                      <div>
-                        <p className="text-xs text-gray-500 capitalize">{STATUS_LABELS[s.status] || s.status}</p>
-                        <p className="text-sm font-semibold text-gray-900">{fmt(s.total)}</p>
-                        <p className="text-xs text-gray-400">{s.count} invoice{s.count !== 1 ? 's' : ''}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </Card>
-          )}
         </>
       ) : (
         <p className="text-center text-gray-500 py-12">Failed to load analytics data.</p>
