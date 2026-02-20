@@ -41,6 +41,10 @@ router.get('/', (req: Request, res: Response) => {
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
   const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
   const search = (req.query.search as string) || '';
+  const sortDir = (req.query.sort_dir as string) === 'asc' ? 'ASC' : 'DESC';
+  const sortBy = (req.query.sort_by as string) === 'order_date'
+    ? 'COALESCE(o.order_date, op.created_at)'
+    : 'op.created_at';
   const offset = (page - 1) * limit;
 
   const conditions: string[] = [];
@@ -63,6 +67,7 @@ router.get('/', (req: Request, res: Response) => {
       c.name as customer_name,
       s.name as supplier_name,
       o.order_number,
+      o.order_date,
       o.type as order_type,
       o.total_amount as order_total,
       o.file_path as order_file_path,
@@ -73,7 +78,7 @@ router.get('/', (req: Request, res: Response) => {
     LEFT JOIN customers c ON op.customer_id = c.id
     LEFT JOIN suppliers s ON op.supplier_id = s.id
     LEFT JOIN orders o ON op.order_id = o.id
-    ${where} ORDER BY op.created_at DESC LIMIT ? OFFSET ?
+    ${where} ORDER BY ${sortBy} ${sortDir} LIMIT ? OFFSET ?
   `).all(...params, limit, offset);
 
   res.json({ data: operations, total, page, limit, totalPages: Math.ceil(total / limit) });

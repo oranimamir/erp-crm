@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
-import { Briefcase, Search, Plus, ChevronLeft, ChevronRight, FileText, Receipt, FileSpreadsheet } from 'lucide-react';
+import { Briefcase, Search, Plus, ChevronLeft, ChevronRight, FileText, Receipt, FileSpreadsheet, ChevronUp, ChevronDown } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
 
@@ -36,7 +36,10 @@ export default function OperationsPage() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [search, setSearch] = useState('');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [loading, setLoading] = useState(true);
+
+  const toggleSort = () => { setSortDir(d => d === 'asc' ? 'desc' : 'asc'); setPage(1); };
 
   const handleStatusChange = async (id: number, status: string) => {
     try {
@@ -50,7 +53,7 @@ export default function OperationsPage() {
   const fetchOperations = useCallback(async () => {
     setLoading(true);
     try {
-      const params: any = { page, limit: 20 };
+      const params: any = { page, limit: 20, sort_by: 'order_date', sort_dir: sortDir };
       if (search) params.search = search;
       const { data } = await api.get('/operations', { params });
       setOperations(data.data);
@@ -61,7 +64,7 @@ export default function OperationsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, addToast]);
+  }, [page, search, sortDir, addToast]);
 
   useEffect(() => { fetchOperations(); }, [fetchOperations]);
 
@@ -88,8 +91,8 @@ export default function OperationsPage() {
           <button
             onClick={async () => {
               const { data } = await api.get('/operations', { params: { page: 1, limit: 9999, search } });
-              downloadExcel('operations', ['Operation #', 'Order #', 'Customer / Supplier', 'Status', 'Docs', 'Invoices', 'Created'],
-                data.data.map((op: Operation) => [op.operation_number, op.order_number || '', op.customer_name || op.supplier_name || '', op.status, op.doc_count, op.invoice_count, formatDate(op.created_at) || '']));
+              downloadExcel('operations', ['Operation #', 'Order #', 'Customer / Supplier', 'Status', 'Docs', 'Invoices', 'Order Date'],
+                data.data.map((op: any) => [op.operation_number, op.order_number || '', op.customer_name || op.supplier_name || '', op.status, op.doc_count, op.invoice_count, formatDate(op.order_date || op.created_at) || '']));
             }}
             className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50"
           >
@@ -127,7 +130,15 @@ export default function OperationsPage() {
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Status</th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Docs</th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Invoices</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-600">Created</th>
+                <th
+                  className="text-left px-4 py-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900 select-none"
+                  onClick={toggleSort}
+                >
+                  <span className="flex items-center gap-1">
+                    Order Date
+                    {sortDir === 'asc' ? <ChevronUp size={12} className="text-primary-600" /> : <ChevronDown size={12} className="text-primary-600" />}
+                  </span>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -174,7 +185,7 @@ export default function OperationsPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-gray-500">
-                    {formatDate(op.created_at) || '-'}
+                    {formatDate((op as any).order_date) || formatDate(op.created_at) || '-'}
                   </td>
                 </tr>
               ))}
