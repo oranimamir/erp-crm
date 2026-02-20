@@ -23,6 +23,7 @@ import wireTransferScanRoutes from './routes/wire-transfer-scan.js';
 import productRoutes from './routes/products.js';
 import invoiceGenerateRoutes from './routes/invoice-generate.js';
 import invoiceTemplateRoutes from './routes/invoice-template.js';
+import operationRoutes from './routes/operations.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -56,6 +57,7 @@ app.use('/api/wire-transfers/scan', authenticateToken, wireTransferScanRoutes);
 app.use('/api/products', authenticateToken, productRoutes);
 app.use('/api/invoice-generate', authenticateToken, invoiceGenerateRoutes);
 app.use('/api/invoice-template', authenticateToken, invoiceTemplateRoutes);
+app.use('/api/operations', authenticateToken, operationRoutes);
 
 // Serve built client in production
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');

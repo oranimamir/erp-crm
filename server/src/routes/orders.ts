@@ -118,6 +118,23 @@ router.post('/', (req: Request, res: Response) => {
     const orderId = insertOrder();
     const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as any;
     const orderItems = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(orderId as number);
+
+    // Auto-create operation if operation_number provided and doesn't already exist
+    if (operation_number) {
+      const existingOp = db.prepare('SELECT id FROM operations WHERE operation_number = ?').get(operation_number);
+      if (!existingOp) {
+        db.prepare(`
+          INSERT INTO operations (operation_number, order_id, customer_id, supplier_id)
+          VALUES (?, ?, ?, ?)
+        `).run(
+          operation_number,
+          orderId,
+          type === 'customer' ? (customer_id || null) : null,
+          type === 'supplier' ? (supplier_id || null) : null
+        );
+      }
+    }
+
     notifyAdmin({ action: 'created', entity: 'Order', label: order.order_number, performedBy: req.user?.display_name || 'Unknown' });
     res.status(201).json({ ...order, items: orderItems });
   } catch (err: any) {

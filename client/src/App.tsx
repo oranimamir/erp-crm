@@ -25,6 +25,8 @@ import InvoiceGeneratorPage from './pages/InvoiceGeneratorPage';
 import AdminUsersPage from './pages/AdminUsersPage';
 import AcceptInvitePage from './pages/AcceptInvitePage';
 import NotFoundPage from './pages/NotFoundPage';
+import OperationsPage from './pages/OperationsPage';
+import OperationDetailPage from './pages/OperationDetailPage';
 
 export default function App() {
   return (
@@ -57,6 +59,8 @@ export default function App() {
               <Route path="/inventory" element={<InventoryPage />} />
               <Route path="/production" element={<ProductionPage />} />
               <Route path="/products" element={<ProductsPage />} />
+              <Route path="/operations" element={<OperationsPage />} />
+              <Route path="/operations/:id" element={<OperationDetailPage />} />
               <Route path="/admin/users" element={<AdminUsersPage />} />
               <Route path="*" element={<NotFoundPage />} />
             </Route>

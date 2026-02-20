@@ -324,6 +324,39 @@ export async function initializeDatabase() {
       FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE,
       FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL
     );
+
+    CREATE TABLE IF NOT EXISTS operations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      operation_number TEXT UNIQUE NOT NULL,
+      order_id INTEGER,
+      customer_id INTEGER,
+      supplier_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'active',
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE SET NULL,
+      FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL,
+      FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS document_categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS operation_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      operation_id INTEGER NOT NULL,
+      category_id INTEGER,
+      file_path TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (operation_id) REFERENCES operations(id) ON DELETE CASCADE,
+      FOREIGN KEY (category_id) REFERENCES document_categories(id) ON DELETE SET NULL
+    );
   `);
 
   // Migrate status_history table to support 'production' entity_type
@@ -383,6 +416,19 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE users ADD COLUMN email TEXT`); } catch (_) { /* column may already exist */ }
   // Add notify_on_changes flag to users
   try { db.exec(`ALTER TABLE users ADD COLUMN notify_on_changes INTEGER NOT NULL DEFAULT 0`); } catch (_) { /* column may already exist */ }
+  // Add operation_id to invoices
+  try { db.exec(`ALTER TABLE invoices ADD COLUMN operation_id INTEGER`); } catch (_) { /* column may already exist */ }
+
+  // Seed default document categories
+  const defaultCategories = [
+    'Quality Statement', 'COA', 'Insurance', 'MSDS', 'PDS',
+    'Packing list', 'Halal certificate', 'Kosher certificate',
+  ];
+  for (const name of defaultCategories) {
+    try {
+      db.prepare('INSERT OR IGNORE INTO document_categories (name) VALUES (?)').run(name);
+    } catch (_) { /* ignore */ }
+  }
 
   // Seed admin user if not exists
   const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');

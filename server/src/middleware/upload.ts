@@ -49,3 +49,15 @@ export const uploadWireTransfer = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter,
 });
+
+export const uploadOperationDoc = multer({
+  storage: createStorage('operation-docs'),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter,
+});
+
+export const uploadOrder = multer({
+  storage: createStorage('orders'),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter,
+});

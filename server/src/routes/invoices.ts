@@ -66,7 +66,7 @@ router.get('/:id', (req: Request, res: Response) => {
 });
 
 router.post('/', uploadInvoice.single('file'), (req: Request, res: Response) => {
-  const { invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, invoice_date, payment_date, notes, our_ref, po_number } = req.body;
+  const { invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, invoice_date, payment_date, notes, our_ref, po_number, operation_id } = req.body;
   if (!invoice_number || !type || !amount) {
     res.status(400).json({ error: 'invoice_number, type, and amount are required' });
     return;
@@ -77,14 +77,14 @@ router.post('/', uploadInvoice.single('file'), (req: Request, res: Response) => 
 
   try {
     const result = db.prepare(`
-      INSERT INTO invoices (invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, invoice_date, payment_date, notes, file_path, file_name, our_ref, po_number)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO invoices (invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, invoice_date, payment_date, notes, file_path, file_name, our_ref, po_number, operation_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       invoice_number,
       type === 'customer' ? (customer_id || null) : null,
       type === 'supplier' ? (supplier_id || null) : null,
       type, parseFloat(amount), currency || 'USD', status || 'draft', due_date || null, invoice_date || null, payment_date || null, notes || null,
-      file_path, file_name, our_ref || null, po_number || null
+      file_path, file_name, our_ref || null, po_number || null, operation_id ? Number(operation_id) : null
     );
 
     // Record initial status
@@ -107,7 +107,7 @@ router.put('/:id', uploadInvoice.single('file'), (req: Request, res: Response) =
   const existing = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
-  const { invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, invoice_date, payment_date, notes, our_ref, po_number } = req.body;
+  const { invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, invoice_date, payment_date, notes, our_ref, po_number, operation_id } = req.body;
 
   // Delete old file if new one uploaded
   let file_path = existing.file_path;
@@ -123,7 +123,7 @@ router.put('/:id', uploadInvoice.single('file'), (req: Request, res: Response) =
 
   try {
     db.prepare(`
-      UPDATE invoices SET invoice_number=?, customer_id=?, supplier_id=?, type=?, amount=?, currency=?, status=?, due_date=?, invoice_date=?, payment_date=?, notes=?, file_path=?, file_name=?, our_ref=?, po_number=?, updated_at=datetime('now')
+      UPDATE invoices SET invoice_number=?, customer_id=?, supplier_id=?, type=?, amount=?, currency=?, status=?, due_date=?, invoice_date=?, payment_date=?, notes=?, file_path=?, file_name=?, our_ref=?, po_number=?, operation_id=?, updated_at=datetime('now')
       WHERE id=?
     `).run(
       invoice_number || existing.invoice_number,
@@ -131,7 +131,9 @@ router.put('/:id', uploadInvoice.single('file'), (req: Request, res: Response) =
       type === 'supplier' ? (supplier_id || null) : null,
       type || existing.type, parseFloat(amount) || existing.amount, currency || existing.currency,
       status || existing.status, due_date || existing.due_date, invoice_date ?? existing.invoice_date, payment_date ?? existing.payment_date, notes ?? existing.notes,
-      file_path, file_name, our_ref ?? existing.our_ref, po_number ?? existing.po_number, req.params.id
+      file_path, file_name, our_ref ?? existing.our_ref, po_number ?? existing.po_number,
+      operation_id !== undefined ? (operation_id ? Number(operation_id) : null) : existing.operation_id,
+      req.params.id
     );
 
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id) as any;

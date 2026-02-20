@@ -42,6 +42,7 @@ interface InvoiceForm {
   notes: string;
   our_ref: string;
   po_number: string;
+  operation_id: string;
 }
 
 const emptyForm: InvoiceForm = {
@@ -58,6 +59,7 @@ const emptyForm: InvoiceForm = {
   notes: '',
   our_ref: '',
   po_number: '',
+  operation_id: '',
 };
 
 function addDays(dateStr: string, days: number): string {
@@ -79,6 +81,7 @@ export default function InvoiceFormPage() {
   const [currentFile, setCurrentFile] = useState<{ name: string; path?: string } | null>(null);
   const [customers, setCustomers] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
+  const [operations, setOperations] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [scanning, setScanning] = useState(false);
@@ -87,12 +90,14 @@ export default function InvoiceFormPage() {
     const loadData = async () => {
       setLoading(true);
       try {
-        const [customersRes, suppliersRes] = await Promise.all([
+        const [customersRes, suppliersRes, operationsRes] = await Promise.all([
           api.get('/customers', { params: { limit: 1000 } }),
           api.get('/suppliers', { params: { limit: 1000 } }),
+          api.get('/operations', { params: { limit: 1000 } }),
         ]);
         setCustomers(customersRes.data.data || customersRes.data);
         setSuppliers(suppliersRes.data.data || suppliersRes.data);
+        setOperations(operationsRes.data.data || operationsRes.data);
 
         if (id) {
           const res = await api.get(`/invoices/${id}`);
@@ -111,6 +116,7 @@ export default function InvoiceFormPage() {
             notes: inv.notes || '',
             our_ref: inv.our_ref || '',
             po_number: inv.po_number || '',
+            operation_id: inv.operation_id ? String(inv.operation_id) : '',
           });
           if (inv.file_path) {
             const filename = inv.file_path.split('/').pop() || inv.file_path;
@@ -227,6 +233,7 @@ export default function InvoiceFormPage() {
       if (form.notes) formData.append('notes', form.notes);
       if (form.our_ref) formData.append('our_ref', form.our_ref);
       if (form.po_number) formData.append('po_number', form.po_number);
+      if (form.operation_id) formData.append('operation_id', form.operation_id);
       if (file) formData.append('file', file);
 
       if (isEdit) {
@@ -348,6 +355,16 @@ export default function InvoiceFormPage() {
               placeholder="e.g. PO-123"
             />
           </div>
+
+          {operations.length > 0 && (
+            <Select
+              label="Link to Operation (optional)"
+              value={form.operation_id}
+              onChange={e => updateField('operation_id', e.target.value)}
+              options={operations.map(op => ({ value: String(op.id), label: `${op.operation_number}${op.order_number ? ` — Order ${op.order_number}` : ''}${op.customer_name || op.supplier_name ? ` (${op.customer_name || op.supplier_name})` : ''}` }))}
+              placeholder="No operation linked"
+            />
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <Input
