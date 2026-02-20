@@ -138,6 +138,23 @@ router.get('/overdue-invoices', (_req: Request, res: Response) => {
   res.json(invoices);
 });
 
+router.get('/open-operations', (_req: Request, res: Response) => {
+  const ops = db.prepare(`
+    SELECT op.id, op.operation_number, op.status, op.created_at,
+      c.name as customer_name, s.name as supplier_name,
+      o.order_number,
+      (SELECT COUNT(*) FROM invoices i WHERE i.operation_id = op.id) as invoice_count
+    FROM operations op
+    LEFT JOIN customers c ON op.customer_id = c.id
+    LEFT JOIN suppliers s ON op.supplier_id = s.id
+    LEFT JOIN orders o ON op.order_id = o.id
+    WHERE op.status != 'delivered'
+    ORDER BY op.created_at DESC
+    LIMIT 20
+  `).all();
+  res.json(ops);
+});
+
 router.get('/forecast', (_req: Request, res: Response) => {
   const year = new Date().getFullYear();
   const data = [];

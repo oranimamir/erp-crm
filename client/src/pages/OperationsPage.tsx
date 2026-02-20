@@ -19,11 +19,12 @@ interface Operation {
   created_at: string;
 }
 
+const STATUS_OPTIONS = ['ordered', 'shipped', 'delivered'];
+
 const STATUS_COLORS: Record<string, string> = {
-  active: 'bg-green-100 text-green-800',
-  completed: 'bg-blue-100 text-blue-800',
-  cancelled: 'bg-red-100 text-red-800',
-  on_hold: 'bg-yellow-100 text-yellow-800',
+  ordered:   'bg-yellow-100 text-yellow-800',
+  shipped:   'bg-blue-100 text-blue-800',
+  delivered: 'bg-green-100 text-green-800',
 };
 
 export default function OperationsPage() {
@@ -36,6 +37,15 @@ export default function OperationsPage() {
   const [totalPages, setTotalPages] = useState(1);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+
+  const handleStatusChange = async (id: number, status: string) => {
+    try {
+      await api.patch(`/operations/${id}/status`, { status });
+      setOperations(prev => prev.map(op => op.id === id ? { ...op, status } : op));
+    } catch {
+      addToast('Failed to update status', 'error');
+    }
+  };
 
   const fetchOperations = useCallback(async () => {
     setLoading(true);
@@ -140,10 +150,16 @@ export default function OperationsPage() {
                   <td className="px-4 py-3 text-gray-700">
                     {op.customer_name || op.supplier_name || <span className="text-gray-400">—</span>}
                   </td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize ${STATUS_COLORS[op.status] || 'bg-gray-100 text-gray-700'}`}>
-                      {op.status.replace('_', ' ')}
-                    </span>
+                  <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                    <select
+                      value={op.status}
+                      onChange={e => handleStatusChange(op.id, e.target.value)}
+                      className={`text-xs rounded-full px-2 py-0.5 font-medium border-0 cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary-500 ${STATUS_COLORS[op.status] || 'bg-gray-100 text-gray-700'}`}
+                    >
+                      {STATUS_OPTIONS.map(s => (
+                        <option key={s} value={s} className="bg-white text-gray-900">{s.charAt(0).toUpperCase() + s.slice(1)}</option>
+                      ))}
+                    </select>
                   </td>
                   <td className="px-4 py-3">
                     <span className="flex items-center gap-1 text-gray-600">

@@ -20,7 +20,7 @@ interface Stats {
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<Stats | null>(null);
-  const [recentOrders, setRecentOrders] = useState<any[]>([]);
+  const [openOperations, setOpenOperations] = useState<any[]>([]);
   const [pendingInvoices, setPendingInvoices] = useState<any[]>([]);
   const [shippingOverview, setShippingOverview] = useState<any[]>([]);
   const [monthlyPayments, setMonthlyPayments] = useState<any[]>([]);
@@ -33,7 +33,7 @@ export default function DashboardPage() {
   useEffect(() => {
     Promise.all([
       api.get('/dashboard/stats'),
-      api.get('/dashboard/recent-orders'),
+      api.get('/dashboard/open-operations'),
       api.get('/dashboard/pending-invoices'),
       api.get('/dashboard/shipping-overview'),
       api.get('/dashboard/monthly-payments'),
@@ -43,7 +43,7 @@ export default function DashboardPage() {
       api.get('/dashboard/forecast'),
     ]).then(([s, o, i, sh, mp, it, ov, pi, fc]) => {
       setStats(s.data);
-      setRecentOrders(o.data);
+      setOpenOperations(o.data);
       setPendingInvoices(i.data);
       setShippingOverview(sh.data);
       setMonthlyPayments(mp.data);
@@ -121,22 +121,24 @@ export default function DashboardPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
-          <div className="px-5 py-4 border-b border-gray-100">
-            <h2 className="font-semibold text-gray-900">Recent Orders</h2>
+          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+            <h2 className="font-semibold text-gray-900">Open Operations</h2>
+            <Link to="/operations" className="text-xs text-primary-600 hover:underline">View all</Link>
           </div>
           <div className="divide-y divide-gray-100">
-            {recentOrders.length === 0 ? (
-              <p className="px-5 py-8 text-center text-sm text-gray-500">No orders yet</p>
-            ) : recentOrders.slice(0, 5).map((order: any) => (
-              <Link key={order.id} to={`/orders/${order.id}`} className="flex items-center justify-between px-5 py-3 hover:bg-gray-50">
+            {openOperations.length === 0 ? (
+              <p className="px-5 py-8 text-center text-sm text-gray-500">No open operations</p>
+            ) : openOperations.slice(0, 8).map((op: any) => (
+              <Link key={op.id} to={`/operations/${op.id}`} className="flex items-center justify-between px-5 py-3 hover:bg-gray-50">
                 <div>
-                  <p className="text-sm font-medium text-gray-900">{order.order_number}</p>
-                  <p className="text-xs text-gray-500">{order.customer_name || order.supplier_name}</p>
+                  <p className="text-sm font-medium text-gray-900">{op.operation_number}</p>
+                  <p className="text-xs text-gray-500">{op.customer_name || op.supplier_name || op.order_number || '—'}</p>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-sm font-medium text-gray-900">€{order.total_amount?.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                  <StatusBadge status={order.status} />
-                </div>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${
+                  op.status === 'shipped' ? 'bg-blue-100 text-blue-800' :
+                  op.status === 'ordered' ? 'bg-yellow-100 text-yellow-800' :
+                  'bg-gray-100 text-gray-700'
+                }`}>{op.status}</span>
               </Link>
             ))}
           </div>
