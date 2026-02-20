@@ -10,8 +10,9 @@ import SearchBar from '../components/ui/SearchBar';
 import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
-import { Plus, FileText, Eye, Trash2, FileDown, ChevronUp, ChevronDown } from 'lucide-react';
+import { Plus, FileText, Eye, Trash2, FileDown, ChevronUp, ChevronDown, FileSpreadsheet } from 'lucide-react';
 import { formatDate } from '../lib/dates';
+import { downloadExcel } from '../lib/exportExcel';
 
 const statusBadgeClasses: Record<string, string> = {
   draft:     'bg-gray-100 text-gray-700 border-gray-200',
@@ -115,6 +116,22 @@ export default function InvoicesPage() {
 
   const formatDateOrDash = (dateStr: string) => formatDate(dateStr) || '-';
 
+  const handleExport = async () => {
+    const res = await api.get('/invoices', { params: { page: 1, limit: 9999, search, status: statusFilter || undefined, type: typeFilter || undefined } });
+    const rows = res.data.data.map((inv: any) => [
+      inv.invoice_number,
+      inv.customer_name || inv.supplier_name || '',
+      inv.type,
+      inv.amount,
+      inv.currency,
+      inv.eur_amount ?? '',
+      inv.status,
+      formatDateOrDash(inv.invoice_date),
+      formatDateOrDash(inv.due_date),
+    ]);
+    downloadExcel('invoices', ['Invoice #', 'Customer / Supplier', 'Type', 'Amount', 'Currency', 'EUR Amount', 'Status', 'Invoice Date', 'Due Date'], rows);
+  };
+
   const formatAmount = (amount: number, currency?: string) => {
     if (amount == null) return '-';
     const symbol = currency === 'EUR' ? '\u20AC' : currency === 'GBP' ? '\u00A3' : '$';
@@ -126,8 +143,9 @@ export default function InvoicesPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Invoices</h1>
         <div className="flex gap-2">
+          <Button variant="secondary" onClick={handleExport}><FileSpreadsheet size={16} /> Export Excel</Button>
           <Link to="/invoices/generate">
-            <Button variant="secondary"><FileDown size={16} /> Generate Invoice PDF</Button>
+            <Button variant="secondary"><FileDown size={16} /> Generate PDF</Button>
           </Link>
           <Link to="/invoices/new">
             <Button><Plus size={16} /> New Invoice</Button>

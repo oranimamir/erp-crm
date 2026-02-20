@@ -10,7 +10,8 @@ import SearchBar from '../components/ui/SearchBar';
 import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
-import { Plus, Users, Eye, Pencil, Trash2, BarChart3 } from 'lucide-react';
+import { Plus, Users, Eye, Pencil, Trash2, BarChart3, FileSpreadsheet } from 'lucide-react';
+import { downloadExcel } from '../lib/exportExcel';
 
 const CHART_COLORS = [
   'bg-blue-500', 'bg-teal-500', 'bg-orange-400', 'bg-purple-500',
@@ -94,7 +95,14 @@ export default function CustomersPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Customers</h1>
-        <Button onClick={openCreate}><Plus size={16} /> Add Customer</Button>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={async () => {
+            const res = await api.get('/customers', { params: { page: 1, limit: 9999, search } });
+            downloadExcel('customers', ['Name', 'Email', 'Phone', 'Company', 'Address', 'Notes'],
+              res.data.data.map((c: any) => [c.name, c.email || '', c.phone || '', c.company || '', c.address || '', c.notes || '']));
+          }}><FileSpreadsheet size={16} /> Export Excel</Button>
+          <Button onClick={openCreate}><Plus size={16} /> Add Customer</Button>
+        </div>
       </div>
 
       <Card>

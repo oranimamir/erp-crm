@@ -2,8 +2,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
-import { Briefcase, Search, Plus, ChevronLeft, ChevronRight, FileText, Receipt } from 'lucide-react';
+import { Briefcase, Search, Plus, ChevronLeft, ChevronRight, FileText, Receipt, FileSpreadsheet } from 'lucide-react';
 import { formatDate } from '../lib/dates';
+import { downloadExcel } from '../lib/exportExcel';
 
 interface Operation {
   id: number;
@@ -74,6 +75,17 @@ export default function OperationsPage() {
               onChange={e => { setSearch(e.target.value); setPage(1); }}
             />
           </div>
+          <button
+            onClick={async () => {
+              const { data } = await api.get('/operations', { params: { page: 1, limit: 9999, search } });
+              downloadExcel('operations', ['Operation #', 'Order #', 'Customer / Supplier', 'Status', 'Docs', 'Invoices', 'Created'],
+                data.data.map((op: Operation) => [op.operation_number, op.order_number || '', op.customer_name || op.supplier_name || '', op.status, op.doc_count, op.invoice_count, formatDate(op.created_at) || '']));
+            }}
+            className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50"
+          >
+            <FileSpreadsheet size={16} />
+            Export Excel
+          </button>
           <button
             onClick={() => navigate('/orders/new')}
             className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700"

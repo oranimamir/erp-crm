@@ -138,6 +138,37 @@ router.get('/overdue-invoices', (_req: Request, res: Response) => {
   res.json(invoices);
 });
 
+router.get('/forecast', (_req: Request, res: Response) => {
+  const year = new Date().getFullYear();
+  const data = [];
+  for (let m = 1; m <= 12; m++) {
+    const monthStr = `${year}-${String(m).padStart(2, '0')}`;
+    const paid = (db.prepare(`
+      SELECT COALESCE(SUM(eur_val), 0) as total FROM (
+        SELECT COALESCE(wt.eur_amount, wt.amount) as eur_val
+        FROM wire_transfers wt JOIN invoices i ON wt.invoice_id = i.id
+        WHERE i.type = 'customer' AND strftime('%Y-%m', wt.transfer_date) = ?
+        UNION ALL
+        SELECT p.amount FROM payments p JOIN invoices i ON p.invoice_id = i.id
+        WHERE i.type = 'customer' AND strftime('%Y-%m', p.payment_date) = ?
+        UNION ALL
+        SELECT COALESCE(i.eur_amount, i.amount) FROM invoices i
+        WHERE i.type = 'customer' AND i.status = 'paid'
+          AND NOT EXISTS (SELECT 1 FROM wire_transfers wt WHERE wt.invoice_id = i.id)
+          AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
+          AND i.payment_date IS NOT NULL AND strftime('%Y-%m', i.payment_date) = ?
+      )
+    `).get(monthStr, monthStr, monthStr) as any).total;
+    const pending = (db.prepare(`
+      SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total
+      FROM invoices WHERE type = 'customer' AND status IN ('sent', 'draft', 'overdue')
+        AND due_date IS NOT NULL AND strftime('%Y-%m', due_date) = ?
+    `).get(monthStr) as any).total;
+    data.push({ month: monthStr, paid: Number(paid), pending: Number(pending) });
+  }
+  res.json(data);
+});
+
 router.get('/paid-invoices', (_req: Request, res: Response) => {
   const invoices = db.prepare(`
     SELECT

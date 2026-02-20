@@ -12,7 +12,8 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
-import { Plus, Truck, Eye, Pencil, Trash2, BarChart3 } from 'lucide-react';
+import { Plus, Truck, Eye, Pencil, Trash2, BarChart3, FileSpreadsheet } from 'lucide-react';
+import { downloadExcel } from '../lib/exportExcel';
 
 const CHART_COLORS = [
   'bg-purple-500', 'bg-blue-500', 'bg-orange-400', 'bg-teal-500',
@@ -115,7 +116,14 @@ export default function SuppliersPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Suppliers</h1>
-        <Button onClick={openCreate}><Plus size={16} /> Add Supplier</Button>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={async () => {
+            const res = await api.get('/suppliers', { params: { page: 1, limit: 9999, search, category: categoryFilter } });
+            downloadExcel('suppliers', ['Name', 'Category', 'Email', 'Phone', 'Address', 'Notes'],
+              res.data.data.map((s: any) => [s.name, s.category || '', s.email || '', s.phone || '', s.address || '', s.notes || '']));
+          }}><FileSpreadsheet size={16} /> Export Excel</Button>
+          <Button onClick={openCreate}><Plus size={16} /> Add Supplier</Button>
+        </div>
       </div>
 
       <Card>

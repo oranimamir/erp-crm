@@ -27,6 +27,7 @@ export default function DashboardPage() {
   const [inTransit, setInTransit] = useState<any[]>([]);
   const [overdueInvoices, setOverdueInvoices] = useState<any[]>([]);
   const [paidInvoices, setPaidInvoices] = useState<any[]>([]);
+  const [forecast, setForecast] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -39,7 +40,8 @@ export default function DashboardPage() {
       api.get('/dashboard/in-transit'),
       api.get('/dashboard/overdue-invoices'),
       api.get('/dashboard/paid-invoices'),
-    ]).then(([s, o, i, sh, mp, it, ov, pi]) => {
+      api.get('/dashboard/forecast'),
+    ]).then(([s, o, i, sh, mp, it, ov, pi, fc]) => {
       setStats(s.data);
       setRecentOrders(o.data);
       setPendingInvoices(i.data);
@@ -48,6 +50,7 @@ export default function DashboardPage() {
       setInTransit(it.data);
       setOverdueInvoices(ov.data);
       setPaidInvoices(pi.data);
+      setForecast(fc.data);
     }).finally(() => setLoading(false));
   }, []);
 
@@ -153,6 +156,9 @@ export default function DashboardPage() {
                   <p className="text-xs text-gray-500">{inv.customer_name || inv.supplier_name}</p>
                 </div>
                 <div className="flex items-center gap-3">
+                  {inv.due_date && (
+                    <span className="text-xs text-gray-400">Due {formatDate(inv.due_date)}</span>
+                  )}
                   <span className="text-sm font-medium text-gray-900">€{(inv.eur_amount ?? inv.amount)?.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                   <StatusBadge status={inv.status} />
                 </div>
@@ -313,6 +319,77 @@ export default function DashboardPage() {
           </div>
         )}
       </Card>
+      {/* Revenue Forecast */}
+      {forecast.length > 0 && (() => {
+        const currentMonth = new Date().toISOString().slice(0, 7);
+        const maxBar = Math.max(...forecast.map(m => m.paid + m.pending), 1);
+        const totalPaid = forecast.reduce((s, m) => s + m.paid, 0);
+        const totalPending = forecast.reduce((s, m) => s + m.pending, 0);
+        return (
+          <Card>
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <TrendingUp size={16} className="text-gray-400" />
+                <h2 className="font-semibold text-gray-900">Revenue Forecast {new Date().getFullYear()}</h2>
+              </div>
+              <div className="flex items-center gap-4 text-xs text-gray-500">
+                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-green-500 inline-block" /> Received</span>
+                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-amber-400 inline-block" /> Pending</span>
+              </div>
+            </div>
+            <div className="p-5">
+              <div className="grid grid-cols-3 gap-4 pb-4 border-b border-gray-100 mb-4">
+                <div className="text-center">
+                  <p className="text-xs text-gray-500 mb-0.5">Received YTD</p>
+                  <p className="text-lg font-bold text-green-600">€{totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-xs text-gray-500 mb-0.5">Pending Invoices</p>
+                  <p className="text-lg font-bold text-amber-500">€{totalPending.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-xs text-gray-500 mb-0.5">Total Expected</p>
+                  <p className="text-lg font-bold text-gray-900">€{(totalPaid + totalPending).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                </div>
+              </div>
+              <div className="flex items-end gap-1" style={{ height: 160 }}>
+                {forecast.map((m: any) => {
+                  const isCurrent = m.month === currentMonth;
+                  const paidH = m.paid > 0 ? Math.max((m.paid / maxBar) * 140, 3) : 0;
+                  const pendingH = m.pending > 0 ? Math.max((m.pending / maxBar) * 140, 3) : 0;
+                  return (
+                    <div key={m.month} className={`flex-1 flex flex-col items-center gap-1 h-full justify-end ${isCurrent ? 'relative' : ''}`}>
+                      {isCurrent && <div className="absolute inset-x-0 inset-y-0 bg-primary-50 rounded pointer-events-none" />}
+                      <div className="w-full flex flex-col items-center relative z-10">
+                        {m.pending > 0 && (
+                          <div
+                            className="w-4/5 bg-amber-400 rounded-t"
+                            style={{ height: `${pendingH}px` }}
+                            title={`Pending: €${m.pending.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                          />
+                        )}
+                        {m.paid > 0 && (
+                          <div
+                            className={`w-4/5 bg-green-500 ${m.pending > 0 ? '' : 'rounded-t'}`}
+                            style={{ height: `${paidH}px` }}
+                            title={`Received: €${m.paid.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                          />
+                        )}
+                        {m.paid === 0 && m.pending === 0 && (
+                          <div className="w-4/5 bg-gray-100 rounded-t" style={{ height: '2px' }} />
+                        )}
+                      </div>
+                      <span className={`text-[10px] relative z-10 ${isCurrent ? 'font-bold text-primary-600' : 'text-gray-400'}`}>
+                        {new Date(m.month + '-02').toLocaleDateString('en-GB', { month: 'short' })}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </Card>
+        );
+      })()}
     </div>
   );
 }

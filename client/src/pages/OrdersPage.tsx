@@ -10,8 +10,9 @@ import SearchBar from '../components/ui/SearchBar';
 import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
-import { Plus, ShoppingCart, Eye, Trash2, Download } from 'lucide-react';
+import { Plus, ShoppingCart, Eye, Trash2, Download, FileSpreadsheet } from 'lucide-react';
 import { formatDate } from '../lib/dates';
+import { downloadExcel } from '../lib/exportExcel';
 
 const statusOptions = [
   { value: 'order_placed', label: 'Order Placed' },
@@ -113,9 +114,16 @@ export default function OrdersPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Orders</h1>
-        <Link to="/orders/new">
-          <Button><Plus size={16} /> New Order</Button>
-        </Link>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={async () => {
+            const res = await api.get('/orders', { params: { page: 1, limit: 9999, search, status: statusFilter || undefined, type: typeFilter || undefined } });
+            downloadExcel('orders', ['Order #', 'Customer / Supplier', 'Type', 'Amount', 'Status', 'Created'],
+              res.data.data.map((o: any) => [o.order_number, o.customer_name || o.supplier_name || '', o.type, o.total_amount ?? '', o.status, formatDate(o.created_at) || '']));
+          }}><FileSpreadsheet size={16} /> Export Excel</Button>
+          <Link to="/orders/new">
+            <Button><Plus size={16} /> New Order</Button>
+          </Link>
+        </div>
       </div>
 
       <Card>

@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import api from '../lib/api';
 import Card from '../components/ui/Card';
-import { BarChart3, TrendingUp, TrendingDown, DollarSign, Clock, RefreshCw } from 'lucide-react';
+import { BarChart3, TrendingUp, TrendingDown, DollarSign, Clock, RefreshCw, FileSpreadsheet } from 'lucide-react';
+import { downloadExcel } from '../lib/exportExcel';
 
 interface MonthData { month: string; received: number; paid_out: number; }
 interface CustomerData { customer_id: number; customer_name: string; total: number; invoice_count: number; }
@@ -77,14 +78,29 @@ export default function AnalyticsPage() {
           <BarChart3 size={24} className="text-primary-600" />
           Analytics
         </h1>
-        {isFiltered && (
-          <button
-            onClick={() => { setYear(currentYear); setQuarter(''); setCustomerId(''); setSupplierId(''); }}
-            className="flex items-center gap-1 text-sm text-primary-600 hover:underline"
-          >
-            <RefreshCw size={14} /> Reset filters
-          </button>
-        )}
+        <div className="flex items-center gap-3">
+          {data && (
+            <button
+              onClick={() => {
+                const monthRows = data.monthly.map(m => [m.month, m.received, m.paid_out, m.received - m.paid_out]);
+                const custRows = data.by_customer.map(c => [c.customer_name, c.total, c.invoice_count]);
+                const suppRows = data.by_supplier.map(s => [s.supplier_name, s.total, s.invoice_count]);
+                downloadExcel(`analytics-${year}${quarter ? '-Q' + quarter : ''}`, ['Month', 'Received (EUR)', 'Paid Out (EUR)', 'Net (EUR)'], monthRows);
+              }}
+              className="flex items-center gap-1 text-sm text-gray-600 border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50"
+            >
+              <FileSpreadsheet size={14} /> Export Excel
+            </button>
+          )}
+          {isFiltered && (
+            <button
+              onClick={() => { setYear(currentYear); setQuarter(''); setCustomerId(''); setSupplierId(''); }}
+              className="flex items-center gap-1 text-sm text-primary-600 hover:underline"
+            >
+              <RefreshCw size={14} /> Reset filters
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Filters */}

@@ -11,7 +11,8 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
-import { Plus, Warehouse, Pencil, Trash2, PackagePlus } from 'lucide-react';
+import { Plus, Warehouse, Pencil, Trash2, PackagePlus, FileSpreadsheet } from 'lucide-react';
+import { downloadExcel } from '../lib/exportExcel';
 
 const unitOptions = [
   { value: 'tons', label: 'tons' },
@@ -141,7 +142,14 @@ export default function InventoryPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Inventory</h1>
-        <Button onClick={openCreate}><Plus size={16} /> Add Item</Button>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={async () => {
+            const res = await api.get('/inventory', { params: { page: 1, limit: 9999, search, category: filterCategory } });
+            downloadExcel('inventory', ['Product', 'SKU', 'Category', 'Quantity', 'Unit', 'Min Stock', 'Supplier'],
+              res.data.data.map((item: any) => [item.name, item.sku || '', item.category || '', item.quantity, item.unit, item.min_stock_level, item.supplier_name || '']));
+          }}><FileSpreadsheet size={16} /> Export Excel</Button>
+          <Button onClick={openCreate}><Plus size={16} /> Add Item</Button>
+        </div>
       </div>
 
       <Card>
