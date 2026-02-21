@@ -13,7 +13,7 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
-import { Plus, Users, Pencil, Trash2, UserPlus, Clock, XCircle, Copy, Bell, BellOff, CheckCircle, Link } from 'lucide-react';
+import { Plus, Users, Pencil, Trash2, UserPlus, Mail, Clock, XCircle, Copy, Bell, BellOff, CheckCircle, Link } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 
 const roleOptions = [
