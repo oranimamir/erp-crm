@@ -19,8 +19,8 @@ export default function SettingsPage() {
       addToast('New passwords do not match', 'error');
       return;
     }
-    if (newPassword.length < 4) {
-      addToast('New password must be at least 4 characters', 'error');
+    if (newPassword.length < 8) {
+      addToast('New password must be at least 8 characters', 'error');
       return;
     }
     setSaving(true);
@@ -77,7 +77,7 @@ export default function SettingsPage() {
               value={newPassword}
               onChange={e => setNewPassword(e.target.value)}
               required
-              minLength={4}
+              minLength={8}
               className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
               placeholder="Enter new password"
             />

@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import { rateLimit } from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { initializeDatabase } from './database.js';
@@ -30,17 +32,60 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware
-app.use(cors());
-app.use(express.json());
+// Warn if JWT_SECRET is using the insecure default
+if (!process.env.JWT_SECRET) {
+  console.warn('⚠️  JWT_SECRET is not set — using insecure default. Set it in your .env file.');
+}
+
+// ── Security headers ────────────────────────────────────────────────────────
+app.use(helmet({
+  crossOriginEmbedderPolicy: false, // Allow file previews/embeds
+  contentSecurityPolicy: false,     // Managed by the SPA
+}));
+
+// ── CORS ────────────────────────────────────────────────────────────────────
+const allowedOrigins = process.env.APP_URL
+  ? [process.env.APP_URL, 'http://localhost:5173', 'http://localhost:3001']
+  : true; // Dev fallback: allow all
+
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true,
+}));
+
+// ── Body parsing ─────────────────────────────────────────────────────────────
+app.use(express.json({ limit: '2mb' }));
+
+// ── Rate limiters ─────────────────────────────────────────────────────────────
+
+// Strict limiter for login — 20 attempts per 15 min per IP
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { error: 'Too many login attempts. Please try again in 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// General API limiter — 300 req per minute per IP
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 300,
+  message: { error: 'Too many requests. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // Initialize database
 await initializeDatabase();
 
-// Public routes
+// ── Public routes (with rate limiting) ───────────────────────────────────────
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/accept-invite', authLimiter);
 app.use('/api/auth', authRoutes);
 
-// Protected routes
+// ── Protected routes ──────────────────────────────────────────────────────────
+app.use('/api', apiLimiter);
 app.use('/api/customers', authenticateToken, customerRoutes);
 app.use('/api/suppliers', authenticateToken, supplierRoutes);
 app.use('/api/invoices/scan', authenticateToken, invoiceScanRoutes);
@@ -61,11 +106,11 @@ app.use('/api/invoice-template', authenticateToken, invoiceTemplateRoutes);
 app.use('/api/operations', authenticateToken, operationRoutes);
 app.use('/api/analytics', authenticateToken, analyticsRoutes);
 
-// Serve built client in production
+// ── Serve built client in production ─────────────────────────────────────────
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');
 app.use(express.static(clientDist));
 
-// Error handling for multer
+// ── Error handling ────────────────────────────────────────────────────────────
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   if (err.code === 'LIMIT_FILE_SIZE') {
     res.status(400).json({ error: 'File too large. Maximum size is 10MB.' });
@@ -79,7 +124,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// SPA fallback - serve index.html for non-API routes
+// ── SPA fallback ──────────────────────────────────────────────────────────────
 app.get('*', (_req, res) => {
   res.sendFile(path.join(clientDist, 'index.html'));
 });

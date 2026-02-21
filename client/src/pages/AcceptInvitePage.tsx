@@ -45,7 +45,7 @@ export default function AcceptInvitePage() {
     setError('');
 
     if (!username.trim()) { setError('Username is required'); return; }
-    if (password.length < 4) { setError('Password must be at least 4 characters'); return; }
+    if (password.length < 8) { setError('Password must be at least 8 characters'); return; }
     if (password !== confirmPassword) { setError('Passwords do not match'); return; }
 
     setLoading(true);
