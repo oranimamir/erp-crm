@@ -12,6 +12,7 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import StatusBadge from '../components/ui/StatusBadge';
 import { Plus, Factory, Pencil, Trash2, Eye, ArrowRight, Clock } from 'lucide-react';
+import { formatDate } from '../lib/dates';
 
 const productionStatuses = [
   { value: 'new_order', label: 'New Order' },
@@ -204,7 +205,7 @@ export default function ProductionPage() {
                     </td>
                     <td className="px-4 py-3 text-gray-600">{b.toller_name || '-'}</td>
                     <td className="px-4 py-3 text-right text-gray-900">{b.quantity} {b.unit}</td>
-                    <td className="px-4 py-3 text-gray-500 text-xs">{new Date(b.created_at).toLocaleDateString()}</td>
+                    <td className="px-4 py-3 text-gray-500 text-xs">{formatDate(b.created_at)}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
                         <button onClick={() => openDetail(b)} className="p-1.5 text-gray-400 hover:text-primary-600 rounded"><Eye size={16} /></button>

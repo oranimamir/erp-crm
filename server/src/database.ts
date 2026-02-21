@@ -331,7 +331,7 @@ export async function initializeDatabase() {
       order_id INTEGER,
       customer_id INTEGER,
       supplier_id INTEGER,
-      status TEXT NOT NULL DEFAULT 'active',
+      status TEXT NOT NULL DEFAULT 'ordered',
       notes TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -439,6 +439,12 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE invoices ADD COLUMN eur_amount REAL`); } catch (_) { /* column may already exist */ }
   try { db.exec(`ALTER TABLE wire_transfers ADD COLUMN fx_rate REAL`); } catch (_) { /* column may already exist */ }
   try { db.exec(`ALTER TABLE wire_transfers ADD COLUMN eur_amount REAL`); } catch (_) { /* column may already exist */ }
+
+  // Migrate operations statuses: old values → new (ordered/shipped/delivered)
+  try {
+    db.exec(`UPDATE operations SET status = 'ordered'   WHERE status IN ('active', 'on_hold', 'cancelled')`);
+    db.exec(`UPDATE operations SET status = 'delivered' WHERE status = 'completed'`);
+  } catch (_) { /* safe to ignore */ }
 
   // Seed default document categories
   const defaultCategories = [

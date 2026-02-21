@@ -14,6 +14,7 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
 import { Plus, Users, Pencil, Trash2, Mail, Clock, XCircle, Copy, Bell, BellOff, RefreshCw, CheckCircle, AlertTriangle } from 'lucide-react';
+import { formatDate } from '../lib/dates';
 
 const roleOptions = [
   { value: 'user', label: 'User' },
@@ -257,7 +258,7 @@ export default function AdminUsersPage() {
                         {u.notify_on_changes ? 'On' : 'Off'}
                       </button>
                     </td>
-                    <td className="px-4 py-3 text-gray-600">{new Date(u.created_at).toLocaleDateString()}</td>
+                    <td className="px-4 py-3 text-gray-600">{formatDate(u.created_at)}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
                         <button onClick={() => openEdit(u)} className="p-1.5 text-gray-400 hover:text-primary-600 rounded"><Pencil size={16} /></button>
@@ -329,9 +330,9 @@ export default function AdminUsersPage() {
                       <td className="px-4 py-3 font-medium text-gray-900">{inv.email}</td>
                       <td className="px-4 py-3 text-gray-600">{inv.display_name || '-'}</td>
                       <td className="px-4 py-3"><Badge variant={inv.role === 'admin' ? 'purple' : 'blue'}>{inv.role}</Badge></td>
-                      <td className="px-4 py-3 text-gray-600">{new Date(inv.created_at).toLocaleDateString()}</td>
+                      <td className="px-4 py-3 text-gray-600">{formatDate(inv.created_at)}</td>
                       <td className="px-4 py-3 text-gray-600">
-                        {expired ? <span className="text-red-500 text-xs font-medium">Expired</span> : new Date(inv.expires_at).toLocaleDateString()}
+                        {expired ? <span className="text-red-500 text-xs font-medium">Expired</span> : formatDate(inv.expires_at)}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-end gap-1">

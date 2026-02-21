@@ -7,6 +7,7 @@ import Button from '../components/ui/Button';
 import StatusBadge from '../components/ui/StatusBadge';
 import Badge from '../components/ui/Badge';
 import { ArrowLeft, Pencil, MapPin, Truck, Calendar, Hash, Clock } from 'lucide-react';
+import { formatDate } from '../lib/dates';
 
 const statusOptions = [
   { value: 'pending', label: 'Pending' },
@@ -76,7 +77,7 @@ export default function ShipmentDetailPage() {
           <div className="flex items-center gap-2 text-gray-600"><Truck size={16} /> {shipment.carrier || 'No carrier'}</div>
           {shipment.order_number && <div className="flex items-center gap-2 text-gray-600"><Hash size={16} /> <Link to={`/orders/${shipment.order_id}`} className="text-primary-600 hover:underline">{shipment.order_number}</Link></div>}
           {shipment.estimated_delivery && <div className="flex items-center gap-2 text-gray-600"><Calendar size={16} /> Est: {shipment.estimated_delivery}</div>}
-          <div className="flex items-center gap-2 text-gray-600"><Clock size={16} /> Created: {new Date(shipment.created_at).toLocaleDateString()}</div>
+          <div className="flex items-center gap-2 text-gray-600"><Clock size={16} /> Created: {formatDate(shipment.created_at)}</div>
         </div>
         {shipment.notes && <p className="mt-4 text-sm text-gray-600 bg-gray-50 rounded-lg p-3">{shipment.notes}</p>}
       </Card>
