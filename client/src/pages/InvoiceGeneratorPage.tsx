@@ -3,7 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import Button from '../components/ui/Button';
-import { ArrowLeft, Plus, Trash2, FileDown, Loader2, Upload, FileText, X } from 'lucide-react';
+import {
+  ArrowLeft, Plus, Trash2, Loader2, Upload, FileText, X,
+  Eye, ShoppingCart, CheckCircle, FileDown, Search,
+} from 'lucide-react';
 
 // ── Unit conversion helpers ───────────────────────────────────────────────
 function toLbs(qty: number, unit: string): number {
@@ -23,7 +26,6 @@ function pricePerLb(price: number, unit: string): number {
   }
 }
 
-// ── Line item type ────────────────────────────────────────────────────────
 interface LineItem {
   line: number;
   reference: string;
@@ -37,7 +39,6 @@ const emptyLine = (n: number): LineItem => ({
   line: n, reference: '', commercial_name: '', packaging: '', quantity_lb: '', price_per_lb: '',
 });
 
-// ── Default company data ──────────────────────────────────────────────────
 const DEFAULT_COMPANY = {
   company_name: 'TripleW BV',
   company_address1: 'Innovatiestraat 1',
@@ -47,7 +48,6 @@ const DEFAULT_COMPANY = {
   company_vat: '',
 };
 
-// ── Inline editable input on invoice canvas ───────────────────────────────
 interface FieldProps extends React.InputHTMLAttributes<HTMLInputElement> {
   wrapClass?: string;
 }
@@ -69,18 +69,21 @@ const TA = ({ className = '', ...props }: TAProps) => (
 );
 
 export default function InvoiceGeneratorPage() {
-  const navigate      = useNavigate();
-  const { addToast }  = useToast();
-  const fileInputRef  = useRef<HTMLInputElement>(null);
+  const navigate     = useNavigate();
+  const { addToast } = useToast();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Template state
   const [templateExists,    setTemplateExists]    = useState(false);
   const [templateUploading, setTemplateUploading] = useState(false);
   const [useTemplate,       setUseTemplate]       = useState(false);
 
-  // Orders list
-  const [orders,          setOrders]          = useState<any[]>([]);
-  const [selectedOrderId, setSelectedOrderId] = useState('');
+  // Orders
+  const [orders,         setOrders]         = useState<any[]>([]);
+  const [orderSearch,    setOrderSearch]    = useState('');
+  const [showOrderDrop,  setShowOrderDrop]  = useState(false);
+  const [connectedOrder, setConnectedOrder] = useState<any | null>(null);
+  const orderDropRef = useRef<HTMLDivElement>(null);
 
   // Company info
   const [company, setCompany] = useState({ ...DEFAULT_COMPANY });
@@ -111,9 +114,12 @@ export default function InvoiceGeneratorPage() {
     bank_name: '', iban: '', bic: '', bank_address: '',
   });
 
-  const [generating, setGenerating] = useState(false);
+  // Preview
+  const [previewing,  setPreviewing]  = useState(false);
+  const [previewUrl,  setPreviewUrl]  = useState<string | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
 
-  // ── On mount: load template status + orders ──────────────────────────
+  // ── Load template + orders on mount ──────────────────────────────────
   useEffect(() => {
     api.get('/invoice-template').then(r => {
       setTemplateExists(r.data.exists);
@@ -142,7 +148,18 @@ export default function InvoiceGeneratorPage() {
       .catch(() => {});
   }, []);
 
-  // ── Template upload ──────────────────────────────────────────────────
+  // Close order dropdown on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (orderDropRef.current && !orderDropRef.current.contains(e.target as Node)) {
+        setShowOrderDrop(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  // ── Template upload / remove ─────────────────────────────────────────
   const handleTemplateUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -172,7 +189,7 @@ export default function InvoiceGeneratorPage() {
         bic:          cfg.bic          || prev.bic,
         bank_address: cfg.bank_address || prev.bank_address,
       }));
-      addToast('Template uploaded and company details extracted', 'success');
+      addToast('Template uploaded', 'success');
     } catch {
       addToast('Failed to upload template', 'error');
     } finally {
@@ -192,31 +209,48 @@ export default function InvoiceGeneratorPage() {
     }
   };
 
-  // ── Auto-fill from order ─────────────────────────────────────────────
-  const applyOrder = async (orderId: string) => {
-    if (!orderId) return;
+  // ── Connect order ────────────────────────────────────────────────────
+  const connectOrder = async (order: any) => {
+    setShowOrderDrop(false);
+    setOrderSearch('');
     try {
-      const res   = await api.get(`/orders/${orderId}`);
-      const order = res.data;
-      setClient(prev => ({ ...prev, client_name: order.customer_name || prev.client_name }));
-      setHeader(prev => ({ ...prev, ref_number: order.order_number || prev.ref_number }));
-      if (Array.isArray(order.items) && order.items.length > 0) {
-        setItems(order.items.map((it: any, idx: number) => ({
+      const res = await api.get(`/orders/${order.id}`);
+      const o = res.data;
+      setConnectedOrder(o);
+      setClient(prev => ({
+        ...prev,
+        client_name:     o.customer_name    || prev.client_name,
+        billing_address: o.billing_address  || prev.billing_address,
+        contact_person:  o.contact_person   || prev.contact_person,
+      }));
+      setHeader(prev => ({
+        ...prev,
+        ref_number: o.order_number || prev.ref_number,
+        po_number:  o.po_number    || prev.po_number,
+      }));
+      if (Array.isArray(o.items) && o.items.length > 0) {
+        setItems(o.items.map((it: any, idx: number) => ({
           line:            idx + 1,
-          reference:       it.description || '',
+          reference:       it.sku || it.description || '',
           commercial_name: it.description || '',
           packaging:       it.packaging   || '',
           quantity_lb:     it.quantity ? toLbs(parseFloat(it.quantity), it.unit || 'lbs').toFixed(2) : '',
           price_per_lb:    it.unit_price ? pricePerLb(parseFloat(it.unit_price), it.unit || 'lbs').toFixed(4) : '',
         })));
       }
-      if (order.payment_terms) setTerms(prev => ({ ...prev, payment_terms: order.payment_terms }));
-      if (order.inco_terms)    setTerms(prev => ({ ...prev, incoterm: order.inco_terms }));
-      if (order.delivery_date) setTerms(prev => ({ ...prev, requested_delivery_date: order.delivery_date }));
-      addToast('Order details applied', 'success');
+      if (o.payment_terms)  setTerms(prev => ({ ...prev, payment_terms: o.payment_terms }));
+      if (o.inco_terms)     setTerms(prev => ({ ...prev, incoterm: o.inco_terms }));
+      if (o.delivery_date)  setTerms(prev => ({ ...prev, requested_delivery_date: o.delivery_date }));
+      if (o.destination)    setTerms(prev => ({ ...prev, delivery: o.destination }));
+      addToast(`Loaded: ${o.order_number}`, 'success');
     } catch {
       addToast('Could not load order details', 'error');
     }
+  };
+
+  const disconnectOrder = () => {
+    setConnectedOrder(null);
+    setOrderSearch('');
   };
 
   // ── Line item helpers ────────────────────────────────────────────────
@@ -230,50 +264,70 @@ export default function InvoiceGeneratorPage() {
     (sum, it) => sum + (parseFloat(it.quantity_lb) || 0) * (parseFloat(it.price_per_lb) || 0), 0
   );
 
-  // ── Generate PDF ─────────────────────────────────────────────────────
-  const handleGenerate = async () => {
+  // ── Build payload ────────────────────────────────────────────────────
+  const buildPayload = () => ({
+    use_template: useTemplate && templateExists,
+    ...company, ...header, ...client, ...terms, ...bank,
+    items: items.map(it => ({
+      line:            it.line,
+      reference:       it.reference,
+      commercial_name: it.commercial_name,
+      packaging:       it.packaging,
+      quantity_lb:     parseFloat(it.quantity_lb)  || 0,
+      price_per_lb:    parseFloat(it.price_per_lb) || 0,
+    })),
+  });
+
+  // ── Preview PDF ──────────────────────────────────────────────────────
+  const handlePreview = async () => {
     if (!header.invoice_number.trim()) { addToast('Please enter an invoice number', 'error'); return; }
-    const payload = {
-      use_template: useTemplate && templateExists,
-      ...company, ...header, ...client, ...terms, ...bank,
-      items: items.map(it => ({
-        line:            it.line,
-        reference:       it.reference,
-        commercial_name: it.commercial_name,
-        packaging:       it.packaging,
-        quantity_lb:     parseFloat(it.quantity_lb)  || 0,
-        price_per_lb:    parseFloat(it.price_per_lb) || 0,
-      })),
-    };
-    setGenerating(true);
+    setPreviewing(true);
     try {
-      const res = await api.post('/invoice-generate', payload, { responseType: 'blob' });
-      const url = URL.createObjectURL(res.data);
-      const a   = document.createElement('a');
-      a.href = url;
-      a.download = `${header.invoice_number || 'invoice'}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      addToast('PDF downloaded', 'success');
+      const res = await api.post('/invoice-generate', buildPayload(), { responseType: 'blob' });
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      setPreviewUrl(url);
+      setShowPreview(true);
     } catch {
-      addToast('Failed to generate PDF', 'error');
+      addToast('Failed to generate preview', 'error');
     } finally {
-      setGenerating(false);
+      setPreviewing(false);
     }
   };
 
+  // ── Download ─────────────────────────────────────────────────────────
+  const handleDownload = () => {
+    if (!previewUrl) return;
+    const a = document.createElement('a');
+    a.href = previewUrl;
+    a.download = `${header.invoice_number || 'invoice'}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    addToast('PDF downloaded', 'success');
+  };
+
+  const closePreview = () => {
+    setShowPreview(false);
+  };
+
+  // ── Filtered orders for dropdown ─────────────────────────────────────
+  const filteredOrders = orders.filter(o => {
+    const q = orderSearch.toLowerCase();
+    return !q || (o.order_number || '').toLowerCase().includes(q) || (o.customer_name || '').toLowerCase().includes(q);
+  });
+
   return (
     <div className="space-y-4 max-w-5xl mx-auto pb-10">
-      {/* ── Toolbar ──────────────────────────────────────────────────── */}
+
+      {/* ── Toolbar ────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 flex-wrap">
         <button onClick={() => navigate('/invoices')} className="p-1.5 text-gray-400 hover:text-gray-700 rounded">
           <ArrowLeft size={18} />
         </button>
         <h1 className="text-lg font-bold text-gray-900 mr-2">Generate Invoice PDF</h1>
 
-        {/* Template badge */}
+        {/* Template controls */}
         <input
           ref={fileInputRef}
           type="file"
@@ -302,39 +356,115 @@ export default function InvoiceGeneratorPage() {
           </button>
         )}
 
-        {/* Order selector */}
-        <select
-          value={selectedOrderId}
-          onChange={e => { setSelectedOrderId(e.target.value); applyOrder(e.target.value); }}
-          className="border border-gray-300 rounded-lg px-2 py-1 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500"
-        >
-          <option value="">Load from order…</option>
-          {orders.map(o => (
-            <option key={o.id} value={String(o.id)}>
-              {o.order_number} — {o.customer_name || 'Customer'}
-            </option>
-          ))}
-        </select>
-
-        {/* Generate */}
+        {/* Preview button in toolbar */}
         <div className="ml-auto">
-          <Button onClick={handleGenerate} disabled={generating}>
-            {generating
+          <Button onClick={handlePreview} disabled={previewing}>
+            {previewing
               ? <><Loader2 size={16} className="animate-spin" /> Generating…</>
-              : <><FileDown size={16} /> Generate &amp; Download PDF</>
+              : <><Eye size={16} /> Preview Invoice</>
             }
           </Button>
         </div>
       </div>
 
-      {/* ── Invoice Canvas ────────────────────────────────────────────── */}
+      {/* ── Order Connection Card ───────────────────────────────────────── */}
+      <div className={`rounded-xl border-2 transition-colors ${connectedOrder ? 'border-green-200 bg-green-50' : 'border-dashed border-gray-200 bg-gray-50'}`}>
+        {connectedOrder ? (
+          /* Connected state */
+          <div className="px-5 py-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
+                  <CheckCircle size={18} className="text-green-600" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-green-900">
+                    Connected to order: <span className="font-bold">{connectedOrder.order_number}</span>
+                  </p>
+                  <div className="flex flex-wrap gap-3 mt-1 text-xs text-green-700">
+                    {connectedOrder.customer_name && (
+                      <span>Customer: <span className="font-medium">{connectedOrder.customer_name}</span></span>
+                    )}
+                    {connectedOrder.items?.length > 0 && (
+                      <span>{connectedOrder.items.length} line item{connectedOrder.items.length !== 1 ? 's' : ''} loaded</span>
+                    )}
+                    {connectedOrder.inco_terms && (
+                      <span>Incoterm: <span className="font-medium">{connectedOrder.inco_terms}</span></span>
+                    )}
+                    {connectedOrder.payment_terms && (
+                      <span>Terms: <span className="font-medium">{connectedOrder.payment_terms}</span></span>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={disconnectOrder}
+                className="flex items-center gap-1 text-xs text-green-700 hover:text-red-600 border border-green-200 hover:border-red-200 rounded-full px-3 py-1 transition-colors"
+              >
+                <X size={11} /> Disconnect
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* No order connected */
+          <div className="px-5 py-4">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0">
+                <ShoppingCart size={16} className="text-gray-400" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-700">Connect to an Order <span className="text-gray-400 font-normal">(optional)</span></p>
+                <p className="text-xs text-gray-400 mt-0.5">Auto-fill client details and line items from a customer order</p>
+              </div>
+              {/* Order search dropdown */}
+              <div className="relative flex-shrink-0" ref={orderDropRef}>
+                <button
+                  onClick={() => setShowOrderDrop(v => !v)}
+                  className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50 shadow-sm"
+                >
+                  <Search size={14} className="text-gray-400" />
+                  <span>Select order…</span>
+                </button>
+                {showOrderDrop && (
+                  <div className="absolute right-0 top-full mt-1 w-80 bg-white border border-gray-200 rounded-xl shadow-xl z-50">
+                    <div className="p-2 border-b border-gray-100">
+                      <input
+                        autoFocus
+                        type="text"
+                        value={orderSearch}
+                        onChange={e => setOrderSearch(e.target.value)}
+                        placeholder="Search by order # or customer…"
+                        className="w-full text-sm px-3 py-1.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                      />
+                    </div>
+                    <div className="max-h-56 overflow-y-auto divide-y divide-gray-50">
+                      {filteredOrders.length === 0 ? (
+                        <p className="px-4 py-3 text-sm text-gray-400 text-center">No orders found</p>
+                      ) : filteredOrders.map(o => (
+                        <button
+                          key={o.id}
+                          onClick={() => connectOrder(o)}
+                          className="w-full text-left px-4 py-2.5 hover:bg-primary-50 transition-colors"
+                        >
+                          <p className="text-sm font-medium text-gray-900">{o.order_number}</p>
+                          <p className="text-xs text-gray-500">{o.customer_name || 'No customer'}</p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Invoice Canvas ──────────────────────────────────────────────── */}
       <div className="bg-white shadow-xl rounded-sm border border-gray-200 overflow-hidden">
 
         {/* Teal header */}
         <div className="bg-teal-600 text-white px-8 py-6">
           <div className="flex items-start justify-between gap-6">
-
-            {/* Left: company info */}
             <div className="flex-1 min-w-0 space-y-1">
               <F
                 value={company.company_name}
@@ -365,7 +495,6 @@ export default function InvoiceGeneratorPage() {
               </div>
             </div>
 
-            {/* Right: INVOICE + numbers */}
             <div className="text-right flex-shrink-0">
               <h1 className="text-3xl font-bold uppercase tracking-widest mb-3 text-white">INVOICE</h1>
               <div className="space-y-1 text-sm">
@@ -459,54 +588,36 @@ export default function InvoiceGeneratorPage() {
                     <tr key={idx} className="hover:bg-gray-50 group">
                       <td className="px-3 py-2 text-center text-gray-400 text-xs">{it.line}</td>
                       <td className="px-3 py-2">
-                        <input
-                          type="text" value={it.reference}
-                          onChange={e => updateItem(idx, 'reference', e.target.value)}
+                        <input type="text" value={it.reference} onChange={e => updateItem(idx, 'reference', e.target.value)}
                           className="w-full border-b border-dashed border-gray-200 focus:border-teal-400 bg-transparent focus:outline-none text-sm placeholder-gray-300"
-                          placeholder="Ref"
-                        />
+                          placeholder="Ref" />
                       </td>
                       <td className="px-3 py-2">
-                        <input
-                          type="text" value={it.commercial_name}
-                          onChange={e => updateItem(idx, 'commercial_name', e.target.value)}
+                        <input type="text" value={it.commercial_name} onChange={e => updateItem(idx, 'commercial_name', e.target.value)}
                           className="w-full border-b border-dashed border-gray-200 focus:border-teal-400 bg-transparent focus:outline-none text-sm placeholder-gray-300"
-                          placeholder="Product name"
-                        />
+                          placeholder="Product name" />
                       </td>
                       <td className="px-3 py-2">
-                        <input
-                          type="text" value={it.packaging}
-                          onChange={e => updateItem(idx, 'packaging', e.target.value)}
+                        <input type="text" value={it.packaging} onChange={e => updateItem(idx, 'packaging', e.target.value)}
                           className="w-full border-b border-dashed border-gray-200 focus:border-teal-400 bg-transparent focus:outline-none text-sm placeholder-gray-300"
-                          placeholder="25kg bags"
-                        />
+                          placeholder="25kg bags" />
                       </td>
                       <td className="px-3 py-2">
-                        <input
-                          type="number" value={it.quantity_lb}
-                          onChange={e => updateItem(idx, 'quantity_lb', e.target.value)}
+                        <input type="number" value={it.quantity_lb} onChange={e => updateItem(idx, 'quantity_lb', e.target.value)}
                           className="w-full border-b border-dashed border-gray-200 focus:border-teal-400 bg-transparent focus:outline-none text-sm text-right placeholder-gray-300"
-                          placeholder="0.00"
-                        />
+                          placeholder="0.00" />
                       </td>
                       <td className="px-3 py-2">
-                        <input
-                          type="number" value={it.price_per_lb} step="0.0001"
-                          onChange={e => updateItem(idx, 'price_per_lb', e.target.value)}
+                        <input type="number" value={it.price_per_lb} step="0.0001" onChange={e => updateItem(idx, 'price_per_lb', e.target.value)}
                           className="w-full border-b border-dashed border-gray-200 focus:border-teal-400 bg-transparent focus:outline-none text-sm text-right placeholder-gray-300"
-                          placeholder="0.0000"
-                        />
+                          placeholder="0.0000" />
                       </td>
                       <td className="px-3 py-2 text-right font-medium text-gray-700 text-xs whitespace-nowrap">
                         {total ? total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
                       </td>
                       <td className="px-1 py-2">
                         {items.length > 1 && (
-                          <button
-                            onClick={() => removeItem(idx)}
-                            className="opacity-0 group-hover:opacity-100 p-0.5 text-gray-300 hover:text-red-500 transition-opacity"
-                          >
+                          <button onClick={() => removeItem(idx)} className="opacity-0 group-hover:opacity-100 p-0.5 text-gray-300 hover:text-red-500 transition-opacity">
                             <Trash2 size={12} />
                           </button>
                         )}
@@ -527,10 +638,7 @@ export default function InvoiceGeneratorPage() {
               </tfoot>
             </table>
           </div>
-          <button
-            onClick={addItem}
-            className="mt-2 flex items-center gap-1 text-xs text-teal-600 hover:text-teal-800 transition-colors"
-          >
+          <button onClick={addItem} className="mt-2 flex items-center gap-1 text-xs text-teal-600 hover:text-teal-800 transition-colors">
             <Plus size={13} /> Add line
           </button>
         </div>
@@ -541,58 +649,27 @@ export default function InvoiceGeneratorPage() {
           <div className="grid grid-cols-2 gap-x-10 gap-y-3 text-sm text-gray-700">
             <div className="flex items-start gap-2">
               <span className="text-gray-500 shrink-0 w-36 text-xs pt-0.5">Payment Terms:</span>
-              <F
-                value={terms.payment_terms}
-                onChange={e => setTerms({ ...terms, payment_terms: e.target.value })}
-                className="text-gray-800 flex-1 w-full placeholder-gray-300"
-                placeholder="e.g. Net 30"
-              />
+              <F value={terms.payment_terms} onChange={e => setTerms({ ...terms, payment_terms: e.target.value })} className="text-gray-800 flex-1 w-full placeholder-gray-300" placeholder="e.g. Net 30" />
             </div>
             <div className="flex items-start gap-2">
               <span className="text-gray-500 shrink-0 w-36 text-xs pt-0.5">Description:</span>
-              <F
-                value={terms.description}
-                onChange={e => setTerms({ ...terms, description: e.target.value })}
-                className="text-gray-800 flex-1 w-full placeholder-gray-300"
-                placeholder="Order description"
-              />
+              <F value={terms.description} onChange={e => setTerms({ ...terms, description: e.target.value })} className="text-gray-800 flex-1 w-full placeholder-gray-300" placeholder="Order description" />
             </div>
             <div className="flex items-start gap-2">
               <span className="text-gray-500 shrink-0 w-36 text-xs pt-0.5">Incoterm:</span>
-              <F
-                value={terms.incoterm}
-                onChange={e => setTerms({ ...terms, incoterm: e.target.value })}
-                className="text-gray-800 flex-1 w-full placeholder-gray-300"
-                placeholder="e.g. FOB, CIF"
-              />
+              <F value={terms.incoterm} onChange={e => setTerms({ ...terms, incoterm: e.target.value })} className="text-gray-800 flex-1 w-full placeholder-gray-300" placeholder="e.g. FOB, CIF" />
             </div>
             <div className="flex items-start gap-2">
               <span className="text-gray-500 shrink-0 w-36 text-xs pt-0.5">Delivery:</span>
-              <F
-                value={terms.delivery}
-                onChange={e => setTerms({ ...terms, delivery: e.target.value })}
-                className="text-gray-800 flex-1 w-full placeholder-gray-300"
-                placeholder="Port / destination"
-              />
+              <F value={terms.delivery} onChange={e => setTerms({ ...terms, delivery: e.target.value })} className="text-gray-800 flex-1 w-full placeholder-gray-300" placeholder="Port / destination" />
             </div>
             <div className="flex items-start gap-2">
               <span className="text-gray-500 shrink-0 w-36 text-xs pt-0.5">Requested Delivery:</span>
-              <F
-                type="date"
-                value={terms.requested_delivery_date}
-                onChange={e => setTerms({ ...terms, requested_delivery_date: e.target.value })}
-                className="text-gray-800 flex-1 placeholder-gray-300"
-              />
+              <F type="date" value={terms.requested_delivery_date} onChange={e => setTerms({ ...terms, requested_delivery_date: e.target.value })} className="text-gray-800 flex-1 placeholder-gray-300" />
             </div>
             <div className="flex items-start gap-2 col-span-2">
               <span className="text-gray-500 shrink-0 w-36 text-xs pt-0.5">Remarks:</span>
-              <TA
-                value={terms.remarks}
-                onChange={e => setTerms({ ...terms, remarks: e.target.value })}
-                rows={2}
-                className="text-gray-800 flex-1 placeholder-gray-300"
-                placeholder="Additional remarks…"
-              />
+              <TA value={terms.remarks} onChange={e => setTerms({ ...terms, remarks: e.target.value })} rows={2} className="text-gray-800 flex-1 placeholder-gray-300" placeholder="Additional remarks…" />
             </div>
           </div>
         </div>
@@ -623,15 +700,58 @@ export default function InvoiceGeneratorPage() {
         )}
       </div>
 
-      {/* Bottom generate button */}
-      <div className="flex justify-end">
-        <Button onClick={handleGenerate} disabled={generating} size="lg">
-          {generating
+      {/* ── Bottom action bar ───────────────────────────────────────────── */}
+      <div className="flex items-center justify-between bg-white border border-gray-200 rounded-xl px-5 py-3 shadow-sm">
+        <p className="text-sm text-gray-500">
+          {connectedOrder
+            ? <>Linked to <span className="font-medium text-gray-800">{connectedOrder.order_number}</span> · {connectedOrder.customer_name}</>
+            : 'Fill in the invoice details above, then preview before downloading.'
+          }
+        </p>
+        <Button onClick={handlePreview} disabled={previewing} size="lg">
+          {previewing
             ? <><Loader2 size={18} className="animate-spin" /> Generating…</>
-            : <><FileDown size={18} /> Generate &amp; Download PDF</>
+            : <><Eye size={18} /> Preview Invoice</>
           }
         </Button>
       </div>
+
+      {/* ── PDF Preview Modal ───────────────────────────────────────────── */}
+      {showPreview && previewUrl && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-gray-900/80 backdrop-blur-sm">
+          {/* Modal header */}
+          <div className="flex items-center justify-between px-5 py-3 bg-white border-b border-gray-200 flex-shrink-0">
+            <div className="flex items-center gap-3">
+              <FileText size={18} className="text-teal-600" />
+              <div>
+                <p className="text-sm font-semibold text-gray-900">
+                  Invoice Preview: <span className="text-teal-600">{header.invoice_number || 'Draft'}</span>
+                </p>
+                <p className="text-xs text-gray-500">Review the invoice below. Download when you're satisfied.</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={closePreview}
+                className="px-3 py-1.5 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                ← Back to edit
+              </button>
+              <Button onClick={handleDownload}>
+                <FileDown size={16} /> Download PDF
+              </Button>
+            </div>
+          </div>
+          {/* PDF viewer */}
+          <div className="flex-1 overflow-hidden p-4">
+            <iframe
+              src={previewUrl}
+              className="w-full h-full rounded-lg bg-white shadow-xl"
+              title="Invoice Preview"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
