@@ -371,7 +371,7 @@ export default function AdminUsersPage() {
       <Modal open={showInviteModal} onClose={() => setShowInviteModal(false)} title="Invite User via Email" size="lg">
         <div className="space-y-4">
           {inviteLink ? (
-            <div className="space-y-3">
+            <div className="space-y-4">
               {/* Email delivery status */}
               {inviteEmailResult?.sent ? (
                 <div className="flex items-start gap-2 bg-green-50 border border-green-200 text-green-800 text-sm rounded-lg px-4 py-3">
@@ -382,46 +382,58 @@ export default function AdminUsersPage() {
                 <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg px-4 py-3">
                   <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
                   <div>
-                    <p className="font-medium">Email not configured — invitation was created but no email was sent.</p>
-                    <p className="mt-1 text-xs text-amber-700">Set <code className="bg-amber-100 px-1 rounded">RESEND_API_KEY</code> and <code className="bg-amber-100 px-1 rounded">RESEND_FROM_EMAIL</code> (a verified domain address) in your Railway environment variables, then use the Resend button below.</p>
+                    <p className="font-medium">Email not configured — share the link below instead.</p>
+                    <p className="mt-1 text-xs text-amber-700">Add <code className="bg-amber-100 px-1 rounded">RESEND_API_KEY</code> to your server environment variables to enable email sending.</p>
+                  </div>
+                </div>
+              ) : inviteEmailResult?.error?.includes('verify a domain') || inviteEmailResult?.error?.includes('testing emails') ? (
+                <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg px-4 py-3">
+                  <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="font-medium">Resend domain not verified — share the link below instead.</p>
+                    <p className="mt-1 text-xs text-amber-700">
+                      To send emails to any address, verify a domain at{' '}
+                      <a href="https://resend.com/domains" target="_blank" rel="noreferrer" className="underline font-medium">resend.com/domains</a>
+                      {', '}then set <code className="bg-amber-100 px-1 rounded">RESEND_FROM_EMAIL</code> to an address on that domain (e.g. <code className="bg-amber-100 px-1 rounded">noreply@yourdomain.com</code>).
+                    </p>
                   </div>
                 </div>
               ) : (
                 <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-800 text-sm rounded-lg px-4 py-3">
                   <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
                   <div>
-                    <p className="font-medium">Email delivery failed — invitation was created.</p>
+                    <p className="font-medium">Email delivery failed — share the link below instead.</p>
                     {inviteEmailResult?.error && (
                       <p className="mt-1 text-xs text-red-700 font-mono break-all">{inviteEmailResult.error}</p>
                     )}
-                    <p className="mt-1 text-xs text-red-700">
-                      Note: Resend's <code className="bg-red-100 px-1 rounded">onboarding@resend.dev</code> from-address only delivers to your own verified Resend account email. Set <code className="bg-red-100 px-1 rounded">RESEND_FROM_EMAIL</code> to an address on a domain you've verified in Resend.
-                    </p>
                   </div>
                 </div>
               )}
 
-              {/* Invite link */}
-              <div className="space-y-1">
-                <label className="block text-sm font-medium text-gray-700">Invite Link</label>
+              {/* Invite link — primary action */}
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-3">
+                <div>
+                  <p className="text-sm font-medium text-gray-900">Invite link for <span className="text-primary-600">{inviteForm.email}</span></p>
+                  <p className="text-xs text-gray-500 mt-0.5">Send this link to the person you're inviting — it expires in 7 days.</p>
+                </div>
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
                     readOnly
                     value={inviteLink}
-                    className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm bg-gray-50"
+                    className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white font-mono text-xs"
                   />
-                  <button
-                    onClick={() => copyToClipboard(inviteLink)}
-                    className="p-2 text-gray-500 hover:text-primary-600 rounded-lg border border-gray-300 hover:border-primary-300"
-                    title="Copy link"
-                  >
-                    <Copy size={16} />
-                  </button>
                 </div>
-                <p className="text-xs text-gray-500">Share this link directly with the recipient if email delivery fails.</p>
+                <button
+                  onClick={() => copyToClipboard(inviteLink)}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700 transition-colors"
+                >
+                  <Copy size={15} />
+                  Copy Invite Link
+                </button>
               </div>
-              <div className="flex justify-end pt-2">
+
+              <div className="flex justify-end">
                 <Button onClick={() => setShowInviteModal(false)}>Done</Button>
               </div>
             </div>
