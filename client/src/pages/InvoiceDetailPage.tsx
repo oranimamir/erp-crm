@@ -558,7 +558,7 @@ export default function InvoiceDetailPage() {
                           {entry.changed_by_name && (
                             <span className="font-medium">{entry.changed_by_name}</span>
                           )}
-                          <span>{formatDateTime(entry.created_at || entry.date)}</span>
+                          <span>{formatDateTime(entry.created_at)}</span>
                         </div>
                         {entry.notes && (
                           <p className="mt-1 text-xs text-gray-500 bg-gray-50 rounded p-2">{entry.notes}</p>

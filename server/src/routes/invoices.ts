@@ -203,7 +203,7 @@ router.post('/:id/wire-transfers', uploadWireTransfer.single('file'), async (req
 
   const payment_date = req.body.payment_date || req.body.transfer_date || new Date().toISOString().split('T')[0];
   const bank_reference = req.body.bank_reference || null;
-  const amount = req.body.amount ? parseFloat(req.body.amount) : invoice.amount;
+  const amount = req.body.amount != null ? parseFloat(req.body.amount) : invoice.amount;
 
   const file_path = req.file ? req.file.filename : null;
   const file_name = req.file ? req.file.originalname : null;

@@ -79,6 +79,7 @@ export default function DashboardPage() {
           </div>
           <div className="divide-y divide-red-100">
             {overdueInvoices.map((inv: any) => {
+              if (!inv.due_date) return null;
               const daysOverdue = Math.floor((Date.now() - new Date(inv.due_date).getTime()) / (1000 * 60 * 60 * 24));
               return (
                 <Link key={inv.id} to={`/invoices/${inv.id}`} className="flex items-center justify-between py-2 hover:bg-red-100 rounded px-2 -mx-2">
