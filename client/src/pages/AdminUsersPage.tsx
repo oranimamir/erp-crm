@@ -13,7 +13,7 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
-import { Plus, Users, Pencil, Trash2, Mail, Clock, XCircle, Copy, Bell, BellOff, RefreshCw, CheckCircle, AlertTriangle } from 'lucide-react';
+import { Plus, Users, Pencil, Trash2, UserPlus, Clock, XCircle, Copy, Bell, BellOff, CheckCircle, Link } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 
 const roleOptions = [
@@ -42,8 +42,7 @@ export default function AdminUsersPage() {
   const [inviteSaving, setInviteSaving] = useState(false);
   const [invitations, setInvitations] = useState<any[]>([]);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
-  const [inviteEmailResult, setInviteEmailResult] = useState<{ sent: boolean; error?: string | null; not_configured?: boolean } | null>(null);
-  const [resendingId, setResendingId] = useState<number | null>(null);
+  const [copied, setCopied] = useState(false);
 
   // Admin guard
   useEffect(() => {
@@ -124,34 +123,12 @@ export default function AdminUsersPage() {
     try {
       const res = await api.post('/users/invite', inviteForm);
       setInviteLink(res.data.invite_link);
-      setInviteEmailResult({
-        sent: res.data.email_sent,
-        error: res.data.email_error,
-        not_configured: res.data.email_not_configured,
-      });
+      setCopied(false);
       fetchInvitations();
     } catch (err: any) {
-      addToast(err.response?.data?.error || 'Failed to send invite', 'error');
+      addToast(err.response?.data?.error || 'Failed to create invite', 'error');
     } finally {
       setInviteSaving(false);
-    }
-  };
-
-  const handleResendInvite = async (inviteId: number) => {
-    setResendingId(inviteId);
-    try {
-      const res = await api.post(`/users/invitations/${inviteId}/resend`, {});
-      if (res.data.email_sent) {
-        addToast('Invitation email resent successfully', 'success');
-      } else if (res.data.email_not_configured) {
-        addToast('Email not configured on server (RESEND_API_KEY missing)', 'error');
-      } else {
-        addToast(`Email failed: ${res.data.email_error || 'Unknown error'}`, 'error');
-      }
-    } catch (err: any) {
-      addToast(err.response?.data?.error || 'Failed to resend', 'error');
-    } finally {
-      setResendingId(null);
     }
   };
 
@@ -174,9 +151,14 @@ export default function AdminUsersPage() {
     }
   };
 
-  const copyToClipboard = (text: string) => {
+  const copyToClipboard = (text: string, showFeedback = false) => {
     navigator.clipboard.writeText(text);
-    addToast('Link copied to clipboard', 'success');
+    if (showFeedback) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } else {
+      addToast('Link copied to clipboard', 'success');
+    }
   };
 
   if (currentUser?.role !== 'admin') return null;
@@ -187,7 +169,7 @@ export default function AdminUsersPage() {
         <h1 className="text-2xl font-bold text-gray-900">User Management</h1>
         <div className="flex items-center gap-2">
           <Button variant="secondary" onClick={openCreate}><Plus size={16} /> Add User</Button>
-          <Button onClick={() => { setInviteForm({ email: '', display_name: '', role: 'user' }); setInviteLink(null); setInviteEmailResult(null); setShowInviteModal(true); }}><Mail size={16} /> Invite via Email</Button>
+          <Button onClick={() => { setInviteForm({ email: '', display_name: '', role: 'user' }); setInviteLink(null); setCopied(false); setShowInviteModal(true); }}><UserPlus size={16} /> Invite User</Button>
         </div>
       </div>
 
@@ -337,25 +319,15 @@ export default function AdminUsersPage() {
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-end gap-1">
                           {!expired && (
-                            <>
-                              <button
-                                onClick={() => copyToClipboard(invLink)}
-                                className="p-1.5 text-gray-400 hover:text-primary-600 rounded"
-                                title="Copy invite link"
-                              >
-                                <Copy size={16} />
-                              </button>
-                              <button
-                                onClick={() => handleResendInvite(inv.id)}
-                                disabled={resendingId === inv.id}
-                                className="p-1.5 text-gray-400 hover:text-primary-600 rounded disabled:opacity-50"
-                                title="Resend invitation email"
-                              >
-                                <RefreshCw size={16} className={resendingId === inv.id ? 'animate-spin' : ''} />
-                              </button>
-                            </>
+                            <button
+                              onClick={() => copyToClipboard(invLink)}
+                              className="p-1.5 text-gray-400 hover:text-primary-600 rounded"
+                              title="Copy invite link"
+                            >
+                              <Copy size={16} />
+                            </button>
                           )}
-                          <button onClick={() => handleRevokeInvite(inv.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded" title="Revoke"><XCircle size={16} /></button>
+                          <button onClick={() => handleRevokeInvite(inv.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded" title="Revoke invitation"><XCircle size={16} /></button>
                         </div>
                       </td>
                     </tr>
@@ -368,87 +340,59 @@ export default function AdminUsersPage() {
       )}
 
       {/* Invite User Modal */}
-      <Modal open={showInviteModal} onClose={() => setShowInviteModal(false)} title="Invite User via Email" size="lg">
-        <div className="space-y-4">
-          {inviteLink ? (
-            <div className="space-y-4">
-              {/* Email delivery status */}
-              {inviteEmailResult?.sent ? (
-                <div className="flex items-start gap-2 bg-green-50 border border-green-200 text-green-800 text-sm rounded-lg px-4 py-3">
-                  <CheckCircle size={16} className="mt-0.5 flex-shrink-0" />
-                  <span>Invitation email sent successfully to <strong>{inviteForm.email}</strong>.</span>
-                </div>
-              ) : inviteEmailResult?.not_configured ? (
-                <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg px-4 py-3">
-                  <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
-                  <div>
-                    <p className="font-medium">Email not configured — share the link below instead.</p>
-                    <p className="mt-1 text-xs text-amber-700">Add <code className="bg-amber-100 px-1 rounded">RESEND_API_KEY</code> to your server environment variables to enable email sending.</p>
-                  </div>
-                </div>
-              ) : inviteEmailResult?.error?.includes('verify a domain') || inviteEmailResult?.error?.includes('testing emails') ? (
-                <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg px-4 py-3">
-                  <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
-                  <div>
-                    <p className="font-medium">Resend domain not verified — share the link below instead.</p>
-                    <p className="mt-1 text-xs text-amber-700">
-                      To send emails to any address, verify a domain at{' '}
-                      <a href="https://resend.com/domains" target="_blank" rel="noreferrer" className="underline font-medium">resend.com/domains</a>
-                      {', '}then set <code className="bg-amber-100 px-1 rounded">RESEND_FROM_EMAIL</code> to an address on that domain (e.g. <code className="bg-amber-100 px-1 rounded">noreply@yourdomain.com</code>).
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-800 text-sm rounded-lg px-4 py-3">
-                  <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
-                  <div>
-                    <p className="font-medium">Email delivery failed — share the link below instead.</p>
-                    {inviteEmailResult?.error && (
-                      <p className="mt-1 text-xs text-red-700 font-mono break-all">{inviteEmailResult.error}</p>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Invite link — primary action */}
-              <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-3">
-                <div>
-                  <p className="text-sm font-medium text-gray-900">Invite link for <span className="text-primary-600">{inviteForm.email}</span></p>
-                  <p className="text-xs text-gray-500 mt-0.5">Send this link to the person you're inviting — it expires in 7 days.</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    readOnly
-                    value={inviteLink}
-                    className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white font-mono text-xs"
-                  />
-                </div>
-                <button
-                  onClick={() => copyToClipboard(inviteLink)}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700 transition-colors"
-                >
-                  <Copy size={15} />
-                  Copy Invite Link
-                </button>
+      <Modal open={showInviteModal} onClose={() => setShowInviteModal(false)} title="Invite User" size="lg">
+        {inviteLink ? (
+          <div className="space-y-5">
+            {/* Success header */}
+            <div className="flex items-center gap-3 p-4 bg-green-50 border border-green-200 rounded-xl">
+              <div className="flex-shrink-0 w-9 h-9 rounded-full bg-green-100 flex items-center justify-center">
+                <CheckCircle size={18} className="text-green-600" />
               </div>
-
-              <div className="flex justify-end">
-                <Button onClick={() => setShowInviteModal(false)}>Done</Button>
+              <div>
+                <p className="text-sm font-semibold text-green-900">Invitation created</p>
+                <p className="text-xs text-green-700 mt-0.5">For <span className="font-medium">{inviteForm.email}</span> · expires in 7 days</p>
               </div>
             </div>
-          ) : (
-            <>
-              <Input label="Email *" type="email" value={inviteForm.email} onChange={e => setInviteForm({ ...inviteForm, email: e.target.value })} placeholder="user@example.com" />
-              <Input label="Display Name" value={inviteForm.display_name} onChange={e => setInviteForm({ ...inviteForm, display_name: e.target.value })} placeholder="John Doe" />
-              <Select label="Role" value={inviteForm.role} onChange={e => setInviteForm({ ...inviteForm, role: e.target.value })} options={roleOptions} />
-              <div className="flex justify-end gap-2 pt-2">
-                <Button variant="secondary" onClick={() => setShowInviteModal(false)}>Cancel</Button>
-                <Button onClick={handleInvite} disabled={inviteSaving}>{inviteSaving ? 'Sending...' : 'Send Invitation'}</Button>
+
+            {/* Invite link */}
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-700">Invite link</label>
+              <p className="text-xs text-gray-500">Copy this link and send it to the new user via WhatsApp, email, or any other channel.</p>
+              <div className="flex items-center gap-2 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                <Link size={14} className="flex-shrink-0 text-gray-400" />
+                <span className="flex-1 text-xs font-mono text-gray-700 truncate">{inviteLink}</span>
               </div>
-            </>
-          )}
-        </div>
+              <button
+                onClick={() => copyToClipboard(inviteLink, true)}
+                className={`w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-colors ${
+                  copied
+                    ? 'bg-green-600 text-white'
+                    : 'bg-primary-600 text-white hover:bg-primary-700'
+                }`}
+              >
+                {copied ? <CheckCircle size={15} /> : <Copy size={15} />}
+                {copied ? 'Copied!' : 'Copy Invite Link'}
+              </button>
+            </div>
+
+            <div className="flex justify-end pt-1">
+              <Button onClick={() => setShowInviteModal(false)}>Done</Button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-500">Enter the new user's details. An invite link will be generated for you to share with them.</p>
+            <Input label="Email address *" type="email" value={inviteForm.email} onChange={e => setInviteForm({ ...inviteForm, email: e.target.value })} placeholder="user@example.com" />
+            <Input label="Display Name" value={inviteForm.display_name} onChange={e => setInviteForm({ ...inviteForm, display_name: e.target.value })} placeholder="e.g. John Doe" />
+            <Select label="Role" value={inviteForm.role} onChange={e => setInviteForm({ ...inviteForm, role: e.target.value })} options={roleOptions} />
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="secondary" onClick={() => setShowInviteModal(false)}>Cancel</Button>
+              <Button onClick={handleInvite} disabled={inviteSaving}>
+                {inviteSaving ? 'Creating...' : <><UserPlus size={15} /> Generate Invite Link</>}
+              </Button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );
