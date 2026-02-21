@@ -81,6 +81,13 @@ export default function DashboardPage() {
             {overdueInvoices.map((inv: any) => {
               if (!inv.due_date) return null;
               const daysOverdue = Math.floor((Date.now() - new Date(inv.due_date).getTime()) / (1000 * 60 * 60 * 24));
+              const formattedAmount = (() => {
+                try {
+                  return new Intl.NumberFormat(undefined, { style: 'currency', currency: inv.currency || 'EUR' }).format(inv.amount);
+                } catch {
+                  return `${inv.currency ?? ''} ${Number(inv.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
+                }
+              })();
               return (
                 <Link key={inv.id} to={`/invoices/${inv.id}`} className="flex items-center justify-between py-2 hover:bg-red-100 rounded px-2 -mx-2">
                   <div>
@@ -88,9 +95,7 @@ export default function DashboardPage() {
                     <span className="text-sm text-red-700 ml-2">{inv.customer_name || inv.supplier_name}</span>
                   </div>
                   <div className="flex items-center gap-3">
-                    <span className="text-sm font-medium text-red-900">
-                      €{(inv.eur_amount ?? inv.amount)?.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                    </span>
+                    <span className="text-sm font-medium text-red-900">{formattedAmount}</span>
                     <span className="text-xs text-red-600 font-medium bg-red-100 px-2 py-0.5 rounded-full">
                       {daysOverdue} day{daysOverdue !== 1 ? 's' : ''} overdue
                     </span>
