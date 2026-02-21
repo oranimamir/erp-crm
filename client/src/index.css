@@ -17,3 +17,84 @@ body {
   @apply bg-gray-50 text-gray-900 antialiased;
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
 }
+
+/* ── Dark mode ────────────────────────────────────────────────────────────── */
+
+html.dark body {
+  background-color: #111827;
+  color: #f9fafb;
+}
+
+/* Backgrounds */
+html.dark .bg-white        { background-color: #1f2937; }
+html.dark .bg-gray-50      { background-color: #111827; }
+html.dark .bg-gray-100     { background-color: #1f2937; }
+html.dark .bg-gray-200     { background-color: #374151; }
+
+/* Text */
+html.dark .text-gray-900   { color: #f9fafb; }
+html.dark .text-gray-800   { color: #f3f4f6; }
+html.dark .text-gray-700   { color: #e5e7eb; }
+html.dark .text-gray-600   { color: #d1d5db; }
+html.dark .text-gray-500   { color: #9ca3af; }
+html.dark .text-gray-400   { color: #6b7280; }
+
+/* Borders */
+html.dark .border-gray-100 { border-color: #374151; }
+html.dark .border-gray-200 { border-color: #374151; }
+html.dark .border-gray-300 { border-color: #4b5563; }
+
+/* Dividers */
+html.dark .divide-gray-100 > * + * { border-color: #374151; }
+html.dark .divide-gray-200 > * + * { border-color: #374151; }
+
+/* Hover states */
+html.dark .hover\:bg-gray-50:hover  { background-color: #1f2937; }
+html.dark .hover\:bg-gray-100:hover { background-color: #374151; }
+
+/* Inputs, textareas, selects */
+html.dark input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+html.dark textarea,
+html.dark select {
+  background-color: #374151;
+  color: #f9fafb;
+  border-color: #4b5563;
+}
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: #6b7280;
+}
+
+/* Table header */
+html.dark thead,
+html.dark .bg-gray-50.border-b { background-color: #1f2937; }
+
+/* Shadows — soften in dark mode */
+html.dark .shadow-sm { box-shadow: 0 1px 3px 0 rgba(0,0,0,0.4); }
+
+/* Modals */
+html.dark .relative.bg-white { background-color: #1f2937; }
+
+/* Badge overrides — keep colored badges readable */
+html.dark .bg-green-100  { background-color: #064e3b; }
+html.dark .text-green-800 { color: #6ee7b7; }
+html.dark .bg-yellow-100 { background-color: #78350f; }
+html.dark .text-yellow-800 { color: #fcd34d; }
+html.dark .bg-blue-100   { background-color: #1e3a5f; }
+html.dark .text-blue-800  { color: #93c5fd; }
+html.dark .bg-red-100    { background-color: #7f1d1d; }
+html.dark .text-red-800   { color: #fca5a5; }
+html.dark .bg-purple-100 { background-color: #4c1d95; }
+html.dark .text-purple-800 { color: #c4b5fd; }
+html.dark .bg-gray-100.text-gray-700 { background-color: #374151; color: #d1d5db; }
+
+/* Red accent text (overdue) */
+html.dark .text-red-600  { color: #f87171; }
+html.dark .text-red-900  { color: #fca5a5; }
+html.dark .text-red-700  { color: #fca5a5; }
+html.dark .bg-red-50     { background-color: #450a0a; }
+html.dark .hover\:bg-red-100:hover { background-color: #7f1d1d; }
+html.dark .divide-red-100 > * + * { border-color: #7f1d1d; }
+
+/* Primary-50 highlight */
+html.dark .bg-primary-50 { background-color: #1e3a5f; }

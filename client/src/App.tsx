@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import { ToastProvider } from './contexts/ToastContext';
+import { ThemeProvider } from './contexts/ThemeContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
@@ -28,10 +29,12 @@ import NotFoundPage from './pages/NotFoundPage';
 import OperationsPage from './pages/OperationsPage';
 import OperationDetailPage from './pages/OperationDetailPage';
 import AnalyticsPage from './pages/AnalyticsPage';
+import SettingsPage from './pages/SettingsPage';
 
 export default function App() {
   return (
     <AuthProvider>
+      <ThemeProvider>
       <ToastProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
@@ -63,12 +66,14 @@ export default function App() {
               <Route path="/operations" element={<OperationsPage />} />
               <Route path="/operations/:id" element={<OperationDetailPage />} />
               <Route path="/analytics" element={<AnalyticsPage />} />
+              <Route path="/settings" element={<SettingsPage />} />
               <Route path="/admin/users" element={<AdminUsersPage />} />
               <Route path="*" element={<NotFoundPage />} />
             </Route>
           </Route>
         </Routes>
       </ToastProvider>
+      </ThemeProvider>
     </AuthProvider>
   );
 }

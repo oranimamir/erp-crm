@@ -152,4 +152,26 @@ router.post('/accept-invite', (req: Request, res: Response) => {
   });
 });
 
+router.post('/change-password', authenticateToken, (req: Request, res: Response) => {
+  const { current_password, new_password } = req.body;
+  if (!current_password || !new_password) {
+    res.status(400).json({ error: 'Current password and new password are required' });
+    return;
+  }
+  if (new_password.length < 4) {
+    res.status(400).json({ error: 'New password must be at least 4 characters' });
+    return;
+  }
+
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.userId) as any;
+  if (!user || !bcrypt.compareSync(current_password, user.password_hash)) {
+    res.status(401).json({ error: 'Current password is incorrect' });
+    return;
+  }
+
+  const hash = bcrypt.hashSync(new_password, 10);
+  db.prepare(`UPDATE users SET password_hash=?, updated_at=datetime('now') WHERE id=?`).run(hash, req.user!.userId);
+  res.json({ message: 'Password changed successfully' });
+});
+
 export default router;
