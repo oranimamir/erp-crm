@@ -13,8 +13,9 @@ import { Plus, Box, Pencil, Trash2 } from 'lucide-react';
 
 const emptyForm = {
   type: '',
-  code: '',
   product_mass: '',
+  product: '',
+  code: '',
   units_per_pallet: '',
   pallet_label_code: '',
   weight_per_pallet: '',
@@ -62,8 +63,9 @@ export default function PackagingPage() {
     setEditing(item);
     setForm({
       type: item.type || '',
-      code: item.code || '',
       product_mass: item.product_mass ?? '',
+      product: item.product || '',
+      code: item.code || '',
       units_per_pallet: item.units_per_pallet ?? '',
       pallet_label_code: item.pallet_label_code || '',
       weight_per_pallet: item.weight_per_pallet ?? '',
@@ -78,7 +80,7 @@ export default function PackagingPage() {
 
   const handleSave = async () => {
     if (!form.type.trim() || !form.code.trim()) {
-      addToast('Type and Code are required', 'error');
+      addToast('Type and Packaging Code are required', 'error');
       return;
     }
     setSaving(true);
@@ -134,7 +136,7 @@ export default function PackagingPage() {
         <div className="p-4 border-b border-gray-100">
           <div className="flex items-center gap-4 flex-wrap">
             <div className="flex-1 min-w-[200px] max-w-sm">
-              <SearchBar value={search} onChange={v => { setSearch(v); setPage(1); }} placeholder="Search by type or code..." />
+              <SearchBar value={search} onChange={v => { setSearch(v); setPage(1); }} placeholder="Search by type, product or code..." />
             </div>
             <span className="text-sm text-gray-500">{total} packaging type{total !== 1 ? 's' : ''}</span>
           </div>
@@ -156,38 +158,44 @@ export default function PackagingPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Type</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Code</th>
-                  <th className="text-right px-4 py-3 font-medium text-gray-600">Fill Mass (kg)</th>
-                  <th className="text-right px-4 py-3 font-medium text-gray-600">Units/Pallet</th>
-                  <th className="text-right px-4 py-3 font-medium text-gray-600">Gross Weight (kg)</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Pallet Label Code</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Compatible</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Notes</th>
-                  <th className="text-right px-4 py-3 font-medium text-gray-600">Actions</th>
+                  <th className="text-left px-3 py-3 font-medium text-gray-600">Type</th>
+                  <th className="text-right px-3 py-3 font-medium text-gray-600">Product mass</th>
+                  <th className="text-left px-3 py-3 font-medium text-gray-600">Product</th>
+                  <th className="text-left px-3 py-3 font-medium text-gray-600">Packaging code</th>
+                  <th className="text-right px-3 py-3 font-medium text-gray-600"># per pal</th>
+                  <th className="text-left px-3 py-3 font-medium text-gray-600">Code on pallet label</th>
+                  <th className="text-right px-3 py-3 font-medium text-gray-600">Product weight per pal</th>
+                  <th className="text-right px-3 py-3 font-medium text-gray-600">Weight packaging</th>
+                  <th className="text-right px-3 py-3 font-medium text-gray-600">Weight pallet</th>
+                  <th className="text-right px-3 py-3 font-medium text-gray-600">Gross weight</th>
+                  <th className="text-left px-3 py-3 font-medium text-gray-600">Compatible</th>
+                  <th className="text-right px-3 py-3 font-medium text-gray-600">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {items.map(item => (
                   <tr key={item.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 font-medium text-gray-900">{item.type}</td>
-                    <td className="px-4 py-3 text-gray-600 font-mono text-xs">{item.code}</td>
-                    <td className="px-4 py-3 text-right text-gray-700">{fmt(item.product_mass, 3)}</td>
-                    <td className="px-4 py-3 text-right text-gray-700">{item.units_per_pallet ?? '—'}</td>
-                    <td className="px-4 py-3 text-right text-gray-700">{fmt(item.gross_weight)}</td>
-                    <td className="px-4 py-3 text-gray-500 font-mono text-xs">{item.pallet_label_code || '—'}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2.5 font-medium text-gray-900 whitespace-nowrap">{item.type}</td>
+                    <td className="px-3 py-2.5 text-right text-gray-700">{fmt(item.product_mass, 3)}</td>
+                    <td className="px-3 py-2.5 text-gray-600 max-w-[160px] truncate">{item.product || '—'}</td>
+                    <td className="px-3 py-2.5 text-gray-700 font-mono text-xs">{item.code}</td>
+                    <td className="px-3 py-2.5 text-right text-gray-700">{item.units_per_pallet ?? '—'}</td>
+                    <td className="px-3 py-2.5 text-gray-500 font-mono text-xs">{item.pallet_label_code || '—'}</td>
+                    <td className="px-3 py-2.5 text-right text-gray-700">{fmt(item.weight_per_pallet)}</td>
+                    <td className="px-3 py-2.5 text-right text-gray-700">{fmt(item.weight_packaging)}</td>
+                    <td className="px-3 py-2.5 text-right text-gray-700">{fmt(item.weight_pallet)}</td>
+                    <td className="px-3 py-2.5 text-right text-gray-700 font-medium">{fmt(item.gross_weight)}</td>
+                    <td className="px-3 py-2.5">
                       {item.compatible ? (
                         <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
                           {item.compatible}
                         </span>
                       ) : '—'}
                     </td>
-                    <td className="px-4 py-3 text-gray-500 max-w-[200px] truncate">{item.notes || '—'}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2.5">
                       <div className="flex items-center justify-end gap-1">
-                        <button onClick={() => openEdit(item)} className="p-1.5 text-gray-400 hover:text-primary-600 rounded"><Pencil size={16} /></button>
-                        <button onClick={() => setDeleteId(item.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded"><Trash2 size={16} /></button>
+                        <button onClick={() => openEdit(item)} className="p-1.5 text-gray-400 hover:text-primary-600 rounded"><Pencil size={15} /></button>
+                        <button onClick={() => setDeleteId(item.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded"><Trash2 size={15} /></button>
                       </div>
                     </td>
                   </tr>
@@ -203,20 +211,23 @@ export default function PackagingPage() {
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <Input label="Type *" value={form.type} onChange={e => setForm({ ...form, type: e.target.value })} placeholder="e.g. 15l short blue pails" />
-            <Input label="Code *" value={form.code} onChange={e => setForm({ ...form, code: e.target.value })} placeholder="e.g. PU18" />
-          </div>
-          <div className="grid grid-cols-3 gap-4">
-            <Input label="Fill Mass (kg)" type="number" value={form.product_mass} onChange={e => setForm({ ...form, product_mass: e.target.value })} placeholder="e.g. 18" />
-            <Input label="Units per Pallet" type="number" value={form.units_per_pallet} onChange={e => setForm({ ...form, units_per_pallet: e.target.value })} placeholder="e.g. 32" />
-            <Input label="Pallet Label Code" value={form.pallet_label_code} onChange={e => setForm({ ...form, pallet_label_code: e.target.value })} placeholder="e.g. PU18032" />
-          </div>
-          <div className="grid grid-cols-4 gap-4">
-            <Input label="Product Wt/Pallet (kg)" type="number" value={form.weight_per_pallet} onChange={e => setForm({ ...form, weight_per_pallet: e.target.value })} />
-            <Input label="Packaging Wt (kg)" type="number" value={form.weight_packaging} onChange={e => setForm({ ...form, weight_packaging: e.target.value })} />
-            <Input label="Pallet Wt (kg)" type="number" value={form.weight_pallet} onChange={e => setForm({ ...form, weight_pallet: e.target.value })} />
-            <Input label="Gross Weight (kg)" type="number" value={form.gross_weight} onChange={e => setForm({ ...form, gross_weight: e.target.value })} />
+            <Input label="Product mass" type="number" value={form.product_mass} onChange={e => setForm({ ...form, product_mass: e.target.value })} placeholder="e.g. 18" />
           </div>
           <div className="grid grid-cols-2 gap-4">
+            <Input label="Product" value={form.product} onChange={e => setForm({ ...form, product: e.target.value })} placeholder="e.g. Midas Circulac" />
+            <Input label="Packaging code *" value={form.code} onChange={e => setForm({ ...form, code: e.target.value })} placeholder="e.g. PU18" />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <Input label="# per pal" type="number" value={form.units_per_pallet} onChange={e => setForm({ ...form, units_per_pallet: e.target.value })} placeholder="e.g. 32" />
+            <Input label="Code on pallet label" value={form.pallet_label_code} onChange={e => setForm({ ...form, pallet_label_code: e.target.value })} placeholder="e.g. PU18032" />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <Input label="Product weight per pal" type="number" value={form.weight_per_pallet} onChange={e => setForm({ ...form, weight_per_pallet: e.target.value })} />
+            <Input label="Weight packaging" type="number" value={form.weight_packaging} onChange={e => setForm({ ...form, weight_packaging: e.target.value })} />
+          </div>
+          <div className="grid grid-cols-3 gap-4">
+            <Input label="Weight pallet" type="number" value={form.weight_pallet} onChange={e => setForm({ ...form, weight_pallet: e.target.value })} />
+            <Input label="Gross weight" type="number" value={form.gross_weight} onChange={e => setForm({ ...form, gross_weight: e.target.value })} />
             <div className="space-y-1">
               <label className="block text-sm font-medium text-gray-700">Compatible</label>
               <input
@@ -226,15 +237,15 @@ export default function PackagingPage() {
                 placeholder="e.g. Food"
               />
             </div>
-            <div className="space-y-1">
-              <label className="block text-sm font-medium text-gray-700">Notes</label>
-              <input
-                value={form.notes}
-                onChange={e => setForm({ ...form, notes: e.target.value })}
-                className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                placeholder="Optional notes"
-              />
-            </div>
+          </div>
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-gray-700">Notes</label>
+            <input
+              value={form.notes}
+              onChange={e => setForm({ ...form, notes: e.target.value })}
+              className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+              placeholder="Optional notes"
+            />
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="secondary" onClick={() => setShowModal(false)}>Cancel</Button>
