@@ -467,7 +467,8 @@ export async function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS packaging (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       type TEXT NOT NULL,
-      code TEXT UNIQUE NOT NULL,
+      code TEXT NOT NULL,
+      product TEXT,
       product_mass REAL,
       units_per_pallet INTEGER,
       pallet_label_code TEXT,
@@ -481,6 +482,35 @@ export async function initializeDatabase() {
       updated_at TEXT DEFAULT (datetime('now'))
     )
   `);
+  // Remove UNIQUE constraint from packaging.code if it still exists
+  try {
+    const schema = (db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='packaging'").get() as any)?.sql || '';
+    if (schema.includes('UNIQUE')) {
+      db.exec(`
+        CREATE TABLE packaging_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          type TEXT NOT NULL,
+          code TEXT NOT NULL,
+          product TEXT,
+          product_mass REAL,
+          units_per_pallet INTEGER,
+          pallet_label_code TEXT,
+          weight_per_pallet REAL,
+          weight_packaging REAL,
+          weight_pallet REAL,
+          gross_weight REAL,
+          compatible TEXT DEFAULT 'Food',
+          notes TEXT,
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now'))
+        );
+        INSERT INTO packaging_new (id, type, code, product, product_mass, units_per_pallet, pallet_label_code, weight_per_pallet, weight_packaging, weight_pallet, gross_weight, compatible, notes, created_at, updated_at)
+          SELECT id, type, code, product, product_mass, units_per_pallet, pallet_label_code, weight_per_pallet, weight_packaging, weight_pallet, gross_weight, compatible, notes, created_at, updated_at FROM packaging;
+        DROP TABLE packaging;
+        ALTER TABLE packaging_new RENAME TO packaging;
+      `);
+    }
+  } catch (_) { /* already migrated */ }
 
   // Clear pre-seeded packaging data — user populates via UI/import
   const hasSeedData = (db.prepare("SELECT COUNT(*) as c FROM packaging WHERE code = 'SU04'").get() as any).c;

@@ -41,11 +41,7 @@ router.post('/', (req, res) => {
     const row = db.prepare('SELECT * FROM packaging WHERE id = ?').get(result.lastInsertRowid);
     res.status(201).json(row);
   } catch (err: any) {
-    if (err.message?.includes('UNIQUE')) {
-      res.status(400).json({ error: 'Packaging code already exists' });
-    } else {
-      res.status(500).json({ error: err.message });
-    }
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -64,11 +60,7 @@ router.put('/:id', (req, res) => {
     `).run(type.trim(), code.trim(), product_mass ?? null, product ?? null, units_per_pallet ?? null, pallet_label_code ?? null, weight_per_pallet ?? null, weight_packaging ?? null, weight_pallet ?? null, gross_weight ?? null, compatible ?? 'Food', notes ?? null, req.params.id);
     res.json(db.prepare('SELECT * FROM packaging WHERE id = ?').get(req.params.id));
   } catch (err: any) {
-    if (err.message?.includes('UNIQUE')) {
-      res.status(400).json({ error: 'Packaging code already exists' });
-    } else {
-      res.status(500).json({ error: err.message });
-    }
+    res.status(500).json({ error: err.message });
   }
 });
 
