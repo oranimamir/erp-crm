@@ -12,6 +12,7 @@ import { downloadExcel } from '../lib/exportExcel';
 interface Operation {
   id: number;
   operation_number: string;
+  order_id?: number;
   order_number?: string;
   order_type?: string;
   order_date?: string;
@@ -288,7 +289,15 @@ export default function OperationsPage() {
                   </td>
                   <td className="px-4 py-3 text-gray-700" onClick={e => e.stopPropagation()}>
                     <div className="flex items-center gap-2">
-                      {op.order_number ? (
+                      {op.order_number && op.order_id ? (
+                        <button
+                          onClick={() => navigate(`/orders/${op.order_id}/edit`)}
+                          className="font-medium text-primary-700 hover:underline"
+                          title="Edit order"
+                        >
+                          {op.order_number}
+                        </button>
+                      ) : op.order_number ? (
                         <span className="font-medium">{op.order_number}</span>
                       ) : (
                         <span className="text-gray-400">—</span>
