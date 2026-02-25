@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import Card from '../components/ui/Card';
@@ -81,8 +81,10 @@ const emptyItem = (): OrderItem => ({
 export default function OrderFormPage() {
   const { id }      = useParams();
   const navigate    = useNavigate();
+  const [searchParams] = useSearchParams();
   const { addToast } = useToast();
   const isEditing   = Boolean(id);
+  const prefillOpNumber = searchParams.get('operation_number') || '';
 
   const [loading,      setLoading]      = useState(false);
   const [saving,       setSaving]       = useState(false);
@@ -96,7 +98,7 @@ export default function OrderFormPage() {
 
   // ── Form state ───────────────────────────────────────────────────────
   const [form, setForm] = useState({
-    operation_number: '',
+    operation_number: prefillOpNumber,
     order_number:  '',
     order_date:    new Date().toISOString().slice(0, 10),
     type:          'customer',

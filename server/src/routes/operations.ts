@@ -42,9 +42,13 @@ router.get('/', (req: Request, res: Response) => {
   const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
   const search = (req.query.search as string) || '';
   const sortDir = (req.query.sort_dir as string) === 'asc' ? 'ASC' : 'DESC';
-  const sortBy = (req.query.sort_by as string) === 'order_date'
-    ? 'COALESCE(o.order_date, op.created_at)'
-    : 'op.created_at';
+  const sortByMap: Record<string, string> = {
+    order_date: 'COALESCE(o.order_date, op.created_at)',
+    created_at: 'op.created_at',
+    status:     'op.status',
+    name:       'COALESCE(c.name, s.name)',
+  };
+  const sortBy = sortByMap[(req.query.sort_by as string)] || sortByMap.order_date;
   const offset = (page - 1) * limit;
 
   const conditions: string[] = [];
@@ -172,14 +176,17 @@ router.put('/:id', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT * FROM operations WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Operation not found' }); return; }
 
-  const { operation_number, status, notes } = req.body;
+  const { operation_number, status, notes, order_id, customer_id, supplier_id } = req.body;
   try {
     db.prepare(`
-      UPDATE operations SET operation_number=?, status=?, notes=?, updated_at=datetime('now') WHERE id=?
+      UPDATE operations SET operation_number=?, status=?, notes=?, order_id=?, customer_id=?, supplier_id=?, updated_at=datetime('now') WHERE id=?
     `).run(
       operation_number || existing.operation_number,
       status || existing.status,
       notes ?? existing.notes,
+      order_id !== undefined ? (order_id || null) : existing.order_id,
+      customer_id !== undefined ? (customer_id || null) : existing.customer_id,
+      supplier_id !== undefined ? (supplier_id || null) : existing.supplier_id,
       req.params.id
     );
     const op = db.prepare('SELECT * FROM operations WHERE id = ?').get(req.params.id);

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import Card from '../components/ui/Card';
@@ -71,10 +71,12 @@ function addDays(dateStr: string, days: number): string {
 export default function InvoiceFormPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { addToast } = useToast();
   const isEdit = Boolean(id);
+  const prefillOperationId = searchParams.get('operation_id') || '';
 
-  const [form, setForm] = useState<InvoiceForm>({ ...emptyForm });
+  const [form, setForm] = useState<InvoiceForm>({ ...emptyForm, operation_id: prefillOperationId });
   const [paymentTerms, setPaymentTerms] = useState('');
   const dueDateManuallySet = useRef(false);
   const [file, setFile] = useState<File | null>(null);
@@ -173,7 +175,11 @@ export default function InvoiceFormPage() {
         return updated;
       });
 
-      addToast('Invoice scanned and fields auto-filled', 'success');
+      if (data.vendor_or_customer_name && !data.customer_id && !data.supplier_id) {
+        addToast(`Customer "${data.vendor_or_customer_name}" not found in your customer/supplier list. Please select manually.`, 'error');
+      } else {
+        addToast('Invoice scanned and fields auto-filled', 'success');
+      }
     } catch (err: any) {
       const detail = err.response?.data?.error || '';
       const msg = detail.toLowerCase().includes('credit balance')
@@ -282,6 +288,20 @@ export default function InvoiceFormPage() {
 
       <Card className="p-6">
         <form onSubmit={handleSubmit} className="space-y-6">
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-gray-700">Invoice File</label>
+            <FileUpload
+              onFileSelect={handleFileSelect}
+              currentFile={currentFile}
+            />
+            {scanning && (
+              <div className="flex items-center gap-2 text-sm text-primary-600 mt-2">
+                <Loader2 size={16} className="animate-spin" />
+                Scanning invoice with AI...
+              </div>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Input
               label="Invoice Number *"
@@ -404,20 +424,6 @@ export default function InvoiceFormPage() {
               className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
               placeholder="Optional notes..."
             />
-          </div>
-
-          <div className="space-y-1">
-            <label className="block text-sm font-medium text-gray-700">Invoice File</label>
-            <FileUpload
-              onFileSelect={handleFileSelect}
-              currentFile={currentFile}
-            />
-            {scanning && (
-              <div className="flex items-center gap-2 text-sm text-primary-600 mt-2">
-                <Loader2 size={16} className="animate-spin" />
-                Scanning invoice with AI...
-              </div>
-            )}
           </div>
 
           <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">

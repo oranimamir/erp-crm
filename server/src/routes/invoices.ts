@@ -217,11 +217,21 @@ router.post('/:id/wire-transfers', uploadWireTransfer.single('file'), async (req
       VALUES (?, ?, ?, ?, ?, ?, 'approved', ?, ?)
     `).run(req.params.id, amount, payment_date, bank_reference, fx_rate, eur_amount, file_path, file_name);
 
-    // Immediately mark invoice as paid
+    // Immediately mark invoice as paid, and set payment_date from wire transfer date
     const prevStatus = invoice.status;
-    db.prepare(`UPDATE invoices SET status='paid', updated_at=datetime('now') WHERE id=?`).run(req.params.id);
+    db.prepare(`UPDATE invoices SET status='paid', payment_date=?, updated_at=datetime('now') WHERE id=?`).run(payment_date, req.params.id);
     db.prepare(`INSERT INTO status_history (entity_type, entity_id, old_status, new_status, changed_by, notes) VALUES ('invoice', ?, ?, 'paid', ?, 'Auto-paid via wire transfer upload')`)
       .run(req.params.id, prevStatus, req.user!.userId);
+
+    // Auto-deliver linked operation when all its invoices are paid/cancelled
+    if (invoice.operation_id) {
+      const unpaid = (db.prepare(
+        `SELECT COUNT(*) as count FROM invoices WHERE operation_id = ? AND status NOT IN ('paid','cancelled')`
+      ).get(invoice.operation_id) as any).count;
+      if (unpaid === 0) {
+        db.prepare(`UPDATE operations SET status='delivered', updated_at=datetime('now') WHERE id=?`).run(invoice.operation_id);
+      }
+    }
 
     const transfer = db.prepare('SELECT * FROM wire_transfers WHERE id = ?').get(result.lastInsertRowid);
     res.status(201).json(transfer);
@@ -241,8 +251,8 @@ router.delete('/:id/wire-transfers/:transferId', (req: Request, res: Response) =
 
   db.prepare('DELETE FROM wire_transfers WHERE id = ?').run(transfer.id);
 
-  // Revert invoice to sent
-  db.prepare(`UPDATE invoices SET status='sent', updated_at=datetime('now') WHERE id=?`).run(req.params.id);
+  // Revert invoice to sent and clear payment_date
+  db.prepare(`UPDATE invoices SET status='sent', payment_date=NULL, updated_at=datetime('now') WHERE id=?`).run(req.params.id);
   db.prepare(`INSERT INTO status_history (entity_type, entity_id, old_status, new_status, changed_by, notes) VALUES ('invoice', ?, 'paid', 'sent', ?, 'Wire transfer deleted — reverted to sent')`)
     .run(req.params.id, req.user!.userId);
 

@@ -28,6 +28,7 @@ import AcceptInvitePage from './pages/AcceptInvitePage';
 import NotFoundPage from './pages/NotFoundPage';
 import OperationsPage from './pages/OperationsPage';
 import OperationDetailPage from './pages/OperationDetailPage';
+import OperationFormPage from './pages/OperationFormPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import SettingsPage from './pages/SettingsPage';
 
@@ -64,6 +65,7 @@ export default function App() {
               <Route path="/production" element={<ProductionPage />} />
               <Route path="/products" element={<ProductsPage />} />
               <Route path="/operations" element={<OperationsPage />} />
+              <Route path="/operations/new" element={<OperationFormPage />} />
               <Route path="/operations/:id" element={<OperationDetailPage />} />
               <Route path="/analytics" element={<AnalyticsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
