@@ -457,6 +457,9 @@ export async function initializeDatabase() {
     } catch (_) { /* ignore */ }
   }
 
+  // Add payment_due_date to orders (set automatically when status → shipped)
+  try { db.exec(`ALTER TABLE orders ADD COLUMN payment_due_date TEXT`); } catch (_) { /* column may already exist */ }
+
   // Seed admin user if not exists
   const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');
   if (!adminExists) {

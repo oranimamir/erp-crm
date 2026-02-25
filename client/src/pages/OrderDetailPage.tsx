@@ -6,7 +6,7 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import StatusBadge from '../components/ui/StatusBadge';
-import { ArrowLeft, Package, Truck, Clock, ArrowRight, Pencil, Download } from 'lucide-react';
+import { ArrowLeft, Package, Truck, Clock, ArrowRight, Pencil, Download, Eye, X } from 'lucide-react';
 
 const statusOptions = [
   { value: 'order_placed', label: 'Order Placed' },
@@ -35,6 +35,8 @@ export default function OrderDetailPage() {
   const [loading, setLoading] = useState(true);
   const [newStatus, setNewStatus] = useState('');
   const [updatingStatus, setUpdatingStatus] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewFile, setPreviewFile] = useState<string | null>(null);
 
   const fetchOrder = () => {
     setLoading(true);
@@ -80,6 +82,25 @@ export default function OrderDetailPage() {
     if (amount == null) return '—';
     const sym = currency === 'EUR' ? '€' : currency === 'GBP' ? '£' : '$';
     return `${sym}${Number(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+
+  const isImage = (filename: string) => /\.(jpg|jpeg|png|webp)$/i.test(filename);
+
+  const openPreview = async (apiPath: string, filename: string) => {
+    try {
+      const res = await api.get(apiPath, { responseType: 'blob' });
+      const blob = new Blob([res.data], { type: res.headers['content-type'] || 'application/octet-stream' });
+      setPreviewUrl(URL.createObjectURL(blob));
+      setPreviewFile(filename);
+    } catch {
+      addToast('Failed to load preview', 'error');
+    }
+  };
+
+  const closePreview = () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl(null);
+    setPreviewFile(null);
   };
 
   const downloadFile = async (apiPath: string, filename: string) => {
@@ -172,6 +193,12 @@ export default function OrderDetailPage() {
             <p className="text-gray-500 mb-1">Created</p>
             <p className="font-medium text-gray-900">{formatDate(order.created_at)}</p>
           </div>
+          {order.payment_due_date && (
+            <div>
+              <p className="text-gray-500 mb-1">Payment Due</p>
+              <p className="font-medium text-orange-600">{formatDate(order.payment_due_date)}</p>
+            </div>
+          )}
         </div>
 
         {order.description && (
@@ -189,13 +216,19 @@ export default function OrderDetailPage() {
         )}
 
         {order.file_path && (
-          <div className="mt-4 pt-4 border-t border-gray-100">
+          <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-3">
+            <span className="text-sm text-gray-600 flex-1 truncate">{order.file_name || order.file_path}</span>
+            <button
+              onClick={() => openPreview(`/files/orders/${order.file_path}`, order.file_name || order.file_path)}
+              className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-3 py-1.5"
+            >
+              <Eye size={14} /> View
+            </button>
             <button
               onClick={() => downloadFile(`/files/orders/${order.file_path}`, order.file_name || order.file_path)}
-              className="inline-flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700 font-medium"
+              className="inline-flex items-center gap-1.5 text-sm text-primary-600 hover:text-primary-700 border border-primary-200 rounded-lg px-3 py-1.5"
             >
-              <Download size={16} />
-              Download Order Document ({order.file_name || order.file_path})
+              <Download size={14} /> Download
             </button>
           </div>
         )}
@@ -317,6 +350,35 @@ export default function OrderDetailPage() {
           </div>
         )}
       </Card>
+
+      {/* File Preview Modal */}
+      {previewUrl && previewFile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={closePreview}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl mx-4 flex flex-col overflow-hidden" style={{ maxHeight: '90vh' }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
+              <p className="font-medium text-gray-900 truncate">{previewFile}</p>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => downloadFile(`/files/orders/${order.file_path}`, previewFile)}
+                  className="flex items-center gap-1 px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+                >
+                  <Download size={14} /> Download
+                </button>
+                <button onClick={closePreview} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto bg-gray-100 flex items-center justify-center p-4" style={{ minHeight: 0 }}>
+              {isImage(previewFile) ? (
+                <img src={previewUrl} alt={previewFile} className="max-w-full max-h-full object-contain rounded-lg shadow" />
+              ) : (
+                <iframe src={previewUrl} title={previewFile} className="w-full rounded-lg shadow bg-white" style={{ height: '70vh' }} />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Status History */}
       <Card>

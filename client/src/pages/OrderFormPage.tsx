@@ -234,7 +234,12 @@ export default function OrderFormPage() {
 
       if (data.scan_file_path) setScanFilePath(data.scan_file_path);
       if (data.scan_file_name) setScanFileName(data.scan_file_name);
-      addToast('Order scanned — please review and confirm all fields', 'success');
+
+      if (data.customer_or_supplier_name && !data.customer_id && !data.supplier_id) {
+        addToast(`Customer/Supplier "${data.customer_or_supplier_name}" not found in your list. Please select manually.`, 'error');
+      } else {
+        addToast('Order scanned — please review and confirm all fields', 'success');
+      }
     } catch (err: any) {
       const detail = err.response?.data?.error || '';
       const msg = detail.toLowerCase().includes('credit balance')

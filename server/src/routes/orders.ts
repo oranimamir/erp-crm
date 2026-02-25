@@ -210,7 +210,16 @@ router.patch('/:id/status', (req: Request, res: Response) => {
   const { status, notes } = req.body;
   if (!status) { res.status(400).json({ error: 'Status is required' }); return; }
 
-  db.prepare(`UPDATE orders SET status=?, updated_at=datetime('now') WHERE id=?`).run(status, req.params.id);
+  // When shipped, set payment_due_date = today + 45 days
+  let paymentDueDate = existing.payment_due_date || null;
+  if (status === 'shipped' && !existing.payment_due_date) {
+    const d = new Date();
+    d.setDate(d.getDate() + 45);
+    paymentDueDate = d.toISOString().slice(0, 10);
+  }
+
+  db.prepare(`UPDATE orders SET status=?, payment_due_date=?, updated_at=datetime('now') WHERE id=?`)
+    .run(status, paymentDueDate, req.params.id);
   db.prepare(`INSERT INTO status_history (entity_type, entity_id, old_status, new_status, changed_by, notes) VALUES ('order', ?, ?, ?, ?, ?)`)
     .run(req.params.id, existing.status, status, req.user!.userId, notes || null);
 

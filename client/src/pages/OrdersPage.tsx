@@ -10,7 +10,7 @@ import SearchBar from '../components/ui/SearchBar';
 import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
-import { Plus, ShoppingCart, Eye, Trash2, Download, FileSpreadsheet } from 'lucide-react';
+import { Plus, ShoppingCart, Eye, Trash2, Download, FileSpreadsheet, X } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
 
@@ -50,6 +50,8 @@ export default function OrdersPage() {
   const [typeFilter, setTypeFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [deleteId, setDeleteId] = useState<number | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewFile, setPreviewFile] = useState<string | null>(null);
 
   const fetchOrders = () => {
     setLoading(true);
@@ -92,6 +94,25 @@ export default function OrdersPage() {
     const sym = primaryCur === 'EUR' ? '€' : primaryCur === 'GBP' ? '£' : '$';
     const suffix = currencies && currencies.includes(',') ? ' (mixed)' : '';
     return `${sym}${Number(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${suffix}`;
+  };
+
+  const isImage = (filename: string) => /\.(jpg|jpeg|png|webp)$/i.test(filename);
+
+  const openPreview = async (apiPath: string, filename: string) => {
+    try {
+      const res = await api.get(apiPath, { responseType: 'blob' });
+      const blob = new Blob([res.data], { type: res.headers['content-type'] || 'application/octet-stream' });
+      setPreviewUrl(URL.createObjectURL(blob));
+      setPreviewFile(filename);
+    } catch {
+      addToast('Failed to load preview', 'error');
+    }
+  };
+
+  const closePreview = () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl(null);
+    setPreviewFile(null);
   };
 
   const downloadFile = async (apiPath: string, filename: string) => {
@@ -191,15 +212,24 @@ export default function OrdersPage() {
                     <td className="px-4 py-3 text-gray-500">{formatDateOrDash(o.created_at)}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
-                        <Link to={`/orders/${o.id}`} className="p-1.5 text-gray-400 hover:text-primary-600 rounded"><Eye size={16} /></Link>
+                        <Link to={`/orders/${o.id}`} className="p-1.5 text-gray-400 hover:text-primary-600 rounded" title="View order"><Eye size={16} /></Link>
                         {o.file_path && (
-                          <button
-                            onClick={() => downloadFile(`/files/orders/${o.file_path}`, o.file_name || o.file_path)}
-                            className="p-1.5 text-gray-400 hover:text-primary-600 rounded"
-                            title="Download order document"
-                          >
-                            <Download size={16} />
-                          </button>
+                          <>
+                            <button
+                              onClick={() => openPreview(`/files/orders/${o.file_path}`, o.file_name || o.file_path)}
+                              className="p-1.5 text-gray-400 hover:text-primary-600 rounded"
+                              title="Quick view document"
+                            >
+                              <Eye size={16} className="text-indigo-400" />
+                            </button>
+                            <button
+                              onClick={() => downloadFile(`/files/orders/${o.file_path}`, o.file_name || o.file_path)}
+                              className="p-1.5 text-gray-400 hover:text-primary-600 rounded"
+                              title="Download document"
+                            >
+                              <Download size={16} />
+                            </button>
+                          </>
                         )}
                         <button onClick={() => setDeleteId(o.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded"><Trash2 size={16} /></button>
                       </div>
@@ -212,6 +242,27 @@ export default function OrdersPage() {
         )}
         <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
       </Card>
+
+      {/* File Preview Modal */}
+      {previewUrl && previewFile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={closePreview}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl mx-4 flex flex-col overflow-hidden" style={{ maxHeight: '90vh' }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
+              <p className="font-medium text-gray-900 truncate">{previewFile}</p>
+              <button onClick={closePreview} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto bg-gray-100 flex items-center justify-center p-4" style={{ minHeight: 0 }}>
+              {isImage(previewFile) ? (
+                <img src={previewUrl} alt={previewFile} className="max-w-full max-h-full object-contain rounded-lg shadow" />
+              ) : (
+                <iframe src={previewUrl} title={previewFile} className="w-full rounded-lg shadow bg-white" style={{ height: '70vh' }} />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <ConfirmDialog
         open={deleteId !== null}
