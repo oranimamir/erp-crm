@@ -51,8 +51,15 @@ router.get('/', (req: Request, res: Response) => {
   const sortBy = sortByMap[(req.query.sort_by as string)] || sortByMap.order_date;
   const offset = (page - 1) * limit;
 
+  const tab = (req.query.tab as string) || 'active';
+
   const conditions: string[] = [];
   const params: any[] = [];
+  if (tab === 'completed') {
+    conditions.push("op.status = 'delivered'");
+  } else {
+    conditions.push("op.status != 'delivered'");
+  }
   if (search) {
     conditions.push('(op.operation_number LIKE ? OR c.name LIKE ? OR s.name LIKE ?)');
     params.push(`%${search}%`, `%${search}%`, `%${search}%`);
