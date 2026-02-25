@@ -21,7 +21,6 @@ import ShipmentFormPage from './pages/ShipmentFormPage';
 import ShipmentDetailPage from './pages/ShipmentDetailPage';
 import InventoryPage from './pages/InventoryPage';
 import ProductionPage from './pages/ProductionPage';
-import ProductsPage from './pages/ProductsPage';
 import InvoiceGeneratorPage from './pages/InvoiceGeneratorPage';
 import AdminUsersPage from './pages/AdminUsersPage';
 import AcceptInvitePage from './pages/AcceptInvitePage';
@@ -30,7 +29,6 @@ import OperationsPage from './pages/OperationsPage';
 import OperationDetailPage from './pages/OperationDetailPage';
 import OperationFormPage from './pages/OperationFormPage';
 import AnalyticsPage from './pages/AnalyticsPage';
-import PackagingPage from './pages/PackagingPage';
 import SettingsPage from './pages/SettingsPage';
 
 export default function App() {
@@ -64,12 +62,12 @@ export default function App() {
               <Route path="/shipments/:id/edit" element={<ShipmentFormPage />} />
               <Route path="/inventory" element={<InventoryPage />} />
               <Route path="/production" element={<ProductionPage />} />
-              <Route path="/products" element={<ProductsPage />} />
+              <Route path="/products" element={<Navigate to="/inventory" replace />} />
               <Route path="/operations" element={<OperationsPage />} />
               <Route path="/operations/new" element={<OperationFormPage />} />
               <Route path="/operations/:id" element={<OperationDetailPage />} />
               <Route path="/analytics" element={<AnalyticsPage />} />
-              <Route path="/packaging" element={<PackagingPage />} />
+              <Route path="/packaging" element={<Navigate to="/inventory" replace />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/admin/users" element={<AdminUsersPage />} />
               <Route path="*" element={<NotFoundPage />} />
