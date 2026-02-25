@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import api from '../lib/api';
 import Card from '../components/ui/Card';
 import StatusBadge from '../components/ui/StatusBadge';
-import { Users, Truck, FileText, ShoppingCart, Package, DollarSign, TrendingUp, Clock, BarChart3, Navigation, ChevronDown, ChevronRight } from 'lucide-react';
+import { Package, TrendingUp, Clock, BarChart3, Navigation } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 
 interface Stats {
@@ -32,12 +32,8 @@ export default function DashboardPage() {
   const [shippingOverview, setShippingOverview] = useState<any[]>([]);
   const [monthlyPayments, setMonthlyPayments] = useState<any[]>([]);
   const [inTransit, setInTransit] = useState<any[]>([]);
-  const [paidInvoices, setPaidInvoices] = useState<any[]>([]);
   const [forecast, setForecast] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-
-  // Which months are expanded in the paid-per-month breakdown
-  const [expandedMonths, setExpandedMonths] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     Promise.all([
@@ -47,51 +43,24 @@ export default function DashboardPage() {
       api.get('/dashboard/shipping-overview'),
       api.get('/dashboard/monthly-payments'),
       api.get('/dashboard/in-transit'),
-      api.get('/dashboard/paid-invoices'),
       api.get('/dashboard/forecast'),
-    ]).then(([s, o, i, sh, mp, it, pi, fc]) => {
+    ]).then(([s, o, i, sh, mp, it, fc]) => {
       setStats(s.data);
       setOpenOperations(o.data);
       setPendingInvoices(i.data);
       setShippingOverview(sh.data);
       setMonthlyPayments(mp.data);
       setInTransit(it.data);
-      setPaidInvoices(pi.data);
       setForecast(fc.data);
-      // Auto-expand current month
-      const curMonth = new Date().toISOString().slice(0, 7);
-      setExpandedMonths(new Set([curMonth]));
     }).finally(() => setLoading(false));
   }, []);
 
   if (loading) return <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" /></div>;
 
   const statCards = [
-    { label: 'Customers', value: stats?.customers ?? 0, icon: Users, color: 'text-blue-600 bg-blue-100', to: '/customers' },
-    { label: 'Suppliers', value: stats?.suppliers ?? 0, icon: Truck, color: 'text-purple-600 bg-purple-100', to: '/suppliers' },
-    { label: 'Active Orders', value: stats?.activeOrders ?? 0, icon: ShoppingCart, color: 'text-orange-600 bg-orange-100', to: '/orders' },
     { label: 'Active Shipments', value: stats?.activeShipments ?? 0, icon: Package, color: 'text-green-600 bg-green-100', to: '/shipments' },
     { label: 'Pending Receivable (EUR)', value: `€${(stats?.pendingInvoiceAmount ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: Clock, color: 'text-yellow-600 bg-yellow-100', to: '/invoices' },
-    { label: 'Paid Invoices (EUR)', value: `€${(stats?.paidInvoiceAmount ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: DollarSign, color: 'text-green-600 bg-green-100', to: '/invoices' },
   ];
-
-  // Group paid invoices by month (YYYY-MM)
-  const paidByMonth: Record<string, any[]> = {};
-  for (const inv of paidInvoices) {
-    const month = inv.paid_date ? String(inv.paid_date).slice(0, 7) : 'unknown';
-    if (!paidByMonth[month]) paidByMonth[month] = [];
-    paidByMonth[month].push(inv);
-  }
-  // Sorted month keys (descending) from monthly payments data
-  const chartMonths = monthlyPayments.map((m: any) => m.month as string);
-
-  const toggleMonth = (month: string) => {
-    setExpandedMonths(prev => {
-      const next = new Set(prev);
-      next.has(month) ? next.delete(month) : next.add(month);
-      return next;
-    });
-  };
 
   return (
     <div className="space-y-6">
@@ -268,105 +237,6 @@ export default function DashboardPage() {
             );
           })()}
 
-          {/* ── Paid invoices grouped by month ────────────────────────────── */}
-          {paidInvoices.length > 0 && (
-            <div className="mt-6 pt-4 border-t border-gray-100 space-y-1">
-              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Paid Invoices by Month</h3>
-              {chartMonths.map(month => {
-                const invoicesInMonth = paidByMonth[month] || [];
-                if (invoicesInMonth.length === 0) return null;
-                const monthLabel = new Date(month + '-02').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
-                const monthTotal = invoicesInMonth.reduce((s: number, inv: any) => s + (Number(inv.eur_val) || 0), 0);
-                const isOpen = expandedMonths.has(month);
-                return (
-                  <div key={month} className="border border-gray-100 rounded-lg overflow-hidden">
-                    <button
-                      className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 hover:bg-gray-100 text-sm font-medium text-gray-700"
-                      onClick={() => toggleMonth(month)}
-                    >
-                      <span className="flex items-center gap-2">
-                        {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                        {monthLabel}
-                        <span className="text-xs text-gray-400 font-normal">{invoicesInMonth.length} invoice{invoicesInMonth.length !== 1 ? 's' : ''}</span>
-                      </span>
-                      <span className="text-green-700 font-semibold">
-                        €{monthTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </span>
-                    </button>
-                    {isOpen && (
-                      <div className="divide-y divide-gray-50">
-                        {invoicesInMonth.map((inv: any) => (
-                          <Link key={inv.id} to={`/invoices/${inv.id}`}
-                            className="flex items-center justify-between px-4 py-2 hover:bg-gray-50"
-                          >
-                            <div className="flex items-center gap-3">
-                              <span className="text-sm font-medium text-gray-900">{inv.invoice_number}</span>
-                              {inv.customer_name && (
-                                <span className="text-xs text-gray-500">{inv.customer_name}</span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-3 shrink-0 ml-2">
-                              <span className="text-xs text-gray-400">{formatDate(inv.paid_date) || '—'}</span>
-                              <span className="text-sm font-semibold text-green-700">
-                                €{Number(inv.eur_val).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                              </span>
-                            </div>
-                          </Link>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              {/* Any invoices in months not in the chart (older) */}
-              {Object.keys(paidByMonth)
-                .filter(m => !chartMonths.includes(m) && m !== 'unknown')
-                .sort().reverse()
-                .map(month => {
-                  const invoicesInMonth = paidByMonth[month];
-                  const monthLabel = new Date(month + '-02').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
-                  const monthTotal = invoicesInMonth.reduce((s: number, inv: any) => s + (Number(inv.eur_val) || 0), 0);
-                  const isOpen = expandedMonths.has(month);
-                  return (
-                    <div key={month} className="border border-gray-100 rounded-lg overflow-hidden">
-                      <button
-                        className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 hover:bg-gray-100 text-sm font-medium text-gray-700"
-                        onClick={() => toggleMonth(month)}
-                      >
-                        <span className="flex items-center gap-2">
-                          {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                          {monthLabel}
-                          <span className="text-xs text-gray-400 font-normal">{invoicesInMonth.length} invoice{invoicesInMonth.length !== 1 ? 's' : ''}</span>
-                        </span>
-                        <span className="text-green-700 font-semibold">
-                          €{monthTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </span>
-                      </button>
-                      {isOpen && (
-                        <div className="divide-y divide-gray-50">
-                          {invoicesInMonth.map((inv: any) => (
-                            <Link key={inv.id} to={`/invoices/${inv.id}`}
-                              className="flex items-center justify-between px-4 py-2 hover:bg-gray-50"
-                            >
-                              <div className="flex items-center gap-3">
-                                <span className="text-sm font-medium text-gray-900">{inv.invoice_number}</span>
-                                {inv.customer_name && <span className="text-xs text-gray-500">{inv.customer_name}</span>}
-                              </div>
-                              <div className="flex items-center gap-3 shrink-0 ml-2">
-                                <span className="text-xs text-gray-400">{formatDate(inv.paid_date) || '—'}</span>
-                                <span className="text-sm font-semibold text-green-700">
-                                  €{Number(inv.eur_val).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </span>
-                              </div>
-                            </Link>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-            </div>
-          )}
         </div>
       </Card>
 
