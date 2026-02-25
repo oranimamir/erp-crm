@@ -39,6 +39,13 @@ export default function PackagingPage() {
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [form, setForm] = useState({ ...emptyForm });
   const [saving, setSaving] = useState(false);
+  const [products, setProducts] = useState<{ id: number; name: string }[]>([]);
+
+  useEffect(() => {
+    api.get('/products', { params: { limit: 500 } })
+      .then(res => setProducts(res.data.data || []))
+      .catch(() => {});
+  }, []);
 
   const fetchItems = () => {
     setLoading(true);
@@ -214,7 +221,19 @@ export default function PackagingPage() {
             <Input label="Product mass" type="number" value={form.product_mass} onChange={e => setForm({ ...form, product_mass: e.target.value })} placeholder="e.g. 18" />
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <Input label="Product" value={form.product} onChange={e => setForm({ ...form, product: e.target.value })} placeholder="e.g. Midas Circulac" />
+            <div className="space-y-1">
+              <label className="block text-sm font-medium text-gray-700">Product</label>
+              <select
+                value={form.product}
+                onChange={e => setForm({ ...form, product: e.target.value })}
+                className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                <option value="">— select product —</option>
+                {products.map(p => (
+                  <option key={p.id} value={p.name}>{p.name}</option>
+                ))}
+              </select>
+            </div>
             <Input label="Packaging code *" value={form.code} onChange={e => setForm({ ...form, code: e.target.value })} placeholder="e.g. PU18" />
           </div>
           <div className="grid grid-cols-2 gap-4">
