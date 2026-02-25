@@ -28,6 +28,7 @@ import invoiceTemplateRoutes from './routes/invoice-template.js';
 import operationRoutes from './routes/operations.js';
 import analyticsRoutes from './routes/analytics.js';
 import packagingRoutes from './routes/packaging.js';
+import backupRoutes from './routes/backup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -107,6 +108,7 @@ app.use('/api/invoice-template', authenticateToken, invoiceTemplateRoutes);
 app.use('/api/operations', authenticateToken, operationRoutes);
 app.use('/api/analytics', authenticateToken, analyticsRoutes);
 app.use('/api/packaging', authenticateToken, packagingRoutes);
+app.use('/api/backup', authenticateToken, backupRoutes);
 
 // ── Serve built client in production ─────────────────────────────────────────
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');

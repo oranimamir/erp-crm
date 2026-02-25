@@ -1,17 +1,39 @@
 import { useState } from 'react';
-import { Settings, Lock, Monitor, Sun, Moon } from 'lucide-react';
+import { Settings, Lock, Monitor, Sun, Moon, Download, DatabaseBackup } from 'lucide-react';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
+import { useAuth } from '../contexts/AuthContext';
 
 export default function SettingsPage() {
   const { addToast } = useToast();
   const { theme, toggleTheme } = useTheme();
+  const { user } = useAuth();
+  const [downloading, setDownloading] = useState(false);
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [saving, setSaving] = useState(false);
+
+  const handleDownloadBackup = async () => {
+    setDownloading(true);
+    try {
+      const res = await api.get('/backup', { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      a.href = url;
+      a.download = `erp-backup-${timestamp}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+      addToast('Backup downloaded successfully', 'success');
+    } catch {
+      addToast('Failed to download backup', 'error');
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -104,6 +126,34 @@ export default function SettingsPage() {
           </div>
         </form>
       </div>
+
+      {/* Backup — admin only */}
+      {user?.role === 'admin' && (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+              <DatabaseBackup size={16} className="text-gray-500" />
+              Backup
+            </h2>
+          </div>
+          <div className="px-6 py-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-900">Download full backup</p>
+                <p className="text-sm text-gray-500 mt-0.5">Downloads a ZIP file containing the database and all uploaded files</p>
+              </div>
+              <button
+                onClick={handleDownloadBackup}
+                disabled={downloading}
+                className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                <Download size={15} />
+                {downloading ? 'Preparing...' : 'Download Backup'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Appearance */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
