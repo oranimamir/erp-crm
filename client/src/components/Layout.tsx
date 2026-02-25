@@ -5,7 +5,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import {
   LayoutDashboard, Users, Truck, FileText, ShoppingCart,
   LogOut, Menu, Shield, Warehouse, Package, Briefcase, BarChart3,
-  Settings, Sun, Moon,
+  Settings, Sun, Moon, Box,
 } from 'lucide-react';
 
 const navItems = [
@@ -17,6 +17,7 @@ const navItems = [
   { to: '/operations', icon: Briefcase, label: 'Operations' },
   { to: '/inventory', icon: Warehouse, label: 'Inventory' },
   { to: '/products', icon: Package, label: 'Products' },
+  { to: '/packaging', icon: Box, label: 'Packaging' },
   { to: '/analytics', icon: BarChart3, label: 'Analytics' },
 ];
 

@@ -30,6 +30,7 @@ import OperationsPage from './pages/OperationsPage';
 import OperationDetailPage from './pages/OperationDetailPage';
 import OperationFormPage from './pages/OperationFormPage';
 import AnalyticsPage from './pages/AnalyticsPage';
+import PackagingPage from './pages/PackagingPage';
 import SettingsPage from './pages/SettingsPage';
 
 export default function App() {
@@ -68,6 +69,7 @@ export default function App() {
               <Route path="/operations/new" element={<OperationFormPage />} />
               <Route path="/operations/:id" element={<OperationDetailPage />} />
               <Route path="/analytics" element={<AnalyticsPage />} />
+              <Route path="/packaging" element={<PackagingPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/admin/users" element={<AdminUsersPage />} />
               <Route path="*" element={<NotFoundPage />} />

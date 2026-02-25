@@ -460,6 +460,55 @@ export async function initializeDatabase() {
   // Add payment_due_date to orders (set automatically when status → shipped)
   try { db.exec(`ALTER TABLE orders ADD COLUMN payment_due_date TEXT`); } catch (_) { /* column may already exist */ }
 
+  // Packaging table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS packaging (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      code TEXT UNIQUE NOT NULL,
+      product_mass REAL,
+      units_per_pallet INTEGER,
+      pallet_label_code TEXT,
+      weight_per_pallet REAL,
+      weight_packaging REAL,
+      weight_pallet REAL,
+      gross_weight REAL,
+      compatible TEXT DEFAULT 'Food',
+      notes TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+
+  // Seed packaging types from Packaging RG sheet (only if empty)
+  const packagingCount = (db.prepare('SELECT COUNT(*) as c FROM packaging').get() as any).c;
+  if (packagingCount === 0) {
+    const insertPkg = db.prepare(`
+      INSERT OR IGNORE INTO packaging (type, code, product_mass, units_per_pallet, pallet_label_code, weight_per_pallet, weight_packaging, weight_pallet, gross_weight, compatible)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const pkgData = [
+      ['0.125l sample bottle',   'SU04', 0.125,   8,  'S004',    1,    0.1,  0.4,    2.2,   'Food'],
+      ['0.25l sample bottle',    'SU03', 0.25,    4,  'S003',    1,    0.2,  0.4,    2.2,   'Food'],
+      ['0.5l sample bottle',     'SU02', 0.5,     2,  'S002',    1,    0.3,  0.4,    2.0,   'Food'],
+      ['1l sample bottle',       'SU01', 1,       1,  'S001',    1,    0.4,  0.4,    1.8,   'Food'],
+      ['5l sample bottle',       'SU05', 5,       1,  'S005',    5,    1.0,  1.0,    7.0,   'Food'],
+      ['15l short blue pails',   'PU18', 18,     32,  'PU18032', 576,  2.5,  20,   676.0,  'Food'],
+      ['20kg paper bags',        'BU20', 20,     40,  'BU20040', 800,  0.1,  20,   824.0,  'Food'],
+      ['25kg cardboard drums',   'CD25', 25,     18,  'CD25018', 450,  2.0,  20,   506.0,  'Food'],
+      ['25kg paper bags',        'BU25', 25,     30,  'BU25030', 750,  0.1,  25,   778.0,  'Food'],
+      ['25l blue pails',         'PU25', 25,     32,  'PU25032', 800,  3.0,  20,   916.0,  'Food'],
+      ['30l blue pails',         'PU30', 30,     32,  'PU30032', 960,  3.0,  20,  1076.0,  'Food'],
+      ['200l drums',             'DU20', 200,     4,  'DU20004', 800,  10.0, 20,   860.0,  'Food'],
+      ['220l blue drums',        'DU25', 250,     4,  'DU25004',1000,  10.0, 20,  1060.0,  'Food'],
+      ['275l drums',             'DU27', 275,     4,  'DU27004',1100,  10.0, 20,  1160.0,  'Food'],
+      ['1000kg big bags',        'BB10',1000,     1,  'IB10001',1000,  65.0,  0,  1065.0,  'Food'],
+      ['IBC',                    'IBC', 1000,     1,  'IB12001',1000,  65.0,  0,  1065.0,  'Food'],
+      ['Bulk tanker',            'BULK',27000,  null,  null,   27000,  null,  null, 27000,  'Food'],
+    ];
+    for (const row of pkgData) insertPkg.run(...row);
+  }
+
   // Seed admin user if not exists
   const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');
   if (!adminExists) {
