@@ -39,7 +39,7 @@ router.get('/pending-invoices', (_req: Request, res: Response) => {
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
     WHERE i.type = 'customer' AND i.status IN ('draft', 'sent', 'overdue')
-    ORDER BY i.created_at DESC LIMIT 10
+    ORDER BY i.due_date ASC, i.created_at DESC LIMIT 200
   `).all();
   res.json(invoices);
 });

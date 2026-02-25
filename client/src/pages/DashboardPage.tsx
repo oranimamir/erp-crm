@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import api from '../lib/api';
 import Card from '../components/ui/Card';
 import StatusBadge from '../components/ui/StatusBadge';
-import { Users, Truck, FileText, ShoppingCart, Package, DollarSign, TrendingUp, Clock, BarChart3, Navigation, AlertTriangle } from 'lucide-react';
+import { Users, Truck, FileText, ShoppingCart, Package, DollarSign, TrendingUp, Clock, BarChart3, Navigation, ChevronDown, ChevronRight } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 
 interface Stats {
@@ -18,6 +18,13 @@ interface Stats {
   activeShipments: number;
 }
 
+const OP_STATUS_COLORS: Record<string, string> = {
+  'pre-ordered': 'bg-purple-100 text-purple-800',
+  ordered:       'bg-yellow-100 text-yellow-800',
+  shipped:       'bg-blue-100   text-blue-800',
+  delivered:     'bg-green-100  text-green-800',
+};
+
 export default function DashboardPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [openOperations, setOpenOperations] = useState<any[]>([]);
@@ -25,10 +32,12 @@ export default function DashboardPage() {
   const [shippingOverview, setShippingOverview] = useState<any[]>([]);
   const [monthlyPayments, setMonthlyPayments] = useState<any[]>([]);
   const [inTransit, setInTransit] = useState<any[]>([]);
-  const [overdueInvoices, setOverdueInvoices] = useState<any[]>([]);
   const [paidInvoices, setPaidInvoices] = useState<any[]>([]);
   const [forecast, setForecast] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Which months are expanded in the paid-per-month breakdown
+  const [expandedMonths, setExpandedMonths] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     Promise.all([
@@ -38,19 +47,20 @@ export default function DashboardPage() {
       api.get('/dashboard/shipping-overview'),
       api.get('/dashboard/monthly-payments'),
       api.get('/dashboard/in-transit'),
-      api.get('/dashboard/overdue-invoices'),
       api.get('/dashboard/paid-invoices'),
       api.get('/dashboard/forecast'),
-    ]).then(([s, o, i, sh, mp, it, ov, pi, fc]) => {
+    ]).then(([s, o, i, sh, mp, it, pi, fc]) => {
       setStats(s.data);
       setOpenOperations(o.data);
       setPendingInvoices(i.data);
       setShippingOverview(sh.data);
       setMonthlyPayments(mp.data);
       setInTransit(it.data);
-      setOverdueInvoices(ov.data);
       setPaidInvoices(pi.data);
       setForecast(fc.data);
+      // Auto-expand current month
+      const curMonth = new Date().toISOString().slice(0, 7);
+      setExpandedMonths(new Set([curMonth]));
     }).finally(() => setLoading(false));
   }, []);
 
@@ -65,47 +75,27 @@ export default function DashboardPage() {
     { label: 'Paid Invoices (EUR)', value: `€${(stats?.paidInvoiceAmount ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: DollarSign, color: 'text-green-600 bg-green-100', to: '/invoices' },
   ];
 
+  // Group paid invoices by month (YYYY-MM)
+  const paidByMonth: Record<string, any[]> = {};
+  for (const inv of paidInvoices) {
+    const month = inv.paid_date ? String(inv.paid_date).slice(0, 7) : 'unknown';
+    if (!paidByMonth[month]) paidByMonth[month] = [];
+    paidByMonth[month].push(inv);
+  }
+  // Sorted month keys (descending) from monthly payments data
+  const chartMonths = monthlyPayments.map((m: any) => m.month as string);
+
+  const toggleMonth = (month: string) => {
+    setExpandedMonths(prev => {
+      const next = new Set(prev);
+      next.has(month) ? next.delete(month) : next.add(month);
+      return next;
+    });
+  };
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-
-      {overdueInvoices.length > 0 && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <AlertTriangle size={20} className="text-red-600" />
-            <h2 className="text-lg font-semibold text-red-800">
-              {overdueInvoices.length} Overdue Invoice{overdueInvoices.length !== 1 ? 's' : ''}
-            </h2>
-          </div>
-          <div className="divide-y divide-red-100">
-            {overdueInvoices.map((inv: any) => {
-              if (!inv.due_date) return null;
-              const daysOverdue = Math.floor((Date.now() - new Date(inv.due_date).getTime()) / (1000 * 60 * 60 * 24));
-              const formattedAmount = (() => {
-                try {
-                  return new Intl.NumberFormat(undefined, { style: 'currency', currency: inv.currency || 'EUR' }).format(inv.amount);
-                } catch {
-                  return `${inv.currency ?? ''} ${Number(inv.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
-                }
-              })();
-              return (
-                <Link key={inv.id} to={`/invoices/${inv.id}`} className="flex items-center justify-between py-2 hover:bg-red-100 rounded px-2 -mx-2">
-                  <div>
-                    <span className="text-sm font-medium text-red-900">{inv.invoice_number}</span>
-                    <span className="text-sm text-red-700 ml-2">{inv.customer_name || inv.supplier_name}</span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm font-medium text-red-900">{formattedAmount}</span>
-                    <span className="text-xs text-red-600 font-medium bg-red-100 px-2 py-0.5 rounded-full">
-                      {daysOverdue} day{daysOverdue !== 1 ? 's' : ''} overdue
-                    </span>
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {statCards.map(card => (
@@ -126,6 +116,7 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Open Operations */}
         <Card>
           <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
             <h2 className="font-semibold text-gray-900">Open Operations</h2>
@@ -140,41 +131,57 @@ export default function DashboardPage() {
                   <p className="text-sm font-medium text-gray-900">{op.operation_number}</p>
                   <p className="text-xs text-gray-500">{op.customer_name || op.supplier_name || op.order_number || '—'}</p>
                 </div>
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${
-                  op.status === 'shipped' ? 'bg-blue-100 text-blue-800' :
-                  op.status === 'ordered' ? 'bg-yellow-100 text-yellow-800' :
-                  'bg-gray-100 text-gray-700'
-                }`}>{op.status}</span>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${OP_STATUS_COLORS[op.status] || 'bg-gray-100 text-gray-700'}`}>
+                  {op.status}
+                </span>
               </Link>
             ))}
           </div>
         </Card>
 
+        {/* Pending Invoices — all sent, overdue marked in red */}
         <Card>
-          <div className="px-5 py-4 border-b border-gray-100">
+          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
             <h2 className="font-semibold text-gray-900">Pending Invoices</h2>
+            <span className="text-xs text-gray-400">{pendingInvoices.length} total</span>
           </div>
-          <div className="divide-y divide-gray-100">
+          <div className="divide-y divide-gray-100 max-h-80 overflow-y-auto">
             {pendingInvoices.length === 0 ? (
               <p className="px-5 py-8 text-center text-sm text-gray-500">No pending invoices</p>
-            ) : pendingInvoices.slice(0, 5).map((inv: any) => (
-              <Link key={inv.id} to={`/invoices/${inv.id}`} className="flex items-center justify-between px-5 py-3 hover:bg-gray-50">
-                <div>
-                  <p className="text-sm font-medium text-gray-900">{inv.invoice_number}</p>
-                  <p className="text-xs text-gray-500">{inv.customer_name || inv.supplier_name}</p>
-                </div>
-                <div className="flex items-center gap-3">
-                  {inv.due_date && (
-                    <span className="text-xs text-gray-400">Due {formatDate(inv.due_date)}</span>
-                  )}
-                  <span className="text-sm font-medium text-gray-900">€{(inv.eur_amount ?? inv.amount)?.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                  <StatusBadge status={inv.status} />
-                </div>
-              </Link>
-            ))}
+            ) : pendingInvoices.map((inv: any) => {
+              const isOverdue = inv.status === 'overdue' ||
+                (inv.due_date && new Date(inv.due_date) < new Date() && inv.status !== 'paid' && inv.status !== 'cancelled');
+              const daysOverdue = isOverdue && inv.due_date
+                ? Math.floor((Date.now() - new Date(inv.due_date).getTime()) / 86400000)
+                : 0;
+              return (
+                <Link key={inv.id} to={`/invoices/${inv.id}`}
+                  className={`flex items-center justify-between px-5 py-3 hover:bg-gray-50 ${isOverdue ? 'bg-red-50 hover:bg-red-100' : ''}`}
+                >
+                  <div>
+                    <p className={`text-sm font-medium ${isOverdue ? 'text-red-900' : 'text-gray-900'}`}>
+                      {inv.invoice_number}
+                    </p>
+                    <p className="text-xs text-gray-500">{inv.customer_name || inv.supplier_name}</p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 ml-2">
+                    {inv.due_date && (
+                      <span className={`text-xs ${isOverdue ? 'text-red-600 font-medium' : 'text-gray-400'}`}>
+                        {isOverdue ? `${daysOverdue}d overdue` : `Due ${formatDate(inv.due_date)}`}
+                      </span>
+                    )}
+                    <span className={`text-sm font-medium ${isOverdue ? 'text-red-900' : 'text-gray-900'}`}>
+                      €{(inv.eur_amount ?? inv.amount)?.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    </span>
+                    <StatusBadge status={inv.status} />
+                  </div>
+                </Link>
+              );
+            })}
           </div>
         </Card>
 
+        {/* Active Shipments */}
         <Card className="lg:col-span-2">
           <div className="px-5 py-4 border-b border-gray-100">
             <h2 className="font-semibold text-gray-900">Active Shipments</h2>
@@ -195,7 +202,7 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      {/* Monthly Payments Chart */}
+      {/* Monthly Cash Flow Chart + Paid-per-Month breakdown */}
       <Card>
         <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
           <BarChart3 size={16} className="text-gray-400" />
@@ -205,12 +212,12 @@ export default function DashboardPage() {
           {monthlyPayments.length === 0 ? (
             <p className="text-center text-sm text-gray-500 py-8">No payment data available</p>
           ) : (() => {
-            const maxVal = Math.max(...monthlyPayments.map(m => Math.max(m.received, m.paid_out)), 1);
+            const maxVal = Math.max(...monthlyPayments.map((m: any) => Math.max(m.received, m.paid_out)), 1);
             const latest = monthlyPayments[monthlyPayments.length - 1];
             const net = (latest?.received ?? 0) - (latest?.paid_out ?? 0);
             return (
               <div className="space-y-4">
-                {/* Summary row for most recent month */}
+                {/* Summary row */}
                 <div className="grid grid-cols-3 gap-4 pb-4 border-b border-gray-100">
                   <div className="text-center">
                     <p className="text-xs text-gray-500 mb-0.5">Received (this month)</p>
@@ -232,7 +239,7 @@ export default function DashboardPage() {
                   <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-green-500 inline-block" /> Received from clients</span>
                   <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-400 inline-block" /> Paid to suppliers</span>
                 </div>
-                {/* Side-by-side bar chart */}
+                {/* Bar chart */}
                 <div className="flex items-end gap-1.5" style={{ height: '180px' }}>
                   {monthlyPayments.map((m: any) => (
                     <div key={m.month} className="flex-1 flex flex-col items-center gap-1 h-full justify-end">
@@ -261,28 +268,103 @@ export default function DashboardPage() {
             );
           })()}
 
-          {/* Paid invoices list */}
+          {/* ── Paid invoices grouped by month ────────────────────────────── */}
           {paidInvoices.length > 0 && (
-            <div className="mt-4 pt-4 border-t border-gray-100">
-              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Paid Invoices</h3>
-              <div className="divide-y divide-gray-100">
-                {paidInvoices.map((inv: any) => (
-                  <Link key={inv.id} to={`/invoices/${inv.id}`} className="flex items-center justify-between py-2 hover:bg-gray-50 rounded px-1 -mx-1">
-                    <div>
-                      <span className="text-sm font-medium text-gray-900">{inv.invoice_number}</span>
-                      {inv.customer_name && (
-                        <span className="text-sm text-gray-500 ml-2">{inv.customer_name}</span>
+            <div className="mt-6 pt-4 border-t border-gray-100 space-y-1">
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Paid Invoices by Month</h3>
+              {chartMonths.map(month => {
+                const invoicesInMonth = paidByMonth[month] || [];
+                if (invoicesInMonth.length === 0) return null;
+                const monthLabel = new Date(month + '-02').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+                const monthTotal = invoicesInMonth.reduce((s: number, inv: any) => s + (Number(inv.eur_val) || 0), 0);
+                const isOpen = expandedMonths.has(month);
+                return (
+                  <div key={month} className="border border-gray-100 rounded-lg overflow-hidden">
+                    <button
+                      className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 hover:bg-gray-100 text-sm font-medium text-gray-700"
+                      onClick={() => toggleMonth(month)}
+                    >
+                      <span className="flex items-center gap-2">
+                        {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        {monthLabel}
+                        <span className="text-xs text-gray-400 font-normal">{invoicesInMonth.length} invoice{invoicesInMonth.length !== 1 ? 's' : ''}</span>
+                      </span>
+                      <span className="text-green-700 font-semibold">
+                        €{monthTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </button>
+                    {isOpen && (
+                      <div className="divide-y divide-gray-50">
+                        {invoicesInMonth.map((inv: any) => (
+                          <Link key={inv.id} to={`/invoices/${inv.id}`}
+                            className="flex items-center justify-between px-4 py-2 hover:bg-gray-50"
+                          >
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-gray-900">{inv.invoice_number}</span>
+                              {inv.customer_name && (
+                                <span className="text-xs text-gray-500">{inv.customer_name}</span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-3 shrink-0 ml-2">
+                              <span className="text-xs text-gray-400">{formatDate(inv.paid_date) || '—'}</span>
+                              <span className="text-sm font-semibold text-green-700">
+                                €{Number(inv.eur_val).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </span>
+                            </div>
+                          </Link>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {/* Any invoices in months not in the chart (older) */}
+              {Object.keys(paidByMonth)
+                .filter(m => !chartMonths.includes(m) && m !== 'unknown')
+                .sort().reverse()
+                .map(month => {
+                  const invoicesInMonth = paidByMonth[month];
+                  const monthLabel = new Date(month + '-02').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+                  const monthTotal = invoicesInMonth.reduce((s: number, inv: any) => s + (Number(inv.eur_val) || 0), 0);
+                  const isOpen = expandedMonths.has(month);
+                  return (
+                    <div key={month} className="border border-gray-100 rounded-lg overflow-hidden">
+                      <button
+                        className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 hover:bg-gray-100 text-sm font-medium text-gray-700"
+                        onClick={() => toggleMonth(month)}
+                      >
+                        <span className="flex items-center gap-2">
+                          {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                          {monthLabel}
+                          <span className="text-xs text-gray-400 font-normal">{invoicesInMonth.length} invoice{invoicesInMonth.length !== 1 ? 's' : ''}</span>
+                        </span>
+                        <span className="text-green-700 font-semibold">
+                          €{monthTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                      </button>
+                      {isOpen && (
+                        <div className="divide-y divide-gray-50">
+                          {invoicesInMonth.map((inv: any) => (
+                            <Link key={inv.id} to={`/invoices/${inv.id}`}
+                              className="flex items-center justify-between px-4 py-2 hover:bg-gray-50"
+                            >
+                              <div className="flex items-center gap-3">
+                                <span className="text-sm font-medium text-gray-900">{inv.invoice_number}</span>
+                                {inv.customer_name && <span className="text-xs text-gray-500">{inv.customer_name}</span>}
+                              </div>
+                              <div className="flex items-center gap-3 shrink-0 ml-2">
+                                <span className="text-xs text-gray-400">{formatDate(inv.paid_date) || '—'}</span>
+                                <span className="text-sm font-semibold text-green-700">
+                                  €{Number(inv.eur_val).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </span>
+                              </div>
+                            </Link>
+                          ))}
+                        </div>
                       )}
                     </div>
-                    <div className="flex items-center gap-3 shrink-0 ml-2">
-                      <span className="text-xs text-gray-400">{formatDate(inv.paid_date) || '-'}</span>
-                      <span className="text-sm font-semibold text-green-700">
-                        €{Number(inv.eur_val).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </span>
-                    </div>
-                  </Link>
-                ))}
-              </div>
+                  );
+                })}
             </div>
           )}
         </div>
@@ -327,12 +409,13 @@ export default function DashboardPage() {
           </div>
         )}
       </Card>
+
       {/* Revenue Forecast */}
       {forecast.length > 0 && (() => {
         const currentMonth = new Date().toISOString().slice(0, 7);
-        const maxBar = Math.max(...forecast.map(m => m.paid + m.pending), 1);
-        const totalPaid = forecast.reduce((s, m) => s + m.paid, 0);
-        const totalPending = forecast.reduce((s, m) => s + m.pending, 0);
+        const maxBar = Math.max(...forecast.map((m: any) => m.paid + m.pending), 1);
+        const totalPaid = forecast.reduce((s: number, m: any) => s + m.paid, 0);
+        const totalPending = forecast.reduce((s: number, m: any) => s + m.pending, 0);
         return (
           <Card>
             <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
@@ -370,18 +453,12 @@ export default function DashboardPage() {
                       {isCurrent && <div className="absolute inset-x-0 inset-y-0 bg-primary-50 rounded pointer-events-none" />}
                       <div className="w-full flex flex-col items-center relative z-10">
                         {m.pending > 0 && (
-                          <div
-                            className="w-4/5 bg-amber-400 rounded-t"
-                            style={{ height: `${pendingH}px` }}
-                            title={`Pending: €${m.pending.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
-                          />
+                          <div className="w-4/5 bg-amber-400 rounded-t" style={{ height: `${pendingH}px` }}
+                            title={`Pending: €${m.pending.toLocaleString(undefined, { minimumFractionDigits: 2 })}`} />
                         )}
                         {m.paid > 0 && (
-                          <div
-                            className={`w-4/5 bg-green-500 ${m.pending > 0 ? '' : 'rounded-t'}`}
-                            style={{ height: `${paidH}px` }}
-                            title={`Received: €${m.paid.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
-                          />
+                          <div className={`w-4/5 bg-green-500 ${m.pending > 0 ? '' : 'rounded-t'}`} style={{ height: `${paidH}px` }}
+                            title={`Received: €${m.paid.toLocaleString(undefined, { minimumFractionDigits: 2 })}`} />
                         )}
                         {m.paid === 0 && m.pending === 0 && (
                           <div className="w-4/5 bg-gray-100 rounded-t" style={{ height: '2px' }} />
