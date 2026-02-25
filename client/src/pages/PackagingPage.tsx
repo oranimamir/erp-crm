@@ -11,10 +11,25 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import { Plus, Box, Pencil, Trash2 } from 'lucide-react';
 
-const emptyForm = {
+interface PackagingForm {
+  type: string;
+  product_mass: string;
+  product: string[];
+  code: string;
+  units_per_pallet: string;
+  pallet_label_code: string;
+  weight_per_pallet: string;
+  weight_packaging: string;
+  weight_pallet: string;
+  gross_weight: string;
+  compatible: string;
+  notes: string;
+}
+
+const emptyForm: PackagingForm = {
   type: '',
   product_mass: '',
-  product: '',
+  product: [],
   code: '',
   units_per_pallet: '',
   pallet_label_code: '',
@@ -37,7 +52,7 @@ export default function PackagingPage() {
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<any>(null);
   const [deleteId, setDeleteId] = useState<number | null>(null);
-  const [form, setForm] = useState({ ...emptyForm });
+  const [form, setForm] = useState<PackagingForm>({ ...emptyForm });
   const [saving, setSaving] = useState(false);
   const [products, setProducts] = useState<{ id: number; name: string }[]>([]);
 
@@ -71,7 +86,7 @@ export default function PackagingPage() {
     setForm({
       type: item.type || '',
       product_mass: item.product_mass ?? '',
-      product: item.product || '',
+      product: item.product ? item.product.split(',').map((s: string) => s.trim()).filter(Boolean) : [],
       code: item.code || '',
       units_per_pallet: item.units_per_pallet ?? '',
       pallet_label_code: item.pallet_label_code || '',
@@ -94,6 +109,7 @@ export default function PackagingPage() {
     try {
       const payload = {
         ...form,
+        product: form.product.join(', '),
         product_mass: form.product_mass !== '' ? Number(form.product_mass) : null,
         units_per_pallet: form.units_per_pallet !== '' ? Number(form.units_per_pallet) : null,
         weight_per_pallet: form.weight_per_pallet !== '' ? Number(form.weight_per_pallet) : null,
@@ -222,17 +238,27 @@ export default function PackagingPage() {
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1">
-              <label className="block text-sm font-medium text-gray-700">Product</label>
+              <label className="block text-sm font-medium text-gray-700">
+                Product
+                {form.product.length > 0 && (
+                  <span className="ml-2 text-xs font-normal text-primary-600">{form.product.length} selected</span>
+                )}
+              </label>
               <select
+                multiple
                 value={form.product}
-                onChange={e => setForm({ ...form, product: e.target.value })}
-                className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                onChange={e => {
+                  const selected = Array.from(e.target.selectedOptions).map(o => o.value);
+                  setForm({ ...form, product: selected });
+                }}
+                size={Math.min(products.length + 1, 8)}
+                className="block w-full rounded-lg border border-gray-300 px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
               >
-                <option value="">— select product —</option>
                 {products.map(p => (
                   <option key={p.id} value={p.name}>{p.name}</option>
                 ))}
               </select>
+              <p className="text-xs text-gray-400">Hold Ctrl / Cmd to select multiple</p>
             </div>
             <Input label="Packaging code *" value={form.code} onChange={e => setForm({ ...form, code: e.target.value })} placeholder="e.g. PU18" />
           </div>
