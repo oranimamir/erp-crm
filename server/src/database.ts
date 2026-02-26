@@ -459,6 +459,16 @@ export async function initializeDatabase() {
 
   // Add payment_due_date to orders (set automatically when status → shipped)
   try { db.exec(`ALTER TABLE orders ADD COLUMN payment_due_date TEXT`); } catch (_) { /* column may already exist */ }
+  // Backfill payment_date on paid invoices that are missing it (so they appear in cash flow)
+  try {
+    db.exec(`
+      UPDATE invoices
+      SET payment_date = COALESCE(invoice_date, date(created_at))
+      WHERE status = 'paid'
+        AND payment_date IS NULL
+        AND NOT EXISTS (SELECT 1 FROM wire_transfers wt WHERE wt.invoice_id = invoices.id)
+    `);
+  } catch (_) { /* ignore */ }
   // Add product column to packaging
   try { db.exec(`ALTER TABLE packaging ADD COLUMN product TEXT`); } catch (_) { /* column may already exist */ }
 

@@ -140,7 +140,10 @@ router.put('/:id', uploadInvoice.single('file'), (req: Request, res: Response) =
       type === 'customer' ? (customer_id || null) : null,
       type === 'supplier' ? (supplier_id || null) : null,
       type || existing.type, parseFloat(amount) || existing.amount, currency || existing.currency,
-      status || existing.status, due_date || existing.due_date, invoice_date ?? existing.invoice_date, payment_date ?? existing.payment_date, notes ?? existing.notes,
+      status || existing.status, due_date || existing.due_date, invoice_date ?? existing.invoice_date,
+      // Auto-set payment_date to today when marking as paid and no date provided
+      payment_date ?? ((status === 'paid' && !existing.payment_date) ? new Date().toISOString().split('T')[0] : existing.payment_date),
+      notes ?? existing.notes,
       file_path, file_name, our_ref ?? existing.our_ref, po_number ?? existing.po_number,
       operation_id !== undefined ? (operation_id ? Number(operation_id) : null) : existing.operation_id,
       req.params.id
