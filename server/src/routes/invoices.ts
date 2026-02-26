@@ -226,13 +226,16 @@ router.post('/:id/wire-transfers', uploadWireTransfer.single('file'), async (req
     db.prepare(`INSERT INTO status_history (entity_type, entity_id, old_status, new_status, changed_by, notes) VALUES ('invoice', ?, ?, 'paid', ?, 'Auto-paid via wire transfer upload')`)
       .run(req.params.id, prevStatus, req.user!.userId);
 
-    // Auto-deliver linked operation when all its invoices are paid/cancelled
+    // Auto-complete linked operation when delivered and all its invoices are paid/cancelled
     if (invoice.operation_id) {
       const unpaid = (db.prepare(
         `SELECT COUNT(*) as count FROM invoices WHERE operation_id = ? AND status NOT IN ('paid','cancelled')`
       ).get(invoice.operation_id) as any).count;
       if (unpaid === 0) {
-        db.prepare(`UPDATE operations SET status='delivered', updated_at=datetime('now') WHERE id=?`).run(invoice.operation_id);
+        const operation = db.prepare('SELECT status FROM operations WHERE id = ?').get(invoice.operation_id) as any;
+        if (operation && operation.status === 'delivered') {
+          db.prepare(`UPDATE operations SET status='completed', updated_at=datetime('now') WHERE id=?`).run(invoice.operation_id);
+        }
       }
     }
 
@@ -252,12 +255,21 @@ router.delete('/:id/wire-transfers/:transferId', (req: Request, res: Response) =
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
   }
 
+  // Get invoice's operation_id before modifying
+  const invoiceForRevert = db.prepare('SELECT operation_id FROM invoices WHERE id = ?').get(req.params.id) as any;
+
   db.prepare('DELETE FROM wire_transfers WHERE id = ?').run(transfer.id);
 
   // Revert invoice to sent and clear payment_date
   db.prepare(`UPDATE invoices SET status='sent', payment_date=NULL, updated_at=datetime('now') WHERE id=?`).run(req.params.id);
   db.prepare(`INSERT INTO status_history (entity_type, entity_id, old_status, new_status, changed_by, notes) VALUES ('invoice', ?, 'paid', 'sent', ?, 'Wire transfer deleted — reverted to sent')`)
     .run(req.params.id, req.user!.userId);
+
+  // If the operation was completed, revert to delivered (invoice is no longer paid)
+  if (invoiceForRevert?.operation_id) {
+    db.prepare(`UPDATE operations SET status='delivered', updated_at=datetime('now') WHERE id=? AND status='completed'`)
+      .run(invoiceForRevert.operation_id);
+  }
 
   res.json({ message: 'Wire transfer deleted' });
 });

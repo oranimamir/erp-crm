@@ -32,13 +32,14 @@ interface PreviewItem {
   subfolder: string;
 }
 
-const STATUS_OPTIONS = ['pre-ordered', 'ordered', 'shipped', 'delivered'];
+const STATUS_OPTIONS = ['pre-ordered', 'ordered', 'shipped', 'delivered', 'completed'];
 
 const STATUS_COLORS: Record<string, string> = {
   'pre-ordered': 'bg-purple-100 text-purple-800',
   ordered:       'bg-yellow-100 text-yellow-800',
   shipped:       'bg-blue-100   text-blue-800',
   delivered:     'bg-green-100  text-green-800',
+  completed:     'bg-emerald-100 text-emerald-800',
 };
 
 type SortField = 'order_date' | 'status' | 'name';
@@ -83,16 +84,16 @@ export default function OperationsPage() {
   const handleStatusChange = async (id: number, status: string) => {
     try {
       await api.patch(`/operations/${id}/status`, { status });
-      // If the operation moved to/from 'delivered', refetch so it appears in the right tab
-      const movedToCompleted = status === 'delivered' && activeTab === 'active';
-      const movedToActive = status !== 'delivered' && activeTab === 'completed';
+      // If the operation moved to/from 'completed', refetch so it appears in the right tab
+      const movedToCompleted = status === 'completed' && activeTab === 'active';
+      const movedToActive = status !== 'completed' && activeTab === 'completed';
       if (movedToCompleted || movedToActive) {
         fetchOperations();
       } else {
         setOperations(prev => prev.map(op => op.id === id ? { ...op, status } : op));
       }
-    } catch {
-      addToast('Failed to update status', 'error');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to update status', 'error');
     }
   };
 

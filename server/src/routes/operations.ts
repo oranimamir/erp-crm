@@ -56,9 +56,9 @@ router.get('/', (req: Request, res: Response) => {
   const conditions: string[] = [];
   const params: any[] = [];
   if (tab === 'completed') {
-    conditions.push("op.status = 'delivered'");
+    conditions.push("op.status = 'completed'");
   } else {
-    conditions.push("op.status != 'delivered'");
+    conditions.push("op.status != 'completed'");
   }
   if (search) {
     conditions.push('(op.operation_number LIKE ? OR c.name LIKE ? OR s.name LIKE ?)');
@@ -173,6 +173,21 @@ router.patch('/:id/status', (req: Request, res: Response) => {
   if (!existing) { res.status(404).json({ error: 'Operation not found' }); return; }
   const { status } = req.body;
   if (!status) { res.status(400).json({ error: 'status is required' }); return; }
+
+  if (status === 'completed') {
+    if (existing.status !== 'delivered') {
+      res.status(400).json({ error: 'Operation must be delivered before it can be completed' });
+      return;
+    }
+    const unpaid = (db.prepare(
+      `SELECT COUNT(*) as count FROM invoices WHERE operation_id = ? AND status NOT IN ('paid','cancelled')`
+    ).get(req.params.id) as any).count;
+    if (unpaid > 0) {
+      res.status(400).json({ error: 'All invoices must be paid before the operation can be completed' });
+      return;
+    }
+  }
+
   db.prepare(`UPDATE operations SET status=?, updated_at=datetime('now') WHERE id=?`).run(status, req.params.id);
   res.json({ id: existing.id, status });
 });
