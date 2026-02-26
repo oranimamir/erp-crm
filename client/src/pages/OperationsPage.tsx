@@ -4,7 +4,7 @@ import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import {
   Briefcase, Search, Plus, ChevronLeft, ChevronRight, FileText, Receipt,
-  FileSpreadsheet, ChevronUp, ChevronDown, Eye, Download, X,
+  FileSpreadsheet, ChevronUp, ChevronDown, Eye, Download, X, Truck, Loader2,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
@@ -21,10 +21,19 @@ interface Operation {
   customer_name?: string;
   supplier_name?: string;
   status: string;
+  ship_date?: string;
   doc_count: number;
   invoice_count: number;
   created_at: string;
 }
+
+function addDays(dateStr: string, days: number): string {
+  if (!dateStr) return '';
+  const d = new Date(dateStr + 'T12:00:00');
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
+}
+function todayISO() { return new Date().toISOString().split('T')[0]; }
 
 interface PreviewItem {
   fileName: string;
@@ -64,6 +73,13 @@ export default function OperationsPage() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
+  // Ship modal
+  const [shipTarget, setShipTarget] = useState<Operation | null>(null);
+  const [shipDate, setShipDate] = useState('');
+  const [payDays, setPayDays] = useState(45);
+  const [dueDate, setDueDate] = useState('');
+  const [savingShip, setSavingShip] = useState(false);
+
   const handleSort = (field: SortField) => {
     if (sortBy === field) {
       setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -81,10 +97,22 @@ export default function OperationsPage() {
       : <ChevronDown size={12} className="text-primary-600" />;
   };
 
-  const handleStatusChange = async (id: number, status: string) => {
+  const handleStatusChange = (id: number, newStatus: string) => {
+    if (newStatus === 'shipped') {
+      const op = operations.find(o => o.id === id) || null;
+      const defaultDate = op?.ship_date || todayISO();
+      setShipTarget(op);
+      setShipDate(defaultDate);
+      setPayDays(45);
+      setDueDate(addDays(defaultDate, 45));
+      return;
+    }
+    applyStatus(id, newStatus);
+  };
+
+  const applyStatus = async (id: number, status: string) => {
     try {
       await api.patch(`/operations/${id}/status`, { status });
-      // If the operation moved to/from 'completed', refetch so it appears in the right tab
       const movedToCompleted = status === 'completed' && activeTab === 'active';
       const movedToActive = status !== 'completed' && activeTab === 'completed';
       if (movedToCompleted || movedToActive) {
@@ -94,6 +122,21 @@ export default function OperationsPage() {
       }
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Failed to update status', 'error');
+    }
+  };
+
+  const handleConfirmShip = async () => {
+    if (!shipTarget || !shipDate || !dueDate) return;
+    setSavingShip(true);
+    try {
+      await api.post(`/operations/${shipTarget.id}/ship`, { ship_date: shipDate, due_date: dueDate });
+      setOperations(prev => prev.map(op => op.id === shipTarget.id ? { ...op, status: 'shipped', ship_date: shipDate } : op));
+      setShipTarget(null);
+      addToast('Operation marked as shipped — invoices updated', 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to mark as shipped', 'error');
+    } finally {
+      setSavingShip(false);
     }
   };
 
@@ -431,6 +474,79 @@ export default function OperationsPage() {
               ) : (
                 <p className="text-gray-500">Unable to preview this file.</p>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Ship Modal ─────────────────────────────────────────────────────── */}
+      {shipTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => !savingShip && setShipTarget(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+              <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                <Truck size={17} className="text-blue-500" />
+                Mark as Shipped — {shipTarget.operation_number}
+              </h3>
+              <button onClick={() => !savingShip && setShipTarget(null)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="px-5 py-5 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Shipment Date</label>
+                <input
+                  type="date"
+                  value={shipDate}
+                  onChange={e => { setShipDate(e.target.value); setDueDate(addDays(e.target.value, payDays)); }}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Payment Terms</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    max={365}
+                    value={payDays}
+                    onChange={e => { const d = Math.max(1, parseInt(e.target.value) || 1); setPayDays(d); setDueDate(addDays(shipDate, d)); }}
+                    className="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                  <span className="text-sm text-gray-500">days after shipment</span>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Invoice Due Date
+                  <span className="text-xs text-gray-400 font-normal ml-1.5">shipment + {payDays} days · editable</span>
+                </label>
+                <input
+                  type="date"
+                  value={dueDate}
+                  onChange={e => setDueDate(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+              </div>
+            </div>
+
+            <div className="px-5 py-4 bg-gray-50 border-t border-gray-200 flex justify-end gap-3">
+              <button
+                onClick={() => setShipTarget(null)}
+                disabled={savingShip}
+                className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-100 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmShip}
+                disabled={savingShip || !shipDate || !dueDate}
+                className="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-60 flex items-center gap-2"
+              >
+                {savingShip ? <Loader2 size={15} className="animate-spin" /> : <Truck size={15} />}
+                {savingShip ? 'Saving...' : 'Confirm Shipment'}
+              </button>
             </div>
           </div>
         </div>
