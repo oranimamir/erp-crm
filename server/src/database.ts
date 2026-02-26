@@ -522,10 +522,50 @@ export async function initializeDatabase() {
     }
   } catch (_) { /* already migrated */ }
 
-  // Clear pre-seeded packaging data — user populates via UI/import
-  const hasSeedData = (db.prepare("SELECT COUNT(*) as c FROM packaging WHERE code = 'SU04'").get() as any).c;
-  if (hasSeedData > 0) {
-    db.prepare('DELETE FROM packaging').run();
+  // Seed packaging data from official Packaging List (only if table is empty)
+  const packagingCount = (db.prepare('SELECT COUNT(*) as c FROM packaging').get() as any).c;
+  if (packagingCount === 0) {
+    const insertPkg = db.prepare(`
+      INSERT INTO packaging (type, code, product, product_mass, units_per_pallet, pallet_label_code, weight_per_pallet, weight_packaging, weight_pallet, gross_weight, compatible)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const pkgData: [string, string, string|null, number|null, number|null, string|null, number|null, number|null, number|null, number|null, string][] = [
+      ['0.125l sample bottle',  'SU04', 'ALL',                                      0.125, 8,    'S004',    1,    0.1,  0.4,  2.2,    'Food'],
+      ['0.25l sample bottle',   'SU03', 'ALL',                                      0.25,  4,    'S003',    1,    0.2,  0.4,  2.2,    'Food'],
+      ['0.5l sample bottle',    'SU02', 'ALL',                                      0.5,   2,    'S002',    1,    0.3,  0.4,  2,      'Food'],
+      ['1l sample bottle',      'SU01', 'ALL',                                      1,     1,    'S001',    1,    0.4,  0.4,  1.8,    'Food'],
+      ['5l sample bottle',      'SU05', 'ALL',                                      5,     1,    'S005',    5,    1,    1,    7,      'Food'],
+      ['15l short blue pails',  'PU18', 'Midas Circulac',                           18,    32,   'PU18032', 576,  2.5,  20,   676,    'Food'],
+      ['15l short blue pails',  'PU18', 'Potassium Circulac',                       18,    32,   'PU18032', 576,  2.5,  20,   676,    'Food'],
+      ['15l short blue pails',  'PU18', 'Sodium Circulac',                          18,    32,   'PU18032', 576,  2.5,  20,   676,    'Food'],
+      ['20kg paper bags',       'BU20', 'Midas Circulac Powder',                    20,    50,   'BU20050', 1000, 0.1,  20,   1025,   'Food'],
+      ['20kg paper bags',       'BU20', 'Midas Circulac Powder',                    20,    40,   'BU20040', 800,  0.1,  20,   824,    'Food'],
+      ['20kg paper bags',       'BU20', 'Sodium Circulac S100',                     20,    28,   'BU20028', 560,  0.1,  20,   582.8,  'Food'],
+      ['25kg cardboard drums',  'CD25', 'Naturlac LF60, Ferrous Naturlac FL2H',     25,    18,   'CD25018', 450,  2,    20,   506,    'Food'],
+      ['25kg paper bags',       'BU25', 'Calcium Naturlac CL5H',                    25,    32,   'BU25032', 800,  0.1,  18,   821.2,  'Food'],
+      ['25kg paper bags',       'BU25', 'Calcium Naturlac CG5H',                    25,    24,   'BU25024', 600,  0.1,  18,   620.4,  'Food'],
+      ['25kg paper bags',       'BU25', 'Midas Circulac Powder',                    25,    40,   'BU25040', 1000, 0.1,  25,   1029,   'Food'],
+      ['25kg paper bags',       'BU25', 'Midas Circulac Powder',                    25,    30,   'BU25030', 750,  0.1,  25,   778,    'Food'],
+      ['25l blue pails',        'PU25', 'Circulac, Sodium Circulac',                25,    32,   'PU25032', 800,  3,    20,   916,    'Food'],
+      ['25l blue pails',        'PU30', 'Circulac',                                 30,    32,   'PU30032', 960,  3,    20,   1076,   'Food'],
+      ['25l blue pails',        'PU30', 'Midas Circulac',                           30,    32,   'PU30032', 960,  3,    20,   1076,   'Food'],
+      ['25l blue pails',        'PU30', 'Potassium Circulac',                       30,    32,   'PU30032', 960,  3,    20,   1076,   'Food'],
+      ['25l blue pails',        'PU30', 'Sodium Circulac',                          30,    32,   'PU30032', 960,  3,    20,   1076,   'Food'],
+      ['220l blue drums',       'DU20', 'Ethyl Circulac',                           200,   4,    'DU20004', 800,  10,   20,   860,    'Food'],
+      ['220l blue drums',       'DU25', 'Circulac',                                 250,   4,    'DU25004', 1000, 10,   20,   1060,   'Food'],
+      ['220l blue drums',       'DU25', 'Midas Circulac',                           250,   4,    'DU25004', 1000, 10,   20,   1060,   'Food'],
+      ['220l blue drums',       'DU25', 'Potassium Circulac',                       250,   4,    'DU25004', 1000, 10,   20,   1060,   'Food'],
+      ['220l blue drums',       'DU25', 'Sodium Circulac',                          250,   4,    'DU25004', 1000, 10,   20,   1060,   'Food'],
+      ['220l blue drums',       'DU27', 'Sodium Circulac',                          275,   4,    'DU27004', 1100, 10,   20,   1160,   'Food'],
+      ['1000kg big bags',       'BB10', 'Sodium Circulac S100',                     1000,  1,    'BB10001', 1000, 10,   20,   1030,   'Food'],
+      ['IBC',                   'IB10', 'Ethyl Circulac',                           1000,  1,    'IB10001', 1000, 65,   0,    1065,   'Food'],
+      ['IBC',                   'IB12', 'Circulac',                                 1200,  1,    'IB12001', 1200, 65,   0,    1265,   'Food'],
+      ['IBC',                   'IB13', 'Midas Circulac',                           1300,  1,    'IB13001', 1300, 65,   0,    1365,   'Food'],
+      ['IBC',                   'IB13', 'Potassium Circulac',                       1300,  1,    'IB13001', 1300, 65,   0,    1365,   'Food'],
+      ['IBC',                   'IB13', 'Sodium Circulac',                          1300,  1,    'IB13001', 1300, 65,   0,    1365,   'Food'],
+      ['Bulk',                  'X27K', 'Naturlac',                                 27000, null, null,       27000, null, null, 27000,  'Food'],
+    ];
+    for (const row of pkgData) insertPkg.run(...row);
   }
 
   // Seed admin user if not exists
