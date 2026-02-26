@@ -24,10 +24,20 @@ router.get('/filters', (_req: Request, res: Response) => {
 
 // GET /analytics/summary?year=2026&quarter=1&customer_id=&supplier_id=
 router.get('/summary', (req: Request, res: Response) => {
-  const year = (req.query.year as string) || new Date().getFullYear().toString();
+  const yearNum = parseInt((req.query.year as string) || new Date().getFullYear().toString());
+  if (isNaN(yearNum) || yearNum < 2000 || yearNum > 2100) {
+    res.status(400).json({ error: 'Invalid year' }); return;
+  }
+  const year = String(yearNum);
   const quarter = parseInt(req.query.quarter as string || '0') || 0;
   const customerId = req.query.customer_id ? parseInt(req.query.customer_id as string) : null;
   const supplierId = req.query.supplier_id ? parseInt(req.query.supplier_id as string) : null;
+  if (req.query.customer_id && (isNaN(customerId!) || customerId! <= 0)) {
+    res.status(400).json({ error: 'Invalid customer_id' }); return;
+  }
+  if (req.query.supplier_id && (isNaN(supplierId!) || supplierId! <= 0)) {
+    res.status(400).json({ error: 'Invalid supplier_id' }); return;
+  }
 
   // Date range
   let monthStart: number, monthEnd: number;

@@ -22,9 +22,11 @@ router.get('/', (req, res) => {
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const filename = `erp-backup-${timestamp}.db`;
+  const stats = fs.statSync(dbPath);
 
   res.setHeader('Content-Type', 'application/octet-stream');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Length', stats.size);
 
   fs.createReadStream(dbPath).pipe(res);
 });

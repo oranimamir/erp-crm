@@ -22,10 +22,12 @@ function createStorage(subfolder: string) {
   });
 }
 
+const allowedExtensions = ['.pdf', '.jpg', '.jpeg', '.png', '.webp'];
+const allowedMimeTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
+
 const fileFilter = (_req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
-  const allowed = ['.pdf', '.jpg', '.jpeg', '.png', '.webp'];
   const ext = path.extname(file.originalname).toLowerCase();
-  if (allowed.includes(ext)) {
+  if (allowedExtensions.includes(ext) && allowedMimeTypes.includes(file.mimetype)) {
     cb(null, true);
   } else {
     cb(new Error('Only PDF, JPEG, PNG, and WebP files are allowed'));

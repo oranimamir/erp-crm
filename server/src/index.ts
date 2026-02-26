@@ -48,7 +48,7 @@ app.use(helmet({
 // ── CORS ────────────────────────────────────────────────────────────────────
 const allowedOrigins = process.env.APP_URL
   ? [process.env.APP_URL, 'http://localhost:5173', 'http://localhost:3001']
-  : true; // Dev fallback: allow all
+  : ['http://localhost:5173', 'http://localhost:3001']; // Restrict to localhost even in dev
 
 app.use(cors({
   origin: allowedOrigins,

@@ -10,8 +10,8 @@ const router = Router();
 function serveFile(subfolder: string) {
   return (req: Request, res: Response) => {
     const filename = req.params.filename as string;
-    // Prevent path traversal
-    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+    // Allowlist: only timestamps, hex chars, dots, hyphens — no traversal possible
+    if (!/^[a-zA-Z0-9._-]+$/.test(filename)) {
       res.status(400).json({ error: 'Invalid filename' });
       return;
     }

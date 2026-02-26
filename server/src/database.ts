@@ -525,7 +525,7 @@ export async function initializeDatabase() {
     db.prepare('INSERT INTO users (username, password_hash, display_name, role) VALUES (?, ?, ?, ?)').run(
       'admin', hash, 'Administrator', 'admin'
     );
-    console.log('Default admin user created (admin/admin123)');
+    console.warn('⚠️  Default admin created (admin/admin123) — change this password immediately via Settings.');
   }
 
   db.saveToDisk();

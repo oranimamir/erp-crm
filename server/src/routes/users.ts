@@ -114,7 +114,7 @@ router.put('/:id', requireAdmin, (req: Request, res: Response) => {
 router.delete('/:id', requireAdmin, (req: Request, res: Response) => {
   const userId = Number(req.params.id);
 
-  if (userId === req.user?.userId) {
+  if (!req.user || userId === req.user.userId) {
     res.status(400).json({ error: 'Cannot delete your own account' });
     return;
   }
@@ -143,6 +143,10 @@ router.post('/invite', requireAdmin, (req: Request, res: Response) => {
 
   if (!email) {
     res.status(400).json({ error: 'Email is required' });
+    return;
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    res.status(400).json({ error: 'Invalid email format' });
     return;
   }
   if (role && !['admin', 'user'].includes(role)) {
