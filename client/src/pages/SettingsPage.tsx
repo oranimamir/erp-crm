@@ -24,7 +24,7 @@ export default function SettingsPage() {
       const a = document.createElement('a');
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       a.href = url;
-      a.download = `erp-backup-${timestamp}.zip`;
+      a.download = `erp-backup-${timestamp}.db`;
       a.click();
       URL.revokeObjectURL(url);
       addToast('Backup downloaded successfully', 'success');
