@@ -30,6 +30,13 @@ function fmt(n: number) {
   return `€${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function fmtAxis(n: number): string {
+  if (n === 0) return '0';
+  if (n >= 1_000_000) return `€${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `€${Math.round(n / 1_000)}k`;
+  return `€${Math.round(n)}`;
+}
+
 function monthLabel(m: string) {
   return new Date(m + '-02').toLocaleDateString('en-GB', { month: 'short' });
 }
@@ -409,61 +416,92 @@ export default function AnalyticsPage() {
               {!hasData ? (
                 <p className="text-center text-sm text-gray-500 py-8">No payment data for this period</p>
               ) : (
-                <div className="flex items-end gap-2" style={{ height: 200 }}>
-                  {data.monthly.map(m => (
-                    <div key={m.month} className="flex-1 flex flex-col items-center gap-1 h-full justify-end">
-                      <div className="w-full flex items-end justify-center gap-0.5">
-                        {view !== 'suppliers' && (
-                          <div
-                            className="flex-1 max-w-[20px] bg-green-500 rounded-t transition-all"
-                            style={{ height: `${m.received > 0 ? Math.max((m.received / maxBar) * 165, 2) : 0}px` }}
-                            title={`Received: ${fmt(m.received)}`}
-                          />
-                        )}
-                        {view !== 'customers' && (
-                          <div
-                            className="flex-1 max-w-[20px] bg-red-400 rounded-t transition-all"
-                            style={{ height: `${m.paid_out > 0 ? Math.max((m.paid_out / maxBar) * 165, 2) : 0}px` }}
-                            title={`Paid out: ${fmt(m.paid_out)}`}
-                          />
-                        )}
+                <div className="flex gap-2">
+                  {/* Y-axis labels — top (max) to bottom (0) */}
+                  <div className="flex flex-col justify-between items-end shrink-0 w-14" style={{ height: 165 }}>
+                    {[maxBar, maxBar * 0.75, maxBar * 0.5, maxBar * 0.25, 0].map((v, i) => (
+                      <span key={i} className="text-[10px] text-gray-400 leading-none tabular-nums">
+                        {fmtAxis(v)}
+                      </span>
+                    ))}
+                  </div>
+
+                  {/* Chart area */}
+                  <div className="flex-1 min-w-0 flex flex-col">
+                    {/* Drawing area: bars + horizontal grid lines */}
+                    <div className="relative" style={{ height: 165 }}>
+                      {/* Grid lines at 0 / 25 / 50 / 75 / 100% */}
+                      {[0, 25, 50, 75, 100].map(pct => (
+                        <div
+                          key={pct}
+                          className={`absolute left-0 right-0 pointer-events-none ${pct === 0 ? 'border-t border-gray-300' : 'border-t border-gray-100'}`}
+                          style={{ bottom: `${(pct / 100) * 165}px` }}
+                        />
+                      ))}
+
+                      {/* Bars */}
+                      <div className="flex items-end gap-1 h-full">
+                        {data.monthly.map(m => (
+                          <div key={m.month} className="flex-1 flex items-end justify-center gap-0.5 h-full">
+                            {view !== 'suppliers' && (
+                              <div
+                                className="flex-1 max-w-[20px] bg-green-500 rounded-t transition-all"
+                                style={{ height: `${m.received > 0 ? Math.max((m.received / maxBar) * 165, 2) : 0}px` }}
+                                title={`Received: ${fmt(m.received)}`}
+                              />
+                            )}
+                            {view !== 'customers' && (
+                              <div
+                                className="flex-1 max-w-[20px] bg-red-400 rounded-t transition-all"
+                                style={{ height: `${m.paid_out > 0 ? Math.max((m.paid_out / maxBar) * 165, 2) : 0}px` }}
+                                title={`Paid out: ${fmt(m.paid_out)}`}
+                              />
+                            )}
+                          </div>
+                        ))}
                       </div>
-                      <span className="text-[10px] text-gray-400">{monthLabel(m.month)}</span>
                     </div>
-                  ))}
+
+                    {/* X-axis month labels */}
+                    <div className="flex gap-1 mt-1.5">
+                      {data.monthly.map(m => (
+                        <div key={m.month} className="flex-1 text-center">
+                          <span className="text-[10px] text-gray-400">{monthLabel(m.month)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               )}
+
+              {/* Value table — offset left to align with the bar area */}
               {hasData && (
-                <div className="mt-4 overflow-x-auto">
-                  <table className="w-full text-xs text-center">
-                    <thead>
-                      <tr className="text-gray-400">
-                        {data.monthly.map(m => (
-                          <td key={m.month} className="px-1 pb-1">{monthLabel(m.month)}</td>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {view !== 'suppliers' && (
-                        <tr className="text-green-600 font-medium">
-                          {data.monthly.map(m => (
-                            <td key={m.month} className="px-1">
-                              {m.received > 0 ? `€${Math.round(m.received / 1000)}k` : '—'}
-                            </td>
-                          ))}
-                        </tr>
-                      )}
-                      {view !== 'customers' && (
-                        <tr className="text-red-400 font-medium">
-                          {data.monthly.map(m => (
-                            <td key={m.month} className="px-1">
-                              {m.paid_out > 0 ? `€${Math.round(m.paid_out / 1000)}k` : '—'}
-                            </td>
-                          ))}
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
+                <div className="mt-4 flex gap-2">
+                  <div className="w-14 shrink-0" />{/* spacer matching Y-axis width */}
+                  <div className="flex-1 overflow-x-auto">
+                    <table className="w-full text-xs text-center">
+                      <tbody>
+                        {view !== 'suppliers' && (
+                          <tr className="text-green-600 font-medium">
+                            {data.monthly.map(m => (
+                              <td key={m.month} className="px-1">
+                                {m.received > 0 ? `€${Math.round(m.received / 1000)}k` : '—'}
+                              </td>
+                            ))}
+                          </tr>
+                        )}
+                        {view !== 'customers' && (
+                          <tr className="text-red-400 font-medium">
+                            {data.monthly.map(m => (
+                              <td key={m.month} className="px-1">
+                                {m.paid_out > 0 ? `€${Math.round(m.paid_out / 1000)}k` : '—'}
+                              </td>
+                            ))}
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
             </div>
