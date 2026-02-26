@@ -68,6 +68,7 @@ interface Operation {
   customer_name?: string;
   supplier_name?: string;
   status: string;
+  ship_date?: string;
   notes?: string;
   created_at: string;
   documents: OperationDoc[];
@@ -347,10 +348,10 @@ export default function OperationDetailPage() {
   async function handleStatusChange(newStatus: string) {
     if (newStatus === 'shipped') {
       // Intercept: open ship modal to confirm dates before saving
-      const today = todayISO();
-      setShipDate(today);
+      const defaultDate = operation?.ship_date || todayISO();
+      setShipDate(defaultDate);
       setPayDays(45);
-      setDueDate(addDays(today, 45));
+      setDueDate(addDays(defaultDate, 45));
       setShowShipModal(true);
       return;
     }
@@ -486,15 +487,33 @@ export default function OperationDetailPage() {
               {operation.operation_number}
             </h1>
             <select
-              value={operation.status}
+              value={STATUS_OPTIONS.includes(operation.status) ? operation.status : ''}
               onChange={e => handleStatusChange(e.target.value)}
               disabled={savingStatus}
               className={`text-xs font-medium px-2 py-1 rounded-full border-0 focus:ring-2 focus:ring-primary-500 cursor-pointer ${STATUS_COLORS[operation.status] || 'bg-gray-100 text-gray-700'}`}
             >
+              {!STATUS_OPTIONS.includes(operation.status) && (
+                <option value="">{operation.status.charAt(0).toUpperCase() + operation.status.slice(1)}</option>
+              )}
               {STATUS_OPTIONS.map(s => (
                 <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
               ))}
             </select>
+            {(operation.status === 'shipped' || operation.status === 'delivered') && (
+              <button
+                onClick={() => {
+                  const today = operation.ship_date || todayISO();
+                  setShipDate(today);
+                  setPayDays(45);
+                  setDueDate(addDays(today, 45));
+                  setShowShipModal(true);
+                }}
+                className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 border border-blue-200 bg-blue-50 rounded-lg px-2 py-1"
+                title="Edit shipment date / invoice due date"
+              >
+                <Truck size={12} /> {operation.ship_date ? `Shipped ${formatDate(operation.ship_date)}` : 'Set ship dates'}
+              </button>
+            )}
           </div>
           <p className="text-sm text-gray-500 mt-1">
             {operation.customer_name || operation.supplier_name || '—'} · Created {formatDate(operation.created_at) || '-'}

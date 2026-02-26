@@ -7,7 +7,8 @@ import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
 import FileUpload from '../components/ui/FileUpload';
-import { ArrowLeft, Loader2, ChevronDown, X } from 'lucide-react';
+import { ArrowLeft, Loader2, ChevronDown, X, Truck } from 'lucide-react';
+import { formatDate } from '../lib/dates';
 
 const typeOptions = [
   { value: 'customer', label: 'Customer' },
@@ -475,6 +476,17 @@ export default function InvoiceFormPage() {
               placeholder="No operation linked"
             />
           )}
+
+          {(() => {
+            const selectedOp = operations.find((op: any) => String(op.id) === form.operation_id);
+            if (!selectedOp?.ship_date) return null;
+            return (
+              <div className="flex items-center gap-2 text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+                <Truck size={14} className="flex-shrink-0" />
+                <span>Operation shipped on <strong>{formatDate(selectedOp.ship_date)}</strong> · due date was set to shipment + 45 days</span>
+              </div>
+            );
+          })()}
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <Input
