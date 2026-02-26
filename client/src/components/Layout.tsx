@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Outlet, NavLink } from 'react-router-dom';
+import { Outlet, NavLink, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import {
@@ -33,10 +33,10 @@ export default function Layout() {
 
       {/* Sidebar */}
       <aside className={`fixed lg:static inset-y-0 left-0 z-50 w-64 bg-gray-900 text-white transform transition-transform lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="flex items-center gap-3 px-6 py-5 border-b border-gray-800">
+        <Link to="/dashboard" className="flex items-center gap-3 px-6 py-5 border-b border-gray-800 hover:opacity-80 transition-opacity">
           <div className="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center font-bold text-sm">C</div>
           <span className="text-lg font-bold">CirculERP</span>
-        </div>
+        </Link>
         <nav className="px-3 py-4 flex flex-col h-[calc(100%-73px)]">
           <div className="flex-1 space-y-1">
             {navItems.map(item => (

@@ -7,7 +7,7 @@ import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
 import FileUpload from '../components/ui/FileUpload';
-import { ArrowLeft, Loader2 } from 'lucide-react';
+import { ArrowLeft, Loader2, ChevronDown, X } from 'lucide-react';
 
 const typeOptions = [
   { value: 'customer', label: 'Customer' },
@@ -61,6 +61,96 @@ const emptyForm: InvoiceForm = {
   po_number: '',
   operation_id: '',
 };
+
+interface ComboboxOption { value: string; label: string; }
+
+function SearchableSelect({
+  label, value, onChange, options, placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: ComboboxOption[];
+  placeholder?: string;
+}) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const selected = options.find(o => o.value === value);
+  const filtered = query.trim()
+    ? options.filter(o => o.label.toLowerCase().includes(query.toLowerCase()))
+    : options;
+
+  // Close on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery('');
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  return (
+    <div ref={containerRef} className="space-y-1">
+      <label className="block text-sm font-medium text-gray-700">{label}</label>
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => { setOpen(o => !o); setQuery(''); }}
+          className="w-full flex items-center justify-between rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white text-left focus:outline-none focus:ring-2 focus:ring-primary-500"
+        >
+          <span className={selected ? 'text-gray-900' : 'text-gray-400'}>
+            {selected ? selected.label : (placeholder || 'Select...')}
+          </span>
+          <div className="flex items-center gap-1">
+            {value && (
+              <span
+                role="button"
+                onClick={e => { e.stopPropagation(); onChange(''); }}
+                className="text-gray-400 hover:text-gray-600 p-0.5"
+              >
+                <X size={14} />
+              </span>
+            )}
+            <ChevronDown size={14} className="text-gray-400" />
+          </div>
+        </button>
+
+        {open && (
+          <div className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg">
+            <div className="p-2 border-b border-gray-100">
+              <input
+                autoFocus
+                type="text"
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                placeholder="Search..."
+                className="w-full text-sm px-2 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+              />
+            </div>
+            <ul className="max-h-52 overflow-y-auto py-1">
+              {filtered.length === 0 ? (
+                <li className="px-3 py-2 text-sm text-gray-400">No results</li>
+              ) : filtered.map(o => (
+                <li
+                  key={o.value}
+                  onClick={() => { onChange(o.value); setOpen(false); setQuery(''); }}
+                  className={`px-3 py-2 text-sm cursor-pointer hover:bg-primary-50 hover:text-primary-700 ${o.value === value ? 'bg-primary-50 text-primary-700 font-medium' : 'text-gray-900'}`}
+                >
+                  {o.label}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function addDays(dateStr: string, days: number): string {
   const d = new Date(dateStr);
@@ -322,14 +412,14 @@ export default function InvoiceFormPage() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Select
+            <SearchableSelect
               label={form.type === 'customer' ? 'Customer *' : 'Supplier *'}
               value={form.type === 'customer' ? form.customer_id : form.supplier_id}
-              onChange={e => {
+              onChange={val => {
                 if (form.type === 'customer') {
-                  updateField('customer_id', e.target.value);
+                  updateField('customer_id', val);
                 } else {
-                  updateField('supplier_id', e.target.value);
+                  updateField('supplier_id', val);
                 }
               }}
               options={entityOptions}
