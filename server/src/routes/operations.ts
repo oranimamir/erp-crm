@@ -192,6 +192,50 @@ router.patch('/:id/status', (req: Request, res: Response) => {
   res.json({ id: existing.id, status });
 });
 
+// ── Ship operation ─────────────────────────────────────────────────────────────
+// Sets status to 'shipped' AND updates all customer invoices:
+//   invoice_date = ship_date, due_date = due_date, draft→sent
+
+router.post('/:id/ship', (req: Request, res: Response) => {
+  const existing = db.prepare('SELECT * FROM operations WHERE id = ?').get(req.params.id) as any;
+  if (!existing) { res.status(404).json({ error: 'Operation not found' }); return; }
+
+  const { ship_date, due_date } = req.body;
+  if (!ship_date || !due_date) {
+    res.status(400).json({ error: 'ship_date and due_date are required' }); return;
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ship_date) || !/^\d{4}-\d{2}-\d{2}$/.test(due_date)) {
+    res.status(400).json({ error: 'Dates must be YYYY-MM-DD' }); return;
+  }
+
+  // Update operation: status + ship_date (invoice_date stays on the invoice itself)
+  db.prepare(`UPDATE operations SET status = 'shipped', ship_date = ?, updated_at = datetime('now') WHERE id = ?`).run(ship_date, req.params.id);
+
+  // Update customer invoices: set due_date only — invoice_date is per the uploaded invoice
+  const invoices = db.prepare(
+    "SELECT id, status FROM invoices WHERE operation_id = ? AND type = 'customer'"
+  ).all(req.params.id) as any[];
+
+  for (const inv of invoices) {
+    const newStatus = inv.status === 'draft' ? 'sent' : inv.status;
+    db.prepare(`
+      UPDATE invoices
+      SET due_date = ?, status = ?, updated_at = datetime('now')
+      WHERE id = ?
+    `).run(due_date, newStatus, inv.id);
+
+    if (inv.status === 'draft') {
+      try {
+        db.prepare(
+          "INSERT INTO status_history (entity_type, entity_id, new_status, changed_by) VALUES ('invoice', ?, 'sent', ?)"
+        ).run(inv.id, req.user!.userId);
+      } catch { /* ignore */ }
+    }
+  }
+
+  res.json({ ok: true, invoices_updated: invoices.length });
+});
+
 // ── Update operation ──────────────────────────────────────────────────────────
 
 router.put('/:id', (req: Request, res: Response) => {

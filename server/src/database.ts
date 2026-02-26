@@ -568,6 +568,23 @@ export async function initializeDatabase() {
     for (const row of pkgData) insertPkg.run(...row);
   }
 
+  // Add ship_date to operations
+  try { db.exec(`ALTER TABLE operations ADD COLUMN ship_date TEXT`); } catch (_) { /* already exists */ }
+
+  // SharePoint pending imports
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sharepoint_pending (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      folder_name TEXT NOT NULL,
+      files TEXT NOT NULL,
+      detected_at TEXT DEFAULT (datetime('now')),
+      status TEXT DEFAULT 'pending',
+      operation_id INTEGER REFERENCES operations(id),
+      imported_at TEXT,
+      imported_by INTEGER REFERENCES users(id)
+    )
+  `);
+
   // Seed admin user if not exists
   const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');
   if (!adminExists) {

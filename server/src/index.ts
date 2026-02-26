@@ -29,6 +29,9 @@ import operationRoutes from './routes/operations.js';
 import analyticsRoutes from './routes/analytics.js';
 import packagingRoutes from './routes/packaging.js';
 import backupRoutes from './routes/backup.js';
+import sharepointRoutes from './routes/sharepoint.js';
+import cron from 'node-cron';
+import { scanNewOperations } from './lib/sharepoint.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -81,6 +84,11 @@ const apiLimiter = rateLimit({
 // Initialize database
 await initializeDatabase();
 
+// Schedule daily SharePoint scan at 7:00 AM UTC
+cron.schedule('0 7 * * *', () => {
+  scanNewOperations().catch(err => console.error('[SharePoint scan]', err));
+});
+
 // ── Public routes (with rate limiting) ───────────────────────────────────────
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/accept-invite', authLimiter);
@@ -109,6 +117,7 @@ app.use('/api/operations', authenticateToken, operationRoutes);
 app.use('/api/analytics', authenticateToken, analyticsRoutes);
 app.use('/api/packaging', authenticateToken, packagingRoutes);
 app.use('/api/backup', authenticateToken, backupRoutes);
+app.use('/api/sharepoint', authenticateToken, sharepointRoutes);
 
 // ── Serve built client in production ─────────────────────────────────────────
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');

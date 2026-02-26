@@ -1,12 +1,13 @@
-import { useState } from 'react';
-import { Outlet, NavLink, Link } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Outlet, NavLink, Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import {
   LayoutDashboard, Users, Truck, FileText, ShoppingCart,
   LogOut, Menu, Shield, Warehouse, Briefcase, BarChart3,
-  Settings, Sun, Moon,
+  Settings, Sun, Moon, Bell,
 } from 'lucide-react';
+import api from '../lib/api';
 
 const navItems = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
@@ -22,7 +23,23 @@ const navItems = [
 export default function Layout() {
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
+
+  useEffect(() => {
+    api.get('/sharepoint/pending/count')
+      .then(res => setPendingCount(res.data.count))
+      .catch(() => { /* SharePoint not configured — ignore */ });
+
+    const interval = setInterval(() => {
+      api.get('/sharepoint/pending/count')
+        .then(res => setPendingCount(res.data.count))
+        .catch(() => {});
+    }, 5 * 60 * 1000); // refresh every 5 minutes
+
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <div className="min-h-screen flex">
@@ -102,6 +119,18 @@ export default function Layout() {
               className="p-2 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors"
             >
               {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
+            <button
+              onClick={() => navigate('/sharepoint-sync')}
+              title="SharePoint Sync"
+              className="relative p-2 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+            >
+              <Bell size={18} />
+              {pendingCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1 leading-none">
+                  {pendingCount > 99 ? '99+' : pendingCount}
+                </span>
+              )}
             </button>
             <span className="text-sm text-gray-600">{user?.display_name}</span>
             <button onClick={logout} className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
