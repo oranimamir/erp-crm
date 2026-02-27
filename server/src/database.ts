@@ -612,9 +612,11 @@ export async function initializeDatabase() {
       uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
       rows_imported INTEGER NOT NULL,
       filename TEXT,
-      uploaded_by TEXT
+      uploaded_by TEXT,
+      source TEXT DEFAULT 'manual'
     )
   `);
+  try { db.exec(`ALTER TABLE warehouse_stock_uploads ADD COLUMN source TEXT DEFAULT 'manual'`); } catch (_) {}
 
   // Seed admin user if not exists
   const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');

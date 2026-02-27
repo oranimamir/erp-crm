@@ -11,7 +11,7 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
-import { Plus, Warehouse, Pencil, Trash2, PackagePlus, FileSpreadsheet, Package, Box, Upload } from 'lucide-react';
+import { Plus, Warehouse, Pencil, Trash2, PackagePlus, FileSpreadsheet, Package, Box, Upload, Mail, RefreshCw } from 'lucide-react';
 import { downloadExcel } from '../lib/exportExcel';
 import { formatDate } from '../lib/dates';
 
@@ -808,8 +808,10 @@ function WarehouseStockTab() {
   const [history, setHistory] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [checkingEmail, setCheckingEmail] = useState(false);
   const [search, setSearch] = useState('');
   const [grouped, setGrouped] = useState(false);
+  const [emailConfig, setEmailConfig] = useState<{ configured: boolean; address: string | null }>({ configured: false, address: null });
 
   const fetchData = () => {
     setLoading(true);
@@ -818,7 +820,10 @@ function WarehouseStockTab() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => {
+    fetchData();
+    api.get('/warehouse-stock/email-config').then(res => setEmailConfig(res.data)).catch(() => {});
+  }, []);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -837,6 +842,19 @@ function WarehouseStockTab() {
     } finally {
       setUploading(false);
       e.target.value = '';
+    }
+  };
+
+  const handleCheckEmail = async () => {
+    setCheckingEmail(true);
+    try {
+      await api.post('/warehouse-stock/check-email');
+      addToast('Email check complete', 'success');
+      fetchData();
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Email check failed', 'error');
+    } finally {
+      setCheckingEmail(false);
     }
   };
 
@@ -891,6 +909,27 @@ function WarehouseStockTab() {
 
   return (
     <div className="space-y-4">
+      {/* Email info box */}
+      {emailConfig.configured && (
+        <div className="flex items-center gap-3 px-4 py-3 bg-blue-50 border border-blue-100 rounded-lg text-sm">
+          <Mail size={16} className="text-blue-500 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <span className="text-blue-800 font-medium">Send CSV by email</span>
+            <span className="text-blue-600 ml-2">Attach the CSV file and send to </span>
+            <span className="font-mono text-blue-900 font-semibold">{emailConfig.address}</span>
+            <span className="text-blue-500 ml-2 text-xs">(checked every 15 min)</span>
+          </div>
+          <button
+            onClick={handleCheckEmail}
+            disabled={checkingEmail}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors shrink-0"
+          >
+            <RefreshCw size={13} className={checkingEmail ? 'animate-spin' : ''} />
+            {checkingEmail ? 'Checking...' : 'Check Now'}
+          </button>
+        </div>
+      )}
+
       {/* Upload history log */}
       {history.length > 0 && (
         <Card>
@@ -915,8 +954,14 @@ function WarehouseStockTab() {
                   )}
                 </div>
                 <span className="text-xs text-gray-500 shrink-0">{h.rows_imported.toLocaleString()} rows</span>
-                {h.uploaded_by && h.uploaded_by !== 'Unknown' && (
-                  <span className="text-xs text-gray-400 shrink-0">by {h.uploaded_by}</span>
+                {h.source === 'email' ? (
+                  <span className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full shrink-0">
+                    <Mail size={11} /> via email
+                  </span>
+                ) : (
+                  h.uploaded_by && h.uploaded_by !== 'Unknown' && (
+                    <span className="text-xs text-gray-400 shrink-0">by {h.uploaded_by}</span>
+                  )
                 )}
                 {i === 0 && (
                   <span className="text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full shrink-0">current</span>

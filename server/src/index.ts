@@ -33,6 +33,7 @@ import sharepointRoutes from './routes/sharepoint.js';
 import warehouseStockRoutes from './routes/warehouse-stock.js';
 import cron from 'node-cron';
 import { scanNewOperations } from './lib/sharepoint.js';
+import { checkEmailForStockUpdates } from './lib/email-stock.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -88,6 +89,13 @@ await initializeDatabase();
 // Schedule daily SharePoint scan at 7:00 AM UTC
 cron.schedule('0 7 * * *', () => {
   scanNewOperations().catch(err => console.error('[SharePoint scan]', err));
+});
+
+// Poll inbox for warehouse stock CSV every 15 minutes
+cron.schedule('*/15 * * * *', () => {
+  if (process.env.STOCK_EMAIL_USER) {
+    checkEmailForStockUpdates().catch(err => console.error('[Email stock]', err));
+  }
 });
 
 // ── Public routes (with rate limiting) ───────────────────────────────────────
