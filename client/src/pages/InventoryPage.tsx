@@ -809,6 +809,7 @@ function WarehouseStockTab() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [search, setSearch] = useState('');
+  const [grouped, setGrouped] = useState(false);
 
   const fetchData = () => {
     setLoading(true);
@@ -839,13 +840,6 @@ function WarehouseStockTab() {
     }
   };
 
-  const filtered = search
-    ? rows.filter(r =>
-        r.article?.toLowerCase().includes(search.toLowerCase()) ||
-        r.description?.toLowerCase().includes(search.toLowerCase()) ||
-        r.searchname?.toLowerCase().includes(search.toLowerCase()))
-    : rows;
-
   const fmtNum = (n: number | null) =>
     n != null ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—';
 
@@ -855,6 +849,45 @@ function WarehouseStockTab() {
   };
 
   const lastUpload = history[0] ?? null;
+
+  // Apply search filter
+  const afterSearch = search
+    ? rows.filter(r =>
+        r.article?.toLowerCase().includes(search.toLowerCase()) ||
+        r.description?.toLowerCase().includes(search.toLowerCase()) ||
+        r.searchname?.toLowerCase().includes(search.toLowerCase()))
+    : rows;
+
+  // Build grouped view client-side
+  const groupedRows = (() => {
+    const map = new Map<string, any>();
+    for (const r of afterSearch) {
+      const key = `${r.article}||${r.pc}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          principal: r.principal,
+          article: r.article,
+          searchname: r.searchname,
+          description: r.description,
+          pc: r.pc,
+          stock: 0,
+          gross_weight: 0,
+          nett_weight: 0,
+          pallets: 0,
+        });
+      }
+      const g = map.get(key)!;
+      g.stock        += r.stock        ?? 0;
+      g.gross_weight += r.gross_weight ?? 0;
+      g.nett_weight  += r.nett_weight  ?? 0;
+      g.pallets      += 1;
+    }
+    return Array.from(map.values()).sort((a, b) =>
+      (a.description ?? '').localeCompare(b.description ?? ''));
+  })();
+
+  const displayRows = grouped ? groupedRows : afterSearch;
+  const rowCount    = displayRows.length;
 
   return (
     <div className="space-y-4">
@@ -907,22 +940,37 @@ function WarehouseStockTab() {
 
       <Card>
         <div className="p-4 border-b border-gray-100">
-          <div className="flex items-center gap-4 flex-wrap">
+          <div className="flex items-center gap-3 flex-wrap">
             <div className="flex-1 min-w-[200px] max-w-sm">
               <SearchBar value={search} onChange={v => setSearch(v)} placeholder="Search article or description..." />
             </div>
-            <span className="text-sm text-gray-500">{filtered.length} articles</span>
+
+            {/* Grouped / Ungrouped toggle */}
+            <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-lg text-sm">
+              <button
+                onClick={() => setGrouped(false)}
+                className={`px-3 py-1 rounded-md font-medium transition-colors ${!grouped ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+              >
+                Ungrouped
+              </button>
+              <button
+                onClick={() => setGrouped(true)}
+                className={`px-3 py-1 rounded-md font-medium transition-colors ${grouped ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+              >
+                Grouped
+              </button>
+            </div>
+
+            <span className="text-sm text-gray-500">{rowCount} {grouped ? 'articles' : 'rows'}</span>
             {lastUpload && (
-              <span className="text-xs text-gray-400">
-                Data as of {fmtDateTime(lastUpload.uploaded_at)}
-              </span>
+              <span className="text-xs text-gray-400">Data as of {fmtDateTime(lastUpload.uploaded_at)}</span>
             )}
           </div>
         </div>
 
         {loading ? (
           <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" /></div>
-        ) : filtered.length === 0 ? (
+        ) : displayRows.length === 0 ? (
           <EmptyState
             icon={<Warehouse size={24} />}
             title="No warehouse stock data"
@@ -934,7 +982,42 @@ function WarehouseStockTab() {
               </label>
             }
           />
+        ) : grouped ? (
+          /* ── Grouped view ── */
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100 bg-gray-50">
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Principal</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Article</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Name</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Description</th>
+                  <th className="text-right px-4 py-3 font-medium text-gray-600">Pallets</th>
+                  <th className="text-right px-4 py-3 font-medium text-gray-600">Total Stock</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Pkg</th>
+                  <th className="text-right px-4 py-3 font-medium text-gray-600">Gross Wt (kg)</th>
+                  <th className="text-right px-4 py-3 font-medium text-gray-600">Nett Wt (kg)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {(displayRows as any[]).map((row, i) => (
+                  <tr key={i} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 text-xs text-gray-400">{row.principal || '—'}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-gray-900">{row.article}</td>
+                    <td className="px-4 py-3 text-gray-600">{row.searchname || '—'}</td>
+                    <td className="px-4 py-3 font-medium text-gray-900">{row.description || '—'}</td>
+                    <td className="px-4 py-3 text-right text-gray-700">{row.pallets}</td>
+                    <td className="px-4 py-3 text-right font-bold text-gray-900">{fmtNum(row.stock)}</td>
+                    <td className="px-4 py-3"><span className="font-mono text-xs uppercase text-gray-500">{row.pc || '—'}</span></td>
+                    <td className="px-4 py-3 text-right text-gray-700">{fmtNum(row.gross_weight)}</td>
+                    <td className="px-4 py-3 text-right text-gray-700">{fmtNum(row.nett_weight)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : (
+          /* ── Ungrouped view ── */
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -952,7 +1035,7 @@ function WarehouseStockTab() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {filtered.map((row, i) => (
+                {(displayRows as any[]).map((row, i) => (
                   <tr key={i} className="hover:bg-gray-50">
                     <td className="px-4 py-3 text-xs text-gray-400 font-mono">{row.whs || '—'}</td>
                     <td className="px-4 py-3 text-xs text-gray-400 font-mono">{row.location || '—'}</td>
