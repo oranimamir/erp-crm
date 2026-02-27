@@ -9,14 +9,17 @@ router.get('/stats', (_req: Request, res: Response) => {
   const totalOrders = (db.prepare('SELECT COUNT(*) as count FROM orders').get() as any).count;
   const activeOrders = (db.prepare("SELECT COUNT(*) as count FROM orders WHERE status NOT IN ('completed', 'cancelled')").get() as any).count;
   const totalInvoices = (db.prepare('SELECT COUNT(*) as count FROM invoices').get() as any).count;
-  const pendingInvoiceAmount = (db.prepare("SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total FROM invoices WHERE type = 'customer' AND status IN ('draft', 'sent', 'overdue')").get() as any).total;
+  // Pending: sent/overdue invoices that HAVE a due date — allocated to a specific month
+  const pendingAmount = (db.prepare("SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total FROM invoices WHERE type = 'customer' AND status IN ('sent', 'overdue') AND due_date IS NOT NULL").get() as any).total;
+  // Expected: sent invoices with NO due date — amount expected but not yet scheduled
+  const expectedAmount = (db.prepare("SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total FROM invoices WHERE type = 'customer' AND status = 'sent' AND due_date IS NULL").get() as any).total;
   const paidInvoiceAmount = (db.prepare("SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total FROM invoices WHERE type = 'customer' AND status = 'paid'").get() as any).total;
   const totalPayments = (db.prepare('SELECT COALESCE(SUM(amount), 0) as total FROM payments').get() as any).total;
   const activeShipments = (db.prepare("SELECT COUNT(*) as count FROM shipments WHERE status NOT IN ('delivered', 'returned', 'failed')").get() as any).count;
 
   res.json({
     customers, suppliers, totalOrders, activeOrders,
-    totalInvoices, pendingInvoiceAmount, paidInvoiceAmount,
+    totalInvoices, pendingAmount, expectedAmount, paidInvoiceAmount,
     totalPayments, activeShipments,
     currency: 'EUR',
   });
@@ -176,14 +179,20 @@ router.get('/forecast', (_req: Request, res: Response) => {
           AND i.payment_date IS NOT NULL AND strftime('%Y-%m', i.payment_date) = ?
       )
     `).get(monthStr, monthStr, monthStr) as any).total;
+    // Pending: sent/overdue invoices WITH a due_date, allocated to that due_date month
     const pending = (db.prepare(`
       SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total
-      FROM invoices WHERE type = 'customer' AND status IN ('sent', 'draft', 'overdue')
+      FROM invoices WHERE type = 'customer' AND status IN ('sent', 'overdue')
         AND due_date IS NOT NULL AND strftime('%Y-%m', due_date) = ?
     `).get(monthStr) as any).total;
     data.push({ month: monthStr, paid: Number(paid), pending: Number(pending) });
   }
-  res.json(data);
+  // Expected: sent invoices with NO due_date — total amount expected but unscheduled
+  const expected = (db.prepare(`
+    SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total
+    FROM invoices WHERE type = 'customer' AND status = 'sent' AND due_date IS NULL
+  `).get() as any).total;
+  res.json({ months: data, expected: Number(expected) });
 });
 
 router.get('/paid-invoices', (_req: Request, res: Response) => {

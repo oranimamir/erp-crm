@@ -12,7 +12,8 @@ interface Stats {
   totalOrders: number;
   activeOrders: number;
   totalInvoices: number;
-  pendingInvoiceAmount: number;
+  pendingAmount: number;     // sent/overdue + has due_date
+  expectedAmount: number;    // sent + no due_date
   paidInvoiceAmount: number;
   totalPayments: number;
   activeShipments: number;
@@ -33,6 +34,7 @@ export default function DashboardPage() {
   const [monthlyPayments, setMonthlyPayments] = useState<any[]>([]);
   const [inTransit, setInTransit] = useState<any[]>([]);
   const [forecast, setForecast] = useState<any[]>([]);
+  const [forecastExpected, setForecastExpected] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -51,15 +53,20 @@ export default function DashboardPage() {
       setShippingOverview(sh.data);
       setMonthlyPayments(mp.data);
       setInTransit(it.data);
-      setForecast(fc.data);
+      // forecast now returns { months: [...], expected: N }
+      const fcData = fc.data;
+      setForecast(fcData.months ?? fcData); // fallback if old format
+      setForecastExpected(fcData.expected ?? 0);
     }).finally(() => setLoading(false));
   }, []);
 
   if (loading) return <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" /></div>;
 
+  const fmt = (n: number) => `€${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const statCards = [
     { label: 'Active Shipments', value: stats?.activeShipments ?? 0, icon: Package, color: 'text-green-600 bg-green-100', to: '/shipments' },
-    { label: 'Pending Receivable (EUR)', value: `€${(stats?.pendingInvoiceAmount ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: Clock, color: 'text-yellow-600 bg-yellow-100', to: '/invoices' },
+    { label: 'Pending (w/ due date)', value: fmt(stats?.pendingAmount ?? 0), icon: Clock, color: 'text-amber-600 bg-amber-100', to: '/invoices', sub: 'Sent invoices with due date' },
+    { label: 'Expected (no due date)', value: fmt(stats?.expectedAmount ?? 0), icon: TrendingUp, color: 'text-blue-600 bg-blue-100', to: '/invoices', sub: 'Sent invoices without due date' },
   ];
 
   return (
@@ -71,12 +78,13 @@ export default function DashboardPage() {
           <Link key={card.label} to={card.to}>
             <Card className="p-5 hover:shadow-md transition-shadow">
               <div className="flex items-center gap-4">
-                <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${card.color}`}>
+                <div className={`w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0 ${card.color}`}>
                   <card.icon size={24} />
                 </div>
                 <div>
                   <p className="text-sm text-gray-500">{card.label}</p>
                   <p className="text-2xl font-bold text-gray-900">{card.value}</p>
+                  {'sub' in card && card.sub && <p className="text-xs text-gray-400 mt-0.5">{card.sub}</p>}
                 </div>
               </div>
             </Card>
@@ -286,6 +294,7 @@ export default function DashboardPage() {
         const maxBar = Math.max(...forecast.map((m: any) => m.paid + m.pending), 1);
         const totalPaid = forecast.reduce((s: number, m: any) => s + m.paid, 0);
         const totalPending = forecast.reduce((s: number, m: any) => s + m.pending, 0);
+        const totalAll = totalPaid + totalPending + forecastExpected;
         return (
           <Card>
             <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
@@ -295,22 +304,27 @@ export default function DashboardPage() {
               </div>
               <div className="flex items-center gap-4 text-xs text-gray-500">
                 <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-green-500 inline-block" /> Received</span>
-                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-amber-400 inline-block" /> Pending</span>
+                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-amber-400 inline-block" /> Pending (due date)</span>
+                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-blue-300 inline-block" /> Expected (no date)</span>
               </div>
             </div>
             <div className="p-5">
-              <div className="grid grid-cols-3 gap-4 pb-4 border-b border-gray-100 mb-4">
+              <div className="grid grid-cols-4 gap-3 pb-4 border-b border-gray-100 mb-4">
                 <div className="text-center">
                   <p className="text-xs text-gray-500 mb-0.5">Received YTD</p>
                   <p className="text-lg font-bold text-green-600">€{totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                 </div>
                 <div className="text-center">
-                  <p className="text-xs text-gray-500 mb-0.5">Pending Invoices</p>
+                  <p className="text-xs text-gray-500 mb-0.5">Pending (w/ due date)</p>
                   <p className="text-lg font-bold text-amber-500">€{totalPending.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                 </div>
                 <div className="text-center">
+                  <p className="text-xs text-gray-500 mb-0.5">Expected (no date)</p>
+                  <p className="text-lg font-bold text-blue-500">€{forecastExpected.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                </div>
+                <div className="text-center">
                   <p className="text-xs text-gray-500 mb-0.5">Total Expected</p>
-                  <p className="text-lg font-bold text-gray-900">€{(totalPaid + totalPending).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                  <p className="text-lg font-bold text-gray-900">€{totalAll.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                 </div>
               </div>
               <div className="flex items-end gap-1" style={{ height: 160 }}>

@@ -171,10 +171,17 @@ router.get('/summary', (req: Request, res: Response) => {
   const totalReceived = monthly.reduce((s, m) => s + m.received, 0);
   const totalPaidOut = monthly.reduce((s, m) => s + m.paid_out, 0);
 
+  // Pending: sent/overdue invoices WITH a due_date (scheduled)
   const outstanding = (db.prepare(`
     SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total
     FROM invoices
-    WHERE type = 'customer' AND status IN ('draft', 'sent', 'overdue') ${custWhereOnly}
+    WHERE type = 'customer' AND status IN ('sent', 'overdue') AND due_date IS NOT NULL ${custWhereOnly}
+  `).get() as any).total;
+  // Expected: sent invoices with NO due_date (unscheduled)
+  const expectedReceivable = (db.prepare(`
+    SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total
+    FROM invoices
+    WHERE type = 'customer' AND status = 'sent' AND due_date IS NULL ${custWhereOnly}
   `).get() as any).total;
 
   const outstandingPayable = (db.prepare(`
@@ -193,7 +200,8 @@ router.get('/summary', (req: Request, res: Response) => {
       received: totalReceived,
       paid_out: totalPaidOut,
       net: totalReceived - totalPaidOut,
-      outstanding,
+      outstanding,           // sent/overdue WITH due_date
+      expected: expectedReceivable, // sent WITHOUT due_date
       outstanding_payable: outstandingPayable,
     },
   });

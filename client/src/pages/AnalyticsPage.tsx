@@ -14,7 +14,7 @@ interface Summary {
   monthly: MonthData[];
   by_customer: CustomerData[];
   by_supplier: SupplierData[];
-  totals: { received: number; paid_out: number; net: number; outstanding: number; outstanding_payable: number; };
+  totals: { received: number; paid_out: number; net: number; outstanding: number; expected: number; outstanding_payable: number; };
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -369,12 +369,26 @@ export default function AnalyticsPage() {
             {view !== 'suppliers' && (
               <Card className="p-5">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-yellow-100 flex items-center justify-center shrink-0">
-                    <Clock size={20} className="text-yellow-600" />
+                  <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
+                    <Clock size={20} className="text-amber-600" />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-xs text-gray-500">Outstanding Receivable</p>
+                    <p className="text-xs text-gray-500">Pending (w/ due date)</p>
                     <p className="text-xl font-bold text-gray-900 truncate">{fmt(data.totals.outstanding)}</p>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {view !== 'suppliers' && (
+              <Card className="p-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center shrink-0">
+                    <Clock size={20} className="text-blue-500" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs text-gray-500">Expected (no due date)</p>
+                    <p className="text-xl font-bold text-gray-900 truncate">{fmt(data.totals.expected ?? 0)}</p>
                   </div>
                 </div>
               </Card>
