@@ -30,6 +30,7 @@ import analyticsRoutes from './routes/analytics.js';
 import packagingRoutes from './routes/packaging.js';
 import backupRoutes from './routes/backup.js';
 import sharepointRoutes from './routes/sharepoint.js';
+import warehouseStockRoutes from './routes/warehouse-stock.js';
 import cron from 'node-cron';
 import { scanNewOperations } from './lib/sharepoint.js';
 
@@ -118,6 +119,7 @@ app.use('/api/analytics', authenticateToken, analyticsRoutes);
 app.use('/api/packaging', authenticateToken, packagingRoutes);
 app.use('/api/backup', authenticateToken, backupRoutes);
 app.use('/api/sharepoint', authenticateToken, sharepointRoutes);
+app.use('/api/warehouse-stock', authenticateToken, warehouseStockRoutes);
 
 // ── Serve built client in production ─────────────────────────────────────────
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');

@@ -585,6 +585,33 @@ export async function initializeDatabase() {
     )
   `);
 
+  // Warehouse stock (from weekly CSV upload)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS warehouse_stock (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      principal TEXT,
+      article TEXT NOT NULL,
+      searchname TEXT,
+      description TEXT,
+      stock INTEGER DEFAULT 0,
+      pc TEXT,
+      gross_weight REAL,
+      nett_weight REAL,
+      uploaded_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+
+  // Upload history log for warehouse stock
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS warehouse_stock_uploads (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
+      rows_imported INTEGER NOT NULL,
+      filename TEXT,
+      uploaded_by TEXT
+    )
+  `);
+
   // Seed admin user if not exists
   const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');
   if (!adminExists) {

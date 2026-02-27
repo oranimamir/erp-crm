@@ -11,8 +11,9 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
-import { Plus, Warehouse, Pencil, Trash2, PackagePlus, FileSpreadsheet, Package, Box } from 'lucide-react';
+import { Plus, Warehouse, Pencil, Trash2, PackagePlus, FileSpreadsheet, Package, Box, Upload } from 'lucide-react';
 import { downloadExcel } from '../lib/exportExcel';
+import { formatDate } from '../lib/dates';
 
 // ─── Inventory Tab ────────────────────────────────────────────────────────────
 
@@ -799,12 +800,184 @@ function PackagingTab() {
   );
 }
 
+// ─── Warehouse Stock Tab ──────────────────────────────────────────────────────
+
+function WarehouseStockTab() {
+  const { addToast } = useToast();
+  const [rows, setRows] = useState<any[]>([]);
+  const [history, setHistory] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [search, setSearch] = useState('');
+
+  const fetchData = () => {
+    setLoading(true);
+    api.get('/warehouse-stock')
+      .then(res => { setRows(res.data.data); setHistory(res.data.history ?? []); })
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { fetchData(); }, []);
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      const res = await api.post('/warehouse-stock/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      addToast(`Stock updated — ${res.data.inserted} rows imported`, 'success');
+      fetchData();
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Upload failed', 'error');
+    } finally {
+      setUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const filtered = search
+    ? rows.filter(r =>
+        r.article?.toLowerCase().includes(search.toLowerCase()) ||
+        r.description?.toLowerCase().includes(search.toLowerCase()) ||
+        r.searchname?.toLowerCase().includes(search.toLowerCase()))
+    : rows;
+
+  const fmtNum = (n: number | null) =>
+    n != null ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—';
+
+  const fmtDateTime = (iso: string) => {
+    const d = new Date(iso);
+    return `${formatDate(iso)} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
+  };
+
+  const lastUpload = history[0] ?? null;
+
+  return (
+    <div className="space-y-4">
+      {/* Upload history log */}
+      {history.length > 0 && (
+        <Card>
+          <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-700">Update History</h3>
+            <label className={`inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg cursor-pointer transition-colors ${uploading ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-primary-600 text-white hover:bg-primary-700'}`}>
+              <Upload size={15} />
+              {uploading ? 'Uploading...' : 'Upload CSV'}
+              <input type="file" accept=".csv" className="hidden" disabled={uploading} onChange={handleUpload} />
+            </label>
+          </div>
+          <div className="divide-y divide-gray-50">
+            {history.map((h: any, i: number) => (
+              <div key={h.id} className={`flex items-center gap-3 px-5 py-2.5 ${i === 0 ? 'bg-green-50' : ''}`}>
+                <div className={`w-2 h-2 rounded-full shrink-0 ${i === 0 ? 'bg-green-500' : 'bg-gray-300'}`} />
+                <div className="flex-1 min-w-0">
+                  <span className={`text-sm font-medium ${i === 0 ? 'text-green-800' : 'text-gray-700'}`}>
+                    {fmtDateTime(h.uploaded_at)}
+                  </span>
+                  {h.filename && (
+                    <span className="ml-2 text-xs text-gray-400 font-mono truncate">{h.filename}</span>
+                  )}
+                </div>
+                <span className="text-xs text-gray-500 shrink-0">{h.rows_imported.toLocaleString()} rows</span>
+                {h.uploaded_by && h.uploaded_by !== 'Unknown' && (
+                  <span className="text-xs text-gray-400 shrink-0">by {h.uploaded_by}</span>
+                )}
+                {i === 0 && (
+                  <span className="text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full shrink-0">current</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* Upload button when no history yet */}
+      {history.length === 0 && (
+        <div className="flex justify-end">
+          <label className={`inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg cursor-pointer transition-colors ${uploading ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-primary-600 text-white hover:bg-primary-700'}`}>
+            <Upload size={15} />
+            {uploading ? 'Uploading...' : 'Upload CSV'}
+            <input type="file" accept=".csv" className="hidden" disabled={uploading} onChange={handleUpload} />
+          </label>
+        </div>
+      )}
+
+      <Card>
+        <div className="p-4 border-b border-gray-100">
+          <div className="flex items-center gap-4 flex-wrap">
+            <div className="flex-1 min-w-[200px] max-w-sm">
+              <SearchBar value={search} onChange={v => setSearch(v)} placeholder="Search article or description..." />
+            </div>
+            <span className="text-sm text-gray-500">{filtered.length} articles</span>
+            {lastUpload && (
+              <span className="text-xs text-gray-400">
+                Data as of {fmtDateTime(lastUpload.uploaded_at)}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" /></div>
+        ) : filtered.length === 0 ? (
+          <EmptyState
+            icon={<Warehouse size={24} />}
+            title="No warehouse stock data"
+            description="Upload a weekly CSV export to view current stock levels."
+            action={
+              <label className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg bg-primary-600 text-white hover:bg-primary-700 cursor-pointer">
+                <Upload size={14} /> Upload CSV
+                <input type="file" accept=".csv" className="hidden" onChange={handleUpload} />
+              </label>
+            }
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100 bg-gray-50">
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Principal</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Article</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Name</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Description</th>
+                  <th className="text-right px-4 py-3 font-medium text-gray-600">Stock</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Pkg</th>
+                  <th className="text-right px-4 py-3 font-medium text-gray-600">Gross Wt (kg)</th>
+                  <th className="text-right px-4 py-3 font-medium text-gray-600">Nett Wt (kg)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {filtered.map((row, i) => (
+                  <tr key={i} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 text-xs text-gray-400">{row.principal || '—'}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-gray-900">{row.article}</td>
+                    <td className="px-4 py-3 text-gray-600">{row.searchname || '—'}</td>
+                    <td className="px-4 py-3 font-medium text-gray-900">{row.description || '—'}</td>
+                    <td className="px-4 py-3 text-right font-bold text-gray-900">{fmtNum(row.stock)}</td>
+                    <td className="px-4 py-3"><span className="font-mono text-xs uppercase text-gray-500">{row.pc || '—'}</span></td>
+                    <td className="px-4 py-3 text-right text-gray-700">{fmtNum(row.gross_weight)}</td>
+                    <td className="px-4 py-3 text-right text-gray-700">{fmtNum(row.nett_weight)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
-type InventoryTabId = 'inventory' | 'products' | 'packaging';
+type InventoryTabId = 'inventory' | 'products' | 'packaging' | 'warehouse';
 
 const tabs: { id: InventoryTabId; label: string }[] = [
   { id: 'inventory', label: 'Stock' },
+  { id: 'warehouse', label: 'Warehouse Stock' },
   { id: 'products', label: 'Products' },
   { id: 'packaging', label: 'Packaging' },
 ];
@@ -832,6 +1005,7 @@ export default function InventoryPage() {
       </div>
 
       {activeTab === 'inventory' && <InventoryTab />}
+      {activeTab === 'warehouse' && <WarehouseStockTab />}
       {activeTab === 'products' && <ProductsTab />}
       {activeTab === 'packaging' && <PackagingTab />}
     </div>

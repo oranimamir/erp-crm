@@ -70,6 +70,10 @@ export default function DashboardPage() {
   const expected = stats?.expectedAmount ?? 0;
   const totalYear = paidYTD + pending + expected;
 
+  const expensesYTD = monthlyPayments.reduce((s: number, m: any) => s + (m.paid_out ?? 0), 0);
+  const monthsElapsed = monthlyPayments.length;
+  const expensesAvgPerMonth = monthsElapsed > 0 ? expensesYTD / monthsElapsed : 0;
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
@@ -102,6 +106,24 @@ export default function DashboardPage() {
             <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Total {year}</p>
             <p className="text-2xl font-bold text-gray-900">{fmt(totalYear)}</p>
             <p className="text-xs text-gray-400 mt-1">Paid + pending + expected</p>
+          </Card>
+        </Link>
+      </div>
+
+      {/* ── Expenses summary ──────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 gap-4">
+        <Link to="/invoices?type=supplier">
+          <Card className="p-5 hover:shadow-md transition-shadow h-full">
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Expenses YTD {year}</p>
+            <p className="text-2xl font-bold text-red-600">{fmt(expensesYTD)}</p>
+            <p className="text-xs text-gray-400 mt-1">Total paid to suppliers this year</p>
+          </Card>
+        </Link>
+        <Link to="/invoices?type=supplier">
+          <Card className="p-5 hover:shadow-md transition-shadow h-full">
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Avg / Month</p>
+            <p className="text-2xl font-bold text-orange-500">{fmt(expensesAvgPerMonth)}</p>
+            <p className="text-xs text-gray-400 mt-1">Average monthly expenses ({monthsElapsed} mo)</p>
           </Card>
         </Link>
       </div>
