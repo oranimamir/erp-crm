@@ -24,6 +24,7 @@ interface Operation {
   ship_date?: string;
   doc_count: number;
   invoice_count: number;
+  invoice_total: number;
   created_at: string;
 }
 
@@ -225,11 +226,12 @@ export default function OperationsPage() {
             onClick={async () => {
               const { data } = await api.get('/operations', { params: { page: 1, limit: 9999, search } });
               downloadExcel('operations',
-                ['Operation #', 'Order #', 'Customer / Supplier', 'Status', 'Docs', 'Invoices', 'Order Date'],
+                ['Operation #', 'Order #', 'Customer / Supplier', 'Status', 'Docs', 'Invoices', 'Invoice Total (EUR)', 'Order Date'],
                 data.data.map((op: any) => [
                   op.operation_number, op.order_number || '',
                   op.customer_name || op.supplier_name || '',
                   op.status, op.doc_count, op.invoice_count,
+                  op.invoice_total > 0 ? Number(op.invoice_total).toFixed(2) : '',
                   formatDate(op.order_date || op.created_at) || '',
                 ]));
             }}
@@ -311,6 +313,7 @@ export default function OperationsPage() {
                 </th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Docs</th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Invoices</th>
+                <th className="text-right px-4 py-3 font-medium text-gray-600">Invoice Total</th>
                 <th
                   className={thClass('order_date')}
                   onClick={() => handleSort('order_date')}
@@ -402,6 +405,12 @@ export default function OperationsPage() {
                         </button>
                       )}
                     </span>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    {op.invoice_count > 0 && op.invoice_total > 0
+                      ? <span className="font-medium text-gray-900">€{Number(op.invoice_total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      : <span className="text-gray-400">—</span>
+                    }
                   </td>
                   <td className="px-4 py-3 text-gray-500">
                     {formatDate((op as any).order_date) || formatDate(op.created_at) || '—'}

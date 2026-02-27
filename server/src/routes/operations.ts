@@ -84,7 +84,8 @@ router.get('/', (req: Request, res: Response) => {
       o.file_path as order_file_path,
       o.file_name as order_file_name,
       (SELECT COUNT(*) FROM operation_documents od WHERE od.operation_id = op.id) as doc_count,
-      (SELECT COUNT(*) FROM invoices i WHERE i.operation_id = op.id) as invoice_count
+      (SELECT COUNT(*) FROM invoices i WHERE i.operation_id = op.id) as invoice_count,
+      (SELECT COALESCE(SUM(COALESCE(i.eur_amount, i.amount)), 0) FROM invoices i WHERE i.operation_id = op.id) as invoice_total
     FROM operations op
     LEFT JOIN customers c ON op.customer_id = c.id
     LEFT JOIN suppliers s ON op.supplier_id = s.id
