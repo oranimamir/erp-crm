@@ -266,4 +266,16 @@ router.get('/customer-payments', (_req: Request, res: Response) => {
   res.json(data);
 });
 
+router.get('/tons-ytd', (_req: Request, res: Response) => {
+  const year = new Date().getFullYear().toString();
+  const result = db.prepare(`
+    SELECT COALESCE(SUM(oi.quantity), 0) as total_tons
+    FROM order_items oi
+    JOIN orders o ON oi.order_id = o.id
+    WHERE o.type = 'customer'
+      AND strftime('%Y', COALESCE(o.order_date, date(o.created_at))) = ?
+  `).get(year) as any;
+  res.json({ total_tons: Number(result.total_tons), year: parseInt(year) });
+});
+
 export default router;

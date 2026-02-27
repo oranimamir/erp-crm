@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import api from '../lib/api';
 import Card from '../components/ui/Card';
 import StatusBadge from '../components/ui/StatusBadge';
-import { Package, TrendingUp, Clock, BarChart3, Navigation } from 'lucide-react';
+import { Package, TrendingUp, Clock, BarChart3, Navigation, Scale } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 
 interface Stats {
@@ -36,6 +36,7 @@ export default function DashboardPage() {
   const [inTransit, setInTransit] = useState<any[]>([]);
   const [forecast, setForecast] = useState<any[]>([]);
   const [forecastExpected, setForecastExpected] = useState(0);
+  const [tonsYTD, setTonsYTD] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -47,7 +48,8 @@ export default function DashboardPage() {
       api.get('/dashboard/monthly-payments'),
       api.get('/dashboard/in-transit'),
       api.get('/dashboard/forecast'),
-    ]).then(([s, o, i, sh, mp, it, fc]) => {
+      api.get('/dashboard/tons-ytd'),
+    ]).then(([s, o, i, sh, mp, it, fc, ty]) => {
       setStats(s.data);
       setOpenOperations(o.data);
       setPendingInvoices(i.data);
@@ -58,12 +60,19 @@ export default function DashboardPage() {
       const fcData = fc.data;
       setForecast(fcData.months ?? fcData); // fallback if old format
       setForecastExpected(fcData.expected ?? 0);
+      setTonsYTD(ty.data.total_tons ?? 0);
     }).finally(() => setLoading(false));
   }, []);
 
   if (loading) return <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" /></div>;
 
   const fmt = (n: number) => `€${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const fmtAxis = (n: number): string => {
+    if (n === 0) return '0';
+    if (n >= 1_000_000) return `€${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `€${Math.round(n / 1_000)}k`;
+    return `€${Math.round(n)}`;
+  };
   const year = new Date().getFullYear();
   const paidYTD = stats?.paidYTD ?? 0;
   const pending = stats?.pendingAmount ?? 0;
@@ -110,8 +119,8 @@ export default function DashboardPage() {
         </Link>
       </div>
 
-      {/* ── Expenses summary ──────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-4">
+      {/* ── Expenses + Tons summary ───────────────────────────────────────── */}
+      <div className="grid grid-cols-3 gap-4">
         <Link to="/invoices?type=supplier">
           <Card className="p-5 hover:shadow-md transition-shadow h-full">
             <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Expenses YTD {year}</p>
@@ -124,6 +133,20 @@ export default function DashboardPage() {
             <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Avg / Month</p>
             <p className="text-2xl font-bold text-orange-500">{fmt(expensesAvgPerMonth)}</p>
             <p className="text-xs text-gray-400 mt-1">Average monthly expenses ({monthsElapsed} mo)</p>
+          </Card>
+        </Link>
+        <Link to="/orders">
+          <Card className="p-5 hover:shadow-md transition-shadow h-full">
+            <div className="flex items-center gap-2 mb-1">
+              <Scale size={14} className="text-indigo-500" />
+              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Tons Sold {year}</p>
+            </div>
+            <p className="text-2xl font-bold text-indigo-600">
+              {tonsYTD >= 1000
+                ? `${(tonsYTD / 1000).toFixed(1)}k t`
+                : `${tonsYTD.toFixed(1)} t`}
+            </p>
+            <p className="text-xs text-gray-400 mt-1">Total quantity from customer orders</p>
           </Card>
         </Link>
       </div>
@@ -252,30 +275,59 @@ export default function DashboardPage() {
                   <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-green-500 inline-block" /> Received from clients</span>
                   <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-400 inline-block" /> Paid to suppliers</span>
                 </div>
-                {/* Bar chart */}
-                <div className="flex items-end gap-1.5" style={{ height: '180px' }}>
-                  {monthlyPayments.map((m: any) => (
-                    <div key={m.month} className="flex-1 flex flex-col items-center gap-1 h-full justify-end">
-                      <div className="w-full flex items-end justify-center gap-0.5">
-                        <div
-                          className="flex-1 max-w-[14px] bg-green-500 rounded-t transition-all"
-                          style={{ height: `${Math.max(m.received > 0 ? (m.received / maxVal) * 155 : 0, m.received > 0 ? 2 : 0)}px` }}
-                          title={`Received: €${m.received.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
-                        />
-                        <div
-                          className="flex-1 max-w-[14px] bg-red-400 rounded-t transition-all"
-                          style={{ height: `${Math.max(m.paid_out > 0 ? (m.paid_out / maxVal) * 155 : 0, m.paid_out > 0 ? 2 : 0)}px` }}
-                          title={`Paid Out: €${m.paid_out.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
-                        />
-                        {m.received === 0 && m.paid_out === 0 && (
-                          <div className="w-full max-w-[28px] bg-gray-100 rounded-t" style={{ height: '2px' }} />
-                        )}
-                      </div>
-                      <span className="text-[10px] text-gray-400 whitespace-nowrap">
-                        {new Date(m.month + '-01').toLocaleDateString(undefined, { month: 'short' })}
+                {/* Bar chart with Y-axis */}
+                <div className="flex gap-2">
+                  {/* Y-axis labels */}
+                  <div className="flex flex-col justify-between items-end shrink-0 w-14" style={{ height: 165 }}>
+                    {[maxVal, maxVal * 0.75, maxVal * 0.5, maxVal * 0.25, 0].map((v, i) => (
+                      <span key={i} className="text-[10px] text-gray-400 leading-none tabular-nums">
+                        {fmtAxis(v)}
                       </span>
+                    ))}
+                  </div>
+                  {/* Chart area */}
+                  <div className="flex-1 min-w-0 flex flex-col">
+                    <div className="relative" style={{ height: 165 }}>
+                      {/* Grid lines */}
+                      {[0, 25, 50, 75, 100].map(pct => (
+                        <div
+                          key={pct}
+                          className={`absolute left-0 right-0 pointer-events-none ${pct === 0 ? 'border-t border-gray-300' : 'border-t border-gray-100'}`}
+                          style={{ bottom: `${(pct / 100) * 165}px` }}
+                        />
+                      ))}
+                      {/* Bars */}
+                      <div className="flex items-end gap-1.5 h-full">
+                        {monthlyPayments.map((m: any) => (
+                          <div key={m.month} className="flex-1 flex items-end justify-center gap-0.5 h-full">
+                            <div
+                              className="flex-1 max-w-[14px] bg-green-500 rounded-t transition-all"
+                              style={{ height: `${m.received > 0 ? Math.max((m.received / maxVal) * 165, 2) : 0}px` }}
+                              title={`Received: €${m.received.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                            />
+                            <div
+                              className="flex-1 max-w-[14px] bg-red-400 rounded-t transition-all"
+                              style={{ height: `${m.paid_out > 0 ? Math.max((m.paid_out / maxVal) * 165, 2) : 0}px` }}
+                              title={`Paid Out: €${m.paid_out.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                            />
+                            {m.received === 0 && m.paid_out === 0 && (
+                              <div className="w-full max-w-[28px] bg-gray-100 rounded-t" style={{ height: '2px' }} />
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  ))}
+                    {/* X-axis month labels */}
+                    <div className="flex gap-1.5 mt-1">
+                      {monthlyPayments.map((m: any) => (
+                        <div key={m.month} className="flex-1 text-center">
+                          <span className="text-[10px] text-gray-400 whitespace-nowrap">
+                            {new Date(m.month + '-01').toLocaleDateString(undefined, { month: 'short' })}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
             );

@@ -3,7 +3,7 @@ import api from '../lib/api';
 import Card from '../components/ui/Card';
 import {
   BarChart3, TrendingUp, TrendingDown, DollarSign, Clock,
-  RefreshCw, FileSpreadsheet, Users, Truck,
+  RefreshCw, FileSpreadsheet, Users, Truck, Scale,
 } from 'lucide-react';
 import { downloadExcel } from '../lib/exportExcel';
 
@@ -15,6 +15,10 @@ interface Summary {
   by_customer: CustomerData[];
   by_supplier: SupplierData[];
   totals: { received: number; paid_out: number; net: number; outstanding: number; expected: number; outstanding_payable: number; };
+}
+interface QuantityData {
+  monthly: { month: string; tons: number }[];
+  total_tons: number;
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -39,6 +43,17 @@ function fmtAxis(n: number): string {
 
 function monthLabel(m: string) {
   return new Date(m + '-02').toLocaleDateString('en-GB', { month: 'short' });
+}
+
+function fmtTons(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k t`;
+  return `${n % 1 === 0 ? n.toFixed(0) : n.toFixed(1)} t`;
+}
+
+function fmtTonsAxis(n: number): string {
+  if (n === 0) return '0';
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return `${Math.round(n)}`;
 }
 
 function periodLabel(year: string, monthFrom: string, monthTo: string) {
@@ -67,6 +82,7 @@ export default function AnalyticsPage() {
   const [suppliers, setSuppliers] = useState<any[]>([]);
 
   const [data, setData] = useState<Summary | null>(null);
+  const [quantityData, setQuantityData] = useState<QuantityData | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Load filter options once
@@ -83,18 +99,31 @@ export default function AnalyticsPage() {
   // Load data whenever filters change
   useEffect(() => {
     setLoading(true);
-    api.get('/analytics/summary', {
-      params: {
-        year,
-        month_from: monthFrom,
-        month_to: monthTo,
-        customer_id: customerId || undefined,
-        supplier_id: supplierId || undefined,
-        supplier_category: supplierCategory || undefined,
-      },
-    })
-      .then(res => setData(res.data))
-      .catch(() => setData(null))
+    Promise.all([
+      api.get('/analytics/summary', {
+        params: {
+          year,
+          month_from: monthFrom,
+          month_to: monthTo,
+          customer_id: customerId || undefined,
+          supplier_id: supplierId || undefined,
+          supplier_category: supplierCategory || undefined,
+        },
+      }),
+      api.get('/analytics/quantity', {
+        params: {
+          year,
+          month_from: monthFrom,
+          month_to: monthTo,
+          customer_id: customerId || undefined,
+        },
+      }),
+    ])
+      .then(([summaryRes, quantityRes]) => {
+        setData(summaryRes.data);
+        setQuantityData(quantityRes.data);
+      })
+      .catch(() => { setData(null); setQuantityData(null); })
       .finally(() => setLoading(false));
   }, [year, monthFrom, monthTo, customerId, supplierId, supplierCategory]);
 
@@ -521,6 +550,51 @@ export default function AnalyticsPage() {
             </div>
           </Card>
 
+          {/* Expenses by Category */}
+          {view !== 'customers' && data.by_supplier.length > 0 && (() => {
+            const byCategory = SUPPLIER_CATEGORIES.map(cat => {
+              const matching = data.by_supplier.filter(s => s.category === cat.value);
+              return {
+                label: cat.label,
+                value: cat.value,
+                total: matching.reduce((sum, s) => sum + s.total, 0),
+                count: matching.reduce((sum, s) => sum + s.invoice_count, 0),
+              };
+            }).filter(c => c.total > 0).sort((a, b) => b.total - a.total);
+
+            if (byCategory.length === 0) return null;
+            const maxCat = byCategory[0]?.total || 1;
+            return (
+              <Card>
+                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                  <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                    <Truck size={16} className="text-orange-500" /> Expenses by Category
+                  </h2>
+                  <span className="text-xs text-gray-400">{period}</span>
+                </div>
+                <div className="divide-y divide-gray-100">
+                  {byCategory.map(cat => (
+                    <div key={cat.value} className="px-5 py-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-medium text-gray-700 capitalize">{cat.label.replace('_', ' ')}</span>
+                        <div className="text-right">
+                          <span className="text-sm font-bold text-gray-900">{fmt(cat.total)}</span>
+                          <span className="text-xs text-gray-400 ml-2">{cat.count} inv</span>
+                        </div>
+                      </div>
+                      <div className="w-full bg-gray-100 rounded-full h-2">
+                        <div
+                          className="bg-orange-400 h-2 rounded-full transition-all"
+                          style={{ width: `${(cat.total / maxCat) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            );
+          })()}
+
           {/* Breakdowns */}
           <div className={`grid gap-6 ${view === 'both' ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1'}`}>
 
@@ -616,6 +690,81 @@ export default function AnalyticsPage() {
               </Card>
             )}
           </div>
+
+          {/* Quantity Sold */}
+          {quantityData && quantityData.total_tons > 0 && (() => {
+            const maxTons = Math.max(...quantityData.monthly.map(m => m.tons), 1);
+            const eurPerTon = data.totals.received > 0 ? data.totals.received / quantityData.total_tons : null;
+            return (
+              <Card>
+                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                  <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                    <Scale size={16} className="text-indigo-500" /> Quantity Sold — {period}
+                  </h2>
+                </div>
+                <div className="p-5 space-y-4">
+                  {/* Summary */}
+                  <div className="grid grid-cols-3 gap-4 pb-4 border-b border-gray-100">
+                    <div className="text-center">
+                      <p className="text-xs text-gray-500 mb-0.5">Total Tons</p>
+                      <p className="text-xl font-bold text-indigo-600">{fmtTons(quantityData.total_tons)}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-xs text-gray-500 mb-0.5">Revenue (Period)</p>
+                      <p className="text-xl font-bold text-green-600">{fmt(data.totals.received)}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-xs text-gray-500 mb-0.5">EUR / Ton</p>
+                      <p className="text-xl font-bold text-gray-900">{eurPerTon !== null ? fmt(eurPerTon) : '—'}</p>
+                    </div>
+                  </div>
+                  {/* Bar chart */}
+                  <div className="flex gap-2">
+                    <div className="flex flex-col justify-between items-end shrink-0 w-14" style={{ height: 165 }}>
+                      {[maxTons, maxTons * 0.75, maxTons * 0.5, maxTons * 0.25, 0].map((v, i) => (
+                        <span key={i} className="text-[10px] text-gray-400 leading-none tabular-nums">
+                          {fmtTonsAxis(v)}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="flex-1 min-w-0 flex flex-col">
+                      <div className="relative" style={{ height: 165 }}>
+                        {[0, 25, 50, 75, 100].map(pct => (
+                          <div
+                            key={pct}
+                            className={`absolute left-0 right-0 pointer-events-none ${pct === 0 ? 'border-t border-gray-300' : 'border-t border-gray-100'}`}
+                            style={{ bottom: `${(pct / 100) * 165}px` }}
+                          />
+                        ))}
+                        <div className="flex items-end gap-1 h-full">
+                          {quantityData.monthly.map(m => (
+                            <div key={m.month} className="flex-1 h-full flex items-end justify-center">
+                              {m.tons > 0 ? (
+                                <div
+                                  className="w-4/5 bg-indigo-500 rounded-t transition-all"
+                                  style={{ height: `${Math.max((m.tons / maxTons) * 165, 2)}px` }}
+                                  title={`${fmtTons(m.tons)}`}
+                                />
+                              ) : (
+                                <div className="w-4/5 bg-gray-100 rounded-t" style={{ height: '2px' }} />
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="flex gap-1 mt-1.5">
+                        {quantityData.monthly.map(m => (
+                          <div key={m.month} className="flex-1 text-center">
+                            <span className="text-[10px] text-gray-400">{monthLabel(m.month)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            );
+          })()}
         </>
       ) : (
         <p className="text-center text-gray-500 py-12">Failed to load analytics data.</p>

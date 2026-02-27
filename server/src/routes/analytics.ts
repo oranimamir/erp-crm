@@ -207,4 +207,52 @@ router.get('/summary', (req: Request, res: Response) => {
   });
 });
 
+// GET /analytics/quantity — monthly tons sold from customer orders
+router.get('/quantity', (req: Request, res: Response) => {
+  const yearNum = parseInt((req.query.year as string) || new Date().getFullYear().toString());
+  if (isNaN(yearNum) || yearNum < 2000 || yearNum > 2100) {
+    res.status(400).json({ error: 'Invalid year' }); return;
+  }
+  const year = String(yearNum);
+
+  const rawFrom = parseInt(req.query.month_from as string || '1');
+  const rawTo = parseInt(req.query.month_to as string || '12');
+  const monthStart = Math.min(Math.max(isNaN(rawFrom) ? 1 : rawFrom, 1), 12);
+  const monthEnd = Math.max(Math.min(isNaN(rawTo) ? 12 : rawTo, 12), monthStart);
+
+  const dateStart = `${year}-${String(monthStart).padStart(2, '0')}-01`;
+  const dateEnd = `${year}-${String(monthEnd).padStart(2, '0')}-31`;
+
+  const customerId = req.query.customer_id ? parseInt(req.query.customer_id as string) : null;
+  if (req.query.customer_id && (isNaN(customerId!) || customerId! <= 0)) {
+    res.status(400).json({ error: 'Invalid customer_id' }); return;
+  }
+  const custWhere = customerId ? `AND o.customer_id = ${customerId}` : '';
+
+  const tonsRows = db.prepare(`
+    SELECT strftime('%Y-%m', COALESCE(o.order_date, date(o.created_at))) as month,
+           SUM(oi.quantity) as tons
+    FROM order_items oi
+    JOIN orders o ON oi.order_id = o.id
+    WHERE o.type = 'customer'
+      AND COALESCE(o.order_date, date(o.created_at)) BETWEEN ? AND ?
+      ${custWhere}
+    GROUP BY month
+  `).all(dateStart, dateEnd) as any[];
+
+  const months: Record<string, { month: string; tons: number }> = {};
+  for (let m = monthStart; m <= monthEnd; m++) {
+    const key = `${year}-${String(m).padStart(2, '0')}`;
+    months[key] = { month: key, tons: 0 };
+  }
+  for (const r of tonsRows) {
+    if (months[r.month]) months[r.month].tons = Number(r.tons) || 0;
+  }
+
+  const monthly = Object.values(months);
+  const totalTons = monthly.reduce((s, m) => s + m.tons, 0);
+
+  res.json({ monthly, total_tons: totalTons });
+});
+
 export default router;
