@@ -5,21 +5,12 @@ import db from '../database.js';
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
-// GET / — return stock aggregated by (article, pc) + upload history
+// GET / — return all individual rows + upload history
 router.get('/', (_req: Request, res: Response) => {
   const rows = db.prepare(`
-    SELECT
-      MAX(principal)    as principal,
-      article,
-      MAX(searchname)   as searchname,
-      MAX(description)  as description,
-      SUM(stock)        as stock,
-      MAX(pc)           as pc,
-      SUM(gross_weight) as gross_weight,
-      SUM(nett_weight)  as nett_weight
+    SELECT whs, location, principal, article, searchname, description, stock, pc, gross_weight, nett_weight
     FROM warehouse_stock
-    GROUP BY article, pc
-    ORDER BY MAX(description) ASC, article ASC
+    ORDER BY description ASC, article ASC, whs ASC, location ASC
   `).all();
 
   const history = db.prepare(`
@@ -53,6 +44,8 @@ router.post('/upload', upload.single('file'), (req: Request, res: Response) => {
   const headers = headerLine.split(delimiter).map(h => h.toLowerCase().trim());
 
   const idx = {
+    whs:          headers.indexOf('whs'),
+    location:     headers.indexOf('location'),
     principal:    headers.indexOf('principal'),
     article:      headers.indexOf('article'),
     searchname:   headers.indexOf('searchname'),
@@ -75,8 +68,8 @@ router.post('/upload', upload.single('file'), (req: Request, res: Response) => {
     db.exec('DELETE FROM warehouse_stock');
 
     const insert = db.prepare(`
-      INSERT INTO warehouse_stock (principal, article, searchname, description, stock, pc, gross_weight, nett_weight, uploaded_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO warehouse_stock (whs, location, principal, article, searchname, description, stock, pc, gross_weight, nett_weight, uploaded_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     let inserted = 0;
@@ -88,14 +81,16 @@ router.post('/upload', upload.single('file'), (req: Request, res: Response) => {
       if (!article) continue;
 
       insert.run(
-        idx.principal    >= 0 ? cols[idx.principal]?.trim()           || null : null,
+        idx.whs          >= 0 ? cols[idx.whs]?.trim()               || null : null,
+        idx.location     >= 0 ? cols[idx.location]?.trim()           || null : null,
+        idx.principal    >= 0 ? cols[idx.principal]?.trim()          || null : null,
         article,
-        idx.searchname   >= 0 ? cols[idx.searchname]?.trim()          || null : null,
-        idx.description  >= 0 ? cols[idx.description]?.trim()         || null : null,
-        idx.stock        >= 0 ? parseInt(cols[idx.stock])              || 0   : 0,
-        idx.pc           >= 0 ? cols[idx.pc]?.trim()                   || null : null,
-        idx.gross_weight >= 0 ? parseFloat(cols[idx.gross_weight])     || null : null,
-        idx.nett_weight  >= 0 ? parseFloat(cols[idx.nett_weight])      || null : null,
+        idx.searchname   >= 0 ? cols[idx.searchname]?.trim()         || null : null,
+        idx.description  >= 0 ? cols[idx.description]?.trim()        || null : null,
+        idx.stock        >= 0 ? parseInt(cols[idx.stock])             || 0   : 0,
+        idx.pc           >= 0 ? cols[idx.pc]?.trim()                  || null : null,
+        idx.gross_weight >= 0 ? parseFloat(cols[idx.gross_weight])    || null : null,
+        idx.nett_weight  >= 0 ? parseFloat(cols[idx.nett_weight])     || null : null,
         now,
       );
       inserted++;

@@ -939,6 +939,8 @@ function WarehouseStockTab() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Whs</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Location</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Principal</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Article</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Name</th>
@@ -952,6 +954,8 @@ function WarehouseStockTab() {
               <tbody className="divide-y divide-gray-100">
                 {filtered.map((row, i) => (
                   <tr key={i} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 text-xs text-gray-400 font-mono">{row.whs || '—'}</td>
+                    <td className="px-4 py-3 text-xs text-gray-400 font-mono">{row.location || '—'}</td>
                     <td className="px-4 py-3 text-xs text-gray-400">{row.principal || '—'}</td>
                     <td className="px-4 py-3 font-mono text-xs text-gray-900">{row.article}</td>
                     <td className="px-4 py-3 text-gray-600">{row.searchname || '—'}</td>
@@ -973,17 +977,16 @@ function WarehouseStockTab() {
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
-type InventoryTabId = 'inventory' | 'products' | 'packaging' | 'warehouse';
+type InventoryTabId = 'warehouse' | 'products' | 'packaging';
 
 const tabs: { id: InventoryTabId; label: string }[] = [
-  { id: 'inventory', label: 'Stock' },
   { id: 'warehouse', label: 'Warehouse Stock' },
   { id: 'products', label: 'Products' },
   { id: 'packaging', label: 'Packaging' },
 ];
 
 export default function InventoryPage() {
-  const [activeTab, setActiveTab] = useState<InventoryTabId>('inventory');
+  const [activeTab, setActiveTab] = useState<InventoryTabId>('warehouse');
 
   return (
     <div className="space-y-4">
@@ -1004,7 +1007,6 @@ export default function InventoryPage() {
         ))}
       </div>
 
-      {activeTab === 'inventory' && <InventoryTab />}
       {activeTab === 'warehouse' && <WarehouseStockTab />}
       {activeTab === 'products' && <ProductsTab />}
       {activeTab === 'packaging' && <PackagingTab />}

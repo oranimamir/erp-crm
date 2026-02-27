@@ -589,6 +589,8 @@ export async function initializeDatabase() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS warehouse_stock (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      whs TEXT,
+      location TEXT,
       principal TEXT,
       article TEXT NOT NULL,
       searchname TEXT,
@@ -600,6 +602,8 @@ export async function initializeDatabase() {
       uploaded_at TEXT DEFAULT (datetime('now'))
     )
   `);
+  try { db.exec(`ALTER TABLE warehouse_stock ADD COLUMN whs TEXT`); } catch (_) {}
+  try { db.exec(`ALTER TABLE warehouse_stock ADD COLUMN location TEXT`); } catch (_) {}
 
   // Upload history log for warehouse stock
   db.exec(`
