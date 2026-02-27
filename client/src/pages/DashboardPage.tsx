@@ -12,6 +12,7 @@ interface Stats {
   totalOrders: number;
   activeOrders: number;
   totalInvoices: number;
+  paidYTD: number;           // payments received this calendar year
   pendingAmount: number;     // sent/overdue + has due_date
   expectedAmount: number;    // sent + no due_date
   paidInvoiceAmount: number;
@@ -63,33 +64,46 @@ export default function DashboardPage() {
   if (loading) return <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" /></div>;
 
   const fmt = (n: number) => `€${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  const statCards = [
-    { label: 'Active Shipments', value: stats?.activeShipments ?? 0, icon: Package, color: 'text-green-600 bg-green-100', to: '/shipments' },
-    { label: 'Pending (w/ due date)', value: fmt(stats?.pendingAmount ?? 0), icon: Clock, color: 'text-amber-600 bg-amber-100', to: '/invoices', sub: 'Sent invoices with due date' },
-    { label: 'Expected (no due date)', value: fmt(stats?.expectedAmount ?? 0), icon: TrendingUp, color: 'text-blue-600 bg-blue-100', to: '/invoices', sub: 'Sent invoices without due date' },
-  ];
+  const year = new Date().getFullYear();
+  const paidYTD = stats?.paidYTD ?? 0;
+  const pending = stats?.pendingAmount ?? 0;
+  const expected = stats?.expectedAmount ?? 0;
+  const totalYear = paidYTD + pending + expected;
 
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {statCards.map(card => (
-          <Link key={card.label} to={card.to}>
-            <Card className="p-5 hover:shadow-md transition-shadow">
-              <div className="flex items-center gap-4">
-                <div className={`w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0 ${card.color}`}>
-                  <card.icon size={24} />
-                </div>
-                <div>
-                  <p className="text-sm text-gray-500">{card.label}</p>
-                  <p className="text-2xl font-bold text-gray-900">{card.value}</p>
-                  {'sub' in card && card.sub && <p className="text-xs text-gray-400 mt-0.5">{card.sub}</p>}
-                </div>
-              </div>
-            </Card>
-          </Link>
-        ))}
+      {/* ── Financial summary ─────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <Link to="/invoices">
+          <Card className="p-5 hover:shadow-md transition-shadow h-full">
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Paid YTD {year}</p>
+            <p className="text-2xl font-bold text-green-600">{fmt(paidYTD)}</p>
+            <p className="text-xs text-gray-400 mt-1">Payments received this year</p>
+          </Card>
+        </Link>
+        <Link to="/invoices">
+          <Card className="p-5 hover:shadow-md transition-shadow h-full">
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Pending</p>
+            <p className="text-2xl font-bold text-amber-500">{fmt(pending)}</p>
+            <p className="text-xs text-gray-400 mt-1">Sent invoices with due date</p>
+          </Card>
+        </Link>
+        <Link to="/invoices">
+          <Card className="p-5 hover:shadow-md transition-shadow h-full">
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Expected</p>
+            <p className="text-2xl font-bold text-blue-500">{fmt(expected)}</p>
+            <p className="text-xs text-gray-400 mt-1">Sent invoices without due date</p>
+          </Card>
+        </Link>
+        <Link to="/invoices">
+          <Card className="p-5 hover:shadow-md transition-shadow h-full border-2 border-gray-200">
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Total {year}</p>
+            <p className="text-2xl font-bold text-gray-900">{fmt(totalYear)}</p>
+            <p className="text-xs text-gray-400 mt-1">Paid + pending + expected</p>
+          </Card>
+        </Link>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

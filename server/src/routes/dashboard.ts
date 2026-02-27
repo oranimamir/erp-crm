@@ -14,12 +14,29 @@ router.get('/stats', (_req: Request, res: Response) => {
   // Expected: sent invoices with NO due date — amount expected but not yet scheduled
   const expectedAmount = (db.prepare("SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total FROM invoices WHERE type = 'customer' AND status = 'sent' AND due_date IS NULL").get() as any).total;
   const paidInvoiceAmount = (db.prepare("SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total FROM invoices WHERE type = 'customer' AND status = 'paid'").get() as any).total;
+  // Paid YTD: actual payments received in the current calendar year
+  const paidYTD = (db.prepare(`
+    SELECT COALESCE(SUM(eur_val), 0) as total FROM (
+      SELECT COALESCE(wt.eur_amount, wt.amount) as eur_val
+      FROM wire_transfers wt JOIN invoices i ON wt.invoice_id = i.id
+      WHERE i.type = 'customer' AND strftime('%Y', wt.transfer_date) = strftime('%Y', 'now')
+      UNION ALL
+      SELECT p.amount FROM payments p JOIN invoices i ON p.invoice_id = i.id
+      WHERE i.type = 'customer' AND strftime('%Y', p.payment_date) = strftime('%Y', 'now')
+      UNION ALL
+      SELECT COALESCE(i.eur_amount, i.amount) FROM invoices i
+      WHERE i.type = 'customer' AND i.status = 'paid'
+        AND NOT EXISTS (SELECT 1 FROM wire_transfers wt WHERE wt.invoice_id = i.id)
+        AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
+        AND i.payment_date IS NOT NULL AND strftime('%Y', i.payment_date) = strftime('%Y', 'now')
+    )
+  `).get() as any).total;
   const totalPayments = (db.prepare('SELECT COALESCE(SUM(amount), 0) as total FROM payments').get() as any).total;
   const activeShipments = (db.prepare("SELECT COUNT(*) as count FROM shipments WHERE status NOT IN ('delivered', 'returned', 'failed')").get() as any).count;
 
   res.json({
     customers, suppliers, totalOrders, activeOrders,
-    totalInvoices, pendingAmount, expectedAmount, paidInvoiceAmount,
+    totalInvoices, pendingAmount, expectedAmount, paidInvoiceAmount, paidYTD,
     totalPayments, activeShipments,
     currency: 'EUR',
   });
