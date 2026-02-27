@@ -274,6 +274,7 @@ router.get('/tons-ytd', (_req: Request, res: Response) => {
     JOIN orders o ON oi.order_id = o.id
     WHERE o.type = 'customer'
       AND strftime('%Y', COALESCE(o.order_date, date(o.created_at))) = ?
+      AND (oi.unit IS NULL OR LOWER(oi.unit) IN ('tons', 'ton', 't', 'mt'))
   `).get(year) as any;
   res.json({ total_tons: Number(result.total_tons), year: parseInt(year) });
 });

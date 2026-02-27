@@ -229,6 +229,7 @@ router.get('/quantity', (req: Request, res: Response) => {
   }
   const custWhere = customerId ? `AND o.customer_id = ${customerId}` : '';
 
+  // Only count items whose unit is a recognised tons label
   const tonsRows = db.prepare(`
     SELECT strftime('%Y-%m', COALESCE(o.order_date, date(o.created_at))) as month,
            SUM(oi.quantity) as tons
@@ -236,6 +237,7 @@ router.get('/quantity', (req: Request, res: Response) => {
     JOIN orders o ON oi.order_id = o.id
     WHERE o.type = 'customer'
       AND COALESCE(o.order_date, date(o.created_at)) BETWEEN ? AND ?
+      AND (oi.unit IS NULL OR LOWER(oi.unit) IN ('tons', 'ton', 't', 'mt'))
       ${custWhere}
     GROUP BY month
   `).all(dateStart, dateEnd) as any[];
@@ -252,7 +254,22 @@ router.get('/quantity', (req: Request, res: Response) => {
   const monthly = Object.values(months);
   const totalTons = monthly.reduce((s, m) => s + m.tons, 0);
 
-  res.json({ monthly, total_tons: totalTons });
+  // Per-customer breakdown
+  const byCustomer = db.prepare(`
+    SELECT o.customer_id, c.name as customer_name, SUM(oi.quantity) as tons
+    FROM order_items oi
+    JOIN orders o ON oi.order_id = o.id
+    JOIN customers c ON o.customer_id = c.id
+    WHERE o.type = 'customer'
+      AND COALESCE(o.order_date, date(o.created_at)) BETWEEN ? AND ?
+      AND (oi.unit IS NULL OR LOWER(oi.unit) IN ('tons', 'ton', 't', 'mt'))
+      ${custWhere}
+    GROUP BY o.customer_id
+    ORDER BY tons DESC
+    LIMIT 30
+  `).all(dateStart, dateEnd) as any[];
+
+  res.json({ monthly, total_tons: totalTons, by_customer: byCustomer });
 });
 
 export default router;

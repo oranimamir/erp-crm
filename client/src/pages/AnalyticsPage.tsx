@@ -19,6 +19,7 @@ interface Summary {
 interface QuantityData {
   monthly: { month: string; tons: number }[];
   total_tons: number;
+  by_customer: { customer_id: number; customer_name: string; tons: number }[];
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -47,13 +48,13 @@ function monthLabel(m: string) {
 
 function fmtTons(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k t`;
-  return `${n % 1 === 0 ? n.toFixed(0) : n.toFixed(1)} t`;
+  return `${n % 1 === 0 ? n.toFixed(0) : n.toFixed(2)} t`;
 }
 
 function fmtTonsAxis(n: number): string {
   if (n === 0) return '0';
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return `${Math.round(n)}`;
+  return `${n % 1 === 0 ? n.toFixed(0) : n.toFixed(1)}`;
 }
 
 function periodLabel(year: string, monthFrom: string, monthTo: string) {
@@ -64,12 +65,97 @@ function periodLabel(year: string, monthFrom: string, monthTo: string) {
   return `${MONTHS[from - 1]}–${MONTHS[to - 1]} ${year}`;
 }
 
-type View = 'both' | 'customers' | 'suppliers';
+function FinancialChart({ monthly, isCustomers, maxBar }: {
+  monthly: MonthData[];
+  isCustomers: boolean;
+  maxBar: number;
+}) {
+  const hasData = monthly.some(m => isCustomers ? m.received > 0 : m.paid_out > 0);
+  if (!hasData) {
+    return <p className="text-center text-sm text-gray-500 py-8">No payment data for this period</p>;
+  }
+  const color = isCustomers ? 'bg-green-500' : 'bg-red-400';
+  const textColor = isCustomers ? 'text-green-600' : 'text-red-400';
+  return (
+    <div>
+      <div className="flex gap-2">
+        <div className="flex flex-col justify-between items-end shrink-0 w-14" style={{ height: 165 }}>
+          {[maxBar, maxBar * 0.75, maxBar * 0.5, maxBar * 0.25, 0].map((v, i) => (
+            <span key={i} className="text-[10px] text-gray-400 leading-none tabular-nums">{fmtAxis(v)}</span>
+          ))}
+        </div>
+        <div className="flex-1 min-w-0 flex flex-col">
+          <div className="relative" style={{ height: 165 }}>
+            {[0, 25, 50, 75, 100].map(pct => (
+              <div
+                key={pct}
+                className={`absolute left-0 right-0 pointer-events-none ${pct === 0 ? 'border-t border-gray-300' : 'border-t border-gray-100'}`}
+                style={{ bottom: `${(pct / 100) * 165}px` }}
+              />
+            ))}
+            <div className="flex items-end gap-1 h-full">
+              {monthly.map(m => {
+                const val = isCustomers ? m.received : m.paid_out;
+                return (
+                  <div key={m.month} className="flex-1 h-full flex items-end justify-center">
+                    {val > 0 ? (
+                      <div
+                        className={`w-4/5 ${color} rounded-t transition-all`}
+                        style={{ height: `${Math.max((val / maxBar) * 165, 2)}px` }}
+                        title={`${isCustomers ? 'Received' : 'Paid out'}: ${fmt(val)}`}
+                      />
+                    ) : (
+                      <div className="w-4/5 bg-gray-100 rounded-t" style={{ height: '2px' }} />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div className="flex gap-1 mt-1.5">
+            {monthly.map(m => (
+              <div key={m.month} className="flex-1 text-center">
+                <span className="text-[10px] text-gray-400">{monthLabel(m.month)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 flex gap-2">
+        <div className="w-14 shrink-0" />
+        <div className="flex-1 overflow-x-auto">
+          <table className="w-full text-xs text-center">
+            <tbody>
+              <tr className={`${textColor} font-medium`}>
+                {monthly.map(m => {
+                  const val = isCustomers ? m.received : m.paid_out;
+                  return (
+                    <td key={m.month} className="px-1">
+                      {val > 0 ? `€${Math.round(val / 1000)}k` : '—'}
+                    </td>
+                  );
+                })}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type View = 'customers' | 'suppliers' | 'tonnage';
+
+const VIEW_OPTIONS: { value: View; label: string; active: string }[] = [
+  { value: 'customers', label: 'Revenue',      active: 'bg-green-600 text-white' },
+  { value: 'suppliers', label: 'Expenses',     active: 'bg-red-500 text-white' },
+  { value: 'tonnage',   label: 'Tonnage Sold', active: 'bg-indigo-600 text-white' },
+];
 
 export default function AnalyticsPage() {
   const currentYear = new Date().getFullYear().toString();
 
-  const [view, setView] = useState<View>('both');
+  const [view, setView] = useState<View>('customers');
   const [year, setYear] = useState(currentYear);
   const [monthFrom, setMonthFrom] = useState('1');
   const [monthTo, setMonthTo] = useState('12');
@@ -85,7 +171,6 @@ export default function AnalyticsPage() {
   const [quantityData, setQuantityData] = useState<QuantityData | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Load filter options once
   useEffect(() => {
     Promise.all([api.get('/analytics/years'), api.get('/analytics/filters')])
       .then(([y, f]) => {
@@ -96,7 +181,6 @@ export default function AnalyticsPage() {
       .catch(() => {});
   }, []);
 
-  // Load data whenever filters change
   useEffect(() => {
     setLoading(true);
     Promise.all([
@@ -139,7 +223,6 @@ export default function AnalyticsPage() {
 
   const handleCategoryChange = (val: string) => {
     setSupplierCategory(val);
-    // If the selected supplier is not in the new category, clear it
     if (val && supplierId) {
       const sup = suppliers.find(s => s.id === parseInt(supplierId));
       if (sup && sup.category !== val) setSupplierId('');
@@ -147,7 +230,7 @@ export default function AnalyticsPage() {
   };
 
   const resetFilters = () => {
-    setView('both');
+    setView('customers');
     setYear(currentYear);
     setMonthFrom('1');
     setMonthTo('12');
@@ -156,28 +239,17 @@ export default function AnalyticsPage() {
     setSupplierCategory('');
   };
 
-  const isFiltered = view !== 'both' || year !== currentYear || monthFrom !== '1' || monthTo !== '12'
+  const isFiltered = view !== 'customers' || year !== currentYear || monthFrom !== '1' || monthTo !== '12'
     || customerId !== '' || supplierId !== '' || supplierCategory !== '';
 
-  // Suppliers filtered by selected category (for supplier dropdown)
   const filteredSuppliers = supplierCategory
     ? suppliers.filter(s => s.category === supplierCategory)
     : suppliers;
 
-  const maxBar = data ? Math.max(...data.monthly.map(m => Math.max(
-    view === 'suppliers' ? 0 : m.received,
-    view === 'customers' ? 0 : m.paid_out,
-  )), 1) : 1;
-
-  const hasData = data && data.monthly.some(m =>
-    (view !== 'suppliers' && m.received > 0) || (view !== 'customers' && m.paid_out > 0)
-  );
+  const maxBarCustomers = data ? Math.max(...data.monthly.map(m => m.received), 1) : 1;
+  const maxBarSuppliers = data ? Math.max(...data.monthly.map(m => m.paid_out), 1) : 1;
 
   const period = periodLabel(year, monthFrom, monthTo);
-
-  const chartTitle = view === 'customers' ? `Customer Revenue — ${period}`
-    : view === 'suppliers' ? `Supplier Expenses — ${period}`
-    : `Cash Flow — ${period}`;
 
   return (
     <div className="space-y-6">
@@ -188,16 +260,34 @@ export default function AnalyticsPage() {
           Analytics
         </h1>
         <div className="flex items-center gap-3">
-          {data && (
+          {/* Export button */}
+          {data && view === 'customers' && (
             <button
               onClick={() => {
-                if (view !== 'suppliers') {
-                  const rows = data.by_customer.map(c => [c.customer_name, c.total, c.invoice_count]);
-                  downloadExcel(`revenue-by-customer-${period}`, ['Customer', 'Total (EUR)', 'Invoices'], rows);
-                } else {
-                  const rows = data.by_supplier.map(s => [s.supplier_name, s.category, s.total, s.invoice_count]);
-                  downloadExcel(`expenses-by-supplier-${period}`, ['Supplier', 'Category', 'Total (EUR)', 'Invoices'], rows);
-                }
+                const rows = data.by_customer.map(c => [c.customer_name, c.total, c.invoice_count]);
+                downloadExcel(`revenue-by-customer-${period}`, ['Customer', 'Total (EUR)', 'Invoices'], rows);
+              }}
+              className="flex items-center gap-1 text-sm text-gray-600 border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50"
+            >
+              <FileSpreadsheet size={14} /> Export Excel
+            </button>
+          )}
+          {data && view === 'suppliers' && (
+            <button
+              onClick={() => {
+                const rows = data.by_supplier.map(s => [s.supplier_name, s.category, s.total, s.invoice_count]);
+                downloadExcel(`expenses-by-supplier-${period}`, ['Supplier', 'Category', 'Total (EUR)', 'Invoices'], rows);
+              }}
+              className="flex items-center gap-1 text-sm text-gray-600 border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50"
+            >
+              <FileSpreadsheet size={14} /> Export Excel
+            </button>
+          )}
+          {quantityData && view === 'tonnage' && quantityData.by_customer.length > 0 && (
+            <button
+              onClick={() => {
+                const rows = quantityData.by_customer.map(c => [c.customer_name, c.tons]);
+                downloadExcel(`tonnage-by-customer-${period}`, ['Customer', 'Tons'], rows);
               }}
               className="flex items-center gap-1 text-sm text-gray-600 border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50"
             >
@@ -205,10 +295,7 @@ export default function AnalyticsPage() {
             </button>
           )}
           {isFiltered && (
-            <button
-              onClick={resetFilters}
-              className="flex items-center gap-1 text-sm text-primary-600 hover:underline"
-            >
+            <button onClick={resetFilters} className="flex items-center gap-1 text-sm text-primary-600 hover:underline">
               <RefreshCw size={14} /> Reset filters
             </button>
           )}
@@ -217,23 +304,20 @@ export default function AnalyticsPage() {
 
       {/* Filters */}
       <Card className="p-4 space-y-4">
-        {/* Row 1: View toggle + date range */}
         <div className="flex flex-wrap items-end gap-4">
           {/* View toggle */}
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Show</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1">View</label>
             <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm font-medium">
-              {(['both', 'customers', 'suppliers'] as View[]).map((v, i) => (
+              {VIEW_OPTIONS.map((opt, i) => (
                 <button
-                  key={v}
-                  onClick={() => setView(v)}
+                  key={opt.value}
+                  onClick={() => setView(opt.value)}
                   className={`px-3 py-2 transition-colors ${
-                    view === v
-                      ? 'bg-primary-600 text-white'
-                      : 'bg-white text-gray-600 hover:bg-gray-50'
+                    view === opt.value ? opt.active : 'bg-white text-gray-600 hover:bg-gray-50'
                   } ${i > 0 ? 'border-l border-gray-300' : ''}`}
                 >
-                  {v === 'both' ? 'Both' : v === 'customers' ? 'Customers' : 'Suppliers'}
+                  {opt.label}
                 </button>
               ))}
             </div>
@@ -259,9 +343,7 @@ export default function AnalyticsPage() {
               onChange={e => handleMonthFromChange(e.target.value)}
               className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
             >
-              {MONTHS.map((m, i) => (
-                <option key={i + 1} value={i + 1}>{m}</option>
-              ))}
+              {MONTHS.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
             </select>
           </div>
 
@@ -280,28 +362,28 @@ export default function AnalyticsPage() {
           </div>
         </div>
 
-        {/* Row 2: Entity filters (conditionally shown) */}
-        {(view === 'both' || view === 'customers' || view === 'suppliers') && (
-          <div className="flex flex-wrap items-end gap-4 pt-1 border-t border-gray-100">
-            {/* Customer filter */}
-            {view !== 'suppliers' && (
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1">
-                  <Users size={11} /> Customer
-                </label>
-                <select
-                  value={customerId}
-                  onChange={e => setCustomerId(e.target.value)}
-                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                >
-                  <option value="">All Customers</option>
-                  {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-              </div>
-            )}
+        {/* Row 2: entity filters */}
+        <div className="flex flex-wrap items-end gap-4 pt-1 border-t border-gray-100">
+          {/* Customer filter — Revenue and Tonnage views */}
+          {view !== 'suppliers' && (
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1">
+                <Users size={11} /> Customer
+              </label>
+              <select
+                value={customerId}
+                onChange={e => setCustomerId(e.target.value)}
+                className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                <option value="">All Customers</option>
+                {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+          )}
 
-            {/* Supplier category filter */}
-            {view !== 'customers' && (
+          {/* Supplier filters — Expenses view only */}
+          {view === 'suppliers' && (
+            <>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1">
                   <Truck size={11} /> Category
@@ -317,10 +399,6 @@ export default function AnalyticsPage() {
                   ))}
                 </select>
               </div>
-            )}
-
-            {/* Supplier filter (filtered by category) */}
-            {view !== 'customers' && (
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1">
                   <Truck size={11} /> Supplier
@@ -334,9 +412,9 @@ export default function AnalyticsPage() {
                   {filteredSuppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
               </div>
-            )}
-          </div>
-        )}
+            </>
+          )}
+        </div>
       </Card>
 
       {loading ? (
@@ -345,261 +423,57 @@ export default function AnalyticsPage() {
         </div>
       ) : data ? (
         <>
-          {/* Summary cards */}
-          <div className={`grid gap-4 ${
-            view === 'both'
-              ? 'grid-cols-2 lg:grid-cols-4'
-              : 'grid-cols-2 lg:grid-cols-2'
-          }`}>
-            {view !== 'suppliers' && (
-              <Card className="p-5">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center shrink-0">
-                    <TrendingUp size={20} className="text-green-600" />
+          {/* ── REVENUE VIEW ──────────────────────────────────────────────────── */}
+          {view === 'customers' && (
+            <>
+              <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+                <Card className="p-5">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center shrink-0">
+                      <TrendingUp size={20} className="text-green-600" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs text-gray-500">Revenue Received</p>
+                      <p className="text-xl font-bold text-gray-900 truncate">{fmt(data.totals.received)}</p>
+                    </div>
                   </div>
-                  <div className="min-w-0">
-                    <p className="text-xs text-gray-500">{view === 'customers' ? 'Revenue' : 'Total Received'} (EUR)</p>
-                    <p className="text-xl font-bold text-gray-900 truncate">{fmt(data.totals.received)}</p>
+                </Card>
+                <Card className="p-5">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
+                      <Clock size={20} className="text-amber-600" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs text-gray-500">Pending (w/ due date)</p>
+                      <p className="text-xl font-bold text-gray-900 truncate">{fmt(data.totals.outstanding)}</p>
+                    </div>
                   </div>
-                </div>
-              </Card>
-            )}
-
-            {view !== 'customers' && (
-              <Card className="p-5">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-red-100 flex items-center justify-center shrink-0">
-                    <TrendingDown size={20} className="text-red-500" />
+                </Card>
+                <Card className="p-5">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center shrink-0">
+                      <Clock size={20} className="text-blue-500" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs text-gray-500">Expected (no due date)</p>
+                      <p className="text-xl font-bold text-gray-900 truncate">{fmt(data.totals.expected ?? 0)}</p>
+                    </div>
                   </div>
-                  <div className="min-w-0">
-                    <p className="text-xs text-gray-500">{view === 'suppliers' ? 'Total Expenses' : 'Total Paid Out'} (EUR)</p>
-                    <p className="text-xl font-bold text-gray-900 truncate">{fmt(data.totals.paid_out)}</p>
-                  </div>
-                </div>
-              </Card>
-            )}
-
-            {view === 'both' && (
-              <Card className="p-5">
-                <div className="flex items-center gap-3">
-                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${data.totals.net >= 0 ? 'bg-green-100' : 'bg-red-100'}`}>
-                    <DollarSign size={20} className={data.totals.net >= 0 ? 'text-green-600' : 'text-red-500'} />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs text-gray-500">Net Cash Flow</p>
-                    <p className={`text-xl font-bold truncate ${data.totals.net >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                      {data.totals.net >= 0 ? '+' : ''}{fmt(data.totals.net)}
-                    </p>
-                  </div>
-                </div>
-              </Card>
-            )}
-
-            {view !== 'suppliers' && (
-              <Card className="p-5">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
-                    <Clock size={20} className="text-amber-600" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs text-gray-500">Pending (w/ due date)</p>
-                    <p className="text-xl font-bold text-gray-900 truncate">{fmt(data.totals.outstanding)}</p>
-                  </div>
-                </div>
-              </Card>
-            )}
-
-            {view !== 'suppliers' && (
-              <Card className="p-5">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center shrink-0">
-                    <Clock size={20} className="text-blue-500" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs text-gray-500">Expected (no due date)</p>
-                    <p className="text-xl font-bold text-gray-900 truncate">{fmt(data.totals.expected ?? 0)}</p>
-                  </div>
-                </div>
-              </Card>
-            )}
-
-            {view !== 'customers' && (
-              <Card className="p-5">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-orange-100 flex items-center justify-center shrink-0">
-                    <Clock size={20} className="text-orange-500" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs text-gray-500">Outstanding Payable</p>
-                    <p className="text-xl font-bold text-gray-900 truncate">{fmt(data.totals.outstanding_payable)}</p>
-                  </div>
-                </div>
-              </Card>
-            )}
-          </div>
-
-          {/* Bar chart */}
-          <Card>
-            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-              <h2 className="font-semibold text-gray-900">{chartTitle}</h2>
-              <div className="flex items-center gap-4 text-xs text-gray-500">
-                {view !== 'suppliers' && (
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-3 h-3 rounded bg-green-500 inline-block" /> Received
-                  </span>
-                )}
-                {view !== 'customers' && (
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-3 h-3 rounded bg-red-400 inline-block" /> Paid out
-                  </span>
-                )}
+                </Card>
               </div>
-            </div>
-            <div className="p-5">
-              {!hasData ? (
-                <p className="text-center text-sm text-gray-500 py-8">No payment data for this period</p>
-              ) : (
-                <div className="flex gap-2">
-                  {/* Y-axis labels — top (max) to bottom (0) */}
-                  <div className="flex flex-col justify-between items-end shrink-0 w-14" style={{ height: 165 }}>
-                    {[maxBar, maxBar * 0.75, maxBar * 0.5, maxBar * 0.25, 0].map((v, i) => (
-                      <span key={i} className="text-[10px] text-gray-400 leading-none tabular-nums">
-                        {fmtAxis(v)}
-                      </span>
-                    ))}
-                  </div>
 
-                  {/* Chart area */}
-                  <div className="flex-1 min-w-0 flex flex-col">
-                    {/* Drawing area: bars + horizontal grid lines */}
-                    <div className="relative" style={{ height: 165 }}>
-                      {/* Grid lines at 0 / 25 / 50 / 75 / 100% */}
-                      {[0, 25, 50, 75, 100].map(pct => (
-                        <div
-                          key={pct}
-                          className={`absolute left-0 right-0 pointer-events-none ${pct === 0 ? 'border-t border-gray-300' : 'border-t border-gray-100'}`}
-                          style={{ bottom: `${(pct / 100) * 165}px` }}
-                        />
-                      ))}
-
-                      {/* Bars */}
-                      <div className="flex items-end gap-1 h-full">
-                        {data.monthly.map(m => (
-                          <div key={m.month} className="flex-1 flex items-end justify-center gap-0.5 h-full">
-                            {view !== 'suppliers' && (
-                              <div
-                                className="flex-1 max-w-[20px] bg-green-500 rounded-t transition-all"
-                                style={{ height: `${m.received > 0 ? Math.max((m.received / maxBar) * 165, 2) : 0}px` }}
-                                title={`Received: ${fmt(m.received)}`}
-                              />
-                            )}
-                            {view !== 'customers' && (
-                              <div
-                                className="flex-1 max-w-[20px] bg-red-400 rounded-t transition-all"
-                                style={{ height: `${m.paid_out > 0 ? Math.max((m.paid_out / maxBar) * 165, 2) : 0}px` }}
-                                title={`Paid out: ${fmt(m.paid_out)}`}
-                              />
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* X-axis month labels */}
-                    <div className="flex gap-1 mt-1.5">
-                      {data.monthly.map(m => (
-                        <div key={m.month} className="flex-1 text-center">
-                          <span className="text-[10px] text-gray-400">{monthLabel(m.month)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Value table — offset left to align with the bar area */}
-              {hasData && (
-                <div className="mt-4 flex gap-2">
-                  <div className="w-14 shrink-0" />{/* spacer matching Y-axis width */}
-                  <div className="flex-1 overflow-x-auto">
-                    <table className="w-full text-xs text-center">
-                      <tbody>
-                        {view !== 'suppliers' && (
-                          <tr className="text-green-600 font-medium">
-                            {data.monthly.map(m => (
-                              <td key={m.month} className="px-1">
-                                {m.received > 0 ? `€${Math.round(m.received / 1000)}k` : '—'}
-                              </td>
-                            ))}
-                          </tr>
-                        )}
-                        {view !== 'customers' && (
-                          <tr className="text-red-400 font-medium">
-                            {data.monthly.map(m => (
-                              <td key={m.month} className="px-1">
-                                {m.paid_out > 0 ? `€${Math.round(m.paid_out / 1000)}k` : '—'}
-                              </td>
-                            ))}
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
-          </Card>
-
-          {/* Expenses by Category */}
-          {view !== 'customers' && data.by_supplier.length > 0 && (() => {
-            const byCategory = SUPPLIER_CATEGORIES.map(cat => {
-              const matching = data.by_supplier.filter(s => s.category === cat.value);
-              return {
-                label: cat.label,
-                value: cat.value,
-                total: matching.reduce((sum, s) => sum + s.total, 0),
-                count: matching.reduce((sum, s) => sum + s.invoice_count, 0),
-              };
-            }).filter(c => c.total > 0).sort((a, b) => b.total - a.total);
-
-            if (byCategory.length === 0) return null;
-            const maxCat = byCategory[0]?.total || 1;
-            return (
               <Card>
                 <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                  <h2 className="font-semibold text-gray-900 flex items-center gap-2">
-                    <Truck size={16} className="text-orange-500" /> Expenses by Category
-                  </h2>
-                  <span className="text-xs text-gray-400">{period}</span>
+                  <h2 className="font-semibold text-gray-900">Customer Revenue — {period}</h2>
+                  <span className="flex items-center gap-1.5 text-xs text-gray-500">
+                    <span className="w-3 h-3 rounded bg-green-500 inline-block" /> Received
+                  </span>
                 </div>
-                <div className="divide-y divide-gray-100">
-                  {byCategory.map(cat => (
-                    <div key={cat.value} className="px-5 py-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-medium text-gray-700 capitalize">{cat.label.replace('_', ' ')}</span>
-                        <div className="text-right">
-                          <span className="text-sm font-bold text-gray-900">{fmt(cat.total)}</span>
-                          <span className="text-xs text-gray-400 ml-2">{cat.count} inv</span>
-                        </div>
-                      </div>
-                      <div className="w-full bg-gray-100 rounded-full h-2">
-                        <div
-                          className="bg-orange-400 h-2 rounded-full transition-all"
-                          style={{ width: `${(cat.total / maxCat) * 100}%` }}
-                        />
-                      </div>
-                    </div>
-                  ))}
+                <div className="p-5">
+                  <FinancialChart monthly={data.monthly} isCustomers={true} maxBar={maxBarCustomers} />
                 </div>
               </Card>
-            );
-          })()}
 
-          {/* Breakdowns */}
-          <div className={`grid gap-6 ${view === 'both' ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1'}`}>
-
-            {/* By Customer */}
-            {view !== 'suppliers' && (
               <Card>
                 <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
                   <h2 className="font-semibold text-gray-900 flex items-center gap-2">
@@ -626,10 +500,7 @@ export default function AnalyticsPage() {
                             </div>
                           </div>
                           <div className="w-full bg-gray-100 rounded-full h-1.5">
-                            <div
-                              className="bg-green-500 h-1.5 rounded-full transition-all"
-                              style={{ width: `${(c.total / maxC) * 100}%` }}
-                            />
+                            <div className="bg-green-500 h-1.5 rounded-full" style={{ width: `${(c.total / maxC) * 100}%` }} />
                           </div>
                         </div>
                       );
@@ -637,10 +508,91 @@ export default function AnalyticsPage() {
                   </div>
                 )}
               </Card>
-            )}
+            </>
+          )}
 
-            {/* By Supplier */}
-            {view !== 'customers' && (
+          {/* ── EXPENSES VIEW ─────────────────────────────────────────────────── */}
+          {view === 'suppliers' && (
+            <>
+              <div className="grid grid-cols-2 gap-4">
+                <Card className="p-5">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-red-100 flex items-center justify-center shrink-0">
+                      <TrendingDown size={20} className="text-red-500" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs text-gray-500">Total Expenses Paid</p>
+                      <p className="text-xl font-bold text-gray-900 truncate">{fmt(data.totals.paid_out)}</p>
+                    </div>
+                  </div>
+                </Card>
+                <Card className="p-5">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-orange-100 flex items-center justify-center shrink-0">
+                      <Clock size={20} className="text-orange-500" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs text-gray-500">Outstanding Payable</p>
+                      <p className="text-xl font-bold text-gray-900 truncate">{fmt(data.totals.outstanding_payable)}</p>
+                    </div>
+                  </div>
+                </Card>
+              </div>
+
+              <Card>
+                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                  <h2 className="font-semibold text-gray-900">Supplier Expenses — {period}</h2>
+                  <span className="flex items-center gap-1.5 text-xs text-gray-500">
+                    <span className="w-3 h-3 rounded bg-red-400 inline-block" /> Paid out
+                  </span>
+                </div>
+                <div className="p-5">
+                  <FinancialChart monthly={data.monthly} isCustomers={false} maxBar={maxBarSuppliers} />
+                </div>
+              </Card>
+
+              {/* Expenses by Category */}
+              {data.by_supplier.length > 0 && (() => {
+                const byCategory = SUPPLIER_CATEGORIES.map(cat => {
+                  const matching = data.by_supplier.filter(s => s.category === cat.value);
+                  return {
+                    label: cat.label,
+                    value: cat.value,
+                    total: matching.reduce((sum, s) => sum + s.total, 0),
+                    count: matching.reduce((sum, s) => sum + s.invoice_count, 0),
+                  };
+                }).filter(c => c.total > 0).sort((a, b) => b.total - a.total);
+
+                if (byCategory.length === 0) return null;
+                const maxCat = byCategory[0]?.total || 1;
+                return (
+                  <Card>
+                    <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                      <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                        <Truck size={16} className="text-orange-500" /> Expenses by Category
+                      </h2>
+                      <span className="text-xs text-gray-400">{period}</span>
+                    </div>
+                    <div className="divide-y divide-gray-100">
+                      {byCategory.map(cat => (
+                        <div key={cat.value} className="px-5 py-4">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-sm font-medium text-gray-700">{cat.label}</span>
+                            <div className="text-right">
+                              <span className="text-sm font-bold text-gray-900">{fmt(cat.total)}</span>
+                              <span className="text-xs text-gray-400 ml-2">{cat.count} inv</span>
+                            </div>
+                          </div>
+                          <div className="w-full bg-gray-100 rounded-full h-2">
+                            <div className="bg-orange-400 h-2 rounded-full" style={{ width: `${(cat.total / maxCat) * 100}%` }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                );
+              })()}
+
               <Card>
                 <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
                   <h2 className="font-semibold text-gray-900 flex items-center gap-2">
@@ -677,10 +629,7 @@ export default function AnalyticsPage() {
                             </div>
                           </div>
                           <div className="w-full bg-gray-100 rounded-full h-1.5">
-                            <div
-                              className="bg-red-400 h-1.5 rounded-full transition-all"
-                              style={{ width: `${(s.total / maxS) * 100}%` }}
-                            />
+                            <div className="bg-red-400 h-1.5 rounded-full" style={{ width: `${(s.total / maxS) * 100}%` }} />
                           </div>
                         </div>
                       );
@@ -688,83 +637,177 @@ export default function AnalyticsPage() {
                   </div>
                 )}
               </Card>
-            )}
-          </div>
+            </>
+          )}
 
-          {/* Quantity Sold */}
-          {quantityData && quantityData.total_tons > 0 && (() => {
-            const maxTons = Math.max(...quantityData.monthly.map(m => m.tons), 1);
-            const eurPerTon = data.totals.received > 0 ? data.totals.received / quantityData.total_tons : null;
-            return (
-              <Card>
-                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                  <h2 className="font-semibold text-gray-900 flex items-center gap-2">
-                    <Scale size={16} className="text-indigo-500" /> Quantity Sold — {period}
-                  </h2>
-                </div>
-                <div className="p-5 space-y-4">
-                  {/* Summary */}
-                  <div className="grid grid-cols-3 gap-4 pb-4 border-b border-gray-100">
-                    <div className="text-center">
-                      <p className="text-xs text-gray-500 mb-0.5">Total Tons</p>
-                      <p className="text-xl font-bold text-indigo-600">{fmtTons(quantityData.total_tons)}</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-xs text-gray-500 mb-0.5">Revenue (Period)</p>
-                      <p className="text-xl font-bold text-green-600">{fmt(data.totals.received)}</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-xs text-gray-500 mb-0.5">EUR / Ton</p>
-                      <p className="text-xl font-bold text-gray-900">{eurPerTon !== null ? fmt(eurPerTon) : '—'}</p>
-                    </div>
-                  </div>
-                  {/* Bar chart */}
-                  <div className="flex gap-2">
-                    <div className="flex flex-col justify-between items-end shrink-0 w-14" style={{ height: 165 }}>
-                      {[maxTons, maxTons * 0.75, maxTons * 0.5, maxTons * 0.25, 0].map((v, i) => (
-                        <span key={i} className="text-[10px] text-gray-400 leading-none tabular-nums">
-                          {fmtTonsAxis(v)}
-                        </span>
-                      ))}
-                    </div>
-                    <div className="flex-1 min-w-0 flex flex-col">
-                      <div className="relative" style={{ height: 165 }}>
-                        {[0, 25, 50, 75, 100].map(pct => (
-                          <div
-                            key={pct}
-                            className={`absolute left-0 right-0 pointer-events-none ${pct === 0 ? 'border-t border-gray-300' : 'border-t border-gray-100'}`}
-                            style={{ bottom: `${(pct / 100) * 165}px` }}
-                          />
-                        ))}
-                        <div className="flex items-end gap-1 h-full">
-                          {quantityData.monthly.map(m => (
-                            <div key={m.month} className="flex-1 h-full flex items-end justify-center">
-                              {m.tons > 0 ? (
-                                <div
-                                  className="w-4/5 bg-indigo-500 rounded-t transition-all"
-                                  style={{ height: `${Math.max((m.tons / maxTons) * 165, 2)}px` }}
-                                  title={`${fmtTons(m.tons)}`}
-                                />
-                              ) : (
-                                <div className="w-4/5 bg-gray-100 rounded-t" style={{ height: '2px' }} />
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="flex gap-1 mt-1.5">
-                        {quantityData.monthly.map(m => (
-                          <div key={m.month} className="flex-1 text-center">
-                            <span className="text-[10px] text-gray-400">{monthLabel(m.month)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
+          {/* ── TONNAGE VIEW ──────────────────────────────────────────────────── */}
+          {view === 'tonnage' && quantityData && (
+            quantityData.total_tons === 0 ? (
+              <Card className="p-10 text-center">
+                <Scale size={36} className="text-gray-300 mx-auto mb-3" />
+                <p className="text-gray-500 font-medium">No tonnage data for this period</p>
+                <p className="text-xs text-gray-400 mt-1">
+                  Tonnage is read from customer order line items (unit: tons / t / mt).
+                </p>
               </Card>
-            );
-          })()}
+            ) : (
+              <>
+                {/* Summary cards */}
+                <div className="grid grid-cols-3 gap-4">
+                  <Card className="p-5">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center shrink-0">
+                        <Scale size={20} className="text-indigo-600" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs text-gray-500">Total Tons Sold</p>
+                        <p className="text-xl font-bold text-indigo-600 truncate">{fmtTons(quantityData.total_tons)}</p>
+                      </div>
+                    </div>
+                  </Card>
+                  <Card className="p-5">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center shrink-0">
+                        <TrendingUp size={20} className="text-green-600" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs text-gray-500">Revenue (Period)</p>
+                        <p className="text-xl font-bold text-green-600 truncate">{fmt(data.totals.received)}</p>
+                      </div>
+                    </div>
+                  </Card>
+                  <Card className="p-5">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center shrink-0">
+                        <DollarSign size={20} className="text-gray-600" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs text-gray-500">EUR / Ton</p>
+                        <p className="text-xl font-bold text-gray-900 truncate">
+                          {data.totals.received > 0 && quantityData.total_tons > 0
+                            ? fmt(data.totals.received / quantityData.total_tons)
+                            : '—'}
+                        </p>
+                      </div>
+                    </div>
+                  </Card>
+                </div>
+
+                {/* Monthly tons chart */}
+                <Card>
+                  <div className="px-5 py-4 border-b border-gray-100">
+                    <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                      <Scale size={16} className="text-indigo-500" /> Tons Sold per Month — {period}
+                    </h2>
+                  </div>
+                  <div className="p-5">
+                    {(() => {
+                      const maxTons = Math.max(...quantityData.monthly.map(m => m.tons), 1);
+                      return (
+                        <>
+                          <div className="flex gap-2">
+                            <div className="flex flex-col justify-between items-end shrink-0 w-14" style={{ height: 165 }}>
+                              {[maxTons, maxTons * 0.75, maxTons * 0.5, maxTons * 0.25, 0].map((v, i) => (
+                                <span key={i} className="text-[10px] text-gray-400 leading-none tabular-nums">
+                                  {fmtTonsAxis(v)}
+                                </span>
+                              ))}
+                            </div>
+                            <div className="flex-1 min-w-0 flex flex-col">
+                              <div className="relative" style={{ height: 165 }}>
+                                {[0, 25, 50, 75, 100].map(pct => (
+                                  <div
+                                    key={pct}
+                                    className={`absolute left-0 right-0 pointer-events-none ${pct === 0 ? 'border-t border-gray-300' : 'border-t border-gray-100'}`}
+                                    style={{ bottom: `${(pct / 100) * 165}px` }}
+                                  />
+                                ))}
+                                <div className="flex items-end gap-1 h-full">
+                                  {quantityData.monthly.map(m => (
+                                    <div key={m.month} className="flex-1 h-full flex items-end justify-center">
+                                      {m.tons > 0 ? (
+                                        <div
+                                          className="w-4/5 bg-indigo-500 rounded-t transition-all"
+                                          style={{ height: `${Math.max((m.tons / maxTons) * 165, 2)}px` }}
+                                          title={fmtTons(m.tons)}
+                                        />
+                                      ) : (
+                                        <div className="w-4/5 bg-gray-100 rounded-t" style={{ height: '2px' }} />
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                              <div className="flex gap-1 mt-1.5">
+                                {quantityData.monthly.map(m => (
+                                  <div key={m.month} className="flex-1 text-center">
+                                    <span className="text-[10px] text-gray-400">{monthLabel(m.month)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="mt-3 flex gap-2">
+                            <div className="w-14 shrink-0" />
+                            <div className="flex-1 overflow-x-auto">
+                              <table className="w-full text-xs text-center">
+                                <tbody>
+                                  <tr className="text-indigo-600 font-medium">
+                                    {quantityData.monthly.map(m => (
+                                      <td key={m.month} className="px-1">
+                                        {m.tons > 0 ? fmtTons(m.tons) : '—'}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                </Card>
+
+                {/* Tonnage by customer */}
+                {quantityData.by_customer.length > 0 && (
+                  <Card>
+                    <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                      <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                        <Users size={16} className="text-indigo-600" /> Tonnage by Customer
+                      </h2>
+                      <span className="text-xs text-gray-400">{period}</span>
+                    </div>
+                    <div className="divide-y divide-gray-100">
+                      {quantityData.by_customer.map((c, i) => {
+                        const maxC = quantityData.by_customer[0]?.tons || 1;
+                        const pct = quantityData.total_tons > 0
+                          ? Math.round((c.tons / quantityData.total_tons) * 100)
+                          : 0;
+                        return (
+                          <div key={c.customer_id} className="px-5 py-3">
+                            <div className="flex items-center justify-between mb-1.5">
+                              <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
+                                <span className="text-xs text-gray-400 font-normal w-5">{i + 1}.</span>
+                                {c.customer_name}
+                              </span>
+                              <div className="text-right shrink-0 ml-2">
+                                <span className="text-sm font-bold text-indigo-700">{fmtTons(c.tons)}</span>
+                                <span className="text-xs text-gray-400 ml-1">{pct}%</span>
+                              </div>
+                            </div>
+                            <div className="w-full bg-gray-100 rounded-full h-1.5">
+                              <div className="bg-indigo-500 h-1.5 rounded-full" style={{ width: `${(c.tons / maxC) * 100}%` }} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </Card>
+                )}
+              </>
+            )
+          )}
         </>
       ) : (
         <p className="text-center text-gray-500 py-12">Failed to load analytics data.</p>
