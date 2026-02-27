@@ -207,7 +207,20 @@ router.get('/summary', (req: Request, res: Response) => {
   });
 });
 
-// GET /analytics/quantity — monthly tons sold from customer orders
+// SQL expression that converts any recognised unit to metric tons (MT).
+// 1 MT = 1000 kg = 2204.6226218 lbs
+const MT_EXPR = `
+  CASE
+    WHEN LOWER(oi.unit) IN ('mt', 'metric ton', 'metric tons', 'tonne', 'tonnes', 'tons', 'ton', 't')
+      THEN oi.quantity
+    WHEN LOWER(oi.unit) IN ('kg', 'kgs', 'kilogram', 'kilograms')
+      THEN oi.quantity / 1000.0
+    WHEN LOWER(oi.unit) IN ('lbs', 'lb', 'pound', 'pounds')
+      THEN oi.quantity / 2204.6226218
+    ELSE NULL
+  END`;
+
+// GET /analytics/quantity — monthly metric tons (MT) sold from customer orders
 router.get('/quantity', (req: Request, res: Response) => {
   const yearNum = parseInt((req.query.year as string) || new Date().getFullYear().toString());
   if (isNaN(yearNum) || yearNum < 2000 || yearNum > 2100) {
@@ -229,15 +242,13 @@ router.get('/quantity', (req: Request, res: Response) => {
   }
   const custWhere = customerId ? `AND o.customer_id = ${customerId}` : '';
 
-  // Only count items whose unit is a recognised tons label
   const tonsRows = db.prepare(`
     SELECT strftime('%Y-%m', COALESCE(o.order_date, date(o.created_at))) as month,
-           SUM(oi.quantity) as tons
+           SUM(${MT_EXPR}) as tons
     FROM order_items oi
     JOIN orders o ON oi.order_id = o.id
     WHERE o.type = 'customer'
       AND COALESCE(o.order_date, date(o.created_at)) BETWEEN ? AND ?
-      AND (oi.unit IS NULL OR LOWER(oi.unit) IN ('tons', 'ton', 't', 'mt'))
       ${custWhere}
     GROUP BY month
   `).all(dateStart, dateEnd) as any[];
@@ -256,13 +267,12 @@ router.get('/quantity', (req: Request, res: Response) => {
 
   // Per-customer breakdown
   const byCustomer = db.prepare(`
-    SELECT o.customer_id, c.name as customer_name, SUM(oi.quantity) as tons
+    SELECT o.customer_id, c.name as customer_name, SUM(${MT_EXPR}) as tons
     FROM order_items oi
     JOIN orders o ON oi.order_id = o.id
     JOIN customers c ON o.customer_id = c.id
     WHERE o.type = 'customer'
       AND COALESCE(o.order_date, date(o.created_at)) BETWEEN ? AND ?
-      AND (oi.unit IS NULL OR LOWER(oi.unit) IN ('tons', 'ton', 't', 'mt'))
       ${custWhere}
     GROUP BY o.customer_id
     ORDER BY tons DESC

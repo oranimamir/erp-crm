@@ -47,14 +47,14 @@ function monthLabel(m: string) {
 }
 
 function fmtTons(n: number): string {
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k t`;
-  return `${n % 1 === 0 ? n.toFixed(0) : n.toFixed(2)} t`;
+  if (n >= 1000) return `${(n / 1000).toFixed(2)}k MT`;
+  return `${n.toFixed(2)} MT`;
 }
 
 function fmtTonsAxis(n: number): string {
   if (n === 0) return '0';
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return `${n % 1 === 0 ? n.toFixed(0) : n.toFixed(1)}`;
+  return n >= 10 ? Math.round(n).toString() : n.toFixed(1);
 }
 
 function periodLabel(year: string, monthFrom: string, monthTo: string) {

@@ -268,13 +268,23 @@ router.get('/customer-payments', (_req: Request, res: Response) => {
 
 router.get('/tons-ytd', (_req: Request, res: Response) => {
   const year = new Date().getFullYear().toString();
+  // Convert all units to metric tons: 1 MT = 1000 kg = 2204.6226218 lbs
   const result = db.prepare(`
-    SELECT COALESCE(SUM(oi.quantity), 0) as total_tons
+    SELECT COALESCE(SUM(
+      CASE
+        WHEN LOWER(oi.unit) IN ('mt', 'metric ton', 'metric tons', 'tonne', 'tonnes', 'tons', 'ton', 't')
+          THEN oi.quantity
+        WHEN LOWER(oi.unit) IN ('kg', 'kgs', 'kilogram', 'kilograms')
+          THEN oi.quantity / 1000.0
+        WHEN LOWER(oi.unit) IN ('lbs', 'lb', 'pound', 'pounds')
+          THEN oi.quantity / 2204.6226218
+        ELSE NULL
+      END
+    ), 0) as total_tons
     FROM order_items oi
     JOIN orders o ON oi.order_id = o.id
     WHERE o.type = 'customer'
       AND strftime('%Y', COALESCE(o.order_date, date(o.created_at))) = ?
-      AND (oi.unit IS NULL OR LOWER(oi.unit) IN ('tons', 'ton', 't', 'mt'))
   `).get(year) as any;
   res.json({ total_tons: Number(result.total_tons), year: parseInt(year) });
 });

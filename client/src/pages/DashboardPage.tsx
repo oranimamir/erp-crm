@@ -143,8 +143,8 @@ export default function DashboardPage() {
             </div>
             <p className="text-2xl font-bold text-indigo-600">
               {tonsYTD >= 1000
-                ? `${(tonsYTD / 1000).toFixed(1)}k t`
-                : `${tonsYTD.toFixed(1)} t`}
+                ? `${(tonsYTD / 1000).toFixed(2)}k MT`
+                : `${tonsYTD.toFixed(2)} MT`}
             </p>
             <p className="text-xs text-gray-400 mt-1">Total quantity from customer orders</p>
           </Card>
