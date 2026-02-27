@@ -4,7 +4,7 @@ import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import {
   Briefcase, Search, Plus, ChevronLeft, ChevronRight, FileText, Receipt,
-  FileSpreadsheet, ChevronUp, ChevronDown, Eye, Download, X, Truck, Loader2,
+  FileSpreadsheet, ChevronUp, ChevronDown, Eye, Download, X, Truck, Loader2, ArrowLeftRight,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
@@ -25,6 +25,11 @@ interface Operation {
   doc_count: number;
   invoice_count: number;
   invoice_total: number;
+  quantity_mt: number;
+  quantity_raw: number;
+  quantity_unit?: string;
+  invoice_amount_raw: number;
+  invoice_currency?: string;
   created_at: string;
 }
 
@@ -73,6 +78,9 @@ export default function OperationsPage() {
   const [previewItem, setPreviewItem] = useState<PreviewItem | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+
+  // View toggle: false = MT + EUR (default), true = raw original values
+  const [showRaw, setShowRaw] = useState(false);
 
   // Ship modal
   const [shipTarget, setShipTarget] = useState<Operation | null>(null);
@@ -223,14 +231,23 @@ export default function OperationsPage() {
             />
           </div>
           <button
+            onClick={() => setShowRaw(r => !r)}
+            className={`flex items-center gap-2 px-4 py-2 border rounded-lg text-sm font-medium transition-colors ${showRaw ? 'border-indigo-400 bg-indigo-50 text-indigo-700 hover:bg-indigo-100' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
+            title={showRaw ? 'Switch to MT / EUR view' : 'Switch to original units / currency'}
+          >
+            <ArrowLeftRight size={15} />
+            {showRaw ? 'Original' : 'MT / EUR'}
+          </button>
+          <button
             onClick={async () => {
               const { data } = await api.get('/operations', { params: { page: 1, limit: 9999, search } });
               downloadExcel('operations',
-                ['Operation #', 'Order #', 'Customer / Supplier', 'Status', 'Docs', 'Invoices', 'Invoice Total (EUR)', 'Order Date'],
+                ['Operation #', 'Order #', 'Customer / Supplier', 'Status', 'Docs', 'Invoices', 'Quantity (MT)', 'Invoice Total (EUR)', 'Order Date'],
                 data.data.map((op: any) => [
                   op.operation_number, op.order_number || '',
                   op.customer_name || op.supplier_name || '',
                   op.status, op.doc_count, op.invoice_count,
+                  op.quantity_mt > 0 ? Number(op.quantity_mt).toFixed(2) : '',
                   op.invoice_total > 0 ? Number(op.invoice_total).toFixed(2) : '',
                   formatDate(op.order_date || op.created_at) || '',
                 ]));
@@ -313,7 +330,8 @@ export default function OperationsPage() {
                 </th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Docs</th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Invoices</th>
-                <th className="text-right px-4 py-3 font-medium text-gray-600">Invoice Total</th>
+                <th className="text-right px-4 py-3 font-medium text-gray-600">{showRaw ? 'Quantity' : 'Quantity (MT)'}</th>
+                <th className="text-right px-4 py-3 font-medium text-gray-600">{showRaw ? 'Invoice Total' : 'Invoice Total (EUR)'}</th>
                 <th
                   className={thClass('order_date')}
                   onClick={() => handleSort('order_date')}
@@ -407,9 +425,23 @@ export default function OperationsPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right">
-                    {op.invoice_count > 0 && op.invoice_total > 0
-                      ? <span className="font-medium text-gray-900">€{Number(op.invoice_total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                      : <span className="text-gray-400">—</span>
+                    {showRaw
+                      ? (op.quantity_raw > 0 && op.quantity_unit
+                          ? <span className="font-medium text-gray-900">{Number(op.quantity_raw).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {op.quantity_unit}</span>
+                          : <span className="text-gray-400">—</span>)
+                      : (op.quantity_mt > 0
+                          ? <span className="font-medium text-gray-900">{op.quantity_mt >= 1000 ? `${(op.quantity_mt / 1000).toFixed(2)}k` : op.quantity_mt.toFixed(2)} MT</span>
+                          : <span className="text-gray-400">—</span>)
+                    }
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    {showRaw
+                      ? (op.invoice_count > 0 && op.invoice_amount_raw > 0
+                          ? <span className="font-medium text-gray-900">{op.invoice_currency || ''} {Number(op.invoice_amount_raw).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          : <span className="text-gray-400">—</span>)
+                      : (op.invoice_count > 0 && op.invoice_total > 0
+                          ? <span className="font-medium text-gray-900">€{Number(op.invoice_total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          : <span className="text-gray-400">—</span>)
                     }
                   </td>
                   <td className="px-4 py-3 text-gray-500">

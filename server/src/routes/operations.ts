@@ -85,7 +85,19 @@ router.get('/', (req: Request, res: Response) => {
       o.file_name as order_file_name,
       (SELECT COUNT(*) FROM operation_documents od WHERE od.operation_id = op.id) as doc_count,
       (SELECT COUNT(*) FROM invoices i WHERE i.operation_id = op.id) as invoice_count,
-      (SELECT COALESCE(SUM(COALESCE(i.eur_amount, i.amount)), 0) FROM invoices i WHERE i.operation_id = op.id) as invoice_total
+      (SELECT COALESCE(SUM(COALESCE(i.eur_amount, i.amount)), 0) FROM invoices i WHERE i.operation_id = op.id) as invoice_total,
+      (SELECT COALESCE(SUM(
+        CASE
+          WHEN LOWER(oi.unit) IN ('mt', 'metric ton', 'metric tons', 'tonne', 'tonnes', 'tons', 'ton', 't') THEN oi.quantity
+          WHEN LOWER(oi.unit) IN ('kg', 'kgs', 'kilogram', 'kilograms') THEN oi.quantity / 1000.0
+          WHEN LOWER(oi.unit) IN ('lbs', 'lb', 'pound', 'pounds') THEN oi.quantity / 2204.6226218
+          ELSE NULL
+        END
+      ), 0) FROM order_items oi WHERE oi.order_id = op.order_id) as quantity_mt,
+      (SELECT COALESCE(SUM(oi.quantity), 0) FROM order_items oi WHERE oi.order_id = op.order_id) as quantity_raw,
+      (SELECT oi.unit FROM order_items oi WHERE oi.order_id = op.order_id ORDER BY oi.id LIMIT 1) as quantity_unit,
+      (SELECT COALESCE(SUM(i.amount), 0) FROM invoices i WHERE i.operation_id = op.id) as invoice_amount_raw,
+      (SELECT i.currency FROM invoices i WHERE i.operation_id = op.id ORDER BY i.id LIMIT 1) as invoice_currency
     FROM operations op
     LEFT JOIN customers c ON op.customer_id = c.id
     LEFT JOIN suppliers s ON op.supplier_id = s.id
