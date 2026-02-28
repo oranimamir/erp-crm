@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
+import { getEurRate } from '../lib/fx.js';
 import { uploadOperationDoc } from '../middleware/upload.js';
 import fs from 'fs';
 import path from 'path';
@@ -37,7 +38,7 @@ router.post('/categories', (req: Request, res: Response) => {
 
 // ── Operations list ───────────────────────────────────────────────────────────
 
-router.get('/', (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
   const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
   const search = (req.query.search as string) || '';
@@ -85,7 +86,9 @@ router.get('/', (req: Request, res: Response) => {
       o.file_name as order_file_name,
       (SELECT COUNT(*) FROM operation_documents od WHERE od.operation_id = op.id) as doc_count,
       (SELECT COUNT(*) FROM invoices i WHERE i.operation_id = op.id) as invoice_count,
-      (SELECT COALESCE(SUM(COALESCE(i.eur_amount, i.amount)), 0) FROM invoices i WHERE i.operation_id = op.id) as invoice_total,
+      (SELECT COALESCE(SUM(CASE WHEN i.eur_amount IS NOT NULL THEN i.eur_amount WHEN UPPER(COALESCE(i.currency,'USD'))='EUR' THEN i.amount ELSE 0 END), 0) FROM invoices i WHERE i.operation_id = op.id) as invoice_eur_base,
+      (SELECT COALESCE(SUM(CASE WHEN i.eur_amount IS NULL AND UPPER(COALESCE(i.currency,'USD'))!='EUR' THEN i.amount ELSE 0 END), 0) FROM invoices i WHERE i.operation_id = op.id) as invoice_fx_amount,
+      (SELECT i.currency FROM invoices i WHERE i.eur_amount IS NULL AND UPPER(COALESCE(i.currency,'USD'))!='EUR' AND i.operation_id = op.id ORDER BY i.id LIMIT 1) as invoice_fx_currency,
       (SELECT COALESCE(SUM(
         CASE
           WHEN LOWER(oi.unit) IN ('mt', 'metric ton', 'metric tons', 'tonne', 'tonnes', 'tons', 'ton', 't') THEN oi.quantity
@@ -105,7 +108,27 @@ router.get('/', (req: Request, res: Response) => {
     ${where} ORDER BY ${sortBy} ${sortDir} LIMIT ? OFFSET ?
   `).all(...params, limit, offset);
 
-  res.json({ data: operations, total, page, limit, totalPages: Math.ceil(total / limit) });
+  // Fetch today's FX rates for any non-EUR invoice amounts not yet converted
+  const today = new Date().toISOString().split('T')[0];
+  const fxCurrencies = new Set(
+    (operations as any[])
+      .filter((op: any) => op.invoice_fx_amount > 0 && op.invoice_fx_currency)
+      .map((op: any) => (op.invoice_fx_currency as string).toUpperCase())
+  );
+  const rates: Record<string, number> = {};
+  await Promise.all([...fxCurrencies].map(async (c) => {
+    rates[c] = await getEurRate(c, today);
+  }));
+
+  const data = (operations as any[]).map((op: any) => {
+    const fxRate = op.invoice_fx_currency ? (rates[(op.invoice_fx_currency as string).toUpperCase()] ?? 1) : 1;
+    return {
+      ...op,
+      invoice_total: (op.invoice_eur_base || 0) + (op.invoice_fx_amount || 0) * fxRate,
+    };
+  });
+
+  res.json({ data, total, page, limit, totalPages: Math.ceil(total / limit) });
 });
 
 // ── Single operation ──────────────────────────────────────────────────────────
