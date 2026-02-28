@@ -17,6 +17,8 @@ router.get('/', (req: Request, res: Response) => {
   const search = (req.query.search as string) || '';
   const status = (req.query.status as string) || '';
   const type = (req.query.type as string) || '';
+  const year  = (req.query.year  as string) || '';
+  const month = (req.query.month as string) || '';
   const offset = (page - 1) * limit;
 
   const sortFieldMap: Record<string, string> = {
@@ -35,7 +37,9 @@ router.get('/', (req: Request, res: Response) => {
     params.push(`%${search}%`, `%${search}%`, `%${search}%`);
   }
   if (status) { conditions.push('i.status = ?'); params.push(status); }
-  if (type) { conditions.push('i.type = ?'); params.push(type); }
+  if (type)   { conditions.push('i.type = ?'); params.push(type); }
+  if (year)   { conditions.push("strftime('%Y', COALESCE(i.invoice_date, i.created_at)) = ?"); params.push(year); }
+  if (month)  { conditions.push("strftime('%m', COALESCE(i.invoice_date, i.created_at)) = ?"); params.push(month.padStart(2, '0')); }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const total = (db.prepare(`SELECT COUNT(*) as count FROM invoices i LEFT JOIN customers c ON i.customer_id = c.id LEFT JOIN suppliers s ON i.supplier_id = s.id ${where}`).get(...params) as any).count;

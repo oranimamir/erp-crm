@@ -40,6 +40,10 @@ const typeColors: Record<string, 'blue' | 'purple'> = {
   supplier: 'purple',
 };
 
+const currentYear = new Date().getFullYear();
+const yearOptions = Array.from({ length: currentYear - 2019 }, (_, i) => currentYear - i);
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
 export default function InvoicesPage() {
   const { addToast } = useToast();
   const [invoices, setInvoices] = useState<any[]>([]);
@@ -49,6 +53,8 @@ export default function InvoicesPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
+  const [yearFilter,  setYearFilter]  = useState('');
+  const [monthFilter, setMonthFilter] = useState('');
   const [sortBy, setSortBy] = useState('date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [loading, setLoading] = useState(true);
@@ -78,6 +84,8 @@ export default function InvoicesPage() {
         search,
         status: statusFilter || undefined,
         type: typeFilter || undefined,
+        year:  yearFilter  || undefined,
+        month: monthFilter || undefined,
         sort_by: sortBy,
         sort_dir: sortDir,
       },
@@ -90,7 +98,7 @@ export default function InvoicesPage() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchInvoices(); }, [page, search, statusFilter, typeFilter, sortBy, sortDir]);
+  useEffect(() => { fetchInvoices(); }, [page, search, statusFilter, typeFilter, yearFilter, monthFilter, sortBy, sortDir]);
 
   const handleDelete = async () => {
     if (!deleteId) return;
@@ -117,7 +125,7 @@ export default function InvoicesPage() {
   const formatDateOrDash = (dateStr: string) => formatDate(dateStr) || '-';
 
   const handleExport = async () => {
-    const res = await api.get('/invoices', { params: { page: 1, limit: 9999, search, status: statusFilter || undefined, type: typeFilter || undefined } });
+    const res = await api.get('/invoices', { params: { page: 1, limit: 9999, search, status: statusFilter || undefined, type: typeFilter || undefined, year: yearFilter || undefined, month: monthFilter || undefined } });
     const rows = res.data.data.map((inv: any) => [
       inv.invoice_number,
       inv.customer_name || inv.supplier_name || '',
@@ -174,6 +182,22 @@ export default function InvoicesPage() {
             >
               <option value="">All Types</option>
               {typeOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+            <select
+              value={yearFilter}
+              onChange={e => { setYearFilter(e.target.value); setPage(1); }}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            >
+              <option value="">All Years</option>
+              {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+            <select
+              value={monthFilter}
+              onChange={e => { setMonthFilter(e.target.value); setPage(1); }}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            >
+              <option value="">All Months</option>
+              {MONTHS.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
             </select>
             <span className="text-sm text-gray-500">{total} invoices</span>
           </div>

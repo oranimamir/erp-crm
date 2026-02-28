@@ -39,6 +39,10 @@ const typeLabels: Record<string, string> = {
   supplier: 'Supplier',
 };
 
+const currentYear = new Date().getFullYear();
+const yearOptions = Array.from({ length: currentYear - 2019 }, (_, i) => currentYear - i);
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
 export default function OrdersPage() {
   const { addToast } = useToast();
   const [orders, setOrders] = useState<any[]>([]);
@@ -48,6 +52,8 @@ export default function OrdersPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
+  const [yearFilter,  setYearFilter]  = useState('');
+  const [monthFilter, setMonthFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -62,6 +68,8 @@ export default function OrdersPage() {
         search,
         status: statusFilter || undefined,
         type: typeFilter || undefined,
+        year:  yearFilter  || undefined,
+        month: monthFilter || undefined,
       },
     })
       .then(res => {
@@ -72,7 +80,7 @@ export default function OrdersPage() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchOrders(); }, [page, search, statusFilter, typeFilter]);
+  useEffect(() => { fetchOrders(); }, [page, search, statusFilter, typeFilter, yearFilter, monthFilter]);
 
   const handleDelete = async () => {
     if (!deleteId) return;
@@ -137,7 +145,7 @@ export default function OrdersPage() {
         <h1 className="text-2xl font-bold text-gray-900">Orders</h1>
         <div className="flex gap-2">
           <Button variant="secondary" onClick={async () => {
-            const res = await api.get('/orders', { params: { page: 1, limit: 9999, search, status: statusFilter || undefined, type: typeFilter || undefined } });
+            const res = await api.get('/orders', { params: { page: 1, limit: 9999, search, status: statusFilter || undefined, type: typeFilter || undefined, year: yearFilter || undefined, month: monthFilter || undefined } });
             downloadExcel('orders', ['Order #', 'Customer / Supplier', 'Type', 'Amount', 'Status', 'Created'],
               res.data.data.map((o: any) => [o.order_number, o.customer_name || o.supplier_name || '', o.type, o.total_amount ?? '', o.status, formatDate(o.created_at) || '']));
           }}><FileSpreadsheet size={16} /> Export Excel</Button>
@@ -168,6 +176,22 @@ export default function OrdersPage() {
             >
               <option value="">All Types</option>
               {typeOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+            <select
+              value={yearFilter}
+              onChange={e => { setYearFilter(e.target.value); setPage(1); }}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            >
+              <option value="">All Years</option>
+              {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+            <select
+              value={monthFilter}
+              onChange={e => { setMonthFilter(e.target.value); setPage(1); }}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            >
+              <option value="">All Months</option>
+              {MONTHS.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
             </select>
             <span className="text-sm text-gray-500">{total} orders</span>
           </div>

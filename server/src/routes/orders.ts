@@ -10,6 +10,8 @@ router.get('/', (req: Request, res: Response) => {
   const search = (req.query.search as string) || '';
   const status = (req.query.status as string) || '';
   const type = (req.query.type as string) || '';
+  const year  = (req.query.year  as string) || '';
+  const month = (req.query.month as string) || '';
   const offset = (page - 1) * limit;
 
   const conditions: string[] = [];
@@ -19,7 +21,9 @@ router.get('/', (req: Request, res: Response) => {
     params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
   }
   if (status) { conditions.push('o.status = ?'); params.push(status); }
-  if (type) { conditions.push('o.type = ?'); params.push(type); }
+  if (type)   { conditions.push('o.type = ?'); params.push(type); }
+  if (year)   { conditions.push("strftime('%Y', COALESCE(o.order_date, date(o.created_at))) = ?"); params.push(year); }
+  if (month)  { conditions.push("strftime('%m', COALESCE(o.order_date, date(o.created_at))) = ?"); params.push(month.padStart(2, '0')); }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const total = (db.prepare(`
