@@ -158,6 +158,23 @@ router.get('/overdue-invoices', (_req: Request, res: Response) => {
   res.json(invoices);
 });
 
+// Overdue invoices from prior years (due_date before Jan 1 of the current year)
+router.get('/prior-year-overdue', (_req: Request, res: Response) => {
+  const invoices = db.prepare(`
+    SELECT i.*, c.name as customer_name,
+      COALESCE(i.eur_amount, i.amount) as eur_val
+    FROM invoices i
+    LEFT JOIN customers c ON i.customer_id = c.id
+    WHERE i.type = 'customer'
+      AND i.due_date IS NOT NULL
+      AND strftime('%Y', i.due_date) < strftime('%Y', 'now')
+      AND i.status NOT IN ('paid', 'cancelled')
+    ORDER BY i.due_date ASC
+  `).all();
+  const total = (invoices as any[]).reduce((sum, inv) => sum + (inv.eur_val ?? 0), 0);
+  res.json({ invoices, total });
+});
+
 router.get('/open-operations', (_req: Request, res: Response) => {
   const ops = db.prepare(`
     SELECT op.id, op.operation_number, op.status, op.created_at,
