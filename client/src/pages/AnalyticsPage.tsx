@@ -123,21 +123,15 @@ function FinancialChart({ monthly, isCustomers, maxBar }: {
       </div>
       <div className="mt-3 flex gap-2">
         <div className="w-14 shrink-0" />
-        <div className="flex-1 overflow-x-auto">
-          <table className="w-full text-xs text-center">
-            <tbody>
-              <tr className={`${textColor} font-medium`}>
-                {monthly.map(m => {
-                  const val = isCustomers ? m.received : m.paid_out;
-                  return (
-                    <td key={m.month} className="px-1">
-                      {val > 0 ? `€${Math.round(val / 1000)}k` : '—'}
-                    </td>
-                  );
-                })}
-              </tr>
-            </tbody>
-          </table>
+        <div className={`flex-1 flex gap-1 text-xs font-medium ${textColor}`}>
+          {monthly.map(m => {
+            const val = isCustomers ? m.received : m.paid_out;
+            return (
+              <div key={m.month} className="flex-1 text-center">
+                {val > 0 ? `€${Math.round(val / 1000)}k` : '—'}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -749,18 +743,12 @@ export default function AnalyticsPage() {
                           </div>
                           <div className="mt-3 flex gap-2">
                             <div className="w-14 shrink-0" />
-                            <div className="flex-1 overflow-x-auto">
-                              <table className="w-full text-xs text-center">
-                                <tbody>
-                                  <tr className="text-indigo-600 font-medium">
-                                    {quantityData.monthly.map(m => (
-                                      <td key={m.month} className="px-1">
-                                        {m.tons > 0 ? fmtTons(m.tons) : '—'}
-                                      </td>
-                                    ))}
-                                  </tr>
-                                </tbody>
-                              </table>
+                            <div className="flex-1 flex gap-1 text-xs font-medium text-indigo-600">
+                              {quantityData.monthly.map(m => (
+                                <div key={m.month} className="flex-1 text-center">
+                                  {m.tons > 0 ? fmtTons(m.tons) : '—'}
+                                </div>
+                              ))}
                             </div>
                           </div>
                         </>
