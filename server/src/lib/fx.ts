@@ -1,16 +1,35 @@
 const cache = new Map<string, number>();
+const latestCache = new Map<string, { rate: number; fetchedAt: number }>();
+const LATEST_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 /**
  * Fetch EUR exchange rate for a given currency on a given date.
  * Uses the Frankfurter API (https://api.frankfurter.app).
- * Results are cached in-memory for the lifetime of the process.
+ *
+ * Pass date = 'latest' to get the most recent available rate (cached 1 h).
+ * Historical dates are cached for the lifetime of the process.
  *
  * @param currency - ISO 4217 code (e.g. "USD", "GBP")
- * @param date     - YYYY-MM-DD
+ * @param date     - YYYY-MM-DD or 'latest'
  * @returns EUR rate (e.g. 0.92 means 1 USD = 0.92 EUR)
  */
 export async function getEurRate(currency: string, date: string): Promise<number> {
   if (currency === 'EUR') return 1.0;
+
+  if (date === 'latest') {
+    const cached = latestCache.get(currency);
+    if (cached && Date.now() - cached.fetchedAt < LATEST_TTL_MS) return cached.rate;
+    try {
+      const response = await fetch(`https://api.frankfurter.app/latest?from=${currency}&to=EUR`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json() as { rates: { EUR: number } };
+      latestCache.set(currency, { rate: data.rates.EUR, fetchedAt: Date.now() });
+      return data.rates.EUR;
+    } catch (err) {
+      console.warn(`FX rate fetch failed for ${currency} latest:`, err);
+      return cached?.rate ?? 1.0;
+    }
+  }
 
   const key = `${currency}-${date}`;
   if (cache.has(key)) return cache.get(key)!;

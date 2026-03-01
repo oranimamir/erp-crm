@@ -1,18 +1,52 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
+import { getEurRate } from '../lib/fx.js';
 
 const router = Router();
 
-router.get('/stats', (_req: Request, res: Response) => {
+// Sum {amount, currency} rows → EUR using today's live rates
+async function sumLiveEur(rows: { amount: number; currency: string }[]): Promise<number> {
+  if (rows.length === 0) return 0;
+  const currencies = [...new Set(rows.map(r => (r.currency || 'USD').toUpperCase()).filter(c => c !== 'EUR'))];
+  const rates: Record<string, number> = {};
+  await Promise.all(currencies.map(async c => { rates[c] = await getEurRate(c, 'latest'); }));
+  return rows.reduce((sum, row) => {
+    const curr = (row.currency || 'USD').toUpperCase();
+    return sum + row.amount * (curr === 'EUR' ? 1 : (rates[curr] ?? 1));
+  }, 0);
+}
+
+// Attach live_eur_amount to each invoice object using today's live rates
+async function attachLiveEur(invoices: any[]): Promise<void> {
+  if (invoices.length === 0) return;
+  const currencies = [...new Set(invoices.map(inv => (inv.currency || 'USD').toUpperCase()).filter(c => c !== 'EUR'))];
+  const rates: Record<string, number> = {};
+  await Promise.all(currencies.map(async c => { rates[c] = await getEurRate(c, 'latest'); }));
+  for (const inv of invoices) {
+    const curr = (inv.currency || 'USD').toUpperCase();
+    inv.live_eur_amount = inv.amount * (curr === 'EUR' ? 1 : (rates[curr] ?? 1));
+  }
+}
+
+router.get('/stats', async (_req: Request, res: Response) => {
   const customers = (db.prepare('SELECT COUNT(*) as count FROM customers').get() as any).count;
   const suppliers = (db.prepare('SELECT COUNT(*) as count FROM suppliers').get() as any).count;
   const totalOrders = (db.prepare('SELECT COUNT(*) as count FROM orders').get() as any).count;
   const activeOrders = (db.prepare("SELECT COUNT(*) as count FROM orders WHERE status NOT IN ('completed', 'cancelled')").get() as any).count;
   const totalInvoices = (db.prepare('SELECT COUNT(*) as count FROM invoices').get() as any).count;
-  // Pending: sent/overdue invoices that HAVE a due date in the current year (matches analytics default)
-  const pendingAmount = (db.prepare("SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total FROM invoices WHERE type = 'customer' AND status IN ('sent', 'overdue') AND due_date IS NOT NULL AND strftime('%Y', due_date) = strftime('%Y', 'now')").get() as any).total;
-  // Expected: sent invoices with NO due date — amount expected but not yet scheduled
-  const expectedAmount = (db.prepare("SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total FROM invoices WHERE type = 'customer' AND status = 'sent' AND due_date IS NULL").get() as any).total;
+  // Pending: sent/overdue invoices with due date in current year — live FX conversion
+  const pendingRows = db.prepare(`
+    SELECT amount, UPPER(COALESCE(currency, 'USD')) as currency FROM invoices
+    WHERE type = 'customer' AND status IN ('sent', 'overdue')
+      AND due_date IS NOT NULL AND strftime('%Y', due_date) = strftime('%Y', 'now')
+  `).all() as any[];
+  const pendingAmount = await sumLiveEur(pendingRows);
+  // Expected: sent invoices with NO due date — live FX conversion
+  const expectedRows = db.prepare(`
+    SELECT amount, UPPER(COALESCE(currency, 'USD')) as currency FROM invoices
+    WHERE type = 'customer' AND status = 'sent' AND due_date IS NULL
+  `).all() as any[];
+  const expectedAmount = await sumLiveEur(expectedRows);
   const paidInvoiceAmount = (db.prepare("SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total FROM invoices WHERE type = 'customer' AND status = 'paid'").get() as any).total;
   // Paid YTD: actual payments received in the current calendar year
   const paidYTD = (db.prepare(`
@@ -53,14 +87,15 @@ router.get('/recent-orders', (_req: Request, res: Response) => {
   res.json(orders);
 });
 
-router.get('/pending-invoices', (_req: Request, res: Response) => {
+router.get('/pending-invoices', async (_req: Request, res: Response) => {
   const invoices = db.prepare(`
     SELECT i.*, c.name as customer_name
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
     WHERE i.type = 'customer' AND i.status IN ('draft', 'sent', 'overdue')
     ORDER BY i.due_date ASC, i.created_at DESC LIMIT 200
-  `).all();
+  `).all() as any[];
+  await attachLiveEur(invoices);
   res.json(invoices);
 });
 
@@ -159,10 +194,9 @@ router.get('/overdue-invoices', (_req: Request, res: Response) => {
 });
 
 // Overdue invoices from prior years (due_date before Jan 1 of the current year)
-router.get('/prior-year-overdue', (_req: Request, res: Response) => {
+router.get('/prior-year-overdue', async (_req: Request, res: Response) => {
   const invoices = db.prepare(`
-    SELECT i.*, c.name as customer_name,
-      COALESCE(i.eur_amount, i.amount) as eur_val
+    SELECT i.*, c.name as customer_name
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
     WHERE i.type = 'customer'
@@ -170,8 +204,10 @@ router.get('/prior-year-overdue', (_req: Request, res: Response) => {
       AND strftime('%Y', i.due_date) < strftime('%Y', 'now')
       AND i.status NOT IN ('paid', 'cancelled')
     ORDER BY i.due_date ASC
-  `).all();
-  const total = (invoices as any[]).reduce((sum, inv) => sum + (inv.eur_val ?? 0), 0);
+  `).all() as any[];
+  await attachLiveEur(invoices);
+  for (const inv of invoices) inv.eur_val = inv.live_eur_amount;
+  const total = invoices.reduce((sum, inv) => sum + inv.eur_val, 0);
   res.json({ invoices, total });
 });
 
@@ -192,8 +228,29 @@ router.get('/open-operations', (_req: Request, res: Response) => {
   res.json(ops);
 });
 
-router.get('/forecast', (_req: Request, res: Response) => {
+router.get('/forecast', async (_req: Request, res: Response) => {
   const year = new Date().getFullYear();
+
+  // Fetch all pending invoices for this year upfront so we can apply live FX once
+  const pendingInvoices = db.prepare(`
+    SELECT amount, UPPER(COALESCE(currency, 'USD')) as currency,
+      strftime('%Y-%m', due_date) as month
+    FROM invoices WHERE type = 'customer' AND status IN ('sent', 'overdue')
+      AND due_date IS NOT NULL AND strftime('%Y', due_date) = ?
+  `).all(String(year)) as any[];
+  await attachLiveEur(pendingInvoices);
+  const pendingByMonth = new Map<string, number>();
+  for (const inv of pendingInvoices) {
+    pendingByMonth.set(inv.month, (pendingByMonth.get(inv.month) ?? 0) + inv.live_eur_amount);
+  }
+
+  // Expected: sent invoices with no due_date — live FX
+  const expectedRows = db.prepare(`
+    SELECT amount, UPPER(COALESCE(currency, 'USD')) as currency
+    FROM invoices WHERE type = 'customer' AND status = 'sent' AND due_date IS NULL
+  `).all() as any[];
+  const expected = await sumLiveEur(expectedRows);
+
   const data = [];
   for (let m = 1; m <= 12; m++) {
     const monthStr = `${year}-${String(m).padStart(2, '0')}`;
@@ -213,20 +270,9 @@ router.get('/forecast', (_req: Request, res: Response) => {
           AND i.payment_date IS NOT NULL AND strftime('%Y-%m', i.payment_date) = ?
       )
     `).get(monthStr, monthStr, monthStr) as any).total;
-    // Pending: sent/overdue invoices WITH a due_date, allocated to that due_date month
-    const pending = (db.prepare(`
-      SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total
-      FROM invoices WHERE type = 'customer' AND status IN ('sent', 'overdue')
-        AND due_date IS NOT NULL AND strftime('%Y-%m', due_date) = ?
-    `).get(monthStr) as any).total;
-    data.push({ month: monthStr, paid: Number(paid), pending: Number(pending) });
+    data.push({ month: monthStr, paid: Number(paid), pending: pendingByMonth.get(monthStr) ?? 0 });
   }
-  // Expected: sent invoices with NO due_date — total amount expected but unscheduled
-  const expected = (db.prepare(`
-    SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total
-    FROM invoices WHERE type = 'customer' AND status = 'sent' AND due_date IS NULL
-  `).get() as any).total;
-  res.json({ months: data, expected: Number(expected) });
+  res.json({ months: data, expected });
 });
 
 router.get('/paid-invoices', (_req: Request, res: Response) => {

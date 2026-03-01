@@ -242,7 +242,12 @@ export default function DashboardPage() {
                       </span>
                     )}
                     <span className={`text-sm font-medium ${isOverdue ? 'text-red-900' : 'text-gray-900'}`}>
-                      €{(inv.eur_amount ?? inv.amount)?.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      €{(inv.live_eur_amount ?? inv.eur_amount ?? inv.amount)?.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      {inv.currency && inv.currency !== 'EUR' && (
+                        <span className="text-xs font-normal text-gray-400 ml-1">
+                          ({inv.currency} {inv.amount?.toLocaleString(undefined, { minimumFractionDigits: 2 })})
+                        </span>
+                      )}
                     </span>
                     <StatusBadge status={inv.status} />
                   </div>
