@@ -1,7 +1,19 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
+import { getEurRate } from '../lib/fx.js';
 
 const router = Router();
+
+async function sumLiveEur(rows: { amount: number; currency: string }[]): Promise<number> {
+  if (rows.length === 0) return 0;
+  const currencies = [...new Set(rows.map(r => (r.currency || 'USD').toUpperCase()).filter(c => c !== 'EUR'))];
+  const rates: Record<string, number> = {};
+  await Promise.all(currencies.map(async c => { rates[c] = await getEurRate(c, 'latest'); }));
+  return rows.reduce((sum, row) => {
+    const curr = (row.currency || 'USD').toUpperCase();
+    return sum + row.amount * (curr === 'EUR' ? 1 : (rates[curr] ?? 1));
+  }, 0);
+}
 
 const VALID_SUPPLIER_CATEGORIES = ['logistics', 'blenders', 'raw_materials', 'shipping'];
 
@@ -31,7 +43,7 @@ router.get('/filters', (_req: Request, res: Response) => {
 //   &customer_id=
 //   &supplier_id=
 //   &supplier_category=  (logistics|blenders|raw_materials|shipping)
-router.get('/summary', (req: Request, res: Response) => {
+router.get('/summary', async (req: Request, res: Response) => {
   // ── Year ────────────────────────────────────────────────────────────────────
   const yearNum = parseInt((req.query.year as string) || new Date().getFullYear().toString());
   if (isNaN(yearNum) || yearNum < 2000 || yearNum > 2100) {
@@ -171,27 +183,32 @@ router.get('/summary', (req: Request, res: Response) => {
   const totalReceived = monthly.reduce((s, m) => s + m.received, 0);
   const totalPaidOut = monthly.reduce((s, m) => s + m.paid_out, 0);
 
-  // Pending: sent/overdue invoices WITH a due_date in the selected year
-  const outstanding = (db.prepare(`
-    SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total
+  // Pending: sent/overdue invoices WITH a due_date in the selected year — live FX
+  const outstandingRows = db.prepare(`
+    SELECT amount, UPPER(COALESCE(currency, 'USD')) as currency
     FROM invoices
     WHERE type = 'customer' AND status IN ('sent', 'overdue') AND due_date IS NOT NULL
       AND strftime('%Y', due_date) = ? ${custWhereOnly}
-  `).get(year) as any).total;
-  // Expected: sent invoices with NO due_date (unscheduled)
-  const expectedReceivable = (db.prepare(`
-    SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total
+  `).all(year) as any[];
+  const outstanding = await sumLiveEur(outstandingRows);
+
+  // Expected: sent invoices with NO due_date (unscheduled) — live FX
+  const expectedRows = db.prepare(`
+    SELECT amount, UPPER(COALESCE(currency, 'USD')) as currency
     FROM invoices
     WHERE type = 'customer' AND status = 'sent' AND due_date IS NULL ${custWhereOnly}
-  `).get() as any).total;
+  `).all() as any[];
+  const expectedReceivable = await sumLiveEur(expectedRows);
 
-  const outstandingPayable = (db.prepare(`
-    SELECT COALESCE(SUM(COALESCE(i.eur_amount, i.amount)), 0) as total
+  // Outstanding supplier payable — live FX
+  const payableRows = db.prepare(`
+    SELECT i.amount, UPPER(COALESCE(i.currency, 'USD')) as currency
     FROM invoices i
     ${catJoin}
     WHERE i.type = 'supplier' AND i.status IN ('draft', 'sent', 'overdue')
     ${suppWhereOnly} ${catCond}
-  `).get() as any).total;
+  `).all() as any[];
+  const outstandingPayable = await sumLiveEur(payableRows);
 
   res.json({
     monthly,

@@ -108,8 +108,7 @@ router.get('/', async (req: Request, res: Response) => {
     ${where} ORDER BY ${sortBy} ${sortDir} LIMIT ? OFFSET ?
   `).all(...params, limit, offset);
 
-  // Fetch today's FX rates for any non-EUR invoice amounts not yet converted
-  const today = new Date().toISOString().split('T')[0];
+  // Fetch live FX rates for any non-EUR invoice amounts not yet converted
   const fxCurrencies = new Set(
     (operations as any[])
       .filter((op: any) => op.invoice_fx_amount > 0 && op.invoice_fx_currency)
@@ -117,7 +116,7 @@ router.get('/', async (req: Request, res: Response) => {
   );
   const rates: Record<string, number> = {};
   await Promise.all([...fxCurrencies].map(async (c) => {
-    rates[c] = await getEurRate(c, today);
+    rates[c] = await getEurRate(c, 'latest');
   }));
 
   const data = (operations as any[]).map((op: any) => {
