@@ -85,10 +85,6 @@ export default function Layout() {
                 User Management
               </NavLink>
             )}
-          </div>
-
-          {/* Settings pinned at bottom */}
-          <div className="pt-2 border-t border-gray-800">
             <NavLink
               to="/settings"
               onClick={() => setSidebarOpen(false)}

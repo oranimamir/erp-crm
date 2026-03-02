@@ -211,12 +211,12 @@ export default function DashboardPage() {
         </Card>
 
         {/* Pending Invoices — all sent, overdue marked in red */}
-        <Card>
-          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+        <Card className="flex flex-col">
+          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between shrink-0">
             <h2 className="font-semibold text-gray-900">Pending Invoices</h2>
             <span className="text-xs text-gray-400">{pendingInvoices.length} total</span>
           </div>
-          <div className="divide-y divide-gray-100 max-h-80 overflow-y-auto">
+          <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-gray-100">
             {pendingInvoices.length === 0 ? (
               <p className="px-5 py-8 text-center text-sm text-gray-500">No pending invoices</p>
             ) : pendingInvoices.map((inv: any) => {
