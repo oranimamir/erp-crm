@@ -1,34 +1,54 @@
-import { Router } from 'express';
+import { Router, Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
+import { createBackupArchive, listBackups, getBackupsDir } from '../lib/backup.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const router = Router();
 
-const dbPath = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'erp.db');
-
-// GET /api/backup — admin only, streams the SQLite database file
-router.get('/', (req, res) => {
+// GET /api/backup — stream a fresh full backup ZIP (DB + all uploads)
+router.get('/', async (req: Request, res: Response) => {
   if (req.user?.role !== 'admin') {
     res.status(403).json({ error: 'Admin access required' });
     return;
   }
+  try {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="erp-backup-${timestamp}.zip"`);
+    await createBackupArchive(res);
+  } catch (err) {
+    console.error('[Backup] Download error:', err);
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to create backup' });
+  }
+});
 
-  if (!fs.existsSync(dbPath)) {
-    res.status(404).json({ error: 'Database file not found' });
+// GET /api/backup/list — list saved weekly backups
+router.get('/list', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ error: 'Admin access required' });
     return;
   }
+  res.json(listBackups());
+});
 
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const filename = `erp-backup-${timestamp}.db`;
-  const stats = fs.statSync(dbPath);
-
-  res.setHeader('Content-Type', 'application/octet-stream');
-  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  res.setHeader('Content-Length', stats.size);
-
-  fs.createReadStream(dbPath).pipe(res);
+// GET /api/backup/download/:filename — download a saved weekly backup
+router.get('/download/:filename', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ error: 'Admin access required' });
+    return;
+  }
+  const { filename } = req.params;
+  // Only allow our own backup filenames to prevent path traversal
+  if (!/^erp-backup-[\dT-]+\.zip$/.test(filename)) {
+    res.status(400).json({ error: 'Invalid filename' });
+    return;
+  }
+  const filepath = path.join(getBackupsDir(), filename);
+  if (!fs.existsSync(filepath)) {
+    res.status(404).json({ error: 'Backup not found' });
+    return;
+  }
+  res.download(filepath, filename);
 });
 
 export default router;

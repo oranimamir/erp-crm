@@ -1,15 +1,26 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Settings, Lock, Monitor, Sun, Moon, Download, DatabaseBackup } from 'lucide-react';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
+import { formatDate } from '../lib/dates';
+
+interface SavedBackup { filename: string; size: number; created_at: string; }
 
 export default function SettingsPage() {
   const { addToast } = useToast();
   const { theme, toggleTheme } = useTheme();
   const { user } = useAuth();
   const [downloading, setDownloading] = useState(false);
+  const [savedBackups, setSavedBackups] = useState<SavedBackup[]>([]);
+  const [downloadingFile, setDownloadingFile] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (user?.role === 'admin') {
+      api.get('/backup/list').then(r => setSavedBackups(r.data)).catch(() => {});
+    }
+  }, [user]);
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -24,7 +35,7 @@ export default function SettingsPage() {
       const a = document.createElement('a');
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       a.href = url;
-      a.download = `erp-backup-${timestamp}.db`;
+      a.download = `erp-backup-${timestamp}.zip`;
       a.click();
       URL.revokeObjectURL(url);
       addToast('Backup downloaded successfully', 'success');
@@ -33,6 +44,28 @@ export default function SettingsPage() {
     } finally {
       setDownloading(false);
     }
+  };
+
+  const handleDownloadSaved = async (filename: string) => {
+    setDownloadingFile(filename);
+    try {
+      const res = await api.get(`/backup/download/${filename}`, { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      addToast('Failed to download backup file', 'error');
+    } finally {
+      setDownloadingFile(null);
+    }
+  };
+
+  const fmtSize = (bytes: number) => {
+    if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${Math.round(bytes / 1024)} KB`;
   };
 
   const handleChangePassword = async (e: React.FormEvent) => {
@@ -136,20 +169,53 @@ export default function SettingsPage() {
               Backup
             </h2>
           </div>
-          <div className="px-6 py-5">
+          <div className="px-6 py-5 space-y-5">
+            {/* On-demand download */}
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-900">Download full backup</p>
-                <p className="text-sm text-gray-500 mt-0.5">Downloads a ZIP file containing the database and all uploaded files</p>
+                <p className="text-sm font-medium text-gray-900">Download backup now</p>
+                <p className="text-sm text-gray-500 mt-0.5">
+                  Full ZIP containing the database and all uploaded files (invoices, wire transfers, documents)
+                </p>
               </div>
               <button
                 onClick={handleDownloadBackup}
                 disabled={downloading}
-                className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0 ml-4"
               >
                 <Download size={15} />
                 {downloading ? 'Preparing...' : 'Download Backup'}
               </button>
+            </div>
+
+            {/* Weekly auto-backups */}
+            <div className="border-t border-gray-100 pt-4">
+              <p className="text-sm font-medium text-gray-900 mb-0.5">Weekly automatic backups</p>
+              <p className="text-sm text-gray-500 mb-3">
+                Saved automatically every Sunday at 02:00 UTC. Last 4 weeks are kept.
+              </p>
+              {savedBackups.length === 0 ? (
+                <p className="text-xs text-gray-400 italic">No automatic backups saved yet — first one runs next Sunday.</p>
+              ) : (
+                <div className="divide-y divide-gray-100 rounded-lg border border-gray-200 overflow-hidden">
+                  {savedBackups.map(b => (
+                    <div key={b.filename} className="flex items-center justify-between px-4 py-2.5 hover:bg-gray-50">
+                      <div>
+                        <p className="text-sm font-medium text-gray-800">{formatDate(b.created_at)}</p>
+                        <p className="text-xs text-gray-400">{fmtSize(b.size)}</p>
+                      </div>
+                      <button
+                        onClick={() => handleDownloadSaved(b.filename)}
+                        disabled={downloadingFile === b.filename}
+                        className="flex items-center gap-1.5 text-xs text-primary-600 hover:text-primary-800 font-medium disabled:opacity-50"
+                      >
+                        <Download size={13} />
+                        {downloadingFile === b.filename ? 'Downloading...' : 'Download'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>

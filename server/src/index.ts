@@ -34,6 +34,7 @@ import warehouseStockRoutes from './routes/warehouse-stock.js';
 import cron from 'node-cron';
 import { scanNewOperations } from './lib/sharepoint.js';
 import { checkEmailForStockUpdates } from './lib/email-stock.js';
+import { runScheduledBackup } from './lib/backup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -89,6 +90,11 @@ await initializeDatabase();
 // Schedule daily SharePoint scan at 7:00 AM UTC
 cron.schedule('0 7 * * *', () => {
   scanNewOperations().catch(err => console.error('[SharePoint scan]', err));
+});
+
+// Schedule weekly full backup every Sunday at 02:00 UTC (keeps last 4 = ~1 month)
+cron.schedule('0 2 * * 0', () => {
+  runScheduledBackup().catch(err => console.error('[Backup]', err));
 });
 
 // Poll inbox for warehouse stock CSV every 15 minutes
