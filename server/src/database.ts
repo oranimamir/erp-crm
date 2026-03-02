@@ -628,6 +628,39 @@ export async function initializeDatabase() {
     console.warn('⚠️  Default admin created (admin/admin123) — change this password immediately via Settings.');
   }
 
+  // Login OTP table for 2FA
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS login_otps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      code TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      used INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
+  // Batches and batch-article links
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS batches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      batch_number TEXT UNIQUE NOT NULL,
+      production_date TEXT,
+      expiry_date TEXT,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS batch_warehouse_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      batch_id INTEGER NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+      article TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(batch_id, article)
+    )
+  `);
+
   db.saveToDisk();
 }
 

@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import db from '../database.js';
 import { authenticateToken, generateToken } from '../middleware/auth.js';
+import { sendOtpEmail, notifyAdmin } from '../lib/notify.js';
 
 const router = Router();
 
@@ -18,7 +19,50 @@ router.post('/login', (req: Request, res: Response) => {
     return;
   }
 
+  // 2FA: if user has an email, send OTP instead of issuing token immediately
+  if (user.email) {
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    db.prepare(`INSERT INTO login_otps (user_id, code, expires_at) VALUES (?, ?, ?)`).run(user.id, code, expiresAt);
+    sendOtpEmail(user.email, code);
+    res.json({ step: 'otp', user_id: user.id });
+    return;
+  }
+
   const token = generateToken({ userId: user.id, username: user.username, display_name: user.display_name || user.username, role: user.role });
+  notifyAdmin({ action: 'logged in', entity: 'User', label: user.display_name || user.username, performedBy: user.display_name || user.username });
+  res.json({
+    token,
+    user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role },
+  });
+});
+
+router.post('/verify-otp', (req: Request, res: Response) => {
+  const { user_id, code } = req.body;
+  if (!user_id || !code) {
+    res.status(400).json({ error: 'user_id and code are required' });
+    return;
+  }
+
+  const otp = db.prepare(
+    `SELECT * FROM login_otps WHERE user_id = ? AND code = ? AND used = 0 AND expires_at > datetime('now') ORDER BY created_at DESC LIMIT 1`
+  ).get(user_id, code) as any;
+
+  if (!otp) {
+    res.status(401).json({ error: 'Invalid or expired code' });
+    return;
+  }
+
+  db.prepare(`UPDATE login_otps SET used = 1 WHERE id = ?`).run(otp.id);
+
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(user_id) as any;
+  if (!user) {
+    res.status(404).json({ error: 'User not found' });
+    return;
+  }
+
+  const token = generateToken({ userId: user.id, username: user.username, display_name: user.display_name || user.username, role: user.role });
+  notifyAdmin({ action: 'logged in', entity: 'User', label: user.display_name || user.username, performedBy: user.display_name || user.username });
   res.json({
     token,
     user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role },

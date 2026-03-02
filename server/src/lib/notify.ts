@@ -1,7 +1,7 @@
 import { Resend } from 'resend';
 import db from '../database.js';
 
-export type NotifyAction = 'created' | 'updated' | 'deleted' | 'status changed';
+export type NotifyAction = 'created' | 'updated' | 'deleted' | 'status changed' | 'logged in';
 
 export interface NotifyPayload {
   action: NotifyAction;
@@ -9,6 +9,37 @@ export interface NotifyPayload {
   label: string;       // Name or identifier
   performedBy: string; // Display name of user who acted
   detail?: string;     // Optional extra info (e.g. new status)
+}
+
+/** Sends a one-time login code to a user's email. Fire-and-forget — only fires if RESEND_API_KEY is set. */
+export function sendOtpEmail(to: string, code: string): void {
+  _sendOtp(to, code).catch(err =>
+    console.error('[notify] Failed to send OTP email:', err?.message || err)
+  );
+}
+
+async function _sendOtp(to: string, code: string): Promise<void> {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) return;
+  const from = process.env.RESEND_FROM_EMAIL || 'CirculERP <onboarding@resend.dev>';
+  const html = `
+<div style="font-family:sans-serif;max-width:480px;margin:0 auto;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+  <div style="background:#4f46e5;padding:16px 24px;">
+    <span style="color:white;font-weight:700;font-size:17px;">CirculERP — Login Code</span>
+  </div>
+  <div style="padding:24px;">
+    <p style="margin:0 0 16px;font-size:15px;color:#111827;">Your one-time login code is:</p>
+    <div style="font-size:36px;font-weight:700;letter-spacing:8px;color:#4f46e5;padding:16px;background:#f0f0ff;border-radius:8px;text-align:center;font-family:monospace;">${code}</div>
+    <p style="margin:16px 0 0;font-size:13px;color:#6b7280;">This code expires in 10 minutes. Do not share it with anyone.</p>
+  </div>
+</div>`;
+  const resend = new Resend(apiKey);
+  await resend.emails.send({
+    from,
+    to,
+    subject: `[CirculERP] Your login code: ${code}`,
+    html,
+  });
 }
 
 /** Fire-and-forget: sends an email to all admin users with an email set. */
@@ -36,6 +67,7 @@ async function _send(payload: NotifyPayload): Promise<void> {
     updated: '#2563eb',
     deleted: '#dc2626',
     'status changed': '#d97706',
+    'logged in': '#0891b2',
   };
   const color = actionColor[payload.action] || '#6b7280';
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
@@ -81,6 +81,28 @@ export default function OperationsPage() {
 
   // View toggle: false = MT + EUR (default), true = raw original values
   const [showRaw, setShowRaw] = useState(false);
+
+  // Invoice inline expand
+  const [expandedInvoices, setExpandedInvoices] = useState<Record<number, any[]>>({});
+  const [loadingInvoices, setLoadingInvoices] = useState<Set<number>>(new Set());
+
+  const toggleInvoices = async (id: number) => {
+    if (expandedInvoices[id] !== undefined) {
+      setExpandedInvoices(prev => { const n = { ...prev }; delete n[id]; return n; });
+      return;
+    }
+    setLoadingInvoices(prev => new Set(prev).add(id));
+    setExpandedInvoices(prev => ({ ...prev, [id]: [] }));
+    try {
+      const { data } = await api.get(`/operations/${id}`);
+      setExpandedInvoices(prev => ({ ...prev, [id]: data.invoices || [] }));
+    } catch {
+      addToast('Failed to load invoices', 'error');
+      setExpandedInvoices(prev => { const n = { ...prev }; delete n[id]; return n; });
+    } finally {
+      setLoadingInvoices(prev => { const s = new Set(prev); s.delete(id); return s; });
+    }
+  };
 
   // Ship modal
   const [shipTarget, setShipTarget] = useState<Operation | null>(null);
@@ -344,8 +366,8 @@ export default function OperationsPage() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {operations.map(op => (
+                <Fragment key={op.id}>
                 <tr
-                  key={op.id}
                   onClick={() => navigate(`/operations/${op.id}`)}
                   className="hover:bg-gray-50 cursor-pointer transition-colors"
                 >
@@ -409,18 +431,18 @@ export default function OperationsPage() {
                       {op.doc_count}
                     </span>
                   </td>
-                  <td className="px-4 py-3">
-                    <span className="flex items-center gap-1 text-gray-600">
+                  <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                    <span
+                      className={`flex items-center gap-1 ${op.invoice_count > 0 ? 'cursor-pointer hover:text-primary-700' : 'text-gray-600'} ${expandedInvoices[op.id] !== undefined ? 'text-primary-700 font-semibold' : 'text-gray-600'}`}
+                      onClick={op.invoice_count > 0 ? () => toggleInvoices(op.id) : undefined}
+                      title={op.invoice_count > 0 ? 'Click to preview invoices' : undefined}
+                    >
                       <Receipt size={14} />
                       {op.invoice_count}
                       {op.invoice_count > 0 && (
-                        <button
-                          onClick={e => { e.stopPropagation(); navigate(`/operations/${op.id}`); }}
-                          className="ml-1 p-0.5 text-gray-400 hover:text-primary-600"
-                          title="View invoices"
-                        >
-                          <Eye size={13} />
-                        </button>
+                        expandedInvoices[op.id] !== undefined
+                          ? <ChevronDown size={13} />
+                          : <ChevronRight size={13} className="text-gray-400" />
                       )}
                     </span>
                   </td>
@@ -448,6 +470,53 @@ export default function OperationsPage() {
                     {formatDate((op as any).order_date) || formatDate(op.created_at) || '—'}
                   </td>
                 </tr>
+                {expandedInvoices[op.id] !== undefined && (
+                  <tr>
+                    <td colSpan={9} className="px-4 pb-3 pt-0 bg-blue-50/30 border-b border-gray-100">
+                      <div className="rounded-lg border border-blue-100 overflow-hidden">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="bg-blue-50 border-b border-blue-100">
+                              <th className="text-left px-3 py-2 font-medium text-gray-600">Invoice #</th>
+                              <th className="text-left px-3 py-2 font-medium text-gray-600">Type</th>
+                              <th className="text-right px-3 py-2 font-medium text-gray-600">Amount</th>
+                              <th className="text-left px-3 py-2 font-medium text-gray-600">Status</th>
+                              <th className="text-left px-3 py-2 font-medium text-gray-600">Due Date</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {loadingInvoices.has(op.id) ? (
+                              <tr><td colSpan={5} className="px-3 py-3 text-center text-gray-400">
+                                <div className="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-primary-600" />
+                              </td></tr>
+                            ) : expandedInvoices[op.id].length === 0 ? (
+                              <tr><td colSpan={5} className="px-3 py-3 text-center text-gray-400 text-xs">No invoices found</td></tr>
+                            ) : (
+                              expandedInvoices[op.id].map((inv: any) => (
+                                <tr
+                                  key={inv.id}
+                                  onClick={e => { e.stopPropagation(); navigate(`/invoices/${inv.id}`); }}
+                                  className="border-t border-blue-50 hover:bg-blue-50 cursor-pointer"
+                                >
+                                  <td className="px-3 py-2 font-medium text-primary-700">{inv.invoice_number}</td>
+                                  <td className="px-3 py-2 text-gray-600 capitalize">{inv.type}</td>
+                                  <td className="px-3 py-2 text-right text-gray-900">
+                                    {inv.currency} {Number(inv.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <span className="px-1.5 py-0.5 rounded-full text-xs bg-gray-100 text-gray-700">{inv.status}</span>
+                                  </td>
+                                  <td className="px-3 py-2 text-gray-500">{formatDate(inv.due_date) || '—'}</td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>

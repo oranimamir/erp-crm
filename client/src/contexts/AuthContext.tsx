@@ -12,7 +12,8 @@ interface User {
 interface AuthContextType {
   user: User | null;
   token: string | null;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<{ step: 'done' } | { step: 'otp'; userId: number }>;
+  verifyOtp: (userId: number, code: string) => Promise<void>;
   logout: () => void;
   loading: boolean;
 }
@@ -40,8 +41,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [token]);
 
-  const login = async (username: string, password: string) => {
+  const login = async (username: string, password: string): Promise<{ step: 'done' } | { step: 'otp'; userId: number }> => {
     const res = await api.post('/auth/login', { username, password });
+    if (res.data.step === 'otp') {
+      return { step: 'otp', userId: res.data.user_id };
+    }
+    localStorage.setItem('token', res.data.token);
+    localStorage.setItem('user', JSON.stringify(res.data.user));
+    setToken(res.data.token);
+    setUser(res.data.user);
+    return { step: 'done' };
+  };
+
+  const verifyOtp = async (userId: number, code: string): Promise<void> => {
+    const res = await api.post('/auth/verify-otp', { user_id: userId, code });
     localStorage.setItem('token', res.data.token);
     localStorage.setItem('user', JSON.stringify(res.data.user));
     setToken(res.data.token);
@@ -57,7 +70,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout, loading }}>
+    <AuthContext.Provider value={{ user, token, login, verifyOtp, logout, loading }}>
       {children}
     </AuthContext.Provider>
   );

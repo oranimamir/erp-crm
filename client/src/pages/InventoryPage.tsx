@@ -11,7 +11,7 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
-import { Plus, Warehouse, Pencil, Trash2, PackagePlus, FileSpreadsheet, Package, Box, Upload, Mail, RefreshCw } from 'lucide-react';
+import { Plus, Warehouse, Pencil, Trash2, PackagePlus, FileSpreadsheet, Package, Box, Upload, Mail, RefreshCw, ChevronRight, ChevronDown, Tag } from 'lucide-react';
 import { downloadExcel } from '../lib/exportExcel';
 import { formatDate } from '../lib/dates';
 
@@ -812,6 +812,8 @@ function WarehouseStockTab() {
   const [search, setSearch] = useState('');
   const [grouped, setGrouped] = useState(false);
   const [emailConfig, setEmailConfig] = useState<{ configured: boolean; address: string | null }>({ configured: false, address: null });
+  const [expandedArticles, setExpandedArticles] = useState<Set<string>>(new Set());
+  const [batchLinksByArticle, setBatchLinksByArticle] = useState<Record<string, string[]>>({});
 
   const fetchData = () => {
     setLoading(true);
@@ -820,8 +822,22 @@ function WarehouseStockTab() {
       .finally(() => setLoading(false));
   };
 
+  const fetchBatchLinks = () => {
+    api.get('/inventory/batches').then(res => {
+      const map: Record<string, string[]> = {};
+      for (const batch of res.data) {
+        for (const link of (batch.articles || [])) {
+          if (!map[link.article]) map[link.article] = [];
+          map[link.article].push(batch.batch_number);
+        }
+      }
+      setBatchLinksByArticle(map);
+    }).catch(() => {});
+  };
+
   useEffect(() => {
     fetchData();
+    fetchBatchLinks();
     api.get('/warehouse-stock/email-config').then(res => setEmailConfig(res.data)).catch(() => {});
   }, []);
 
@@ -883,6 +899,7 @@ function WarehouseStockTab() {
       const key = `${r.article}||${r.pc}`;
       if (!map.has(key)) {
         map.set(key, {
+          key,
           principal: r.principal,
           article: r.article,
           searchname: r.searchname,
@@ -892,6 +909,7 @@ function WarehouseStockTab() {
           gross_weight: 0,
           nett_weight: 0,
           pallets: 0,
+          items: [] as any[],
         });
       }
       const g = map.get(key)!;
@@ -899,6 +917,7 @@ function WarehouseStockTab() {
       g.gross_weight += r.gross_weight ?? 0;
       g.nett_weight  += r.nett_weight  ?? 0;
       g.pallets      += 1;
+      g.items.push(r);
     }
     return Array.from(map.values()).sort((a, b) =>
       (a.description ?? '').localeCompare(b.description ?? ''));
@@ -1033,6 +1052,7 @@ function WarehouseStockTab() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
+                  <th className="text-left px-4 py-3 font-medium text-gray-600 w-8"></th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Principal</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Article</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Name</th>
@@ -1045,19 +1065,57 @@ function WarehouseStockTab() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {(displayRows as any[]).map((row, i) => (
-                  <tr key={i} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-xs text-gray-400">{row.principal || '—'}</td>
-                    <td className="px-4 py-3 font-mono text-xs text-gray-900">{row.article}</td>
-                    <td className="px-4 py-3 text-gray-600">{row.searchname || '—'}</td>
-                    <td className="px-4 py-3 font-medium text-gray-900">{row.description || '—'}</td>
-                    <td className="px-4 py-3 text-right text-gray-700">{row.pallets}</td>
-                    <td className="px-4 py-3 text-right font-bold text-gray-900">{fmtNum(row.stock)}</td>
-                    <td className="px-4 py-3"><span className="font-mono text-xs uppercase text-gray-500">{row.pc || '—'}</span></td>
-                    <td className="px-4 py-3 text-right text-gray-700">{fmtNum(row.gross_weight)}</td>
-                    <td className="px-4 py-3 text-right text-gray-700">{fmtNum(row.nett_weight)}</td>
-                  </tr>
-                ))}
+                {(displayRows as any[]).map((row) => {
+                  const isExpanded = expandedArticles.has(row.key);
+                  const batches = batchLinksByArticle[row.article] || [];
+                  return (
+                    <>
+                      <tr
+                        key={row.key}
+                        className="hover:bg-gray-50 cursor-pointer"
+                        onClick={() => setExpandedArticles(prev => {
+                          const next = new Set(prev);
+                          if (next.has(row.key)) next.delete(row.key); else next.add(row.key);
+                          return next;
+                        })}
+                      >
+                        <td className="px-4 py-3 text-gray-400">
+                          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-400">{row.principal || '—'}</td>
+                        <td className="px-4 py-3 font-mono text-xs text-gray-900">{row.article}</td>
+                        <td className="px-4 py-3 text-gray-600">{row.searchname || '—'}</td>
+                        <td className="px-4 py-3">
+                          <span className="font-medium text-gray-900">{row.description || '—'}</span>
+                          {batches.length > 0 && batches.map(bn => (
+                            <span key={bn} className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium bg-indigo-100 text-indigo-700">
+                              <Tag size={10} />{bn}
+                            </span>
+                          ))}
+                        </td>
+                        <td className="px-4 py-3 text-right text-gray-700">{row.pallets}</td>
+                        <td className="px-4 py-3 text-right font-bold text-gray-900">{fmtNum(row.stock)}</td>
+                        <td className="px-4 py-3"><span className="font-mono text-xs uppercase text-gray-500">{row.pc || '—'}</span></td>
+                        <td className="px-4 py-3 text-right text-gray-700">{fmtNum(row.gross_weight)}</td>
+                        <td className="px-4 py-3 text-right text-gray-700">{fmtNum(row.nett_weight)}</td>
+                      </tr>
+                      {isExpanded && row.items.map((item: any, idx: number) => (
+                        <tr key={`${row.key}-sub-${idx}`} className="bg-indigo-50/40 text-xs border-b border-indigo-100/50">
+                          <td className="px-4 py-2" />
+                          <td className="px-4 py-2 text-gray-400 font-mono">{item.whs || '—'}</td>
+                          <td className="px-4 py-2 text-gray-400 font-mono">{item.location || '—'}</td>
+                          <td className="px-4 py-2 text-gray-500">{item.searchname || '—'}</td>
+                          <td className="px-4 py-2 text-gray-600 italic">{item.description || '—'}</td>
+                          <td className="px-4 py-2 text-right text-gray-400">1</td>
+                          <td className="px-4 py-2 text-right font-medium text-gray-800">{fmtNum(item.stock)}</td>
+                          <td className="px-4 py-2"><span className="font-mono uppercase text-gray-400">{item.pc || '—'}</span></td>
+                          <td className="px-4 py-2 text-right text-gray-500">{fmtNum(item.gross_weight)}</td>
+                          <td className="px-4 py-2 text-right text-gray-500">{fmtNum(item.nett_weight)}</td>
+                        </tr>
+                      ))}
+                    </>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1103,14 +1161,248 @@ function WarehouseStockTab() {
   );
 }
 
+// ─── Batches Tab ──────────────────────────────────────────────────────────────
+
+function BatchesTab() {
+  const { addToast } = useToast();
+  const [batches, setBatches] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [editing, setEditing] = useState<any>(null);
+  const [deleteId, setDeleteId] = useState<number | null>(null);
+  const [form, setForm] = useState({ batch_number: '', production_date: '', expiry_date: '', notes: '' });
+  const [saving, setSaving] = useState(false);
+  const [articles, setArticles] = useState<string[]>([]);
+  const [linkBatchId, setLinkBatchId] = useState<number | null>(null);
+  const [linkArticle, setLinkArticle] = useState('');
+  const [linkingSaving, setLinkingSaving] = useState(false);
+
+  const fetchBatches = () => {
+    setLoading(true);
+    api.get('/inventory/batches')
+      .then(res => setBatches(res.data))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    fetchBatches();
+    api.get('/warehouse-stock').then(res => {
+      const unique = [...new Set(
+        (res.data.data || []).map((r: any) => r.article).filter(Boolean)
+      )] as string[];
+      setArticles(unique.sort());
+    }).catch(() => {});
+  }, []);
+
+  const openCreate = () => {
+    setEditing(null);
+    setForm({ batch_number: '', production_date: '', expiry_date: '', notes: '' });
+    setShowModal(true);
+  };
+
+  const openEdit = (batch: any) => {
+    setEditing(batch);
+    setForm({
+      batch_number: batch.batch_number || '',
+      production_date: batch.production_date || '',
+      expiry_date: batch.expiry_date || '',
+      notes: batch.notes || '',
+    });
+    setShowModal(true);
+  };
+
+  const handleSave = async () => {
+    if (!form.batch_number.trim()) { addToast('Batch number is required', 'error'); return; }
+    setSaving(true);
+    try {
+      if (editing) {
+        await api.put(`/inventory/batches/${editing.id}`, form);
+        addToast('Batch updated', 'success');
+      } else {
+        await api.post('/inventory/batches', form);
+        addToast('Batch created', 'success');
+      }
+      setShowModal(false);
+      fetchBatches();
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to save', 'error');
+    } finally { setSaving(false); }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteId) return;
+    try {
+      await api.delete(`/inventory/batches/${deleteId}`);
+      addToast('Batch deleted', 'success');
+      fetchBatches();
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to delete', 'error');
+    }
+    setDeleteId(null);
+  };
+
+  const handleLink = async () => {
+    if (!linkBatchId || !linkArticle) return;
+    setLinkingSaving(true);
+    try {
+      await api.post(`/inventory/batches/${linkBatchId}/links`, { article: linkArticle });
+      addToast('Article linked', 'success');
+      setLinkArticle('');
+      setLinkBatchId(null);
+      fetchBatches();
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to link article', 'error');
+    } finally { setLinkingSaving(false); }
+  };
+
+  const handleUnlink = async (linkId: number) => {
+    try {
+      await api.delete(`/inventory/batches/links/${linkId}`);
+      addToast('Article unlinked', 'success');
+      fetchBatches();
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to unlink', 'error');
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <Button onClick={openCreate}><Plus size={16} /> Add Batch</Button>
+      </div>
+
+      <Card>
+        {loading ? (
+          <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" /></div>
+        ) : batches.length === 0 ? (
+          <EmptyState
+            icon={<Package size={24} />}
+            title="No batches"
+            description="Create your first batch to track production lots."
+            action={<Button onClick={openCreate} size="sm"><Plus size={14} /> Add Batch</Button>}
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100 bg-gray-50">
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Batch #</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Production Date</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Expiry Date</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Linked Articles</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Notes</th>
+                  <th className="text-right px-4 py-3 font-medium text-gray-600">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {batches.map(batch => (
+                  <tr key={batch.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 font-semibold text-gray-900 font-mono">{batch.batch_number}</td>
+                    <td className="px-4 py-3 text-gray-600">{formatDate(batch.production_date) || '—'}</td>
+                    <td className="px-4 py-3 text-gray-600">{formatDate(batch.expiry_date) || '—'}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap gap-1 items-center">
+                        {(batch.articles || []).map((link: any) => (
+                          <span key={link.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+                            {link.article}
+                            <button
+                              onClick={() => handleUnlink(link.id)}
+                              className="text-indigo-400 hover:text-indigo-700 leading-none ml-0.5"
+                              title="Remove link"
+                            >×</button>
+                          </span>
+                        ))}
+                        {linkBatchId === batch.id ? (
+                          <span className="inline-flex items-center gap-1">
+                            <select
+                              value={linkArticle}
+                              onChange={e => setLinkArticle(e.target.value)}
+                              className="text-xs border border-gray-300 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                            >
+                              <option value="">— select article —</option>
+                              {articles.map(a => <option key={a} value={a}>{a}</option>)}
+                            </select>
+                            <button
+                              onClick={handleLink}
+                              disabled={!linkArticle || linkingSaving}
+                              className="text-xs px-2 py-0.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50"
+                            >Add</button>
+                            <button
+                              onClick={() => { setLinkBatchId(null); setLinkArticle(''); }}
+                              className="text-xs text-gray-400 hover:text-gray-600"
+                            >✕</button>
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => { setLinkBatchId(batch.id); setLinkArticle(''); }}
+                            className="text-xs px-2 py-0.5 border border-dashed border-gray-300 rounded-full text-gray-400 hover:text-gray-600 hover:border-gray-400"
+                          >+ Link Article</button>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-gray-500 max-w-[200px] truncate">{batch.notes || '—'}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-1">
+                        <button onClick={() => openEdit(batch)} className="p-1.5 text-gray-400 hover:text-primary-600 rounded"><Pencil size={15} /></button>
+                        <button onClick={() => setDeleteId(batch.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded"><Trash2 size={15} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <Modal open={showModal} onClose={() => setShowModal(false)} title={editing ? 'Edit Batch' : 'New Batch'} size="md">
+        <div className="space-y-4">
+          <Input label="Batch Number *" value={form.batch_number} onChange={e => setForm({ ...form, batch_number: e.target.value })} placeholder="e.g. B-2024-001" />
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="block text-sm font-medium text-gray-700">Production Date</label>
+              <input type="date" value={form.production_date} onChange={e => setForm({ ...form, production_date: e.target.value })}
+                className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
+            </div>
+            <div className="space-y-1">
+              <label className="block text-sm font-medium text-gray-700">Expiry Date</label>
+              <input type="date" value={form.expiry_date} onChange={e => setForm({ ...form, expiry_date: e.target.value })}
+                className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-gray-700">Notes</label>
+            <textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={3}
+              className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" placeholder="Optional notes..." />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="secondary" onClick={() => setShowModal(false)}>Cancel</Button>
+            <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving...' : editing ? 'Update' : 'Create'}</Button>
+          </div>
+        </div>
+      </Modal>
+
+      <ConfirmDialog
+        open={deleteId !== null}
+        onClose={() => setDeleteId(null)}
+        onConfirm={handleDelete}
+        title="Delete Batch"
+        message="Are you sure you want to delete this batch? All article links will be removed."
+        confirmLabel="Delete"
+      />
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
-type InventoryTabId = 'warehouse' | 'products' | 'packaging';
+type InventoryTabId = 'warehouse' | 'products' | 'packaging' | 'batches';
 
 const tabs: { id: InventoryTabId; label: string }[] = [
   { id: 'warehouse', label: 'Warehouse Stock' },
   { id: 'products', label: 'Products' },
   { id: 'packaging', label: 'Packaging' },
+  { id: 'batches', label: 'Batches' },
 ];
 
 export default function InventoryPage() {
@@ -1138,6 +1430,7 @@ export default function InventoryPage() {
       {activeTab === 'warehouse' && <WarehouseStockTab />}
       {activeTab === 'products' && <ProductsTab />}
       {activeTab === 'packaging' && <PackagingTab />}
+      {activeTab === 'batches' && <BatchesTab />}
     </div>
   );
 }

@@ -243,6 +243,11 @@ router.post('/:id/wire-transfers', uploadWireTransfer.single('file'), async (req
       }
     }
 
+    notifyAdmin({ action: 'status changed', entity: 'Invoice',
+      label: invoice.invoice_number,
+      performedBy: req.user?.display_name || 'Unknown',
+      detail: 'Paid via wire transfer upload' });
+
     const transfer = db.prepare('SELECT * FROM wire_transfers WHERE id = ?').get(result.lastInsertRowid);
     res.status(201).json(transfer);
   } catch (err: any) {

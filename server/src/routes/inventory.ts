@@ -113,4 +113,95 @@ router.delete('/:id', (req: Request, res: Response) => {
   res.json({ message: 'Item deleted' });
 });
 
+// ── Batch CRUD ────────────────────────────────────────────────────────────────
+
+router.get('/batches', (req: Request, res: Response) => {
+  const batches = db.prepare('SELECT * FROM batches ORDER BY batch_number ASC').all();
+  const result = (batches as any[]).map(b => {
+    const articles = db.prepare(
+      'SELECT id, article FROM batch_warehouse_links WHERE batch_id = ? ORDER BY article ASC'
+    ).all(b.id);
+    return { ...b, articles };
+  });
+  res.json(result);
+});
+
+router.post('/batches', (req: Request, res: Response) => {
+  const { batch_number, production_date, expiry_date, notes } = req.body;
+  if (!batch_number) { res.status(400).json({ error: 'batch_number is required' }); return; }
+  try {
+    const result = db.prepare(
+      `INSERT INTO batches (batch_number, production_date, expiry_date, notes) VALUES (?, ?, ?, ?)`
+    ).run(batch_number, production_date || null, expiry_date || null, notes || null);
+    const batch = db.prepare('SELECT * FROM batches WHERE id = ?').get(result.lastInsertRowid) as any;
+    res.status(201).json({ ...batch, articles: [] });
+  } catch (err: any) {
+    if (err.message?.includes('UNIQUE')) {
+      res.status(409).json({ error: 'Batch number already exists' });
+    } else {
+      res.status(400).json({ error: err.message });
+    }
+  }
+});
+
+router.put('/batches/:id', (req: Request, res: Response) => {
+  const existing = db.prepare('SELECT * FROM batches WHERE id = ?').get(req.params.id) as any;
+  if (!existing) { res.status(404).json({ error: 'Batch not found' }); return; }
+  const { batch_number, production_date, expiry_date, notes } = req.body;
+  try {
+    db.prepare(
+      `UPDATE batches SET batch_number=?, production_date=?, expiry_date=?, notes=? WHERE id=?`
+    ).run(
+      batch_number || existing.batch_number,
+      production_date !== undefined ? (production_date || null) : existing.production_date,
+      expiry_date !== undefined ? (expiry_date || null) : existing.expiry_date,
+      notes !== undefined ? (notes || null) : existing.notes,
+      req.params.id
+    );
+    const batch = db.prepare('SELECT * FROM batches WHERE id = ?').get(req.params.id) as any;
+    const articles = db.prepare('SELECT id, article FROM batch_warehouse_links WHERE batch_id = ? ORDER BY article ASC').all(batch.id);
+    res.json({ ...batch, articles });
+  } catch (err: any) {
+    if (err.message?.includes('UNIQUE')) {
+      res.status(409).json({ error: 'Batch number already exists' });
+    } else {
+      res.status(400).json({ error: err.message });
+    }
+  }
+});
+
+router.delete('/batches/:id', (req: Request, res: Response) => {
+  const existing = db.prepare('SELECT * FROM batches WHERE id = ?').get(req.params.id) as any;
+  if (!existing) { res.status(404).json({ error: 'Batch not found' }); return; }
+  db.prepare('DELETE FROM batches WHERE id = ?').run(req.params.id);
+  res.json({ message: 'Batch deleted' });
+});
+
+router.post('/batches/:id/links', (req: Request, res: Response) => {
+  const batch = db.prepare('SELECT id FROM batches WHERE id = ?').get(req.params.id) as any;
+  if (!batch) { res.status(404).json({ error: 'Batch not found' }); return; }
+  const { article } = req.body;
+  if (!article) { res.status(400).json({ error: 'article is required' }); return; }
+  try {
+    const result = db.prepare(
+      `INSERT INTO batch_warehouse_links (batch_id, article) VALUES (?, ?)`
+    ).run(req.params.id, article);
+    const link = db.prepare('SELECT * FROM batch_warehouse_links WHERE id = ?').get(result.lastInsertRowid);
+    res.status(201).json(link);
+  } catch (err: any) {
+    if (err.message?.includes('UNIQUE')) {
+      res.status(409).json({ error: 'Article already linked to this batch' });
+    } else {
+      res.status(400).json({ error: err.message });
+    }
+  }
+});
+
+router.delete('/batches/links/:linkId', (req: Request, res: Response) => {
+  const link = db.prepare('SELECT * FROM batch_warehouse_links WHERE id = ?').get(req.params.linkId) as any;
+  if (!link) { res.status(404).json({ error: 'Link not found' }); return; }
+  db.prepare('DELETE FROM batch_warehouse_links WHERE id = ?').run(req.params.linkId);
+  res.json({ message: 'Link removed' });
+});
+
 export default router;
