@@ -32,7 +32,7 @@ export default function DashboardPage() {
   const [openOperations, setOpenOperations] = useState<any[]>([]);
   const [pendingInvoices, setPendingInvoices] = useState<any[]>([]);
   const [monthlyPayments, setMonthlyPayments] = useState<any[]>([]);
-  const [customerForecast, setCustomerForecast] = useState<any[]>([]);
+  const [customerForecast, setCustomerForecast] = useState<{ received: any[]; pending: any[]; expected: any[] }>({ received: [], pending: [], expected: [] });
   const [forecast, setForecast] = useState<any[]>([]);
   const [forecastExpected, setForecastExpected] = useState(0);
   const [tonsYTD, setTonsYTD] = useState(0);
@@ -426,69 +426,69 @@ export default function DashboardPage() {
         );
       })()}
 
-      {/* Per-Customer Outstanding Breakdown */}
-      {customerForecast.length > 0 && (() => {
-        const grandTotal = customerForecast.reduce((s: number, c: any) => s + c.total, 0);
-        const PALETTE = [
-          'bg-blue-500', 'bg-violet-500', 'bg-indigo-500', 'bg-cyan-500',
-          'bg-teal-500', 'bg-emerald-500', 'bg-sky-500', 'bg-purple-500',
-        ];
-        const statusColor = (status: string, due_date: string | null) => {
-          const overdue = due_date && new Date(due_date) < new Date();
-          if (status === 'overdue' || overdue) return 'bg-red-100 text-red-800 border border-red-200';
-          if (status === 'sent') return 'bg-amber-100 text-amber-800 border border-amber-200';
-          return 'bg-gray-100 text-gray-600 border border-gray-200';
-        };
-        return (
-          <Card>
-            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Users size={16} className="text-gray-400" />
-                <h2 className="font-semibold text-gray-900">Outstanding by Customer</h2>
+      {/* Per-Customer Revenue Breakdown — 3 panels */}
+      {(customerForecast.received?.length > 0 || customerForecast.pending?.length > 0 || customerForecast.expected?.length > 0) && (() => {
+        const fmt2 = (n: number) => `€${n.toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
+
+        function CustomerPanel({ title, accent, rows, emptyText }: {
+          title: string; accent: string; rows: any[]; emptyText: string;
+        }) {
+          const total = rows.reduce((s: number, c: any) => s + c.total, 0);
+          const maxRow = rows[0]?.total || 1;
+          return (
+            <Card>
+              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                  <Users size={15} className="text-gray-400" />
+                  {title}
+                </h2>
+                {rows.length > 0 && (
+                  <span className={`text-sm font-bold ${accent}`}>{fmt2(total)}</span>
+                )}
               </div>
-              <span className="text-xs text-gray-400">€{grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })} total open</span>
-            </div>
-            {/* Proportional bar */}
-            <div className="mx-5 mt-4 h-3 rounded-full overflow-hidden flex">
-              {customerForecast.map((c: any, i: number) => (
-                <div
-                  key={c.customer_id}
-                  className={PALETTE[i % PALETTE.length]}
-                  style={{ width: `${grandTotal > 0 ? (c.total / grandTotal) * 100 : 0}%` }}
-                  title={`${c.customer_name}: €${c.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
-                />
-              ))}
-            </div>
-            <div className="divide-y divide-gray-100 mt-4">
-              {customerForecast.map((c: any, i: number) => (
-                <div key={c.customer_id} className="px-5 py-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${PALETTE[i % PALETTE.length]}`} />
-                      <span className="text-sm font-medium text-gray-900">{c.customer_name}</span>
-                      <span className="text-xs text-gray-400">{c.invoices.length} invoice{c.invoices.length !== 1 ? 's' : ''}</span>
+              {rows.length === 0 ? (
+                <p className="px-5 py-6 text-center text-sm text-gray-400">{emptyText}</p>
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  {rows.map((c: any) => (
+                    <div key={c.customer_id} className="px-5 py-3">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-sm font-medium text-gray-900">{c.customer_name}</span>
+                        <span className={`text-sm font-bold ${accent}`}>{fmt2(c.total)}</span>
+                      </div>
+                      <div className="w-full bg-gray-100 rounded-full h-1.5">
+                        <div className={`h-1.5 rounded-full`}
+                          style={{ width: `${Math.round((c.total / maxRow) * 100)}%`, background: accent.includes('green') ? '#22c55e' : accent.includes('amber') ? '#f59e0b' : '#3b82f6' }} />
+                      </div>
                     </div>
-                    <span className="text-sm font-bold text-gray-900">
-                      €{c.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5 pl-4">
-                    {c.invoices.map((inv: any) => (
-                      <Link
-                        key={inv.id}
-                        to={`/invoices/${inv.id}`}
-                        className={`inline-flex items-center gap-1 text-xs rounded px-2 py-0.5 font-medium hover:opacity-80 transition-opacity ${statusColor(inv.status, inv.due_date)}`}
-                      >
-                        <span>{inv.invoice_number}</span>
-                        <span>·</span>
-                        <span>€{inv.eur_amount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
-                      </Link>
-                    ))}
-                  </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </Card>
+              )}
+            </Card>
+          );
+        }
+
+        return (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <CustomerPanel
+              title="Received YTD"
+              accent="text-green-600"
+              rows={customerForecast.received ?? []}
+              emptyText="No payments received yet this year"
+            />
+            <CustomerPanel
+              title="Pending (with due date)"
+              accent="text-amber-600"
+              rows={customerForecast.pending ?? []}
+              emptyText="No pending invoices with a due date"
+            />
+            <CustomerPanel
+              title="Expected (no due date)"
+              accent="text-blue-600"
+              rows={customerForecast.expected ?? []}
+              emptyText="No invoices without a due date"
+            />
+          </div>
         );
       })()}
     </div>

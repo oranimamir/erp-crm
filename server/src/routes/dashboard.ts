@@ -330,28 +330,72 @@ router.get('/customer-payments', (_req: Request, res: Response) => {
 });
 
 router.get('/customer-forecast', async (_req: Request, res: Response) => {
-  // All open customer invoices grouped by customer, with live EUR conversion
-  const rows = db.prepare(`
-    SELECT i.id, i.invoice_number, i.amount, i.currency, i.status, i.due_date,
+  const year = new Date().getFullYear().toString();
+
+  function groupByCustomer(rows: any[]) {
+    const map = new Map<number, { customer_id: number; customer_name: string; total: number }>();
+    for (const row of rows) {
+      const key = row.customer_id ?? 0;
+      if (!map.has(key)) map.set(key, { customer_id: key, customer_name: row.customer_name || 'Unknown', total: 0 });
+      map.get(key)!.total += row.live_eur_amount ?? 0;
+    }
+    return [...map.values()].sort((a, b) => b.total - a.total);
+  }
+
+  // 1. Received YTD — payments actually received this calendar year, by customer
+  const receivedRows = db.prepare(`
+    SELECT c.id as customer_id, c.name as customer_name,
+      COALESCE(wt.eur_amount, wt.amount) as amount, 'USD' as currency
+    FROM wire_transfers wt
+    JOIN invoices i ON wt.invoice_id = i.id
+    LEFT JOIN customers c ON i.customer_id = c.id
+    WHERE i.type = 'customer' AND strftime('%Y', wt.transfer_date) = ?
+    UNION ALL
+    SELECT c.id as customer_id, c.name as customer_name, p.amount, 'EUR' as currency
+    FROM payments p
+    JOIN invoices i ON p.invoice_id = i.id
+    LEFT JOIN customers c ON i.customer_id = c.id
+    WHERE i.type = 'customer' AND strftime('%Y', p.payment_date) = ?
+    UNION ALL
+    SELECT c.id as customer_id, c.name as customer_name,
+      COALESCE(i.eur_amount, i.amount) as amount, COALESCE(i.currency, 'USD') as currency
+    FROM invoices i
+    LEFT JOIN customers c ON i.customer_id = c.id
+    WHERE i.type = 'customer' AND i.status = 'paid'
+      AND NOT EXISTS (SELECT 1 FROM wire_transfers wt WHERE wt.invoice_id = i.id)
+      AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
+      AND i.payment_date IS NOT NULL AND strftime('%Y', i.payment_date) = ?
+  `).all(year, year, year) as any[];
+  // Wire transfers already store EUR amounts; payments are EUR; direct paid invoices use eur_amount
+  // Treat all as pre-converted so set live_eur_amount = amount directly
+  for (const r of receivedRows) r.live_eur_amount = r.amount;
+
+  // 2. Pending (sent/overdue with due date) — live FX
+  const pendingRows = db.prepare(`
+    SELECT i.id, i.amount, i.currency, i.status, i.due_date,
       c.id as customer_id, c.name as customer_name
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
-    WHERE i.type = 'customer' AND i.status IN ('draft', 'sent', 'overdue')
-    ORDER BY c.name, i.due_date
+    WHERE i.type = 'customer' AND i.status IN ('sent', 'overdue') AND i.due_date IS NOT NULL
+    ORDER BY i.due_date
   `).all() as any[];
-  await attachLiveEur(rows);
+  await attachLiveEur(pendingRows);
 
-  const map = new Map<number, { customer_id: number; customer_name: string; invoices: any[]; total: number }>();
-  for (const row of rows) {
-    const key = row.customer_id ?? 0;
-    if (!map.has(key)) map.set(key, { customer_id: key, customer_name: row.customer_name || 'Unknown', invoices: [], total: 0 });
-    const entry = map.get(key)!;
-    const eur = row.live_eur_amount ?? 0;
-    entry.invoices.push({ id: row.id, invoice_number: row.invoice_number, eur_amount: eur, status: row.status, due_date: row.due_date });
-    entry.total += eur;
-  }
+  // 3. Expected (sent with no due date) — live FX
+  const expectedRows = db.prepare(`
+    SELECT i.id, i.amount, i.currency,
+      c.id as customer_id, c.name as customer_name
+    FROM invoices i
+    LEFT JOIN customers c ON i.customer_id = c.id
+    WHERE i.type = 'customer' AND i.status = 'sent' AND i.due_date IS NULL
+  `).all() as any[];
+  await attachLiveEur(expectedRows);
 
-  res.json([...map.values()].sort((a, b) => b.total - a.total));
+  res.json({
+    received: groupByCustomer(receivedRows),
+    pending:  groupByCustomer(pendingRows),
+    expected: groupByCustomer(expectedRows),
+  });
 });
 
 router.get('/tons-ytd', (_req: Request, res: Response) => {
