@@ -52,42 +52,44 @@ export function parseAndInsertStockCsv(content: string, meta: StockMeta): Insert
 
   const now = new Date().toISOString();
 
-  db.exec('DELETE FROM warehouse_stock');
-
   const insert = db.prepare(`
     INSERT INTO warehouse_stock (whs, location, principal, article, searchname, description, stock, pc, gross_weight, nett_weight, batch_number, uploaded_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
+  // Wrap DELETE + INSERT in a transaction so a failed upload never leaves stock empty
   let inserted = 0;
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(delimiter);
-    if (cols.length < 2) continue;
+  const doImport = db.transaction(() => {
+    db.exec('DELETE FROM warehouse_stock');
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(delimiter);
+      if (cols.length < 2) continue;
 
-    const article = cols[idx.article]?.trim();
-    if (!article) continue;
+      const article = cols[idx.article]?.trim();
+      if (!article) continue;
 
-    insert.run(
-      idx.whs          >= 0 ? cols[idx.whs]?.trim()            || null : null,
-      idx.location     >= 0 ? cols[idx.location]?.trim()        || null : null,
-      idx.principal    >= 0 ? cols[idx.principal]?.trim()       || null : null,
-      article,
-      idx.searchname   >= 0 ? cols[idx.searchname]?.trim()      || null : null,
-      idx.description  >= 0 ? cols[idx.description]?.trim()     || null : null,
-      idx.stock        >= 0 ? parseInt(cols[idx.stock])          || 0   : 0,
-      idx.pc           >= 0 ? cols[idx.pc]?.trim()               || null : null,
-      idx.gross_weight >= 0 ? parseFloat(cols[idx.gross_weight]) || null : null,
-      idx.nett_weight  >= 0 ? parseFloat(cols[idx.nett_weight])  || null : null,
-      idx.batch_number >= 0 ? cols[idx.batch_number]?.trim()    || null : null,
-      now,
-    );
-    inserted++;
-  }
-
-  db.prepare(`
-    INSERT INTO warehouse_stock_uploads (uploaded_at, rows_imported, filename, uploaded_by, source)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(now, inserted, meta.filename || null, meta.uploadedBy, meta.source);
+      insert.run(
+        idx.whs          >= 0 ? cols[idx.whs]?.trim()            || null : null,
+        idx.location     >= 0 ? cols[idx.location]?.trim()        || null : null,
+        idx.principal    >= 0 ? cols[idx.principal]?.trim()       || null : null,
+        article,
+        idx.searchname   >= 0 ? cols[idx.searchname]?.trim()      || null : null,
+        idx.description  >= 0 ? cols[idx.description]?.trim()     || null : null,
+        idx.stock        >= 0 ? parseInt(cols[idx.stock])          || 0   : 0,
+        idx.pc           >= 0 ? cols[idx.pc]?.trim()               || null : null,
+        idx.gross_weight >= 0 ? parseFloat(cols[idx.gross_weight]) || null : null,
+        idx.nett_weight  >= 0 ? parseFloat(cols[idx.nett_weight])  || null : null,
+        idx.batch_number >= 0 ? cols[idx.batch_number]?.trim()    || null : null,
+        now,
+      );
+      inserted++;
+    }
+    db.prepare(`
+      INSERT INTO warehouse_stock_uploads (uploaded_at, rows_imported, filename, uploaded_by, source)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(now, inserted, meta.filename || null, meta.uploadedBy, meta.source);
+  });
+  doImport();
 
   // Detect batch numbers in CSV that are not yet in the batches table
   const missingBatches: string[] = [];

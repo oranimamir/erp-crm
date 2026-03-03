@@ -52,8 +52,8 @@ router.post('/', requireAdmin, (req: Request, res: Response) => {
     res.status(400).json({ error: 'Username and password are required' });
     return;
   }
-  if (password.length < 8) {
-    res.status(400).json({ error: 'Password must be at least 8 characters' });
+  if (password.length < 12) {
+    res.status(400).json({ error: 'Password must be at least 12 characters' });
     return;
   }
   if (role && !['admin', 'user'].includes(role)) {

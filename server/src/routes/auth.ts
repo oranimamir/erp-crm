@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import db from '../database.js';
 import { authenticateToken, generateToken } from '../middleware/auth.js';
 import { sendOtpEmail, notifyAdmin } from '../lib/notify.js';
@@ -21,7 +22,7 @@ router.post('/login', (req: Request, res: Response) => {
 
   // 2FA: if user has an email, send OTP instead of issuing token immediately
   if (user.email) {
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const code = crypto.randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
     db.prepare(`INSERT INTO login_otps (user_id, code, expires_at) VALUES (?, ?, ?)`).run(user.id, code, expiresAt);
     sendOtpEmail(user.email, code);
@@ -139,8 +140,8 @@ router.post('/accept-invite', (req: Request, res: Response) => {
     res.status(400).json({ error: 'Token, username, and password are required' });
     return;
   }
-  if (password.length < 8) {
-    res.status(400).json({ error: 'Password must be at least 8 characters' });
+  if (password.length < 12) {
+    res.status(400).json({ error: 'Password must be at least 12 characters' });
     return;
   }
 

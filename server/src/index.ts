@@ -40,9 +40,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Warn if JWT_SECRET is using the insecure default
+// Require JWT_SECRET in production; warn loudly in development
 if (!process.env.JWT_SECRET) {
-  console.warn('⚠️  JWT_SECRET is not set — using insecure default. Set it in your .env file.');
+  if (process.env.NODE_ENV === 'production') {
+    console.error('FATAL: JWT_SECRET environment variable is not set. Refusing to start in production.');
+    process.exit(1);
+  } else {
+    console.warn('⚠️  JWT_SECRET is not set — using insecure default. Set it in your .env file.');
+  }
 }
 
 // ── Security headers ────────────────────────────────────────────────────────
@@ -59,6 +64,7 @@ const allowedOrigins = process.env.APP_URL
 app.use(cors({
   origin: allowedOrigins,
   credentials: true,
+  maxAge: 86400, // Cache preflight for 24h
 }));
 
 // ── Body parsing ─────────────────────────────────────────────────────────────
@@ -71,6 +77,15 @@ const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
   message: { error: 'Too many login attempts. Please try again in 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Very strict limiter for OTP verification — 5 attempts per 10 min per IP
+const otpLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 5,
+  message: { error: 'Too many OTP attempts. Please try again in 10 minutes.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -108,6 +123,7 @@ cron.schedule('*/15 * * * *', () => {
 
 // ── Public routes (with rate limiting) ───────────────────────────────────────
 app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/verify-otp', otpLimiter);
 app.use('/api/auth/accept-invite', authLimiter);
 app.use('/api/auth', authRoutes);
 
@@ -143,16 +159,19 @@ app.use(express.static(clientDist));
 
 // ── Error handling ────────────────────────────────────────────────────────────
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  // Log full error server-side only — never expose stack traces or DB details to clients
+  console.error('[Error]', err?.message || err);
+
   if (err.code === 'LIMIT_FILE_SIZE') {
     res.status(400).json({ error: 'File too large. Maximum size is 10MB.' });
     return;
   }
-  if (err.message?.includes('Only PDF')) {
+  // Safe user-facing multer/upload errors
+  if (err.message?.includes('Only PDF') || err.message?.includes('files are allowed')) {
     res.status(400).json({ error: err.message });
     return;
   }
-  console.error(err);
-  res.status(500).json({ error: 'Internal server error' });
+  res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
 });
 
 // ── SPA fallback ──────────────────────────────────────────────────────────────

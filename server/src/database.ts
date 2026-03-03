@@ -708,6 +708,17 @@ export async function initializeDatabase() {
     }
   } catch (_) {}
 
+  // Performance indexes on frequently queried columns
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_invoices_customer_id ON invoices(customer_id)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_invoices_operation_id ON invoices(operation_id)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_orders_operation_number ON orders(operation_number)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_operations_status ON operations(status)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_warehouse_stock_article ON warehouse_stock(article)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_warehouse_stock_batch ON warehouse_stock(batch_number)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_batch_documents_batch_id ON batch_documents(batch_id)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_login_otps_user_id ON login_otps(user_id)`); } catch (_) {}
+
   db.saveToDisk();
 }
 
