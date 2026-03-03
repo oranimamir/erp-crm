@@ -67,6 +67,7 @@ export default function OperationsPage() {
   const [activeTab, setActiveTab] = useState<Tab>('active');
   const [operations, setOperations] = useState<Operation[]>([]);
   const [total, setTotal] = useState(0);
+  const [tabTotals, setTabTotals] = useState<{ quantity_mt: number; invoice_eur: number } | null>(null);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [search, setSearch] = useState('');
@@ -179,6 +180,7 @@ export default function OperationsPage() {
       setOperations(data.data);
       setTotal(data.total);
       setTotalPages(data.totalPages);
+      setTabTotals(data.totals ?? null);
     } catch {
       addToast('Failed to load operations', 'error');
     } finally {
@@ -476,6 +478,33 @@ export default function OperationsPage() {
           </table>
         )}
       </div>
+
+      {/* Totals summary */}
+      {tabTotals && (tabTotals.quantity_mt > 0 || tabTotals.invoice_eur > 0) && (
+        <div className="flex items-center justify-end gap-6 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm">
+          <span className="text-gray-500 font-medium mr-auto">
+            {activeTab === 'active' ? 'Active operations total' : 'Completed operations total'} ({total})
+          </span>
+          {tabTotals.quantity_mt > 0 && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-gray-500">Total MT:</span>
+              <span className="font-bold text-indigo-700">
+                {tabTotals.quantity_mt >= 1000
+                  ? `${(tabTotals.quantity_mt / 1000).toFixed(2)}k MT`
+                  : `${tabTotals.quantity_mt.toFixed(2)} MT`}
+              </span>
+            </div>
+          )}
+          {tabTotals.invoice_eur > 0 && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-gray-500">Invoiced:</span>
+              <span className="font-bold text-green-700">
+                €{tabTotals.invoice_eur.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
 
       {totalPages > 1 && (
         <div className="flex items-center justify-between">

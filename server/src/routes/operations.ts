@@ -108,12 +108,31 @@ router.get('/', async (req: Request, res: Response) => {
     ${where} ORDER BY ${sortBy} ${sortDir} LIMIT ? OFFSET ?
   `).all(...params, limit, offset);
 
-  // Fetch live FX rates for any non-EUR invoice amounts not yet converted
-  const fxCurrencies = new Set(
-    (operations as any[])
-      .filter((op: any) => op.invoice_fx_amount > 0 && op.invoice_fx_currency)
-      .map((op: any) => (op.invoice_fx_currency as string).toUpperCase())
-  );
+  // Totals across ALL matching operations (not just current page)
+  const allForTotals = db.prepare(`
+    SELECT
+      COALESCE((SELECT COALESCE(SUM(
+        CASE
+          WHEN LOWER(oi.unit) IN ('mt','metric ton','metric tons','tonne','tonnes','tons','ton','t') THEN oi.quantity
+          WHEN LOWER(oi.unit) IN ('kg','kgs','kilogram','kilograms') THEN oi.quantity/1000.0
+          WHEN LOWER(oi.unit) IN ('lbs','lb','pound','pounds') THEN oi.quantity/2204.6226218
+          ELSE NULL END
+      ), 0) FROM order_items oi WHERE oi.order_id = op.order_id), 0) as quantity_mt,
+      COALESCE((SELECT COALESCE(SUM(CASE WHEN i.eur_amount IS NOT NULL THEN i.eur_amount WHEN UPPER(COALESCE(i.currency,'USD'))='EUR' THEN i.amount ELSE 0 END), 0) FROM invoices i WHERE i.operation_id = op.id), 0) as invoice_eur_base,
+      COALESCE((SELECT COALESCE(SUM(CASE WHEN i.eur_amount IS NULL AND UPPER(COALESCE(i.currency,'USD'))!='EUR' THEN i.amount ELSE 0 END), 0) FROM invoices i WHERE i.operation_id = op.id), 0) as invoice_fx_amount,
+      (SELECT i.currency FROM invoices i WHERE i.eur_amount IS NULL AND UPPER(COALESCE(i.currency,'USD'))!='EUR' AND i.operation_id = op.id ORDER BY i.id LIMIT 1) as invoice_fx_currency
+    FROM operations op
+    LEFT JOIN customers c ON op.customer_id = c.id
+    LEFT JOIN suppliers s ON op.supplier_id = s.id
+    LEFT JOIN orders o ON op.order_id = o.id
+    ${where}
+  `).all(...params) as any[];
+
+  // Collect all FX currencies from both paginated rows and full totals
+  const fxCurrencies = new Set<string>([
+    ...(operations as any[]).filter((op: any) => op.invoice_fx_amount > 0 && op.invoice_fx_currency).map((op: any) => (op.invoice_fx_currency as string).toUpperCase()),
+    ...allForTotals.filter(r => r.invoice_fx_amount > 0 && r.invoice_fx_currency).map(r => (r.invoice_fx_currency as string).toUpperCase()),
+  ]);
   const rates: Record<string, number> = {};
   await Promise.all([...fxCurrencies].map(async (c) => {
     rates[c] = await getEurRate(c, 'latest');
@@ -127,7 +146,14 @@ router.get('/', async (req: Request, res: Response) => {
     };
   });
 
-  res.json({ data, total, page, limit, totalPages: Math.ceil(total / limit) });
+  const totals = allForTotals.reduce((acc, r) => {
+    const fxRate = r.invoice_fx_currency ? (rates[(r.invoice_fx_currency as string).toUpperCase()] ?? 1) : 1;
+    acc.quantity_mt += r.quantity_mt || 0;
+    acc.invoice_eur += (r.invoice_eur_base || 0) + (r.invoice_fx_amount || 0) * fxRate;
+    return acc;
+  }, { quantity_mt: 0, invoice_eur: 0 });
+
+  res.json({ data, total, page, limit, totalPages: Math.ceil(total / limit), totals });
 });
 
 // ── Single operation ──────────────────────────────────────────────────────────
