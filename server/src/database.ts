@@ -676,6 +676,8 @@ export async function initializeDatabase() {
 
   // Add product field to batches (populated from CSV description)
   try { db.exec(`ALTER TABLE batches ADD COLUMN product TEXT`); } catch (_) {}
+  // Add category field to batches
+  try { db.exec(`ALTER TABLE batches ADD COLUMN category TEXT`); } catch (_) {}
 
   // Batch documents (COA and other tagged documents per batch)
   db.exec(`

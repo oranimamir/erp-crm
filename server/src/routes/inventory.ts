@@ -146,12 +146,12 @@ router.get('/batches', (_req: Request, res: Response) => {
 });
 
 router.post('/batches', (req: Request, res: Response) => {
-  const { batch_number, product } = req.body;
+  const { batch_number, product, category } = req.body;
   if (!batch_number) { res.status(400).json({ error: 'batch_number is required' }); return; }
   try {
     const result = db.prepare(
-      `INSERT INTO batches (batch_number, product) VALUES (?, ?)`
-    ).run(batch_number, product || null);
+      `INSERT INTO batches (batch_number, product, category) VALUES (?, ?, ?)`
+    ).run(batch_number, product || null, category || null);
     const batch = db.prepare('SELECT * FROM batches WHERE id = ?').get(result.lastInsertRowid) as any;
     res.status(201).json({ ...batch, documents: [] });
   } catch (err: any) {
@@ -166,13 +166,14 @@ router.post('/batches', (req: Request, res: Response) => {
 router.put('/batches/:id', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT * FROM batches WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Batch not found' }); return; }
-  const { batch_number, product } = req.body;
+  const { batch_number, product, category } = req.body;
   try {
     db.prepare(
-      `UPDATE batches SET batch_number=?, product=? WHERE id=?`
+      `UPDATE batches SET batch_number=?, product=?, category=? WHERE id=?`
     ).run(
       batch_number || existing.batch_number,
       product !== undefined ? (product || null) : existing.product,
+      category !== undefined ? (category || null) : existing.category,
       req.params.id
     );
     const batch = db.prepare('SELECT * FROM batches WHERE id = ?').get(req.params.id) as any;

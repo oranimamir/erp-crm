@@ -1174,7 +1174,7 @@ function BatchesTab() {
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<any>(null);
   const [deleteId, setDeleteId] = useState<number | null>(null);
-  const [form, setForm] = useState({ batch_number: '', product: '' });
+  const [form, setForm] = useState({ batch_number: '', product: '', category: '' });
   const [saving, setSaving] = useState(false);
   // Document management
   const [addingDocBatchId, setAddingDocBatchId] = useState<number | null>(null);
@@ -1193,13 +1193,13 @@ function BatchesTab() {
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ batch_number: '', product: '' });
+    setForm({ batch_number: '', product: '', category: '' });
     setShowModal(true);
   };
 
   const openEdit = (batch: any) => {
     setEditing(batch);
-    setForm({ batch_number: batch.batch_number || '', product: batch.product || '' });
+    setForm({ batch_number: batch.batch_number || '', product: batch.product || '', category: batch.category || '' });
     setShowModal(true);
   };
 
@@ -1298,6 +1298,7 @@ function BatchesTab() {
                 <tr className="border-b border-gray-100 bg-gray-50">
                   <th className="text-left px-4 py-3 font-medium text-gray-600 w-40">Batch #</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Product</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600 w-44">Category</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Documents</th>
                   <th className="text-right px-4 py-3 font-medium text-gray-600 w-20">Actions</th>
                 </tr>
@@ -1307,6 +1308,24 @@ function BatchesTab() {
                   <tr key={batch.id} className="hover:bg-gray-50 align-top">
                     <td className="px-4 py-3 font-semibold text-gray-900 font-mono text-xs">{batch.batch_number}</td>
                     <td className="px-4 py-3 text-gray-700">{batch.product || <span className="text-gray-400">—</span>}</td>
+                    <td className="px-4 py-3">
+                      <select
+                        value={batch.category || ''}
+                        onChange={async e => {
+                          const category = e.target.value;
+                          try {
+                            await api.put(`/inventory/batches/${batch.id}`, { category });
+                            setBatches(prev => prev.map(b => b.id === batch.id ? { ...b, category } : b));
+                          } catch { addToast('Failed to update category', 'error'); }
+                        }}
+                        className="text-sm border border-gray-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 text-gray-700"
+                      >
+                        <option value="">— select —</option>
+                        <option value="TripleW Product">TripleW Product</option>
+                        <option value="Ingredient">Ingredient</option>
+                        <option value="Other">Other</option>
+                      </select>
+                    </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-1.5 items-center">
                         {/* Existing documents */}
@@ -1400,6 +1419,19 @@ function BatchesTab() {
         <div className="space-y-4">
           <Input label="Batch Number *" value={form.batch_number} onChange={e => setForm({ ...form, batch_number: e.target.value })} placeholder="e.g. B-2024-001" />
           <Input label="Product" value={form.product} onChange={e => setForm({ ...form, product: e.target.value })} placeholder="e.g. Naturlac LF60" />
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-gray-700">Category</label>
+            <select
+              value={form.category}
+              onChange={e => setForm({ ...form, category: e.target.value })}
+              className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+            >
+              <option value="">— select —</option>
+              <option value="TripleW Product">TripleW Product</option>
+              <option value="Ingredient">Ingredient</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="secondary" onClick={() => setShowModal(false)}>Cancel</Button>
             <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving...' : editing ? 'Update' : 'Create'}</Button>
