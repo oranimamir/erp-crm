@@ -432,14 +432,19 @@ export default function OperationsPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3 relative" onClick={e => e.stopPropagation()}>
-                    <span
-                      className={`flex items-center gap-1 ${op.invoice_count > 0 ? 'cursor-pointer hover:text-primary-700' : 'text-gray-600'} ${expandedInvoices[op.id] !== undefined ? 'text-primary-700 font-semibold' : 'text-gray-600'}`}
-                      onClick={op.invoice_count > 0 ? () => toggleInvoices(op.id) : undefined}
-                      title={op.invoice_count > 0 ? 'Click to preview invoices' : undefined}
-                    >
+                    <div className="flex items-center gap-1 text-gray-600">
                       <Receipt size={14} />
                       {op.invoice_count}
-                    </span>
+                      {op.invoice_count > 0 && (
+                        <button
+                          onClick={() => toggleInvoices(op.id)}
+                          className={`p-1 rounded hover:bg-gray-200 ${expandedInvoices[op.id] !== undefined ? 'text-primary-600' : 'text-gray-400 hover:text-gray-600'}`}
+                          title="Preview invoices"
+                        >
+                          <Eye size={13} />
+                        </button>
+                      )}
+                    </div>
                     {expandedInvoices[op.id] !== undefined && (
                       <div className="absolute z-30 top-full left-0 mt-1 w-[460px] bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden">
                         <div className="px-3 py-2 bg-gray-50 border-b border-gray-100 flex items-center justify-between">

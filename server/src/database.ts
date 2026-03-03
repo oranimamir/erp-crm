@@ -440,10 +440,9 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE wire_transfers ADD COLUMN fx_rate REAL`); } catch (_) { /* column may already exist */ }
   try { db.exec(`ALTER TABLE wire_transfers ADD COLUMN eur_amount REAL`); } catch (_) { /* column may already exist */ }
 
-  // Migrate operations statuses: old values → new (ordered/shipped/delivered)
+  // Migrate operations statuses: old values → new (only legacy statuses, never touch 'completed')
   try {
-    db.exec(`UPDATE operations SET status = 'ordered'   WHERE status IN ('active', 'on_hold', 'cancelled')`);
-    db.exec(`UPDATE operations SET status = 'delivered' WHERE status = 'completed'`);
+    db.exec(`UPDATE operations SET status = 'ordered' WHERE status IN ('active', 'on_hold', 'cancelled')`);
   } catch (_) { /* safe to ignore */ }
 
   // Seed default document categories
