@@ -235,6 +235,16 @@ export default function InvoiceFormPage() {
     }
   }, [form.invoice_date, paymentTerms]);
 
+  // Auto-set due date from ship_date when a shipped operation is selected
+  useEffect(() => {
+    if (dueDateManuallySet.current) return;
+    const selectedOp = operations.find((op: any) => String(op.id) === form.operation_id);
+    if (selectedOp?.ship_date) {
+      const days = parseInt(paymentTerms, 10);
+      setForm(prev => ({ ...prev, due_date: addDays(selectedOp.ship_date, isNaN(days) ? 45 : days) }));
+    }
+  }, [form.operation_id, operations]);
+
   const updateField = (field: keyof InvoiceForm, value: string) => {
     if (field === 'due_date') dueDateManuallySet.current = true;
     setForm(prev => ({ ...prev, [field]: value }));
@@ -471,7 +481,7 @@ export default function InvoiceFormPage() {
             <Select
               label="Link to Operation (optional)"
               value={form.operation_id}
-              onChange={e => updateField('operation_id', e.target.value)}
+              onChange={e => { dueDateManuallySet.current = false; updateField('operation_id', e.target.value); }}
               options={operations.map(op => ({ value: String(op.id), label: `${op.operation_number}${op.order_number ? ` — Order ${op.order_number}` : ''}${op.customer_name || op.supplier_name ? ` (${op.customer_name || op.supplier_name})` : ''}` }))}
               placeholder="No operation linked"
             />
@@ -483,7 +493,7 @@ export default function InvoiceFormPage() {
             return (
               <div className="flex items-center gap-2 text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
                 <Truck size={14} className="flex-shrink-0" />
-                <span>Operation shipped on <strong>{formatDate(selectedOp.ship_date)}</strong> · due date was set to shipment + 45 days</span>
+                <span>Operation shipped on <strong>{formatDate(selectedOp.ship_date)}</strong> · due date set to shipment + {isNaN(parseInt(paymentTerms, 10)) ? 45 : parseInt(paymentTerms, 10)} days</span>
               </div>
             );
           })()}

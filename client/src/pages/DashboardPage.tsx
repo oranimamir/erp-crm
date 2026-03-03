@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import api from '../lib/api';
 import Card from '../components/ui/Card';
 import StatusBadge from '../components/ui/StatusBadge';
-import { Package, TrendingUp, Clock, BarChart3, Navigation, Scale, AlertTriangle } from 'lucide-react';
+import { TrendingUp, BarChart3, Scale, AlertTriangle, Users } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 
 interface Stats {
@@ -31,9 +31,8 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [openOperations, setOpenOperations] = useState<any[]>([]);
   const [pendingInvoices, setPendingInvoices] = useState<any[]>([]);
-  const [shippingOverview, setShippingOverview] = useState<any[]>([]);
   const [monthlyPayments, setMonthlyPayments] = useState<any[]>([]);
-  const [inTransit, setInTransit] = useState<any[]>([]);
+  const [customerForecast, setCustomerForecast] = useState<any[]>([]);
   const [forecast, setForecast] = useState<any[]>([]);
   const [forecastExpected, setForecastExpected] = useState(0);
   const [tonsYTD, setTonsYTD] = useState(0);
@@ -45,25 +44,23 @@ export default function DashboardPage() {
       api.get('/dashboard/stats'),
       api.get('/dashboard/open-operations'),
       api.get('/dashboard/pending-invoices'),
-      api.get('/dashboard/shipping-overview'),
       api.get('/dashboard/monthly-payments'),
-      api.get('/dashboard/in-transit'),
       api.get('/dashboard/forecast'),
       api.get('/dashboard/tons-ytd'),
       api.get('/dashboard/prior-year-overdue'),
-    ]).then(([s, o, i, sh, mp, it, fc, ty, pyo]) => {
+      api.get('/dashboard/customer-forecast'),
+    ]).then(([s, o, i, mp, fc, ty, pyo, cf]) => {
       setStats(s.data);
       setOpenOperations(o.data);
       setPendingInvoices(i.data);
-      setShippingOverview(sh.data);
       setMonthlyPayments(mp.data);
-      setInTransit(it.data);
       // forecast now returns { months: [...], expected: N }
       const fcData = fc.data;
       setForecast(fcData.months ?? fcData); // fallback if old format
       setForecastExpected(fcData.expected ?? 0);
       setTonsYTD(ty.data.total_tons ?? 0);
       setPriorYearOverdue(pyo.data);
+      setCustomerForecast(cf.data);
     }).finally(() => setLoading(false));
   }, []);
 
@@ -257,25 +254,6 @@ export default function DashboardPage() {
           </div>
         </Card>
 
-        {/* Active Shipments */}
-        <Card className="lg:col-span-2">
-          <div className="px-5 py-4 border-b border-gray-100">
-            <h2 className="font-semibold text-gray-900">Active Shipments</h2>
-          </div>
-          <div className="divide-y divide-gray-100">
-            {shippingOverview.length === 0 ? (
-              <p className="px-5 py-8 text-center text-sm text-gray-500">No active shipments</p>
-            ) : shippingOverview.slice(0, 5).map((sh: any) => (
-              <Link key={sh.id} to={`/shipments/${sh.id}`} className="flex items-center justify-between px-5 py-3 hover:bg-gray-50">
-                <div>
-                  <p className="text-sm font-medium text-gray-900">{sh.tracking_number || `Shipment #${sh.id}`}</p>
-                  <p className="text-xs text-gray-500">{sh.carrier} {sh.order_number ? `- ${sh.order_number}` : ''}</p>
-                </div>
-                <StatusBadge status={sh.status} />
-              </Link>
-            ))}
-          </div>
-        </Card>
       </div>
 
       {/* Monthly Cash Flow Chart + Paid-per-Month breakdown */}
@@ -376,46 +354,6 @@ export default function DashboardPage() {
         </div>
       </Card>
 
-      {/* In Transit to Customers */}
-      <Card>
-        <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
-          <Navigation size={16} className="text-gray-400" />
-          <h2 className="font-semibold text-gray-900">In Transit to Customers ({inTransit.length})</h2>
-        </div>
-        {inTransit.length === 0 ? (
-          <p className="px-5 py-8 text-center text-sm text-gray-500">No shipments in transit</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Order #</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Customer</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Carrier</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Tracking #</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Status</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">ETA</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {inTransit.map((sh: any) => (
-                  <tr key={sh.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 font-medium text-gray-900">
-                      {sh.order_number ? <Link to={`/orders/${sh.order_id}`} className="text-primary-600 hover:text-primary-700">{sh.order_number}</Link> : '-'}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600">{sh.customer_name || '-'}</td>
-                    <td className="px-4 py-3 text-gray-600">{sh.carrier || '-'}</td>
-                    <td className="px-4 py-3 text-gray-600 font-mono text-xs">{sh.tracking_number || '-'}</td>
-                    <td className="px-4 py-3"><StatusBadge status={sh.status} /></td>
-                    <td className="px-4 py-3 text-gray-600">{formatDate(sh.estimated_delivery) || '-'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
-
       {/* Revenue Forecast */}
       {forecast.length > 0 && (() => {
         const currentMonth = new Date().toISOString().slice(0, 7);
@@ -483,6 +421,72 @@ export default function DashboardPage() {
                   );
                 })}
               </div>
+            </div>
+          </Card>
+        );
+      })()}
+
+      {/* Per-Customer Outstanding Breakdown */}
+      {customerForecast.length > 0 && (() => {
+        const grandTotal = customerForecast.reduce((s: number, c: any) => s + c.total, 0);
+        const PALETTE = [
+          'bg-blue-500', 'bg-violet-500', 'bg-indigo-500', 'bg-cyan-500',
+          'bg-teal-500', 'bg-emerald-500', 'bg-sky-500', 'bg-purple-500',
+        ];
+        const statusColor = (status: string, due_date: string | null) => {
+          const overdue = due_date && new Date(due_date) < new Date();
+          if (status === 'overdue' || overdue) return 'bg-red-100 text-red-800 border border-red-200';
+          if (status === 'sent') return 'bg-amber-100 text-amber-800 border border-amber-200';
+          return 'bg-gray-100 text-gray-600 border border-gray-200';
+        };
+        return (
+          <Card>
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Users size={16} className="text-gray-400" />
+                <h2 className="font-semibold text-gray-900">Outstanding by Customer</h2>
+              </div>
+              <span className="text-xs text-gray-400">€{grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })} total open</span>
+            </div>
+            {/* Proportional bar */}
+            <div className="mx-5 mt-4 h-3 rounded-full overflow-hidden flex">
+              {customerForecast.map((c: any, i: number) => (
+                <div
+                  key={c.customer_id}
+                  className={PALETTE[i % PALETTE.length]}
+                  style={{ width: `${grandTotal > 0 ? (c.total / grandTotal) * 100 : 0}%` }}
+                  title={`${c.customer_name}: €${c.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                />
+              ))}
+            </div>
+            <div className="divide-y divide-gray-100 mt-4">
+              {customerForecast.map((c: any, i: number) => (
+                <div key={c.customer_id} className="px-5 py-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${PALETTE[i % PALETTE.length]}`} />
+                      <span className="text-sm font-medium text-gray-900">{c.customer_name}</span>
+                      <span className="text-xs text-gray-400">{c.invoices.length} invoice{c.invoices.length !== 1 ? 's' : ''}</span>
+                    </div>
+                    <span className="text-sm font-bold text-gray-900">
+                      €{c.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 pl-4">
+                    {c.invoices.map((inv: any) => (
+                      <Link
+                        key={inv.id}
+                        to={`/invoices/${inv.id}`}
+                        className={`inline-flex items-center gap-1 text-xs rounded px-2 py-0.5 font-medium hover:opacity-80 transition-opacity ${statusColor(inv.status, inv.due_date)}`}
+                      >
+                        <span>{inv.invoice_number}</span>
+                        <span>·</span>
+                        <span>€{inv.eur_amount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
           </Card>
         );

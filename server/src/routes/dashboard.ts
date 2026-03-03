@@ -329,6 +329,31 @@ router.get('/customer-payments', (_req: Request, res: Response) => {
   res.json(data);
 });
 
+router.get('/customer-forecast', async (_req: Request, res: Response) => {
+  // All open customer invoices grouped by customer, with live EUR conversion
+  const rows = db.prepare(`
+    SELECT i.id, i.invoice_number, i.amount, i.currency, i.status, i.due_date,
+      c.id as customer_id, c.name as customer_name
+    FROM invoices i
+    LEFT JOIN customers c ON i.customer_id = c.id
+    WHERE i.type = 'customer' AND i.status IN ('draft', 'sent', 'overdue')
+    ORDER BY c.name, i.due_date
+  `).all() as any[];
+  await attachLiveEur(rows);
+
+  const map = new Map<number, { customer_id: number; customer_name: string; invoices: any[]; total: number }>();
+  for (const row of rows) {
+    const key = row.customer_id ?? 0;
+    if (!map.has(key)) map.set(key, { customer_id: key, customer_name: row.customer_name || 'Unknown', invoices: [], total: 0 });
+    const entry = map.get(key)!;
+    const eur = row.live_eur_amount ?? 0;
+    entry.invoices.push({ id: row.id, invoice_number: row.invoice_number, eur_amount: eur, status: row.status, due_date: row.due_date });
+    entry.total += eur;
+  }
+
+  res.json([...map.values()].sort((a, b) => b.total - a.total));
+});
+
 router.get('/tons-ytd', (_req: Request, res: Response) => {
   const year = new Date().getFullYear().toString();
   // Convert all units to metric tons: 1 MT = 1000 kg = 2204.6226218 lbs

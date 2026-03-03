@@ -138,6 +138,96 @@ function FinancialChart({ monthly, isCustomers, maxBar }: {
   );
 }
 
+// ── Combined Revenue vs Expenses bar chart ─────────────────────────────────
+function CombinedChart({ monthly }: { monthly: MonthData[] }) {
+  const maxBar = Math.max(...monthly.map(m => Math.max(m.received, m.paid_out)), 1);
+  const hasData = monthly.some(m => m.received > 0 || m.paid_out > 0);
+  if (!hasData) return <p className="text-center text-sm text-gray-500 py-8">No data for this period</p>;
+  return (
+    <div>
+      <div className="flex gap-2">
+        <div className="flex flex-col justify-between items-end shrink-0 w-14" style={{ height: 165 }}>
+          {[maxBar, maxBar * 0.75, maxBar * 0.5, maxBar * 0.25, 0].map((v, i) => (
+            <span key={i} className="text-[10px] text-gray-400 leading-none tabular-nums">{fmtAxis(v)}</span>
+          ))}
+        </div>
+        <div className="flex-1 min-w-0 flex flex-col">
+          <div className="relative" style={{ height: 165 }}>
+            {[0, 25, 50, 75, 100].map(pct => (
+              <div key={pct} className={`absolute left-0 right-0 pointer-events-none ${pct === 0 ? 'border-t border-gray-300' : 'border-t border-gray-100'}`}
+                style={{ bottom: `${(pct / 100) * 165}px` }} />
+            ))}
+            <div className="flex items-end gap-1 h-full">
+              {monthly.map(m => {
+                const revH = m.received > 0 ? Math.max((m.received / maxBar) * 163, 2) : 0;
+                const expH = m.paid_out > 0 ? Math.max((m.paid_out / maxBar) * 163, 2) : 0;
+                const net = m.received - m.paid_out;
+                return (
+                  <div key={m.month} className="flex-1 h-full flex items-end justify-center gap-px group relative">
+                    <div className="flex-1 flex items-end">
+                      <div className={`w-full rounded-t transition-all ${m.received > 0 ? 'bg-green-500' : 'bg-gray-100'}`}
+                        style={{ height: `${revH || 2}px` }} title={`Revenue: ${fmt(m.received)}`} />
+                    </div>
+                    <div className="flex-1 flex items-end">
+                      <div className={`w-full rounded-t transition-all ${m.paid_out > 0 ? 'bg-red-400' : 'bg-gray-100'}`}
+                        style={{ height: `${expH || 2}px` }} title={`Expenses: ${fmt(m.paid_out)}`} />
+                    </div>
+                    {/* Net tooltip */}
+                    <div className="absolute -top-7 left-1/2 -translate-x-1/2 hidden group-hover:block z-10 whitespace-nowrap">
+                      <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded shadow ${net >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                        {net >= 0 ? '+' : ''}{fmtAxis(net)}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div className="flex gap-1 mt-1.5">
+            {monthly.map(m => (
+              <div key={m.month} className="flex-1 text-center">
+                <span className="text-[10px] text-gray-400">{monthLabel(m.month)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── SVG Donut chart ────────────────────────────────────────────────────────
+const DONUT_COLORS = ['#22c55e', '#3b82f6', '#8b5cf6', '#06b6d4', '#14b8a6', '#f59e0b', '#6366f1', '#ec4899', '#f97316'];
+
+function DonutChart({ slices }: { slices: { label: string; value: number }[] }) {
+  const total = slices.reduce((s, d) => s + d.value, 0);
+  if (total === 0 || slices.length === 0) return null;
+  const size = 140, r = 56, ir = 34, cx = 70, cy = 70;
+  let angle = -Math.PI / 2;
+  const paths = slices.map((s, i) => {
+    const pct = s.value / total;
+    const sweep = pct * 2 * Math.PI;
+    const end = angle + sweep;
+    const [x1, y1] = [cx + r * Math.cos(angle), cy + r * Math.sin(angle)];
+    const [x2, y2] = [cx + r * Math.cos(end), cy + r * Math.sin(end)];
+    const [ix1, iy1] = [cx + ir * Math.cos(end), cy + ir * Math.sin(end)];
+    const [ix2, iy2] = [cx + ir * Math.cos(angle), cy + ir * Math.sin(angle)];
+    const large = sweep > Math.PI ? 1 : 0;
+    const d = `M${x1.toFixed(2)},${y1.toFixed(2)} A${r},${r},0,${large},1,${x2.toFixed(2)},${y2.toFixed(2)} L${ix1.toFixed(2)},${iy1.toFixed(2)} A${ir},${ir},0,${large},0,${ix2.toFixed(2)},${iy2.toFixed(2)}Z`;
+    angle = end;
+    return { d, color: DONUT_COLORS[i % DONUT_COLORS.length], pct: Math.round(pct * 100), label: s.label };
+  });
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0">
+      {paths.map((p, i) => (
+        <path key={i} d={p.d} fill={p.color} className="hover:opacity-75 transition-opacity cursor-pointer" stroke="white" strokeWidth="1.5">
+          <title>{p.label}: {p.pct}%</title>
+        </path>
+      ))}
+    </svg>
+  );
+}
+
 type View = 'customers' | 'suppliers' | 'tonnage';
 
 const VIEW_OPTIONS: { value: View; label: string; active: string }[] = [
@@ -420,7 +510,8 @@ export default function AnalyticsPage() {
           {/* ── REVENUE VIEW ──────────────────────────────────────────────────── */}
           {view === 'customers' && (
             <>
-              <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+              {/* ── KPI summary ── */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 <Card className="p-5">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center shrink-0">
@@ -428,7 +519,20 @@ export default function AnalyticsPage() {
                     </div>
                     <div className="min-w-0">
                       <p className="text-xs text-gray-500">Revenue Received</p>
-                      <p className="text-xl font-bold text-gray-900 truncate">{fmt(data.totals.received)}</p>
+                      <p className="text-xl font-bold text-green-700 truncate">{fmt(data.totals.received)}</p>
+                    </div>
+                  </div>
+                </Card>
+                <Card className="p-5">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${data.totals.net >= 0 ? 'bg-emerald-100' : 'bg-red-100'}`}>
+                      <DollarSign size={20} className={data.totals.net >= 0 ? 'text-emerald-600' : 'text-red-500'} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs text-gray-500">Net (Revenue − Expenses)</p>
+                      <p className={`text-xl font-bold truncate ${data.totals.net >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+                        {data.totals.net >= 0 ? '+' : ''}{fmt(data.totals.net)}
+                      </p>
                     </div>
                   </div>
                 </Card>
@@ -439,7 +543,7 @@ export default function AnalyticsPage() {
                     </div>
                     <div className="min-w-0">
                       <p className="text-xs text-gray-500">Pending (w/ due date)</p>
-                      <p className="text-xl font-bold text-gray-900 truncate">{fmt(data.totals.outstanding)}</p>
+                      <p className="text-xl font-bold text-amber-600 truncate">{fmt(data.totals.outstanding)}</p>
                     </div>
                   </div>
                 </Card>
@@ -450,15 +554,16 @@ export default function AnalyticsPage() {
                     </div>
                     <div className="min-w-0">
                       <p className="text-xs text-gray-500">Expected (no due date)</p>
-                      <p className="text-xl font-bold text-gray-900 truncate">{fmt(data.totals.expected ?? 0)}</p>
+                      <p className="text-xl font-bold text-blue-600 truncate">{fmt(data.totals.expected ?? 0)}</p>
                     </div>
                   </div>
                 </Card>
               </div>
 
+              {/* ── Monthly Revenue chart ── */}
               <Card>
                 <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                  <h2 className="font-semibold text-gray-900">Customer Revenue — {period}</h2>
+                  <h2 className="font-semibold text-gray-900">Revenue Received — {period}</h2>
                   <span className="flex items-center gap-1.5 text-xs text-gray-500">
                     <span className="w-3 h-3 rounded bg-green-500 inline-block" /> Received
                   </span>
@@ -468,6 +573,37 @@ export default function AnalyticsPage() {
                 </div>
               </Card>
 
+              {/* ── Revenue vs Expenses — combined chart ── */}
+              <Card>
+                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                  <h2 className="font-semibold text-gray-900">Revenue vs Expenses — {period}</h2>
+                  <div className="flex items-center gap-4 text-xs text-gray-500">
+                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-green-500 inline-block" /> Revenue</span>
+                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-400 inline-block" /> Expenses</span>
+                  </div>
+                </div>
+                <div className="p-5">
+                  <CombinedChart monthly={data.monthly} />
+                  <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-3 gap-4 text-center">
+                    <div>
+                      <p className="text-xs text-gray-400 mb-0.5">Total Revenue</p>
+                      <p className="text-base font-bold text-green-600">{fmt(data.totals.received)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-400 mb-0.5">Total Expenses</p>
+                      <p className="text-base font-bold text-red-500">{fmt(data.totals.paid_out)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-400 mb-0.5">Net</p>
+                      <p className={`text-base font-bold ${data.totals.net >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                        {data.totals.net >= 0 ? '+' : ''}{fmt(data.totals.net)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+
+              {/* ── Customer revenue mix + breakdown ── */}
               <Card>
                 <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
                   <h2 className="font-semibold text-gray-900 flex items-center gap-2">
@@ -478,27 +614,49 @@ export default function AnalyticsPage() {
                 {data.by_customer.length === 0 ? (
                   <p className="px-5 py-8 text-center text-sm text-gray-500">No data for this period</p>
                 ) : (
-                  <div className="divide-y divide-gray-100">
-                    {data.by_customer.map((c, i) => {
-                      const maxC = data.by_customer[0]?.total || 1;
-                      return (
-                        <div key={c.customer_id} className="px-5 py-3">
-                          <div className="flex items-center justify-between mb-1.5">
-                            <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
-                              <span className="text-xs text-gray-400 font-normal w-5">{i + 1}.</span>
-                              {c.customer_name}
-                            </span>
-                            <div className="text-right shrink-0 ml-2">
-                              <span className="text-sm font-bold text-gray-900">{fmt(c.total)}</span>
-                              <span className="text-xs text-gray-400 ml-1">{c.invoice_count} inv</span>
+                  <div className="p-5">
+                    {/* Donut + legend side by side */}
+                    <div className="flex gap-6 items-start mb-6">
+                      <DonutChart slices={data.by_customer.map(c => ({ label: c.customer_name, value: c.total }))} />
+                      <div className="flex-1 min-w-0 space-y-2">
+                        {data.by_customer.map((c, i) => {
+                          const totalAll = data.by_customer.reduce((s, x) => s + x.total, 0);
+                          const pct = totalAll > 0 ? Math.round((c.total / totalAll) * 100) : 0;
+                          return (
+                            <div key={c.customer_id} className="flex items-center gap-2">
+                              <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: DONUT_COLORS[i % DONUT_COLORS.length] }} />
+                              <span className="text-sm text-gray-700 truncate flex-1 min-w-0">{c.customer_name}</span>
+                              <span className="text-xs text-gray-400 shrink-0">{pct}%</span>
+                              <span className="text-sm font-semibold text-gray-900 shrink-0 min-w-[80px] text-right">{fmt(c.total)}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    {/* Horizontal bar breakdown */}
+                    <div className="divide-y divide-gray-100 border-t border-gray-100">
+                      {data.by_customer.map((c, i) => {
+                        const maxC = data.by_customer[0]?.total || 1;
+                        const pct = maxC > 0 ? Math.round((c.total / maxC) * 100) : 0;
+                        return (
+                          <div key={c.customer_id} className="py-2.5">
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
+                                <span className="text-xs text-gray-400 font-normal w-5">{i + 1}.</span>
+                                {c.customer_name}
+                              </span>
+                              <div className="text-right shrink-0 ml-2">
+                                <span className="text-sm font-bold text-gray-900">{fmt(c.total)}</span>
+                                <span className="text-xs text-gray-400 ml-1">{c.invoice_count} inv</span>
+                              </div>
+                            </div>
+                            <div className="w-full bg-gray-100 rounded-full h-2">
+                              <div className="h-2 rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: DONUT_COLORS[i % DONUT_COLORS.length] }} />
                             </div>
                           </div>
-                          <div className="w-full bg-gray-100 rounded-full h-1.5">
-                            <div className="bg-green-500 h-1.5 rounded-full" style={{ width: `${(c.total / maxC) * 100}%` }} />
-                          </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </Card>

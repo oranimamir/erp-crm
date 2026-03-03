@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh auth status:*)",
+      "Bash(git commit:*)",
+      "Bash(npx --no-install tsc:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run dev:server:*)",
+      "Bash(npm run dev:client:*)",
+      "Bash(git push:*)",
+      "Bash(npm install:*)",
+      "Bash(node -e:*)",
+      "Bash(npm run dev:*)",
+      "Bash(git add:*)",
+      "Bash(npx tsx:*)",
+      "Bash(node:*)",
+      "Bash(ls:*)",
+      "Bash(npm run build:*)",
+      "Bash(dir \"C:\\\\Users\\\\hilao\\\\Desktop\\\\Claude\\\\erp-crm\\\\server\\\\node_modules\" /b)",
+      "Bash(findstr:*)",
+      "Bash(echo:*)",
+      "Bash(node_modules/.bin/tsc:*)",
+      "Bash(where:*)",
+      "Bash(npx railway:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(./node_modules/.bin/tsc:*)",
+      "Bash(npx --yes tsc:*)",
+      "Bash(powershell:*)",
+      "Bash(cd /c/Users/hilao/Desktop/Claude/erp-crm/server && npm uninstall archiver @types/archiver 2>&1)",
+      "Bash(cd /c/Users/hilao/Downloads && python3 -c \"\nimport openpyxl\nwb = openpyxl.load_workbook\\('250617 Packaging List \\(1\\).xlsx'\\)\nprint\\('Sheets:', wb.sheetnames\\)\nws = wb.active\nprint\\('Active sheet:', ws.title\\)\nprint\\('Dimensions:', ws.dimensions\\)\nprint\\('Max row:', ws.max_row, 'Max col:', ws.max_column\\)\nprint\\(\\)\nprint\\('First 5 rows:'\\)\nfor i, row in enumerate\\(ws.iter_rows\\(values_only=True\\)\\):\n    if i >= 5: break\n    print\\(row\\)\n\" 2>&1)",
+      "Bash(head:*)",
+      "Bash(curl:*)",
+      "Bash(xargs grep:*)",
+      "Bash(railway:*)"
+    ]
+  }
+}
