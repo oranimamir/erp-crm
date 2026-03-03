@@ -1,6 +1,24 @@
 import { Router, Request, Response } from 'express';
+import multer from 'multer';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
 import db from '../database.js';
 import { notifyAdmin } from '../lib/notify.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const batchDocDir = process.env.UPLOADS_PATH
+  ? path.join(process.env.UPLOADS_PATH, 'batch-documents')
+  : path.join(__dirname, '..', '..', 'uploads', 'batch-documents');
+fs.mkdirSync(batchDocDir, { recursive: true });
+
+const uploadBatchDoc = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, batchDocDir),
+    filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`),
+  }),
+  limits: { fileSize: 20 * 1024 * 1024 },
+});
 
 const router = Router();
 
@@ -115,26 +133,26 @@ router.delete('/:id', (req: Request, res: Response) => {
 
 // ── Batch CRUD ────────────────────────────────────────────────────────────────
 
-router.get('/batches', (req: Request, res: Response) => {
+router.get('/batches', (_req: Request, res: Response) => {
   const batches = db.prepare('SELECT * FROM batches ORDER BY batch_number ASC').all();
   const result = (batches as any[]).map(b => {
-    const articles = db.prepare(
-      'SELECT id, article FROM batch_warehouse_links WHERE batch_id = ? ORDER BY article ASC'
+    const documents = db.prepare(
+      'SELECT id, document_type, document_name, file_path, file_name, created_at FROM batch_documents WHERE batch_id = ? ORDER BY created_at ASC'
     ).all(b.id);
-    return { ...b, articles };
+    return { ...b, documents };
   });
   res.json(result);
 });
 
 router.post('/batches', (req: Request, res: Response) => {
-  const { batch_number, production_date, expiry_date, notes } = req.body;
+  const { batch_number, product } = req.body;
   if (!batch_number) { res.status(400).json({ error: 'batch_number is required' }); return; }
   try {
     const result = db.prepare(
-      `INSERT INTO batches (batch_number, production_date, expiry_date, notes) VALUES (?, ?, ?, ?)`
-    ).run(batch_number, production_date || null, expiry_date || null, notes || null);
+      `INSERT INTO batches (batch_number, product) VALUES (?, ?)`
+    ).run(batch_number, product || null);
     const batch = db.prepare('SELECT * FROM batches WHERE id = ?').get(result.lastInsertRowid) as any;
-    res.status(201).json({ ...batch, articles: [] });
+    res.status(201).json({ ...batch, documents: [] });
   } catch (err: any) {
     if (err.message?.includes('UNIQUE')) {
       res.status(409).json({ error: 'Batch number already exists' });
@@ -147,20 +165,18 @@ router.post('/batches', (req: Request, res: Response) => {
 router.put('/batches/:id', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT * FROM batches WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Batch not found' }); return; }
-  const { batch_number, production_date, expiry_date, notes } = req.body;
+  const { batch_number, product } = req.body;
   try {
     db.prepare(
-      `UPDATE batches SET batch_number=?, production_date=?, expiry_date=?, notes=? WHERE id=?`
+      `UPDATE batches SET batch_number=?, product=? WHERE id=?`
     ).run(
       batch_number || existing.batch_number,
-      production_date !== undefined ? (production_date || null) : existing.production_date,
-      expiry_date !== undefined ? (expiry_date || null) : existing.expiry_date,
-      notes !== undefined ? (notes || null) : existing.notes,
+      product !== undefined ? (product || null) : existing.product,
       req.params.id
     );
     const batch = db.prepare('SELECT * FROM batches WHERE id = ?').get(req.params.id) as any;
-    const articles = db.prepare('SELECT id, article FROM batch_warehouse_links WHERE batch_id = ? ORDER BY article ASC').all(batch.id);
-    res.json({ ...batch, articles });
+    const documents = db.prepare('SELECT id, document_type, document_name, file_path, file_name, created_at FROM batch_documents WHERE batch_id = ? ORDER BY created_at ASC').all(batch.id);
+    res.json({ ...batch, documents });
   } catch (err: any) {
     if (err.message?.includes('UNIQUE')) {
       res.status(409).json({ error: 'Batch number already exists' });
@@ -202,6 +218,32 @@ router.delete('/batches/links/:linkId', (req: Request, res: Response) => {
   if (!link) { res.status(404).json({ error: 'Link not found' }); return; }
   db.prepare('DELETE FROM batch_warehouse_links WHERE id = ?').run(req.params.linkId);
   res.json({ message: 'Link removed' });
+});
+
+// ── Batch documents ────────────────────────────────────────────────────────────
+
+router.post('/batches/:id/documents', uploadBatchDoc.single('file'), (req: Request, res: Response) => {
+  const batch = db.prepare('SELECT id FROM batches WHERE id = ?').get(req.params.id) as any;
+  if (!batch) { res.status(404).json({ error: 'Batch not found' }); return; }
+  if (!req.file) { res.status(400).json({ error: 'No file uploaded' }); return; }
+  const { document_type, document_name } = req.body;
+  if (!document_type || !['coa', 'other'].includes(document_type)) {
+    res.status(400).json({ error: 'document_type must be "coa" or "other"' });
+    return;
+  }
+  const result = db.prepare(
+    `INSERT INTO batch_documents (batch_id, document_type, document_name, file_path, file_name) VALUES (?, ?, ?, ?, ?)`
+  ).run(req.params.id, document_type, document_name || null, req.file.filename, req.file.originalname);
+  const doc = db.prepare('SELECT * FROM batch_documents WHERE id = ?').get(result.lastInsertRowid);
+  res.status(201).json(doc);
+});
+
+router.delete('/batches/documents/:docId', (req: Request, res: Response) => {
+  const doc = db.prepare('SELECT * FROM batch_documents WHERE id = ?').get(req.params.docId) as any;
+  if (!doc) { res.status(404).json({ error: 'Document not found' }); return; }
+  try { fs.unlinkSync(path.join(batchDocDir, doc.file_path)); } catch (_) {}
+  db.prepare('DELETE FROM batch_documents WHERE id = ?').run(req.params.docId);
+  res.json({ message: 'Document deleted' });
 });
 
 export default router;

@@ -84,5 +84,24 @@ export function parseAndInsertStockCsv(content: string, meta: StockMeta): number
     VALUES (?, ?, ?, ?, ?)
   `).run(now, inserted, meta.filename || null, meta.uploadedBy, meta.source);
 
+  // Auto-upsert batches: one entry per unique batch_number found in this CSV
+  if (idx.batch_number >= 0) {
+    const seen = new Set<string>();
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(delimiter);
+      if (cols.length < 2) continue;
+      const batchNum = cols[idx.batch_number]?.trim();
+      if (!batchNum) continue;
+      if (seen.has(batchNum)) continue;
+      seen.add(batchNum);
+      const product = idx.description >= 0 ? cols[idx.description]?.trim() || null : null;
+      // Insert new batch, or fill product if it was previously empty
+      db.prepare(`INSERT OR IGNORE INTO batches (batch_number, product) VALUES (?, ?)`).run(batchNum, product);
+      if (product) {
+        db.prepare(`UPDATE batches SET product = ? WHERE batch_number = ? AND product IS NULL`).run(product, batchNum);
+      }
+    }
+  }
+
   return inserted;
 }

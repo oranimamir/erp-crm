@@ -674,6 +674,22 @@ export async function initializeDatabase() {
     )
   `);
 
+  // Add product field to batches (populated from CSV description)
+  try { db.exec(`ALTER TABLE batches ADD COLUMN product TEXT`); } catch (_) {}
+
+  // Batch documents (COA and other tagged documents per batch)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS batch_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      batch_id INTEGER NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+      document_type TEXT NOT NULL CHECK (document_type IN ('coa', 'other')),
+      document_name TEXT,
+      file_path TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
   db.saveToDisk();
 }
 

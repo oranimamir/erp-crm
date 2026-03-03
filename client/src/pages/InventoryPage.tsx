@@ -11,7 +11,7 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
-import { Plus, Warehouse, Pencil, Trash2, PackagePlus, FileSpreadsheet, Package, Box, Upload, Mail, RefreshCw, ChevronRight, ChevronDown, Tag } from 'lucide-react';
+import { Plus, Warehouse, Pencil, Trash2, PackagePlus, FileSpreadsheet, Package, Box, Upload, Mail, RefreshCw, ChevronRight, ChevronDown, Tag, Download, Loader2 } from 'lucide-react';
 import { downloadExcel } from '../lib/exportExcel';
 import { formatDate } from '../lib/dates';
 
@@ -1168,12 +1168,13 @@ function BatchesTab() {
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<any>(null);
   const [deleteId, setDeleteId] = useState<number | null>(null);
-  const [form, setForm] = useState({ batch_number: '', production_date: '', expiry_date: '', notes: '' });
+  const [form, setForm] = useState({ batch_number: '', product: '' });
   const [saving, setSaving] = useState(false);
-  const [articles, setArticles] = useState<string[]>([]);
-  const [linkBatchId, setLinkBatchId] = useState<number | null>(null);
-  const [linkArticle, setLinkArticle] = useState('');
-  const [linkingSaving, setLinkingSaving] = useState(false);
+  // Document management
+  const [addingDocBatchId, setAddingDocBatchId] = useState<number | null>(null);
+  const [docName, setDocName] = useState('');
+  const [docUploading, setDocUploading] = useState<number | null>(null);
+  const [docDeleting, setDocDeleting] = useState<number | null>(null);
 
   const fetchBatches = () => {
     setLoading(true);
@@ -1182,30 +1183,17 @@ function BatchesTab() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => {
-    fetchBatches();
-    api.get('/warehouse-stock').then(res => {
-      const unique = [...new Set(
-        (res.data.data || []).map((r: any) => r.article).filter(Boolean)
-      )] as string[];
-      setArticles(unique.sort());
-    }).catch(() => {});
-  }, []);
+  useEffect(() => { fetchBatches(); }, []);
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ batch_number: '', production_date: '', expiry_date: '', notes: '' });
+    setForm({ batch_number: '', product: '' });
     setShowModal(true);
   };
 
   const openEdit = (batch: any) => {
     setEditing(batch);
-    setForm({
-      batch_number: batch.batch_number || '',
-      production_date: batch.production_date || '',
-      expiry_date: batch.expiry_date || '',
-      notes: batch.notes || '',
-    });
+    setForm({ batch_number: batch.batch_number || '', product: batch.product || '' });
     setShowModal(true);
   };
 
@@ -1239,28 +1227,46 @@ function BatchesTab() {
     setDeleteId(null);
   };
 
-  const handleLink = async () => {
-    if (!linkBatchId || !linkArticle) return;
-    setLinkingSaving(true);
+  const handleUploadDoc = async (batchId: number, type: 'coa' | 'other', name: string, file: File) => {
+    setDocUploading(batchId);
     try {
-      await api.post(`/inventory/batches/${linkBatchId}/links`, { article: linkArticle });
-      addToast('Article linked', 'success');
-      setLinkArticle('');
-      setLinkBatchId(null);
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('document_type', type);
+      if (name) fd.append('document_name', name);
+      await api.post(`/inventory/batches/${batchId}/documents`, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      addToast('Document uploaded', 'success');
       fetchBatches();
     } catch (err: any) {
-      addToast(err.response?.data?.error || 'Failed to link article', 'error');
-    } finally { setLinkingSaving(false); }
+      addToast(err.response?.data?.error || 'Upload failed', 'error');
+    } finally {
+      setDocUploading(null);
+      setAddingDocBatchId(null);
+      setDocName('');
+    }
   };
 
-  const handleUnlink = async (linkId: number) => {
+  const handleDeleteDoc = async (docId: number) => {
+    setDocDeleting(docId);
     try {
-      await api.delete(`/inventory/batches/links/${linkId}`);
-      addToast('Article unlinked', 'success');
+      await api.delete(`/inventory/batches/documents/${docId}`);
+      addToast('Document removed', 'success');
       fetchBatches();
     } catch (err: any) {
-      addToast(err.response?.data?.error || 'Failed to unlink', 'error');
-    }
+      addToast(err.response?.data?.error || 'Failed to delete document', 'error');
+    } finally { setDocDeleting(null); }
+  };
+
+  const downloadDoc = async (filePath: string, fileName: string) => {
+    try {
+      const resp = await api.get(`/files/batch-documents/${filePath}`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([resp.data]));
+      const a = document.createElement('a');
+      a.href = url; a.download = fileName; a.click();
+      URL.revokeObjectURL(url);
+    } catch { addToast('Failed to download file', 'error'); }
   };
 
   return (
@@ -1276,7 +1282,7 @@ function BatchesTab() {
           <EmptyState
             icon={<Package size={24} />}
             title="No batches"
-            description="Create your first batch to track production lots."
+            description="Batches are created automatically when warehouse stock is uploaded, or add them manually."
             action={<Button onClick={openCreate} size="sm"><Plus size={14} /> Add Batch</Button>}
           />
         ) : (
@@ -1284,61 +1290,92 @@ function BatchesTab() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Batch #</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Production Date</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Expiry Date</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Linked Articles</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Notes</th>
-                  <th className="text-right px-4 py-3 font-medium text-gray-600">Actions</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600 w-40">Batch #</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Product</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Documents</th>
+                  <th className="text-right px-4 py-3 font-medium text-gray-600 w-20">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {batches.map(batch => (
-                  <tr key={batch.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 font-semibold text-gray-900 font-mono">{batch.batch_number}</td>
-                    <td className="px-4 py-3 text-gray-600">{formatDate(batch.production_date) || '—'}</td>
-                    <td className="px-4 py-3 text-gray-600">{formatDate(batch.expiry_date) || '—'}</td>
+                  <tr key={batch.id} className="hover:bg-gray-50 align-top">
+                    <td className="px-4 py-3 font-semibold text-gray-900 font-mono text-xs">{batch.batch_number}</td>
+                    <td className="px-4 py-3 text-gray-700">{batch.product || <span className="text-gray-400">—</span>}</td>
                     <td className="px-4 py-3">
-                      <div className="flex flex-wrap gap-1 items-center">
-                        {(batch.articles || []).map((link: any) => (
-                          <span key={link.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
-                            {link.article}
+                      <div className="flex flex-wrap gap-1.5 items-center">
+                        {/* Existing documents */}
+                        {(batch.documents || []).map((doc: any) => (
+                          <span key={doc.id} className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full text-xs font-medium bg-sky-50 text-sky-700 border border-sky-200">
+                            <Tag size={10} className="shrink-0" />
+                            {doc.document_type === 'coa' ? 'COA' : (doc.document_name || 'Document')}
                             <button
-                              onClick={() => handleUnlink(link.id)}
-                              className="text-indigo-400 hover:text-indigo-700 leading-none ml-0.5"
-                              title="Remove link"
-                            >×</button>
+                              onClick={() => downloadDoc(doc.file_path, doc.file_name)}
+                              className="text-sky-400 hover:text-sky-700 p-0.5"
+                              title="Download"
+                            ><Download size={11} /></button>
+                            <button
+                              onClick={() => handleDeleteDoc(doc.id)}
+                              disabled={docDeleting === doc.id}
+                              className="text-sky-300 hover:text-red-500 p-0.5 leading-none disabled:opacity-50"
+                              title="Remove"
+                            >{docDeleting === doc.id ? <Loader2 size={10} className="animate-spin" /> : '×'}</button>
                           </span>
                         ))}
-                        {linkBatchId === batch.id ? (
-                          <span className="inline-flex items-center gap-1">
-                            <select
-                              value={linkArticle}
-                              onChange={e => setLinkArticle(e.target.value)}
-                              className="text-xs border border-gray-300 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary-500"
-                            >
-                              <option value="">— select article —</option>
-                              {articles.map(a => <option key={a} value={a}>{a}</option>)}
-                            </select>
+                        {/* COA upload button */}
+                        <label className={`cursor-pointer text-xs px-2 py-0.5 border border-dashed rounded-full transition-colors ${
+                          docUploading === batch.id ? 'border-sky-300 text-sky-400 cursor-not-allowed' : 'border-blue-300 text-blue-600 hover:bg-blue-50'
+                        }`}>
+                          {docUploading === batch.id ? <Loader2 size={12} className="animate-spin inline" /> : '+ COA'}
+                          <input
+                            type="file"
+                            className="hidden"
+                            disabled={docUploading === batch.id}
+                            onChange={e => {
+                              if (e.target.files?.[0]) handleUploadDoc(batch.id, 'coa', 'COA', e.target.files[0]);
+                              e.target.value = '';
+                            }}
+                          />
+                        </label>
+                        {/* Other document: toggle mini-form */}
+                        {addingDocBatchId === batch.id ? (
+                          <span className="inline-flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-lg px-2 py-1">
+                            <input
+                              type="text"
+                              value={docName}
+                              onChange={e => setDocName(e.target.value)}
+                              placeholder="Document name"
+                              className="text-xs border border-gray-300 rounded px-1.5 py-0.5 w-28 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                              autoFocus
+                            />
+                            <label className={`cursor-pointer text-xs px-2 py-0.5 rounded transition-colors ${
+                              docName.trim() ? 'bg-gray-700 text-white hover:bg-gray-800 cursor-pointer' : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                            }`}>
+                              Choose file
+                              <input
+                                type="file"
+                                className="hidden"
+                                disabled={!docName.trim()}
+                                onChange={e => {
+                                  if (e.target.files?.[0] && docName.trim()) {
+                                    handleUploadDoc(batch.id, 'other', docName.trim(), e.target.files[0]);
+                                  }
+                                  e.target.value = '';
+                                }}
+                              />
+                            </label>
                             <button
-                              onClick={handleLink}
-                              disabled={!linkArticle || linkingSaving}
-                              className="text-xs px-2 py-0.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50"
-                            >Add</button>
-                            <button
-                              onClick={() => { setLinkBatchId(null); setLinkArticle(''); }}
+                              onClick={() => { setAddingDocBatchId(null); setDocName(''); }}
                               className="text-xs text-gray-400 hover:text-gray-600"
                             >✕</button>
                           </span>
                         ) : (
                           <button
-                            onClick={() => { setLinkBatchId(batch.id); setLinkArticle(''); }}
+                            onClick={() => { setAddingDocBatchId(batch.id); setDocName(''); }}
                             className="text-xs px-2 py-0.5 border border-dashed border-gray-300 rounded-full text-gray-400 hover:text-gray-600 hover:border-gray-400"
-                          >+ Link Article</button>
+                          >+ Document</button>
                         )}
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-gray-500 max-w-[200px] truncate">{batch.notes || '—'}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
                         <button onClick={() => openEdit(batch)} className="p-1.5 text-gray-400 hover:text-primary-600 rounded"><Pencil size={15} /></button>
@@ -1356,23 +1393,7 @@ function BatchesTab() {
       <Modal open={showModal} onClose={() => setShowModal(false)} title={editing ? 'Edit Batch' : 'New Batch'} size="md">
         <div className="space-y-4">
           <Input label="Batch Number *" value={form.batch_number} onChange={e => setForm({ ...form, batch_number: e.target.value })} placeholder="e.g. B-2024-001" />
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1">
-              <label className="block text-sm font-medium text-gray-700">Production Date</label>
-              <input type="date" value={form.production_date} onChange={e => setForm({ ...form, production_date: e.target.value })}
-                className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
-            </div>
-            <div className="space-y-1">
-              <label className="block text-sm font-medium text-gray-700">Expiry Date</label>
-              <input type="date" value={form.expiry_date} onChange={e => setForm({ ...form, expiry_date: e.target.value })}
-                className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
-            </div>
-          </div>
-          <div className="space-y-1">
-            <label className="block text-sm font-medium text-gray-700">Notes</label>
-            <textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={3}
-              className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" placeholder="Optional notes..." />
-          </div>
+          <Input label="Product" value={form.product} onChange={e => setForm({ ...form, product: e.target.value })} placeholder="e.g. Naturlac LF60" />
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="secondary" onClick={() => setShowModal(false)}>Cancel</Button>
             <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving...' : editing ? 'Update' : 'Create'}</Button>
@@ -1385,7 +1406,7 @@ function BatchesTab() {
         onClose={() => setDeleteId(null)}
         onConfirm={handleDelete}
         title="Delete Batch"
-        message="Are you sure you want to delete this batch? All article links will be removed."
+        message="Are you sure you want to delete this batch? All documents will also be removed."
         confirmLabel="Delete"
       />
     </div>

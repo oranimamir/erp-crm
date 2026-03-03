@@ -29,5 +29,6 @@ router.get('/payments/:filename', serveFile('payments'));
 router.get('/wire-transfers/:filename', serveFile('wire-transfers'));
 router.get('/orders/:filename', serveFile('orders'));
 router.get('/operation-docs/:filename', serveFile('operation-docs'));
+router.get('/batch-documents/:filename', serveFile('batch-documents'));
 
 export default router;
