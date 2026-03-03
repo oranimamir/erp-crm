@@ -57,12 +57,12 @@ router.post('/upload', upload.single('file'), (req: Request, res: Response) => {
   try {
     const content = req.file.buffer.toString('utf-8');
     const uploadedBy = (req as any).user?.display_name || 'Unknown';
-    const inserted = parseAndInsertStockCsv(content, {
+    const { inserted, missingBatches } = parseAndInsertStockCsv(content, {
       filename: req.file.originalname,
       uploadedBy,
       source: 'manual',
     });
-    res.json({ message: `Imported ${inserted} rows`, inserted });
+    res.json({ message: `Imported ${inserted} rows`, inserted, missingBatches });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }

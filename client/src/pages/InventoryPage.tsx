@@ -852,6 +852,12 @@ function WarehouseStockTab() {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       addToast(`Stock updated — ${res.data.inserted} rows imported`, 'success');
+      const missing: string[] = res.data.missingBatches || [];
+      if (missing.length > 0) {
+        const preview = missing.slice(0, 4).join(', ');
+        const extra = missing.length > 4 ? ` +${missing.length - 4} more` : '';
+        addToast(`New batches not in Batches tab: ${preview}${extra}`, 'info');
+      }
       fetchData();
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Upload failed', 'error');

@@ -6,12 +6,17 @@ interface StockMeta {
   source: 'manual' | 'email';
 }
 
+interface InsertResult {
+  inserted: number;
+  missingBatches: string[]; // batch numbers in CSV not yet in batches table
+}
+
 /**
  * Parse a warehouse stock CSV string and replace all warehouse_stock rows.
  * Logs the upload to warehouse_stock_uploads.
- * Returns the number of rows inserted, or throws on validation error.
+ * Returns { inserted, missingBatches } or throws on validation error.
  */
-export function parseAndInsertStockCsv(content: string, meta: StockMeta): number {
+export function parseAndInsertStockCsv(content: string, meta: StockMeta): InsertResult {
   const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
 
   if (lines.length < 2) throw new Error('File is empty or has no data rows');
@@ -84,24 +89,20 @@ export function parseAndInsertStockCsv(content: string, meta: StockMeta): number
     VALUES (?, ?, ?, ?, ?)
   `).run(now, inserted, meta.filename || null, meta.uploadedBy, meta.source);
 
-  // Auto-upsert batches: one entry per unique batch_number found in this CSV
+  // Detect batch numbers in CSV that are not yet in the batches table
+  const missingBatches: string[] = [];
   if (idx.batch_number >= 0) {
     const seen = new Set<string>();
     for (let i = 1; i < lines.length; i++) {
       const cols = lines[i].split(delimiter);
       if (cols.length < 2) continue;
       const batchNum = cols[idx.batch_number]?.trim();
-      if (!batchNum) continue;
-      if (seen.has(batchNum)) continue;
+      if (!batchNum || seen.has(batchNum)) continue;
       seen.add(batchNum);
-      const product = idx.description >= 0 ? cols[idx.description]?.trim() || null : null;
-      // Insert new batch, or fill product if it was previously empty
-      db.prepare(`INSERT OR IGNORE INTO batches (batch_number, product) VALUES (?, ?)`).run(batchNum, product);
-      if (product) {
-        db.prepare(`UPDATE batches SET product = ? WHERE batch_number = ? AND product IS NULL`).run(product, batchNum);
-      }
+      const exists = db.prepare('SELECT 1 FROM batches WHERE batch_number = ?').get(batchNum);
+      if (!exists) missingBatches.push(batchNum);
     }
   }
 
-  return inserted;
+  return { inserted, missingBatches };
 }

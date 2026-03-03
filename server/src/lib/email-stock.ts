@@ -64,7 +64,7 @@ export async function checkEmailForStockUpdates(): Promise<void> {
         const from = parsed.from?.text || 'email';
         const filename = csvAttachment.filename || 'attachment.csv';
 
-        const inserted = parseAndInsertStockCsv(csvContent, {
+        const { inserted, missingBatches } = parseAndInsertStockCsv(csvContent, {
           filename,
           uploadedBy: from,
           source: 'email',
@@ -72,6 +72,9 @@ export async function checkEmailForStockUpdates(): Promise<void> {
 
         await client.messageFlagsAdd(`${uid}`, ['\\Seen'], { uid: true });
         console.log(`[Email stock] UID ${uid}: imported ${inserted} rows from "${filename}" (from: ${from})`);
+        if (missingBatches.length > 0) {
+          console.warn(`[Email stock] Missing batches (not in batches table): ${missingBatches.join(', ')}`);
+        }
       } catch (err) {
         console.error(`[Email stock] UID ${uid}: failed to process —`, err);
         // Still mark as seen so we don't retry endlessly
