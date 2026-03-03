@@ -5,7 +5,7 @@ import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { initializeDatabase } from './database.js';
+import db, { initializeDatabase } from './database.js';
 import { authenticateToken } from './middleware/auth.js';
 import authRoutes from './routes/auth.js';
 import customerRoutes from './routes/customers.js';
@@ -34,7 +34,7 @@ import warehouseStockRoutes from './routes/warehouse-stock.js';
 import cron from 'node-cron';
 import { scanNewOperations } from './lib/sharepoint.js';
 import { checkEmailForStockUpdates } from './lib/email-stock.js';
-import { runScheduledBackup } from './lib/backup.js';
+import { startBackupScheduler, buildCronExpr } from './lib/backup-scheduler.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -92,10 +92,12 @@ cron.schedule('0 7 * * *', () => {
   scanNewOperations().catch(err => console.error('[SharePoint scan]', err));
 });
 
-// Schedule weekly full backup every Sunday at 02:00 UTC (keeps last 4 = ~1 month)
-cron.schedule('0 2 * * 0', () => {
-  runScheduledBackup().catch(err => console.error('[Backup]', err));
-});
+// Schedule backup based on DB-stored schedule (default: weekly Sunday 02:00 UTC)
+{
+  const schedRow = db.prepare("SELECT value FROM app_settings WHERE key = 'backup_schedule'").get() as any;
+  const sched = schedRow ? JSON.parse(schedRow.value) : { frequency: 'weekly', day: 0, hour: 2, minute: 0 };
+  startBackupScheduler(buildCronExpr(sched));
+}
 
 // Poll inbox for warehouse stock CSV every 15 minutes
 cron.schedule('*/15 * * * *', () => {

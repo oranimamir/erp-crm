@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Settings, Lock, Monitor, Sun, Moon, Download, DatabaseBackup } from 'lucide-react';
+import { Settings, Lock, Monitor, Sun, Moon, Download, DatabaseBackup, Clock } from 'lucide-react';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
@@ -7,6 +7,9 @@ import { useAuth } from '../contexts/AuthContext';
 import { formatDate } from '../lib/dates';
 
 interface SavedBackup { filename: string; size: number; created_at: string; }
+interface BackupSchedule { frequency: 'daily' | 'weekly' | 'monthly'; day: number; hour: number; minute: number; }
+
+const DAYS_OF_WEEK = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 export default function SettingsPage() {
   const { addToast } = useToast();
@@ -16,9 +19,14 @@ export default function SettingsPage() {
   const [savedBackups, setSavedBackups] = useState<SavedBackup[]>([]);
   const [downloadingFile, setDownloadingFile] = useState<string | null>(null);
 
+  // Backup schedule
+  const [schedule, setSchedule] = useState<BackupSchedule>({ frequency: 'weekly', day: 0, hour: 2, minute: 0 });
+  const [savingSchedule, setSavingSchedule] = useState(false);
+
   useEffect(() => {
     if (user?.role === 'admin') {
       api.get('/backup/list').then(r => setSavedBackups(r.data)).catch(() => {});
+      api.get('/backup/schedule').then(r => setSchedule(r.data)).catch(() => {});
     }
   }, [user]);
 
@@ -60,6 +68,18 @@ export default function SettingsPage() {
       addToast('Failed to download backup file', 'error');
     } finally {
       setDownloadingFile(null);
+    }
+  };
+
+  const handleSaveSchedule = async () => {
+    setSavingSchedule(true);
+    try {
+      await api.put('/backup/schedule', schedule);
+      addToast('Backup schedule updated', 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to update schedule', 'error');
+    } finally {
+      setSavingSchedule(false);
     }
   };
 
@@ -188,14 +208,83 @@ export default function SettingsPage() {
               </button>
             </div>
 
-            {/* Weekly auto-backups */}
+            {/* Schedule configuration */}
             <div className="border-t border-gray-100 pt-4">
-              <p className="text-sm font-medium text-gray-900 mb-0.5">Weekly automatic backups</p>
+              <p className="text-sm font-medium text-gray-900 mb-0.5 flex items-center gap-1.5">
+                <Clock size={14} className="text-gray-400" />
+                Automatic backup schedule
+              </p>
+              <p className="text-sm text-gray-500 mb-3">Last 4 backups are kept automatically.</p>
+              <div className="flex flex-wrap items-end gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Frequency</label>
+                  <select
+                    value={schedule.frequency}
+                    onChange={e => setSchedule(s => ({ ...s, frequency: e.target.value as any, day: e.target.value === 'monthly' ? 1 : 0 }))}
+                    className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  >
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="monthly">Monthly</option>
+                  </select>
+                </div>
+                {schedule.frequency === 'weekly' && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Day of week</label>
+                    <select
+                      value={schedule.day}
+                      onChange={e => setSchedule(s => ({ ...s, day: Number(e.target.value) }))}
+                      className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    >
+                      {DAYS_OF_WEEK.map((d, i) => <option key={i} value={i}>{d}</option>)}
+                    </select>
+                  </div>
+                )}
+                {schedule.frequency === 'monthly' && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Day of month</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={28}
+                      value={schedule.day}
+                      onChange={e => setSchedule(s => ({ ...s, day: Math.min(28, Math.max(1, Number(e.target.value))) }))}
+                      className="w-20 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
+                  </div>
+                )}
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Time (UTC)</label>
+                  <div className="flex items-center gap-1">
+                    <select
+                      value={schedule.hour}
+                      onChange={e => setSchedule(s => ({ ...s, hour: Number(e.target.value) }))}
+                      className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    >
+                      {Array.from({ length: 24 }, (_, i) => (
+                        <option key={i} value={i}>{String(i).padStart(2, '0')}:00</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <button
+                  onClick={handleSaveSchedule}
+                  disabled={savingSchedule}
+                  className="px-4 py-1.5 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700 disabled:opacity-50 transition-colors"
+                >
+                  {savingSchedule ? 'Saving...' : 'Save Schedule'}
+                </button>
+              </div>
+            </div>
+
+            {/* Saved auto-backups */}
+            <div className="border-t border-gray-100 pt-4">
+              <p className="text-sm font-medium text-gray-900 mb-0.5">Saved backups</p>
               <p className="text-sm text-gray-500 mb-3">
-                Saved automatically every Sunday at 02:00 UTC. Last 4 weeks are kept.
+                Automatically saved according to your schedule above.
               </p>
               {savedBackups.length === 0 ? (
-                <p className="text-xs text-gray-400 italic">No automatic backups saved yet — first one runs next Sunday.</p>
+                <p className="text-xs text-gray-400 italic">No automatic backups saved yet — the first one will run according to your schedule above.</p>
               ) : (
                 <div className="divide-y divide-gray-100 rounded-lg border border-gray-200 overflow-hidden">
                   {savedBackups.map(b => (

@@ -639,6 +639,19 @@ export async function initializeDatabase() {
     )
   `);
 
+  // App-wide key-value settings (e.g. backup schedule)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  // Seed default backup schedule (weekly, Sunday, 02:00 UTC)
+  try {
+    db.prepare(`INSERT OR IGNORE INTO app_settings (key, value) VALUES ('backup_schedule', '{"frequency":"weekly","day":0,"hour":2,"minute":0}')`).run();
+  } catch (_) {}
+
   // Batches and batch-article links
   db.exec(`
     CREATE TABLE IF NOT EXISTS batches (
