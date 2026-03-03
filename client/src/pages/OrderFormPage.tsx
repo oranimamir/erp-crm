@@ -7,7 +7,7 @@ import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
 import FileUpload from '../components/ui/FileUpload';
-import { ArrowLeft, Plus, X, Loader2 } from 'lucide-react';
+import { ArrowLeft, Plus, X, Loader2, Paperclip } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 interface OrderItem {
@@ -95,6 +95,15 @@ export default function OrderFormPage() {
   const [customers, setCustomers] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [products,  setProducts]  = useState<any[]>([]);
+  const [operations, setOperations] = useState<any[]>([]);
+
+  // Operation link mode
+  const [operationMode, setOperationMode] = useState<'new' | 'existing'>('new');
+  const [linkOperationId, setLinkOperationId] = useState('');
+
+  // Existing file from DB (edit mode)
+  const [existingFilePath, setExistingFilePath] = useState<string | null>(null);
+  const [existingFileName, setExistingFileName] = useState<string | null>(null);
 
   // ── Form state ───────────────────────────────────────────────────────
   const [form, setForm] = useState({
@@ -120,13 +129,15 @@ export default function OrderFormPage() {
   // ── Load reference data ──────────────────────────────────────────────
   useEffect(() => {
     Promise.allSettled([
-      api.get('/customers', { params: { limit: 1000 } }),
-      api.get('/suppliers', { params: { limit: 1000 } }),
-      api.get('/products',  { params: { limit: 1000 } }),
-    ]).then(([cRes, sRes, pRes]) => {
+      api.get('/customers',  { params: { limit: 1000 } }),
+      api.get('/suppliers',  { params: { limit: 1000 } }),
+      api.get('/products',   { params: { limit: 1000 } }),
+      api.get('/operations', { params: { limit: 1000, tab: 'active' } }),
+    ]).then(([cRes, sRes, pRes, opRes]) => {
       if (cRes.status === 'fulfilled') setCustomers(cRes.value.data.data || []);
       if (sRes.status === 'fulfilled') setSuppliers(sRes.value.data.data || []);
       if (pRes.status === 'fulfilled') setProducts(pRes.value.data.data  || []);
+      if (opRes.status === 'fulfilled') setOperations(opRes.value.data.data || []);
     });
   }, []);
 
@@ -163,6 +174,10 @@ export default function OrderFormPage() {
             unit_price:          item.unit_price ?? 0,
             packaging:           item.packaging  || '',
           })));
+        }
+        if (o.file_path) {
+          setExistingFilePath(o.file_path);
+          setExistingFileName(o.file_name || o.file_path);
         }
       })
       .catch(() => { addToast('Failed to load order', 'error'); navigate('/orders'); })
@@ -262,7 +277,8 @@ export default function OrderFormPage() {
     setSaving(true);
     try {
       const payload = {
-        operation_number: form.operation_number || null,
+        operation_number:  operationMode === 'new' ? (form.operation_number || null) : null,
+        link_operation_id: operationMode === 'existing' && linkOperationId ? Number(linkOperationId) : null,
         order_number:  form.order_number,
         order_date:    form.order_date    || null,
         type:          form.type,
@@ -350,14 +366,75 @@ export default function OrderFormPage() {
               Scanning with AI — extracting all fields…
             </div>
           )}
+          {!scanning && !scanFilePath && existingFilePath && (
+            <div className="flex items-center gap-2 mt-2 text-sm text-gray-600">
+              <Paperclip size={14} className="text-gray-400 shrink-0" />
+              <span>Attached: <span className="font-medium">{existingFileName}</span></span>
+              <span className="text-xs text-gray-400">(upload a new file above to replace)</span>
+            </div>
+          )}
+          {!scanning && scanFilePath && (
+            <div className="flex items-center gap-2 mt-2 text-sm text-emerald-600">
+              <Paperclip size={14} className="shrink-0" />
+              <span>File ready: <span className="font-medium">{scanFileName}</span></span>
+            </div>
+          )}
         </Card>
 
         {/* ── Order Details ────────────────────────────────────────────── */}
         <Card className="p-5">
           <h2 className="text-base font-semibold text-gray-900 mb-4">Order Details</h2>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-            <Input label="Operation #" value={form.operation_number}
-              onChange={e => updateField('operation_number', e.target.value)} placeholder="e.g. OP-2026-001" />
+
+            {/* Operation section — spans full row */}
+            <div className="col-span-2 md:col-span-3">
+              <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Operation</label>
+              <div className="flex gap-4 mb-2">
+                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                  <input
+                    type="radio"
+                    name="operationMode"
+                    checked={operationMode === 'new'}
+                    onChange={() => { setOperationMode('new'); setLinkOperationId(''); }}
+                    className="accent-primary-600"
+                  />
+                  Create new operation
+                </label>
+                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                  <input
+                    type="radio"
+                    name="operationMode"
+                    checked={operationMode === 'existing'}
+                    onChange={() => { setOperationMode('existing'); updateField('operation_number', ''); }}
+                    className="accent-primary-600"
+                  />
+                  Link to existing operation
+                </label>
+              </div>
+              {operationMode === 'new' ? (
+                <input
+                  value={form.operation_number}
+                  onChange={e => updateField('operation_number', e.target.value)}
+                  placeholder="e.g. OP-2026-001 (leave blank to skip)"
+                  className="block w-full max-w-xs rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+              ) : (
+                <select
+                  value={linkOperationId}
+                  onChange={e => setLinkOperationId(e.target.value)}
+                  className="block w-full max-w-sm rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                >
+                  <option value="">— Select an operation —</option>
+                  {operations.map((op: any) => (
+                    <option key={op.id} value={String(op.id)}>
+                      {op.operation_number}
+                      {op.customer_name || op.supplier_name ? ` — ${op.customer_name || op.supplier_name}` : ''}
+                      {op.order_id ? ' (has order)' : ''}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
             <Input label="Order Number *" value={form.order_number}
               onChange={e => updateField('order_number', e.target.value)} placeholder="e.g. ORD-001" />
             <Input label="Date of Order" type="date" value={form.order_date}

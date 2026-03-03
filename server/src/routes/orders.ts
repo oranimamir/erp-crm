@@ -69,7 +69,7 @@ router.post('/', (req: Request, res: Response) => {
   const {
     order_number, customer_id, supplier_id, type, status, description, notes, items,
     order_date, inco_terms, destination, transport, delivery_date, payment_terms,
-    file_path, file_name, operation_number,
+    file_path, file_name, operation_number, link_operation_id,
   } = req.body;
 
   if (!order_number || !type) {
@@ -123,19 +123,29 @@ router.post('/', (req: Request, res: Response) => {
     const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as any;
     const orderItems = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(orderId as number);
 
-    // Auto-create operation if operation_number provided and doesn't already exist
-    if (operation_number) {
-      const existingOp = db.prepare('SELECT id FROM operations WHERE operation_number = ?').get(operation_number);
+    // Link or create operation
+    const opCustId = type === 'customer' ? (customer_id || null) : null;
+    const opSuppId = type === 'supplier' ? (supplier_id || null) : null;
+
+    if (link_operation_id) {
+      // Explicit link to an existing operation by ID
+      db.prepare(`
+        UPDATE operations SET order_id=?, customer_id=COALESCE(customer_id,?), supplier_id=COALESCE(supplier_id,?), updated_at=datetime('now') WHERE id=?
+      `).run(orderId, opCustId, opSuppId, link_operation_id);
+      const linkedOp = db.prepare('SELECT operation_number FROM operations WHERE id=?').get(link_operation_id) as any;
+      if (linkedOp) db.prepare(`UPDATE orders SET operation_number=? WHERE id=?`).run(linkedOp.operation_number, orderId);
+    } else if (operation_number) {
+      const existingOp = db.prepare('SELECT id FROM operations WHERE operation_number = ?').get(operation_number) as any;
       if (!existingOp) {
         db.prepare(`
           INSERT INTO operations (operation_number, order_id, customer_id, supplier_id)
           VALUES (?, ?, ?, ?)
-        `).run(
-          operation_number,
-          orderId,
-          type === 'customer' ? (customer_id || null) : null,
-          type === 'supplier' ? (supplier_id || null) : null
-        );
+        `).run(operation_number, orderId, opCustId, opSuppId);
+      } else {
+        // Operation already exists — link this order to it
+        db.prepare(`
+          UPDATE operations SET order_id=?, customer_id=COALESCE(customer_id,?), supplier_id=COALESCE(supplier_id,?), updated_at=datetime('now') WHERE id=?
+        `).run(orderId, opCustId, opSuppId, existingOp.id);
       }
     }
 
@@ -157,7 +167,7 @@ router.put('/:id', (req: Request, res: Response) => {
   const {
     order_number, customer_id, supplier_id, type, status, description, notes, items,
     order_date, inco_terms, destination, transport, delivery_date, payment_terms,
-    operation_number,
+    operation_number, file_path, file_name, link_operation_id,
   } = req.body;
 
   const updateOrder = db.transaction(() => {
@@ -180,7 +190,9 @@ router.put('/:id', (req: Request, res: Response) => {
     db.prepare(`
       UPDATE orders SET order_number=?, customer_id=?, supplier_id=?, type=?, status=?, total_amount=?,
         description=?, notes=?, order_date=?, inco_terms=?, destination=?, transport=?,
-        delivery_date=?, payment_terms=?, operation_number=?, updated_at=datetime('now')
+        delivery_date=?, payment_terms=?, operation_number=?,
+        file_path=COALESCE(?, file_path), file_name=COALESCE(?, file_name),
+        updated_at=datetime('now')
       WHERE id=?
     `).run(
       order_number || existing.order_number,
@@ -192,12 +204,37 @@ router.put('/:id', (req: Request, res: Response) => {
       destination ?? existing.destination, transport ?? existing.transport,
       delivery_date ?? existing.delivery_date, payment_terms ?? existing.payment_terms,
       operation_number ?? existing.operation_number,
+      file_path || null, file_name || null,
       req.params.id
     );
   });
 
   try {
     updateOrder();
+
+    // Handle operation linking after the order is updated
+    const orderId = parseInt(req.params.id as string);
+    const resolvedType = type || existing.type;
+    const opCustId = resolvedType === 'customer' ? (customer_id || existing.customer_id) : null;
+    const opSuppId = resolvedType === 'supplier' ? (supplier_id || existing.supplier_id) : null;
+
+    if (link_operation_id) {
+      db.prepare(`
+        UPDATE operations SET order_id=?, customer_id=COALESCE(customer_id,?), supplier_id=COALESCE(supplier_id,?), updated_at=datetime('now') WHERE id=?
+      `).run(orderId, opCustId, opSuppId, link_operation_id);
+      const linkedOp = db.prepare('SELECT operation_number FROM operations WHERE id=?').get(link_operation_id) as any;
+      if (linkedOp) db.prepare(`UPDATE orders SET operation_number=? WHERE id=?`).run(linkedOp.operation_number, orderId);
+    } else if (operation_number) {
+      const existingOp = db.prepare('SELECT id, order_id FROM operations WHERE operation_number = ?').get(operation_number) as any;
+      if (!existingOp) {
+        db.prepare(`INSERT INTO operations (operation_number, order_id, customer_id, supplier_id) VALUES (?, ?, ?, ?)`)
+          .run(operation_number, orderId, opCustId, opSuppId);
+      } else if (!existingOp.order_id) {
+        db.prepare(`UPDATE operations SET order_id=?, customer_id=COALESCE(customer_id,?), supplier_id=COALESCE(supplier_id,?), updated_at=datetime('now') WHERE id=?`)
+          .run(orderId, opCustId, opSuppId, existingOp.id);
+      }
+    }
+
     const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id) as any;
     const orderItems = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(req.params.id as any);
     notifyAdmin({ action: 'updated', entity: 'Order', label: order.order_number, performedBy: req.user?.display_name || 'Unknown' });
