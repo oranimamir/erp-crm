@@ -134,14 +134,15 @@ router.delete('/:id', (req: Request, res: Response) => {
 // ── Batch CRUD ────────────────────────────────────────────────────────────────
 
 router.get('/batches', (_req: Request, res: Response) => {
-  const batches = db.prepare('SELECT * FROM batches ORDER BY batch_number ASC').all();
-  const result = (batches as any[]).map(b => {
-    const documents = db.prepare(
-      'SELECT id, document_type, document_name, file_path, file_name, created_at FROM batch_documents WHERE batch_id = ? ORDER BY created_at ASC'
-    ).all(b.id);
-    return { ...b, documents };
-  });
-  res.json(result);
+  const batches = db.prepare('SELECT * FROM batches ORDER BY batch_number ASC').all() as any[];
+  const allDocs = db.prepare(
+    'SELECT id, batch_id, document_type, document_name, file_path, file_name, created_at FROM batch_documents ORDER BY created_at ASC'
+  ).all() as any[];
+  const docsByBatch = allDocs.reduce((acc: Record<number, any[]>, d) => {
+    (acc[d.batch_id] = acc[d.batch_id] || []).push(d);
+    return acc;
+  }, {});
+  res.json(batches.map(b => ({ ...b, documents: docsByBatch[b.id] || [] })));
 });
 
 router.post('/batches', (req: Request, res: Response) => {
@@ -175,7 +176,7 @@ router.put('/batches/:id', (req: Request, res: Response) => {
       req.params.id
     );
     const batch = db.prepare('SELECT * FROM batches WHERE id = ?').get(req.params.id) as any;
-    const documents = db.prepare('SELECT id, document_type, document_name, file_path, file_name, created_at FROM batch_documents WHERE batch_id = ? ORDER BY created_at ASC').all(batch.id);
+    const documents = db.prepare('SELECT id, document_type, document_name, file_path, file_name, created_at FROM batch_documents WHERE batch_id = ? ORDER BY created_at ASC').all(batch.id) as any[];
     res.json({ ...batch, documents });
   } catch (err: any) {
     if (err.message?.includes('UNIQUE')) {

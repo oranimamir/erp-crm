@@ -690,6 +690,22 @@ export async function initializeDatabase() {
     )
   `);
 
+  // Backfill batches from existing warehouse_stock rows (one-time, idempotent)
+  try {
+    const stockRows = db.prepare(`
+      SELECT DISTINCT batch_number, description
+      FROM warehouse_stock
+      WHERE batch_number IS NOT NULL AND batch_number != ''
+      ORDER BY batch_number
+    `).all() as any[];
+    for (const row of stockRows) {
+      db.prepare(`INSERT OR IGNORE INTO batches (batch_number, product) VALUES (?, ?)`).run(row.batch_number, row.description || null);
+      if (row.description) {
+        db.prepare(`UPDATE batches SET product = ? WHERE batch_number = ? AND product IS NULL`).run(row.description, row.batch_number);
+      }
+    }
+  } catch (_) {}
+
   db.saveToDisk();
 }
 
