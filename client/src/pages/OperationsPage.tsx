@@ -466,6 +466,7 @@ export default function OperationsPage() {
                                 <th className="text-right px-3 py-1.5 font-medium text-gray-500">Amount</th>
                                 <th className="text-left px-3 py-1.5 font-medium text-gray-500">Status</th>
                                 <th className="text-left px-3 py-1.5 font-medium text-gray-500">Due Date</th>
+                                <th className="px-3 py-1.5" />
                               </tr>
                             </thead>
                             <tbody>
@@ -480,6 +481,26 @@ export default function OperationsPage() {
                                   <td className="px-3 py-1.5 text-right text-gray-900">{inv.currency} {Number(inv.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                                   <td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-700">{inv.status}</span></td>
                                   <td className="px-3 py-1.5 text-gray-500">{formatDate(inv.due_date) || '—'}</td>
+                                  <td className="px-3 py-1.5">
+                                    {inv.file_path && (
+                                      <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                                        <button
+                                          onClick={() => openPreview({ fileName: inv.file_name, filePath: inv.file_path, subfolder: 'invoices' })}
+                                          className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-gray-600"
+                                          title="Preview invoice file"
+                                        >
+                                          <Eye size={13} />
+                                        </button>
+                                        <button
+                                          onClick={() => downloadFile(inv.file_path, inv.file_name, 'invoices')}
+                                          className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-gray-600"
+                                          title="Download invoice file"
+                                        >
+                                          <Download size={13} />
+                                        </button>
+                                      </div>
+                                    )}
+                                  </td>
                                 </tr>
                               ))}
                             </tbody>
