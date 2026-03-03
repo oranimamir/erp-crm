@@ -603,6 +603,7 @@ export async function initializeDatabase() {
   `);
   try { db.exec(`ALTER TABLE warehouse_stock ADD COLUMN whs TEXT`); } catch (_) {}
   try { db.exec(`ALTER TABLE warehouse_stock ADD COLUMN location TEXT`); } catch (_) {}
+  try { db.exec(`ALTER TABLE warehouse_stock ADD COLUMN batch_number TEXT`); } catch (_) {}
 
   // Upload history log for warehouse stock
   db.exec(`

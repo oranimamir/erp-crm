@@ -1102,8 +1102,8 @@ function WarehouseStockTab() {
                       {isExpanded && row.items.map((item: any, idx: number) => (
                         <tr key={`${row.key}-sub-${idx}`} className="bg-indigo-50/40 text-xs border-b border-indigo-100/50">
                           <td className="px-4 py-2" />
-                          <td className="px-4 py-2 text-gray-400 font-mono">{item.whs || '—'}</td>
-                          <td className="px-4 py-2 text-gray-400 font-mono">{item.location || '—'}</td>
+                          <td className="px-4 py-2 font-mono text-indigo-600">{item.batch_number || '—'}</td>
+                          <td className="px-4 py-2 font-mono text-gray-900">{item.article}</td>
                           <td className="px-4 py-2 text-gray-500">{item.searchname || '—'}</td>
                           <td className="px-4 py-2 text-gray-600 italic">{item.description || '—'}</td>
                           <td className="px-4 py-2 text-right text-gray-400">1</td>
@@ -1125,8 +1125,7 @@ function WarehouseStockTab() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Whs</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Location</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Batch</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Principal</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Article</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Name</th>
@@ -1140,8 +1139,7 @@ function WarehouseStockTab() {
               <tbody className="divide-y divide-gray-100">
                 {(displayRows as any[]).map((row, i) => (
                   <tr key={i} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-xs text-gray-400 font-mono">{row.whs || '—'}</td>
-                    <td className="px-4 py-3 text-xs text-gray-400 font-mono">{row.location || '—'}</td>
+                    <td className="px-4 py-3 text-xs font-mono text-indigo-700">{row.batch_number || '—'}</td>
                     <td className="px-4 py-3 text-xs text-gray-400">{row.principal || '—'}</td>
                     <td className="px-4 py-3 font-mono text-xs text-gray-900">{row.article}</td>
                     <td className="px-4 py-3 text-gray-600">{row.searchname || '—'}</td>

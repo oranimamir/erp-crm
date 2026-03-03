@@ -10,7 +10,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // GET / — return all individual rows + upload history
 router.get('/', (_req: Request, res: Response) => {
   const rows = db.prepare(`
-    SELECT whs, location, principal, article, searchname, description, stock, pc, gross_weight, nett_weight
+    SELECT whs, location, principal, article, searchname, description, stock, pc, gross_weight, nett_weight, batch_number
     FROM warehouse_stock
     ORDER BY description ASC, article ASC, whs ASC, location ASC
   `).all();

@@ -20,6 +20,15 @@ export function parseAndInsertStockCsv(content: string, meta: StockMeta): number
   const delimiter = headerLine.includes(';') ? ';' : ',';
   const headers = headerLine.split(delimiter).map(h => h.toLowerCase().trim());
 
+  // Find first matching header name (case-insensitive, already lowercased)
+  const findCol = (...names: string[]) => {
+    for (const n of names) {
+      const i = headers.indexOf(n);
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
+
   const idx = {
     whs:          headers.indexOf('whs'),
     location:     headers.indexOf('location'),
@@ -29,8 +38,9 @@ export function parseAndInsertStockCsv(content: string, meta: StockMeta): number
     description:  headers.indexOf('description'),
     stock:        headers.indexOf('stock'),
     pc:           headers.indexOf('pc'),
-    gross_weight: headers.indexOf('gross weight'),
-    nett_weight:  headers.indexOf('nett weight'),
+    gross_weight: findCol('gross weight', 'grossweight', 'gross wt', 'grosswt'),
+    nett_weight:  findCol('nett weight', 'nettweight', 'net weight', 'netweight', 'nett wt', 'net wt'),
+    batch_number: findCol('batch', 'batch number', 'batchnumber', 'lot', 'lot number', 'lotnumber', 'lot no', 'batch no', 'lotnr', 'batchnr', 'batch nr', 'lot nr'),
   };
 
   if (idx.article === -1) throw new Error('CSV missing required column "article"');
@@ -40,8 +50,8 @@ export function parseAndInsertStockCsv(content: string, meta: StockMeta): number
   db.exec('DELETE FROM warehouse_stock');
 
   const insert = db.prepare(`
-    INSERT INTO warehouse_stock (whs, location, principal, article, searchname, description, stock, pc, gross_weight, nett_weight, uploaded_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO warehouse_stock (whs, location, principal, article, searchname, description, stock, pc, gross_weight, nett_weight, batch_number, uploaded_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   let inserted = 0;
@@ -63,6 +73,7 @@ export function parseAndInsertStockCsv(content: string, meta: StockMeta): number
       idx.pc           >= 0 ? cols[idx.pc]?.trim()               || null : null,
       idx.gross_weight >= 0 ? parseFloat(cols[idx.gross_weight]) || null : null,
       idx.nett_weight  >= 0 ? parseFloat(cols[idx.nett_weight])  || null : null,
+      idx.batch_number >= 0 ? cols[idx.batch_number]?.trim()    || null : null,
       now,
     );
     inserted++;
