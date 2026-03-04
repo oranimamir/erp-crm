@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { LogIn, Mail } from 'lucide-react';
 
 export default function LoginPage() {
-  const { user, login, verifyOtp, loading: authLoading } = useAuth();
+  const { user, login, verifyOtp, resendOtp, loading: authLoading } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [step, setStep] = useState<'credentials' | 'otp'>('credentials');
@@ -37,10 +37,23 @@ export default function LoginPage() {
     }
   };
 
+  const [resendLoading, setResendLoading] = useState(false);
+  const [resendMessage, setResendMessage] = useState('');
+
   const handleResend = async () => {
+    if (!otpUserId) return;
     setError('');
-    setOtp('');
-    setStep('credentials');
+    setResendMessage('');
+    setResendLoading(true);
+    try {
+      await resendOtp(otpUserId);
+      setOtp('');
+      setResendMessage('A new code has been sent to your email.');
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to resend code');
+    } finally {
+      setResendLoading(false);
+    }
   };
 
   return (
@@ -111,6 +124,11 @@ export default function LoginPage() {
                 {error}
               </div>
             )}
+            {resendMessage && (
+              <div className="bg-green-50 border border-green-200 text-green-700 text-sm rounded-lg px-4 py-3">
+                {resendMessage}
+              </div>
+            )}
             <div className="space-y-1">
               <label className="block text-sm font-medium text-gray-700">Verification Code</label>
               <input
@@ -142,8 +160,8 @@ export default function LoginPage() {
             </button>
             <p className="text-center text-sm text-gray-500">
               Didn't receive a code?{' '}
-              <button type="button" onClick={handleResend} className="text-primary-600 hover:underline font-medium">
-                Resend
+              <button type="button" onClick={handleResend} disabled={resendLoading} className="text-primary-600 hover:underline font-medium disabled:opacity-50">
+                {resendLoading ? 'Sending…' : 'Resend'}
               </button>
             </p>
           </form>

@@ -14,6 +14,7 @@ interface AuthContextType {
   token: string | null;
   login: (username: string, password: string) => Promise<{ step: 'done' } | { step: 'otp'; userId: number }>;
   verifyOtp: (userId: number, code: string) => Promise<void>;
+  resendOtp: (userId: number) => Promise<void>;
   logout: () => void;
   loading: boolean;
 }
@@ -61,6 +62,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(res.data.user);
   };
 
+  const resendOtp = async (userId: number): Promise<void> => {
+    await api.post('/auth/resend-otp', { user_id: userId });
+  };
+
   const logout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
@@ -70,7 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, login, verifyOtp, logout, loading }}>
+    <AuthContext.Provider value={{ user, token, login, verifyOtp, resendOtp, logout, loading }}>
       {children}
     </AuthContext.Provider>
   );

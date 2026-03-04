@@ -7,7 +7,7 @@ import { sendOtpEmail, notifyAdmin } from '../lib/notify.js';
 
 const router = Router();
 
-router.post('/login', (req: Request, res: Response) => {
+router.post('/login', async (req: Request, res: Response) => {
   const { username, password } = req.body;
   if (!username || !password) {
     res.status(400).json({ error: 'Username and password are required' });
@@ -20,16 +20,7 @@ router.post('/login', (req: Request, res: Response) => {
     return;
   }
 
-  // 2FA: if user has an email, send OTP instead of issuing token immediately
-  if (user.email) {
-    const code = crypto.randomInt(100000, 1000000).toString();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-    db.prepare(`INSERT INTO login_otps (user_id, code, expires_at) VALUES (?, ?, ?)`).run(user.id, code, expiresAt);
-    sendOtpEmail(user.email, code);
-    res.json({ step: 'otp', user_id: user.id });
-    return;
-  }
-
+  // 2FA disabled until email sending domain is configured
   const token = generateToken({ userId: user.id, username: user.username, display_name: user.display_name || user.username, role: user.role });
   notifyAdmin({ action: 'logged in', entity: 'User', label: user.display_name || user.username, performedBy: user.display_name || user.username });
   res.json({
@@ -195,6 +186,43 @@ router.post('/accept-invite', (req: Request, res: Response) => {
       role: invitation.role || 'user',
     },
   });
+});
+
+router.post('/resend-otp', async (req: Request, res: Response) => {
+  const { user_id } = req.body;
+  if (!user_id) {
+    res.status(400).json({ error: 'user_id is required' });
+    return;
+  }
+
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(user_id) as any;
+  if (!user || !user.email) {
+    res.status(404).json({ error: 'User not found' });
+    return;
+  }
+
+  // Rate-limit: don't allow resend if a valid OTP was issued in the last 60 seconds
+  const recent = db.prepare(
+    `SELECT id FROM login_otps WHERE user_id = ? AND used = 0 AND expires_at > datetime('now') AND created_at > datetime('now', '-60 seconds') LIMIT 1`
+  ).get(user_id);
+  if (recent) {
+    res.status(429).json({ error: 'Please wait before requesting a new code' });
+    return;
+  }
+
+  const code = crypto.randomInt(100000, 1000000).toString();
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  db.prepare(`INSERT INTO login_otps (user_id, code, expires_at) VALUES (?, ?, ?)`).run(user.id, code, expiresAt);
+
+  try {
+    await sendOtpEmail(user.email, code);
+  } catch (err: any) {
+    console.error('[auth] OTP resend failed:', err?.message || err);
+    res.status(503).json({ error: 'Failed to send login code. Please contact an administrator.' });
+    return;
+  }
+
+  res.json({ ok: true });
 });
 
 router.post('/change-password', authenticateToken, (req: Request, res: Response) => {

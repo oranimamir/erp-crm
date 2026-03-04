@@ -11,16 +11,18 @@ export interface NotifyPayload {
   detail?: string;     // Optional extra info (e.g. new status)
 }
 
-/** Sends a one-time login code to a user's email. Fire-and-forget — only fires if RESEND_API_KEY is set. */
-export function sendOtpEmail(to: string, code: string): void {
-  _sendOtp(to, code).catch(err =>
-    console.error('[notify] Failed to send OTP email:', err?.message || err)
-  );
+/** Sends a one-time login code to a user's email. Throws if sending fails. */
+export async function sendOtpEmail(to: string, code: string): Promise<void> {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    console.error('[notify] RESEND_API_KEY is not set — cannot send OTP email');
+    throw new Error('Email service is not configured');
+  }
+  await _sendOtp(to, code);
 }
 
 async function _sendOtp(to: string, code: string): Promise<void> {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) return;
+  const apiKey = process.env.RESEND_API_KEY!;
   const from = process.env.RESEND_FROM_EMAIL || 'CirculERP <onboarding@resend.dev>';
   const html = `
 <div style="font-family:sans-serif;max-width:480px;margin:0 auto;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
