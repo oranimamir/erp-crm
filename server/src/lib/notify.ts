@@ -44,8 +44,16 @@ async function _sendOtp(to: string, code: string): Promise<void> {
   });
 }
 
-/** Fire-and-forget: sends an email to all admin users with an email set. */
+/** Fire-and-forget: logs activity and sends an email to all admin users with an email set. */
 export function notifyAdmin(payload: NotifyPayload): void {
+  // Always log to activity_log (in-app notifications)
+  try {
+    db.prepare(
+      `INSERT INTO activity_log (entity, action, label, performed_by) VALUES (?, ?, ?, ?)`
+    ).run(payload.entity, payload.action, payload.label, payload.performedBy);
+  } catch (err: any) {
+    console.error('[notify] Failed to log activity:', err?.message || err);
+  }
   _send(payload).catch(err =>
     console.error('[notify] Failed to send admin notification:', err?.message || err)
   );

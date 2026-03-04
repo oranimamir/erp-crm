@@ -719,6 +719,20 @@ export async function initializeDatabase() {
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_batch_documents_batch_id ON batch_documents(batch_id)`); } catch (_) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_login_otps_user_id ON login_otps(user_id)`); } catch (_) {}
 
+  // Activity log for in-app notifications
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS activity_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity TEXT NOT NULL,
+      action TEXT NOT NULL,
+      label TEXT NOT NULL,
+      performed_by TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_activity_log_created_at ON activity_log(created_at)`); } catch (_) {}
+  try { db.exec(`ALTER TABLE users ADD COLUMN notifications_last_read_at TEXT`); } catch (_) {}
+
   db.saveToDisk();
 }
 
