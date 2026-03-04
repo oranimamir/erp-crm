@@ -12,6 +12,8 @@ export default function LoginPage() {
   const [otp, setOtp] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [resendLoading, setResendLoading] = useState(false);
+  const [resendMessage, setResendMessage] = useState('');
 
   if (authLoading) return <div className="flex items-center justify-center h-screen"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" /></div>;
   if (user) return <Navigate to="/dashboard" replace />;
@@ -36,9 +38,6 @@ export default function LoginPage() {
       setLoading(false);
     }
   };
-
-  const [resendLoading, setResendLoading] = useState(false);
-  const [resendMessage, setResendMessage] = useState('');
 
   const handleResend = async () => {
     if (!otpUserId) return;
