@@ -30,7 +30,6 @@ import OperationDetailPage from './pages/OperationDetailPage';
 import OperationFormPage from './pages/OperationFormPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import SettingsPage from './pages/SettingsPage';
-import SharePointSyncPage from './pages/SharePointSyncPage';
 
 export default function App() {
   return (
@@ -71,7 +70,6 @@ export default function App() {
               <Route path="/packaging" element={<Navigate to="/inventory" replace />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/admin/users" element={<AdminUsersPage />} />
-              <Route path="/sharepoint-sync" element={<SharePointSyncPage />} />
               <Route path="*" element={<NotFoundPage />} />
             </Route>
           </Route>

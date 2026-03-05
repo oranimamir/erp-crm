@@ -29,11 +29,9 @@ import operationRoutes from './routes/operations.js';
 import analyticsRoutes from './routes/analytics.js';
 import packagingRoutes from './routes/packaging.js';
 import backupRoutes from './routes/backup.js';
-import sharepointRoutes from './routes/sharepoint.js';
 import warehouseStockRoutes from './routes/warehouse-stock.js';
 import notificationRoutes from './routes/notifications.js';
 import cron from 'node-cron';
-import { scanNewOperations } from './lib/sharepoint.js';
 import { checkEmailForStockUpdates } from './lib/email-stock.js';
 import { startBackupScheduler, buildCronExpr } from './lib/backup-scheduler.js';
 
@@ -103,11 +101,6 @@ const apiLimiter = rateLimit({
 // Initialize database
 await initializeDatabase();
 
-// Schedule daily SharePoint scan at 7:00 AM UTC
-cron.schedule('0 7 * * *', () => {
-  scanNewOperations().catch(err => console.error('[SharePoint scan]', err));
-});
-
 // Schedule backup based on DB-stored schedule (default: weekly Sunday 02:00 UTC)
 {
   const schedRow = db.prepare("SELECT value FROM app_settings WHERE key = 'backup_schedule'").get() as any;
@@ -151,7 +144,6 @@ app.use('/api/operations', authenticateToken, operationRoutes);
 app.use('/api/analytics', authenticateToken, analyticsRoutes);
 app.use('/api/packaging', authenticateToken, packagingRoutes);
 app.use('/api/backup', authenticateToken, backupRoutes);
-app.use('/api/sharepoint', authenticateToken, sharepointRoutes);
 app.use('/api/warehouse-stock', authenticateToken, warehouseStockRoutes);
 app.use('/api/notifications', authenticateToken, notificationRoutes);
 
