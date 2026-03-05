@@ -20,29 +20,23 @@ router.post('/login', async (req: Request, res: Response) => {
     return;
   }
 
-  // If user has an email, require 2FA OTP
-  if (user.email) {
-    const code = crypto.randomInt(100000, 1000000).toString();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-    db.prepare(`INSERT INTO login_otps (user_id, code, expires_at) VALUES (?, ?, ?)`).run(user.id, code, expiresAt);
-    try {
-      await sendOtpEmail(user.email, code);
-    } catch (err: any) {
-      console.error('[auth] OTP send failed:', err?.message || err);
-      res.status(503).json({ error: 'Failed to send login code. Please contact an administrator.' });
-      return;
-    }
-    res.json({ step: 'otp', user_id: user.id });
+  // 2FA required for all users — block login if no email set
+  if (!user.email) {
+    res.status(403).json({ error: 'Your account does not have an email address set. Please contact an administrator to enable login.' });
     return;
   }
 
-  // No email — allow direct login
-  const token = generateToken({ userId: user.id, username: user.username, display_name: user.display_name || user.username, role: user.role });
-  notifyAdmin({ action: 'logged in', entity: 'User', label: user.display_name || user.username, performedBy: user.display_name || user.username });
-  res.json({
-    token,
-    user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role },
-  });
+  const code = crypto.randomInt(100000, 1000000).toString();
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  db.prepare(`INSERT INTO login_otps (user_id, code, expires_at) VALUES (?, ?, ?)`).run(user.id, code, expiresAt);
+  try {
+    await sendOtpEmail(user.email, code);
+  } catch (err: any) {
+    console.error('[auth] OTP send failed:', err?.message || err);
+    res.status(503).json({ error: 'Failed to send login code. Please contact an administrator.' });
+    return;
+  }
+  res.json({ step: 'otp', user_id: user.id });
 });
 
 router.post('/verify-otp', (req: Request, res: Response) => {
