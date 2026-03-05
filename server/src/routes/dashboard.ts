@@ -143,24 +143,9 @@ router.get('/monthly-payments', (_req: Request, res: Response) => {
         )
       ), 0) as received,
       COALESCE((
-        SELECT SUM(eur_val) FROM (
-          SELECT COALESCE(wt.eur_amount, wt.amount) as eur_val FROM wire_transfers wt
-          JOIN invoices i ON wt.invoice_id = i.id
-          WHERE i.type = 'supplier'
-            AND strftime('%Y-%m', wt.transfer_date) = months.m
-          UNION ALL
-          SELECT p.amount FROM payments p
-          JOIN invoices i ON p.invoice_id = i.id
-          WHERE i.type = 'supplier'
-            AND strftime('%Y-%m', p.payment_date) = months.m
-          UNION ALL
-          SELECT COALESCE(i.eur_amount, i.amount) FROM invoices i
-          WHERE i.type = 'supplier' AND i.status = 'paid'
-            AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
-            AND NOT EXISTS (SELECT 1 FROM wire_transfers wt WHERE wt.invoice_id = i.id)
-            AND i.payment_date IS NOT NULL
-            AND strftime('%Y-%m', i.payment_date) = months.m
-        )
+        SELECT SUM(COALESCE(i.eur_amount, i.amount)) FROM invoices i
+        WHERE i.type = 'supplier' AND i.status = 'paid'
+          AND strftime('%Y-%m', COALESCE(i.invoice_date, date(i.created_at))) = months.m
       ), 0) as paid_out
     FROM months ORDER BY months.m
   `).all();
