@@ -106,7 +106,7 @@ router.post('/', uploadInvoice.single('file'), (req: Request, res: Response) => 
       .run(result.lastInsertRowid, status || 'draft', req.user!.userId);
 
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(result.lastInsertRowid) as any;
-    notifyAdmin({ action: 'created', entity: 'Invoice', label: invoice.invoice_number, performedBy: req.user?.display_name || 'Unknown' });
+    notifyAdmin({ action: 'created', entity: 'Invoice', label: invoice.invoice_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
     res.status(201).json(invoice);
   } catch (err: any) {
     if (err.message?.includes('UNIQUE')) {
@@ -154,7 +154,7 @@ router.put('/:id', uploadInvoice.single('file'), (req: Request, res: Response) =
     );
 
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id) as any;
-    notifyAdmin({ action: 'updated', entity: 'Invoice', label: invoice.invoice_number, performedBy: req.user?.display_name || 'Unknown' });
+    notifyAdmin({ action: 'updated', entity: 'Invoice', label: invoice.invoice_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
     res.json(invoice);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -173,7 +173,7 @@ router.patch('/:id/status', (req: Request, res: Response) => {
     .run(req.params.id, existing.status, status, req.user!.userId, notes || null);
 
   const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id) as any;
-  notifyAdmin({ action: 'status changed', entity: 'Invoice', label: invoice.invoice_number, performedBy: req.user?.display_name || 'Unknown', detail: status });
+  notifyAdmin({ action: 'status changed', entity: 'Invoice', label: invoice.invoice_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId, detail: status });
   res.json(invoice);
 });
 
@@ -187,7 +187,7 @@ router.delete('/:id', (req: Request, res: Response) => {
   }
 
   db.prepare('DELETE FROM invoices WHERE id = ?').run(req.params.id);
-  notifyAdmin({ action: 'deleted', entity: 'Invoice', label: existing.invoice_number, performedBy: req.user?.display_name || 'Unknown' });
+  notifyAdmin({ action: 'deleted', entity: 'Invoice', label: existing.invoice_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.json({ message: 'Invoice deleted' });
 });
 
@@ -245,7 +245,7 @@ router.post('/:id/wire-transfers', uploadWireTransfer.single('file'), async (req
 
     notifyAdmin({ action: 'status changed', entity: 'Invoice',
       label: invoice.invoice_number,
-      performedBy: req.user?.display_name || 'Unknown',
+      performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
       detail: 'Paid via wire transfer upload' });
 
     const transfer = db.prepare('SELECT * FROM wire_transfers WHERE id = ?').get(result.lastInsertRowid);

@@ -80,7 +80,7 @@ router.post('/', (req: Request, res: Response) => {
       .run(result.lastInsertRowid, status || 'pending', req.user!.userId);
 
     const shipment = db.prepare('SELECT * FROM shipments WHERE id = ?').get(result.lastInsertRowid) as any;
-    notifyAdmin({ action: 'created', entity: 'Shipment', label: shipment.tracking_number || `Shipment #${shipment.id}`, performedBy: req.user?.display_name || 'Unknown' });
+    notifyAdmin({ action: 'created', entity: 'Shipment', label: shipment.tracking_number || `Shipment #${shipment.id}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
     res.status(201).json(shipment);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -107,7 +107,7 @@ router.put('/:id', (req: Request, res: Response) => {
     );
 
     const shipment = db.prepare('SELECT * FROM shipments WHERE id = ?').get(req.params.id) as any;
-    notifyAdmin({ action: 'updated', entity: 'Shipment', label: shipment.tracking_number || `Shipment #${shipment.id}`, performedBy: req.user?.display_name || 'Unknown' });
+    notifyAdmin({ action: 'updated', entity: 'Shipment', label: shipment.tracking_number || `Shipment #${shipment.id}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
     res.json(shipment);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -133,7 +133,7 @@ router.delete('/:id', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT tracking_number FROM shipments WHERE id = ?').get(req.params.id) as any;
   const result = db.prepare('DELETE FROM shipments WHERE id = ?').run(req.params.id);
   if (result.changes === 0) { res.status(404).json({ error: 'Shipment not found' }); return; }
-  notifyAdmin({ action: 'deleted', entity: 'Shipment', label: existing?.tracking_number || `Shipment #${req.params.id}`, performedBy: req.user?.display_name || 'Unknown' });
+  notifyAdmin({ action: 'deleted', entity: 'Shipment', label: existing?.tracking_number || `Shipment #${req.params.id}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.json({ message: 'Shipment deleted' });
 });
 

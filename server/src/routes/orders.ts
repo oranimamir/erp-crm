@@ -149,7 +149,7 @@ router.post('/', (req: Request, res: Response) => {
       }
     }
 
-    notifyAdmin({ action: 'created', entity: 'Order', label: order.order_number, performedBy: req.user?.display_name || 'Unknown' });
+    notifyAdmin({ action: 'created', entity: 'Order', label: order.order_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
     res.status(201).json({ ...order, items: orderItems });
   } catch (err: any) {
     if (err.message?.includes('UNIQUE')) {
@@ -237,7 +237,7 @@ router.put('/:id', (req: Request, res: Response) => {
 
     const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id) as any;
     const orderItems = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(req.params.id as any);
-    notifyAdmin({ action: 'updated', entity: 'Order', label: order.order_number, performedBy: req.user?.display_name || 'Unknown' });
+    notifyAdmin({ action: 'updated', entity: 'Order', label: order.order_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
     res.json({ ...order, items: orderItems });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -272,7 +272,7 @@ router.delete('/:id', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT order_number FROM orders WHERE id = ?').get(req.params.id) as any;
   const result = db.prepare('DELETE FROM orders WHERE id = ?').run(req.params.id);
   if (result.changes === 0) { res.status(404).json({ error: 'Order not found' }); return; }
-  notifyAdmin({ action: 'deleted', entity: 'Order', label: existing?.order_number || `#${req.params.id}`, performedBy: req.user?.display_name || 'Unknown' });
+  notifyAdmin({ action: 'deleted', entity: 'Order', label: existing?.order_number || `#${req.params.id}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.json({ message: 'Order deleted' });
 });
 

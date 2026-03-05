@@ -63,7 +63,7 @@ router.post('/', (req: Request, res: Response) => {
     `).run(name, sku, category, parseFloat(quantity) || 0, unit || 'pcs', parseFloat(min_stock_level) || 0, supplier_id || null, parseFloat(unit_cost) || 0, notes || null);
 
     const item = db.prepare('SELECT * FROM inventory_items WHERE id = ?').get(result.lastInsertRowid) as any;
-    notifyAdmin({ action: 'created', entity: 'Inventory Item', label: `${item.name} (${item.sku})`, performedBy: req.user?.display_name || 'Unknown' });
+    notifyAdmin({ action: 'created', entity: 'Inventory Item', label: `${item.name} (${item.sku})`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
     res.status(201).json(item);
   } catch (err: any) {
     if (err.message?.includes('UNIQUE')) {
@@ -95,7 +95,7 @@ router.put('/:id', (req: Request, res: Response) => {
     );
 
     const item = db.prepare('SELECT * FROM inventory_items WHERE id = ?').get(req.params.id) as any;
-    notifyAdmin({ action: 'updated', entity: 'Inventory Item', label: `${item.name} (${item.sku})`, performedBy: req.user?.display_name || 'Unknown' });
+    notifyAdmin({ action: 'updated', entity: 'Inventory Item', label: `${item.name} (${item.sku})`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
     res.json(item);
   } catch (err: any) {
     if (err.message?.includes('UNIQUE')) {
@@ -127,7 +127,7 @@ router.delete('/:id', (req: Request, res: Response) => {
   if (!existing) { res.status(404).json({ error: 'Item not found' }); return; }
 
   db.prepare('DELETE FROM inventory_items WHERE id = ?').run(req.params.id);
-  notifyAdmin({ action: 'deleted', entity: 'Inventory Item', label: `${existing.name} (${existing.sku})`, performedBy: req.user?.display_name || 'Unknown' });
+  notifyAdmin({ action: 'deleted', entity: 'Inventory Item', label: `${existing.name} (${existing.sku})`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.json({ message: 'Item deleted' });
 });
 

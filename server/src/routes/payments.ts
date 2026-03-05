@@ -68,7 +68,7 @@ router.post('/', uploadPayment.single('file'), (req: Request, res: Response) => 
 
   const payment = db.prepare('SELECT * FROM payments WHERE id = ?').get(result.lastInsertRowid) as any;
   const inv = db.prepare('SELECT invoice_number FROM invoices WHERE id = ?').get(invoice_id) as any;
-  notifyAdmin({ action: 'created', entity: 'Payment', label: `$${parseFloat(amount).toLocaleString()} on ${inv?.invoice_number || `Invoice #${invoice_id}`}`, performedBy: req.user?.display_name || 'Unknown' });
+  notifyAdmin({ action: 'created', entity: 'Payment', label: `$${parseFloat(amount).toLocaleString()} on ${inv?.invoice_number || `Invoice #${invoice_id}`}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.status(201).json(payment);
 });
 
@@ -112,7 +112,7 @@ router.delete('/:id', (req: Request, res: Response) => {
   }
 
   db.prepare('DELETE FROM payments WHERE id = ?').run(req.params.id);
-  notifyAdmin({ action: 'deleted', entity: 'Payment', label: `$${existing.amount?.toLocaleString()} (Payment #${req.params.id})`, performedBy: req.user?.display_name || 'Unknown' });
+  notifyAdmin({ action: 'deleted', entity: 'Payment', label: `$${existing.amount?.toLocaleString()} (Payment #${req.params.id})`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.json({ message: 'Payment deleted' });
 });
 

@@ -5,10 +5,11 @@ export type NotifyAction = 'created' | 'updated' | 'deleted' | 'status changed' 
 
 export interface NotifyPayload {
   action: NotifyAction;
-  entity: string;      // 'Customer', 'Invoice', 'Order', etc.
-  label: string;       // Name or identifier
-  performedBy: string; // Display name of user who acted
-  detail?: string;     // Optional extra info (e.g. new status)
+  entity: string;       // 'Customer', 'Invoice', 'Order', etc.
+  label: string;        // Name or identifier
+  performedBy: string;  // Display name of user who acted
+  performedById?: number; // User ID — excluded from receiving their own notifications
+  detail?: string;      // Optional extra info (e.g. new status)
 }
 
 /** Sends a one-time login code to a user's email. Throws if sending fails. */
@@ -64,8 +65,8 @@ async function _send(payload: NotifyPayload): Promise<void> {
   if (!apiKey) return;
 
   const admins = db.prepare(
-    `SELECT email FROM users WHERE notify_on_changes = 1 AND email IS NOT NULL AND email != ''`
-  ).all() as Array<{ email: string }>;
+    `SELECT email FROM users WHERE notify_on_changes = 1 AND email IS NOT NULL AND email != '' AND id != ?`
+  ).all(payload.performedById ?? -1) as Array<{ email: string }>;
 
   if (admins.length === 0) return;
 

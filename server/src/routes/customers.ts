@@ -41,7 +41,7 @@ router.post('/', (req: Request, res: Response) => {
   ).run(name, email || null, phone || null, address || null, company || null, notes || null);
 
   const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(result.lastInsertRowid) as any;
-  notifyAdmin({ action: 'created', entity: 'Customer', label: customer.name, performedBy: req.user?.display_name || 'Unknown' });
+  notifyAdmin({ action: 'created', entity: 'Customer', label: customer.name, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.status(201).json(customer);
 });
 
@@ -58,7 +58,7 @@ router.put('/:id', (req: Request, res: Response) => {
   ).run(name, email || null, phone || null, address || null, company || null, notes || null, req.params.id);
 
   const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(req.params.id) as any;
-  notifyAdmin({ action: 'updated', entity: 'Customer', label: customer.name, performedBy: req.user?.display_name || 'Unknown' });
+  notifyAdmin({ action: 'updated', entity: 'Customer', label: customer.name, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.json(customer);
 });
 
@@ -67,7 +67,7 @@ router.delete('/:id', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT name FROM customers WHERE id = ?').get(req.params.id) as any;
   const result = db.prepare('DELETE FROM customers WHERE id = ?').run(req.params.id);
   if (result.changes === 0) { res.status(404).json({ error: 'Customer not found' }); return; }
-  notifyAdmin({ action: 'deleted', entity: 'Customer', label: existing?.name || `#${req.params.id}`, performedBy: req.user?.display_name || 'Unknown' });
+  notifyAdmin({ action: 'deleted', entity: 'Customer', label: existing?.name || `#${req.params.id}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.json({ message: 'Customer deleted' });
 });
 
