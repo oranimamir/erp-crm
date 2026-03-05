@@ -379,28 +379,51 @@ export default function DashboardPage() {
                 <div className="text-center">
                   <p className="text-xs text-gray-500 mb-0.5">Received YTD</p>
                   <p className="text-lg font-bold text-green-600">€{totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                  <div className="flex flex-wrap justify-center gap-1 mt-1.5">
+                    {forecast.filter((m: any) => m.paid > 0).map((m: any) => (
+                      <span key={m.month} className="text-[10px] bg-green-50 text-green-700 border border-green-200 rounded px-1.5 py-0.5 font-medium">
+                        {new Date(m.month + '-02').toLocaleDateString('en-GB', { month: 'short' })}
+                      </span>
+                    ))}
+                  </div>
                 </div>
                 <div className="text-center">
                   <p className="text-xs text-gray-500 mb-0.5">Pending (w/ due date)</p>
                   <p className="text-lg font-bold text-amber-500">€{totalPending.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                  <div className="flex flex-wrap justify-center gap-1 mt-1.5">
+                    {forecast.filter((m: any) => m.pending > 0).map((m: any) => (
+                      <span key={m.month} className="text-[10px] bg-amber-50 text-amber-700 border border-amber-200 rounded px-1.5 py-0.5 font-medium">
+                        {new Date(m.month + '-02').toLocaleDateString('en-GB', { month: 'short' })}
+                      </span>
+                    ))}
+                  </div>
                 </div>
                 <div className="text-center">
                   <p className="text-xs text-gray-500 mb-0.5">Expected (no date)</p>
                   <p className="text-lg font-bold text-blue-500">€{forecastExpected.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                  <p className="text-[10px] text-gray-400 mt-1.5">No due date set</p>
                 </div>
                 <div className="text-center">
                   <p className="text-xs text-gray-500 mb-0.5">Total Expected</p>
                   <p className="text-lg font-bold text-gray-900">€{totalAll.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                 </div>
               </div>
-              <div className="flex items-end gap-1" style={{ height: 160 }}>
+              <div className="flex items-end gap-1" style={{ height: 180 }}>
                 {forecast.map((m: any) => {
                   const isCurrent = m.month === currentMonth;
+                  const total = m.paid + m.pending;
                   const paidH = m.paid > 0 ? Math.max((m.paid / maxBar) * 140, 3) : 0;
                   const pendingH = m.pending > 0 ? Math.max((m.pending / maxBar) * 140, 3) : 0;
                   return (
-                    <div key={m.month} className={`flex-1 flex flex-col items-center gap-1 h-full justify-end ${isCurrent ? 'relative' : ''}`}>
+                    <div key={m.month} className={`flex-1 flex flex-col items-center gap-0.5 h-full justify-end ${isCurrent ? 'relative' : ''}`}>
                       {isCurrent && <div className="absolute inset-x-0 inset-y-0 bg-primary-50 rounded pointer-events-none" />}
+                      {total > 0 ? (
+                        <span className={`text-[9px] relative z-10 tabular-nums leading-none mb-0.5 ${isCurrent ? 'font-bold text-primary-600' : 'text-gray-400'}`}>
+                          {fmtAxis(total)}
+                        </span>
+                      ) : (
+                        <span className="text-[9px] leading-none mb-0.5 invisible">0</span>
+                      )}
                       <div className="w-full flex flex-col items-center relative z-10">
                         {m.pending > 0 && (
                           <div className="w-4/5 bg-amber-400 rounded-t" style={{ height: `${pendingH}px` }}
@@ -414,7 +437,7 @@ export default function DashboardPage() {
                           <div className="w-4/5 bg-gray-100 rounded-t" style={{ height: '2px' }} />
                         )}
                       </div>
-                      <span className={`text-[10px] relative z-10 ${isCurrent ? 'font-bold text-primary-600' : 'text-gray-400'}`}>
+                      <span className={`text-[10px] relative z-10 mt-0.5 ${isCurrent ? 'font-bold text-primary-600' : 'text-gray-400'}`}>
                         {new Date(m.month + '-02').toLocaleDateString('en-GB', { month: 'short' })}
                       </span>
                     </div>
