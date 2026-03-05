@@ -27,11 +27,14 @@ import {
   Loader2,
   Eye,
   Trash2,
+  Plus,
+  X,
 } from 'lucide-react';
 
 const statusOptions = [
   { value: 'draft', label: 'Draft' },
   { value: 'sent', label: 'Sent' },
+  { value: 'partially_paid', label: 'Partially Paid' },
   { value: 'paid', label: 'Paid' },
   { value: 'overdue', label: 'Overdue' },
   { value: 'cancelled', label: 'Cancelled' },
@@ -64,6 +67,13 @@ export default function InvoiceDetailPage() {
   const [wireUploading, setWireUploading] = useState(false);
   const [wireUploadStatus, setWireUploadStatus] = useState('');
   const [isDragging, setIsDragging] = useState(false);
+
+  // Add payment installment form
+  const [showAddPayment, setShowAddPayment] = useState(false);
+  const [addPaymentAmount, setAddPaymentAmount] = useState('');
+  const [addPaymentDate, setAddPaymentDate] = useState(new Date().toISOString().split('T')[0]);
+  const [addPaymentNotes, setAddPaymentNotes] = useState('');
+  const [addingPayment, setAddingPayment] = useState(false);
 
   // Preview modal
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -183,6 +193,44 @@ export default function InvoiceDetailPage() {
     }
   };
 
+  // ── Payment installments ───────────────────────────────────────────────────
+
+  const handleAddPayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!addPaymentAmount || isNaN(Number(addPaymentAmount)) || Number(addPaymentAmount) <= 0) {
+      addToast('Enter a valid amount', 'error');
+      return;
+    }
+    setAddingPayment(true);
+    try {
+      await api.post(`/invoices/${id}/payments`, {
+        amount: addPaymentAmount,
+        payment_date: addPaymentDate,
+        notes: addPaymentNotes || undefined,
+      });
+      addToast('Payment recorded', 'success');
+      setShowAddPayment(false);
+      setAddPaymentAmount('');
+      setAddPaymentNotes('');
+      fetchInvoice();
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to add payment', 'error');
+    } finally {
+      setAddingPayment(false);
+    }
+  };
+
+  const handleDeletePayment = async (paymentId: number) => {
+    if (!confirm('Delete this payment installment?')) return;
+    try {
+      await api.delete(`/invoices/${id}/payments/${paymentId}`);
+      addToast('Payment deleted', 'success');
+      fetchInvoice();
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to delete payment', 'error');
+    }
+  };
+
   // ── File preview ──────────────────────────────────────────────────────────
 
   const openPreview = async (filePath: string, fileName: string, subfolder: string) => {
@@ -248,8 +296,16 @@ export default function InvoiceDetailPage() {
   }
 
   const payments: any[] = invoice.payments || [];
+  const invoicePayments: any[] = invoice.invoice_payments || [];
   const statusHistory: any[] = invoice.status_history || [];
   const wireTransfers: any[] = invoice.wire_transfers || [];
+
+  const totalPaid = invoicePayments.reduce((sum: number, p: any) => sum + (p.amount || 0), 0);
+  const totalPaidEur = invoicePayments.reduce((sum: number, p: any) => sum + (p.eur_amount || p.amount || 0), 0);
+  const invoiceEurAmt = invoice.eur_amount || invoice.amount;
+  const paidFraction = invoiceEurAmt > 0 ? Math.min(1, totalPaidEur / invoiceEurAmt) : 0;
+  const remaining = invoice.amount - totalPaid;
+  const currSymbol = invoice.currency === 'EUR' ? '€' : invoice.currency === 'GBP' ? '£' : '$';
 
   return (
     <div className="space-y-6">
@@ -383,6 +439,156 @@ export default function InvoiceDetailPage() {
         </div>
       </Card>
 
+      {/* Payment History — supplier invoices */}
+      {invoice.type === 'supplier' && (
+        <Card>
+          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <CreditCard size={16} className="text-gray-400" />
+              <h2 className="font-semibold text-gray-900">Payment History</h2>
+            </div>
+            {(invoice.status === 'sent' || invoice.status === 'partially_paid') && !showAddPayment && (
+              <button
+                onClick={() => setShowAddPayment(true)}
+                className="inline-flex items-center gap-1 text-sm text-primary-600 hover:text-primary-700 font-medium"
+              >
+                <Plus size={14} /> Add Payment
+              </button>
+            )}
+          </div>
+
+          <div className="p-5 space-y-4">
+            {/* Progress bar */}
+            {invoicePayments.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-gray-600">
+                    {currSymbol}{totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} paid
+                    {invoice.currency !== 'EUR' && totalPaidEur > 0 && (
+                      <span className="text-gray-400 ml-1">(≈ €{totalPaidEur.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})</span>
+                    )}
+                  </span>
+                  <span className="text-gray-500">
+                    {remaining > 0.005
+                      ? `${currSymbol}${remaining.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} remaining`
+                      : 'Fully paid'}
+                  </span>
+                </div>
+                <div className="w-full bg-gray-100 rounded-full h-2">
+                  <div
+                    className="bg-green-500 h-2 rounded-full transition-all"
+                    style={{ width: `${(paidFraction * 100).toFixed(1)}%` }}
+                  />
+                </div>
+                {invoice.remainder_due_date && remaining > 0.005 && (
+                  <p className="text-xs text-amber-600">
+                    Remaining due: {formatDate(invoice.remainder_due_date)}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Installment list */}
+            {invoicePayments.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-2">No payments recorded yet</p>
+            ) : (
+              <div className="divide-y divide-gray-100">
+                {invoicePayments.map((p: any, idx: number) => (
+                  <div key={p.id || idx} className="py-3 flex items-center justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-gray-900">
+                          {currSymbol}{p.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                        {p.eur_amount != null && invoice.currency !== 'EUR' && (
+                          <span className="text-xs text-gray-400">
+                            → €{p.eur_amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-2">
+                        <span>{formatDate(p.payment_date)}</span>
+                        {p.notes && <span className="text-gray-400">· {p.notes}</span>}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleDeletePayment(p.id)}
+                      className="text-red-400 hover:text-red-600 shrink-0"
+                      title="Delete installment"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Add payment inline form */}
+            {showAddPayment && (
+              <form onSubmit={handleAddPayment} className="border border-gray-200 rounded-lg p-4 space-y-3 bg-gray-50">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-700">New Installment</span>
+                  <button type="button" onClick={() => setShowAddPayment(false)}>
+                    <X size={14} className="text-gray-400 hover:text-gray-600" />
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Amount *</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={addPaymentAmount}
+                      onChange={e => setAddPaymentAmount(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Payment Date *</label>
+                    <input
+                      type="date"
+                      value={addPaymentDate}
+                      onChange={e => setAddPaymentDate(e.target.value)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                      required
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Notes (optional)</label>
+                  <input
+                    type="text"
+                    value={addPaymentNotes}
+                    onChange={e => setAddPaymentNotes(e.target.value)}
+                    placeholder="e.g. Second instalment"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                </div>
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddPayment(false)}
+                    className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-100"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={addingPayment}
+                    className="px-3 py-1.5 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
+                  >
+                    {addingPayment ? 'Recording...' : 'Record Payment'}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </Card>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Payments Section */}
         {payments.length > 0 && (
@@ -413,8 +619,8 @@ export default function InvoiceDetailPage() {
             <h2 className="font-semibold text-gray-900">Wire Transfers ({wireTransfers.length})</h2>
           </div>
 
-          {/* Drag-drop upload zone — visible when invoice is 'sent' */}
-          {invoice.status === 'sent' && (
+          {/* Drag-drop upload zone — visible when invoice is 'sent' or 'partially_paid' */}
+          {(invoice.status === 'sent' || invoice.status === 'partially_paid') && (
             <div className="px-5 pt-4 pb-2 space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <div>

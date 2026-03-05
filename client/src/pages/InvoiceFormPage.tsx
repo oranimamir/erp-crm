@@ -7,7 +7,7 @@ import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
 import FileUpload from '../components/ui/FileUpload';
-import { ArrowLeft, Loader2, ChevronDown, X, Truck } from 'lucide-react';
+import { ArrowLeft, Loader2, ChevronDown, X, Truck, CreditCard } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 
 const typeOptions = [
@@ -179,6 +179,12 @@ export default function InvoiceFormPage() {
   const [saving, setSaving] = useState(false);
   const [scanning, setScanning] = useState(false);
 
+  // Initial payment section (new invoices only, supplier type)
+  const [hasInitialPayment, setHasInitialPayment] = useState(false);
+  const [initialPaymentAmount, setInitialPaymentAmount] = useState('');
+  const [initialPaymentDate, setInitialPaymentDate] = useState(new Date().toISOString().slice(0, 10));
+  const [remainderDueDate, setRemainderDueDate] = useState('');
+
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
@@ -342,6 +348,14 @@ export default function InvoiceFormPage() {
       if (form.po_number) formData.append('po_number', form.po_number);
       if (form.operation_id) formData.append('operation_id', form.operation_id);
       if (file) formData.append('file', file);
+
+      if (!isEdit && form.type === 'supplier' && hasInitialPayment && initialPaymentAmount && initialPaymentDate) {
+        formData.append('initial_payment_amount', initialPaymentAmount);
+        formData.append('initial_payment_date', initialPaymentDate);
+      }
+      if (!isEdit && form.type === 'supplier' && remainderDueDate) {
+        formData.append('remainder_due_date', remainderDueDate);
+      }
 
       if (isEdit) {
         await api.put(`/invoices/${id}`, formData, {
@@ -537,6 +551,63 @@ export default function InvoiceFormPage() {
               placeholder="Optional notes..."
             />
           </div>
+
+          {/* Initial Payment section — new supplier invoices only */}
+          {!isEdit && form.type === 'supplier' && (
+            <div className="border border-gray-200 rounded-lg overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setHasInitialPayment(prev => !prev)}
+                className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 text-sm font-medium text-gray-700 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <CreditCard size={15} className="text-gray-400" />
+                  <span>An initial payment has already been made</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={hasInitialPayment}
+                  onChange={() => {}}
+                  className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 pointer-events-none"
+                />
+              </button>
+
+              {hasInitialPayment && (
+                <div className="px-4 py-4 space-y-4 bg-white">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <Input
+                      label="Amount Paid *"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max={form.amount || undefined}
+                      value={initialPaymentAmount}
+                      onChange={e => setInitialPaymentAmount(e.target.value)}
+                      placeholder="0.00"
+                    />
+                    <Input
+                      label="Payment Date *"
+                      type="date"
+                      value={initialPaymentDate}
+                      onChange={e => setInitialPaymentDate(e.target.value)}
+                    />
+                  </div>
+                  <Input
+                    label="Remaining Due Date (optional)"
+                    type="date"
+                    value={remainderDueDate}
+                    onChange={e => setRemainderDueDate(e.target.value)}
+                  />
+                  {form.amount && initialPaymentAmount && Number(initialPaymentAmount) < Number(form.amount) && (
+                    <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                      Remaining balance: {form.currency === 'EUR' ? '€' : form.currency === 'GBP' ? '£' : '$'}
+                      {(Number(form.amount) - Number(initialPaymentAmount)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} — invoice will be marked as <strong>Partially Paid</strong>
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
             <Button variant="secondary" type="button" onClick={() => navigate('/invoices')}>

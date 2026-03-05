@@ -5,6 +5,7 @@ const statusColors: Record<string, 'gray' | 'blue' | 'green' | 'yellow' | 'red' 
   draft: 'gray',
   sent: 'blue',
   paid: 'green',
+  partially_paid: 'orange',
   overdue: 'red',
   cancelled: 'red',
   // Order
@@ -42,6 +43,7 @@ const statusLabels: Record<string, string> = {
   draft: 'Draft',
   sent: 'Sent',
   paid: 'Paid',
+  partially_paid: 'Partially Paid',
   overdue: 'Overdue',
   cancelled: 'Cancelled',
   order_placed: 'Order Placed',
