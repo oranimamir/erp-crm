@@ -317,16 +317,11 @@ router.get('/:id/wire-transfers', (req: Request, res: Response) => {
   const invoice = db.prepare('SELECT id FROM invoices WHERE id = ?').get(req.params.id) as any;
   if (!invoice) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
-  // Use inline integer to bypass any parameter binding issue
   const transfers = db.prepare(`
     SELECT wt.*, u.display_name as approved_by_name
     FROM wire_transfers wt LEFT JOIN users u ON wt.approved_by = u.id
     WHERE wt.invoice_id = ${invoiceId} ORDER BY wt.created_at DESC
   `).all();
-
-  const allWt = (db.prepare('SELECT COUNT(*) as c, GROUP_CONCAT(invoice_id) as ids FROM wire_transfers').get() as any);
-  console.log(`[wire-transfers] invoice=${invoiceId} found=${invoice.id} transfers=${transfers.length} totalWT=${allWt?.c} allIds=${allWt?.ids}`);
-
   res.json(transfers);
 });
 
