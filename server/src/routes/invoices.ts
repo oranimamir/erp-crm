@@ -19,6 +19,7 @@ router.get('/', (req: Request, res: Response) => {
   const type = (req.query.type as string) || '';
   const year  = (req.query.year  as string) || '';
   const month = (req.query.month as string) || '';
+  const wire  = (req.query.wire  as string) || '';
   const offset = (page - 1) * limit;
 
   const sortFieldMap: Record<string, string> = {
@@ -40,16 +41,19 @@ router.get('/', (req: Request, res: Response) => {
   if (type)   { conditions.push('i.type = ?'); params.push(type); }
   if (year)   { conditions.push("strftime('%Y', COALESCE(i.invoice_date, i.created_at)) = ?"); params.push(year); }
   if (month)  { conditions.push("strftime('%m', COALESCE(i.invoice_date, i.created_at)) = ?"); params.push(month.padStart(2, '0')); }
+  if (wire === 'yes') { conditions.push('COALESCE(wt.wire_transfer_count, 0) > 0'); }
+  if (wire === 'no')  { conditions.push('(wt.wire_transfer_count IS NULL OR wt.wire_transfer_count = 0)'); }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
-  const total = (db.prepare(`SELECT COUNT(*) as count FROM invoices i LEFT JOIN customers c ON i.customer_id = c.id LEFT JOIN suppliers s ON i.supplier_id = s.id ${where}`).get(...params) as any).count;
+  const wtJoin = `LEFT JOIN (SELECT invoice_id, COUNT(*) as wire_transfer_count FROM wire_transfers GROUP BY invoice_id) wt ON wt.invoice_id = i.id`;
+  const total = (db.prepare(`SELECT COUNT(*) as count FROM invoices i LEFT JOIN customers c ON i.customer_id = c.id LEFT JOIN suppliers s ON i.supplier_id = s.id ${wtJoin} ${where}`).get(...params) as any).count;
   const invoices = db.prepare(`
     SELECT i.*, c.name as customer_name, s.name as supplier_name,
       COALESCE(wt.wire_transfer_count, 0) as wire_transfer_count
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
     LEFT JOIN suppliers s ON i.supplier_id = s.id
-    LEFT JOIN (SELECT invoice_id, COUNT(*) as wire_transfer_count FROM wire_transfers GROUP BY invoice_id) wt ON wt.invoice_id = i.id
+    ${wtJoin}
     ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?
   `).all(...params, limit, offset);
 
@@ -371,16 +375,11 @@ router.post('/:id/wire-transfers', uploadWireTransfer.single('file'), async (req
     // Force save again after status update
     db.saveToDisk();
 
-    // Auto-complete linked operation when delivered and all its invoices are paid/cancelled
+    // Auto-complete linked operation: delivered + at least one wire transfer uploaded = completed
     if (invoice.operation_id) {
-      const unpaid = (db.prepare(
-        `SELECT COUNT(*) as count FROM invoices WHERE operation_id = ? AND status NOT IN ('paid','cancelled')`
-      ).get(invoice.operation_id) as any).count;
-      if (unpaid === 0) {
-        const operation = db.prepare('SELECT status FROM operations WHERE id = ?').get(invoice.operation_id) as any;
-        if (operation && operation.status === 'delivered') {
-          db.prepare(`UPDATE operations SET status='completed', updated_at=datetime('now') WHERE id=?`).run(invoice.operation_id);
-        }
+      const operation = db.prepare('SELECT status FROM operations WHERE id = ?').get(invoice.operation_id) as any;
+      if (operation && operation.status === 'delivered') {
+        db.prepare(`UPDATE operations SET status='completed', updated_at=datetime('now') WHERE id=?`).run(invoice.operation_id);
       }
     }
 

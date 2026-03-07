@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import Card from '../components/ui/Card';
@@ -10,7 +10,7 @@ import SearchBar from '../components/ui/SearchBar';
 import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
-import { Plus, FileText, Eye, Trash2, FileDown, ChevronUp, ChevronDown, FileSpreadsheet, Landmark } from 'lucide-react';
+import { Plus, FileText, Eye, Trash2, FileDown, ChevronUp, ChevronDown, FileSpreadsheet, Landmark, Download, X, Loader2 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
 
@@ -46,6 +46,7 @@ const MONTHS = ['January','February','March','April','May','June','July','August
 
 export default function InvoicesPage() {
   const { addToast } = useToast();
+  const navigate = useNavigate();
   const [invoices, setInvoices] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -55,10 +56,57 @@ export default function InvoicesPage() {
   const [typeFilter, setTypeFilter] = useState('');
   const [yearFilter,  setYearFilter]  = useState('');
   const [monthFilter, setMonthFilter] = useState('');
+  const [wireFilter,  setWireFilter]  = useState('');
   const [sortBy, setSortBy] = useState('date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [loading, setLoading] = useState(true);
   const [deleteId, setDeleteId] = useState<number | null>(null);
+
+  // Preview modal
+  const [previewItem, setPreviewItem] = useState<{ fileName: string; filePath: string; subfolder: string } | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [loadingWirePreview, setLoadingWirePreview] = useState<Set<number>>(new Set());
+
+  async function openPreview(fileName: string, filePath: string, subfolder: string) {
+    setPreviewItem({ fileName, filePath, subfolder });
+    setPreviewUrl(null);
+    setPreviewLoading(true);
+    try {
+      const resp = await api.get(`/files/${subfolder}/${filePath}`, { responseType: 'blob' });
+      const blob = new Blob([resp.data], { type: resp.headers['content-type'] || 'application/octet-stream' });
+      setPreviewUrl(URL.createObjectURL(blob));
+    } catch {
+      addToast('Failed to load preview', 'error');
+      setPreviewItem(null);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  function closePreview() {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewItem(null);
+    setPreviewUrl(null);
+  }
+
+  async function previewWire(invId: number) {
+    if (loadingWirePreview.has(invId)) return;
+    setLoadingWirePreview(prev => new Set(prev).add(invId));
+    try {
+      const { data } = await api.get(`/invoices/${invId}/wire-transfers`);
+      const wt = data.find((w: any) => w.file_path);
+      if (wt) {
+        openPreview(wt.file_name || wt.file_path, wt.file_path, 'wire-transfers');
+      } else {
+        navigate(`/invoices/${invId}`);
+      }
+    } catch {
+      addToast('Failed to load wire transfer', 'error');
+    } finally {
+      setLoadingWirePreview(prev => { const s = new Set(prev); s.delete(invId); return s; });
+    }
+  }
 
   const handleSort = (field: string) => {
     if (sortBy === field) {
@@ -86,6 +134,7 @@ export default function InvoicesPage() {
         type: typeFilter || undefined,
         year:  yearFilter  || undefined,
         month: monthFilter || undefined,
+        wire:  wireFilter  || undefined,
         sort_by: sortBy,
         sort_dir: sortDir,
       },
@@ -98,7 +147,7 @@ export default function InvoicesPage() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchInvoices(); }, [page, search, statusFilter, typeFilter, yearFilter, monthFilter, sortBy, sortDir]);
+  useEffect(() => { fetchInvoices(); }, [page, search, statusFilter, typeFilter, yearFilter, monthFilter, wireFilter, sortBy, sortDir]);
 
   const handleDelete = async () => {
     if (!deleteId) return;
@@ -199,6 +248,15 @@ export default function InvoicesPage() {
               <option value="">All Months</option>
               {MONTHS.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
             </select>
+            <select
+              value={wireFilter}
+              onChange={e => { setWireFilter(e.target.value); setPage(1); }}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            >
+              <option value="">All (Wire)</option>
+              <option value="yes">Wire Transfer: Yes</option>
+              <option value="no">Wire Transfer: No</option>
+            </select>
             <span className="text-sm text-gray-500">{total} invoices</span>
           </div>
         </div>
@@ -245,7 +303,20 @@ export default function InvoicesPage() {
               <tbody className="divide-y divide-gray-100">
                 {invoices.map(inv => (
                   <tr key={inv.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 font-medium text-gray-900">{inv.invoice_number}</td>
+                    <td className="px-4 py-3 font-medium text-gray-900">
+                      <div className="flex items-center gap-1.5">
+                        {inv.invoice_number}
+                        {inv.file_path && (
+                          <button
+                            onClick={e => { e.stopPropagation(); openPreview(inv.file_name || inv.file_path, inv.file_path, 'invoices'); }}
+                            className="p-0.5 text-gray-400 hover:text-primary-600 rounded"
+                            title="Preview invoice file"
+                          >
+                            <Eye size={13} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-4 py-3 text-gray-600">
                       {(inv.customer_id || inv.supplier_id) ? (
                         <Link
@@ -276,12 +347,21 @@ export default function InvoicesPage() {
                         {statusOptions.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                       </select>
                     </td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                       {inv.wire_transfer_count > 0 ? (
-                        <Link to={`/invoices/${inv.id}`} title={`${inv.wire_transfer_count} wire transfer${inv.wire_transfer_count > 1 ? 's' : ''}`} onClick={e => e.stopPropagation()} className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-800">
+                        <div className="flex items-center gap-1 text-indigo-600">
                           <Landmark size={14} />
                           <span className="text-xs font-medium">{inv.wire_transfer_count}</span>
-                        </Link>
+                          <button
+                            onClick={() => previewWire(inv.id)}
+                            className="p-0.5 rounded hover:bg-gray-100 text-gray-400 hover:text-indigo-600"
+                            title="Preview wire transfer"
+                          >
+                            {loadingWirePreview.has(inv.id)
+                              ? <Loader2 size={13} className="animate-spin" />
+                              : <Eye size={13} />}
+                          </button>
+                        </div>
                       ) : (
                         <span className="text-gray-300">—</span>
                       )}
@@ -310,6 +390,37 @@ export default function InvoicesPage() {
         message="Are you sure you want to delete this invoice? This action cannot be undone."
         confirmLabel="Delete"
       />
+
+      {previewItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={closePreview}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl mx-4 flex flex-col overflow-hidden" style={{ maxHeight: '90vh' }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
+              <p className="font-medium text-gray-900 truncate">{previewItem.fileName}</p>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {previewUrl && (
+                  <a href={previewUrl} download={previewItem.fileName} className="flex items-center gap-1 px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">
+                    <Download size={14} /> Download
+                  </a>
+                )}
+                <button onClick={closePreview} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><X size={18} /></button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto min-h-0 bg-gray-100 flex items-center justify-center p-4">
+              {previewLoading ? (
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600" />
+              ) : previewUrl ? (
+                /\.(jpg|jpeg|png|webp)$/i.test(previewItem.fileName) ? (
+                  <img src={previewUrl} alt={previewItem.fileName} className="max-w-full max-h-full object-contain rounded-lg shadow" />
+                ) : (
+                  <iframe src={previewUrl} title={previewItem.fileName} className="w-full rounded-lg shadow bg-white" style={{ height: '70vh' }} />
+                )
+              ) : (
+                <p className="text-gray-500">Unable to preview this file.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

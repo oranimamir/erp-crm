@@ -246,14 +246,14 @@ router.patch('/:id/status', (req: Request, res: Response) => {
 
   if (status === 'completed') {
     if (existing.status !== 'delivered') {
-      res.status(400).json({ error: 'Operation must be delivered before it can be completed' });
+      res.status(400).json({ error: 'Operation must be in Delivered status before completing' });
       return;
     }
-    const unpaid = (db.prepare(
-      `SELECT COUNT(*) as count FROM invoices WHERE operation_id = ? AND status NOT IN ('paid','cancelled')`
+    const wtCount = (db.prepare(
+      `SELECT COUNT(*) as count FROM wire_transfers wt JOIN invoices i ON wt.invoice_id = i.id WHERE i.operation_id = ?`
     ).get(req.params.id) as any).count;
-    if (unpaid > 0) {
-      res.status(400).json({ error: 'All invoices must be paid before the operation can be completed' });
+    if (wtCount === 0) {
+      res.status(400).json({ error: 'At least one wire transfer must be uploaded before the operation can be completed' });
       return;
     }
   }
