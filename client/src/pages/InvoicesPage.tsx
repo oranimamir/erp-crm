@@ -10,7 +10,7 @@ import SearchBar from '../components/ui/SearchBar';
 import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
-import { Plus, FileText, Eye, Trash2, FileDown, ChevronUp, ChevronDown, FileSpreadsheet } from 'lucide-react';
+import { Plus, FileText, Eye, Trash2, FileDown, ChevronUp, ChevronDown, FileSpreadsheet, Landmark } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
 
@@ -232,6 +232,7 @@ export default function InvoicesPage() {
                     <span className="flex items-center justify-end gap-1">Amount <SortIcon field="amount" /></span>
                   </th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Status</th>
+                  <th className="text-center px-4 py-3 font-medium text-gray-600">Wire</th>
                   <th
                     className="text-left px-4 py-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900 select-none"
                     onClick={() => handleSort('date')}
@@ -274,6 +275,16 @@ export default function InvoicesPage() {
                       >
                         {statusOptions.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                       </select>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      {inv.wire_transfer_count > 0 ? (
+                        <Link to={`/invoices/${inv.id}`} title={`${inv.wire_transfer_count} wire transfer${inv.wire_transfer_count > 1 ? 's' : ''}`} onClick={e => e.stopPropagation()} className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-800">
+                          <Landmark size={14} />
+                          <span className="text-xs font-medium">{inv.wire_transfer_count}</span>
+                        </Link>
+                      ) : (
+                        <span className="text-gray-300">—</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-gray-600">{formatDateOrDash(inv.invoice_date || inv.due_date)}</td>
                     <td className="px-4 py-3">

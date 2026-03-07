@@ -44,10 +44,12 @@ router.get('/', (req: Request, res: Response) => {
 
   const total = (db.prepare(`SELECT COUNT(*) as count FROM invoices i LEFT JOIN customers c ON i.customer_id = c.id LEFT JOIN suppliers s ON i.supplier_id = s.id ${where}`).get(...params) as any).count;
   const invoices = db.prepare(`
-    SELECT i.*, c.name as customer_name, s.name as supplier_name
+    SELECT i.*, c.name as customer_name, s.name as supplier_name,
+      COALESCE(wt.wire_transfer_count, 0) as wire_transfer_count
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
     LEFT JOIN suppliers s ON i.supplier_id = s.id
+    LEFT JOIN (SELECT invoice_id, COUNT(*) as wire_transfer_count FROM wire_transfers GROUP BY invoice_id) wt ON wt.invoice_id = i.id
     ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?
   `).all(...params, limit, offset);
 
