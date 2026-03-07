@@ -337,8 +337,14 @@ router.post('/:id/wire-transfers', uploadWireTransfer.single('file'), async (req
   const file_name = req.file ? req.file.originalname : null;
 
   try {
-    const fx_rate = await getEurRate(invoice.currency || 'USD', payment_date);
-    const eur_amount = amount * fx_rate;
+    let fx_rate = 1;
+    let eur_amount = amount;
+    try {
+      fx_rate = await getEurRate(invoice.currency || 'USD', payment_date);
+      eur_amount = amount * fx_rate;
+    } catch (fxErr) {
+      console.warn(`[wire-transfer] FX lookup failed for ${invoice.currency}/${payment_date}, proceeding without conversion:`, fxErr);
+    }
 
     const result = db.prepare(`
       INSERT INTO wire_transfers (invoice_id, amount, transfer_date, bank_reference, fx_rate, eur_amount, status, file_path, file_name)
