@@ -36,6 +36,7 @@ const statusOptions = [
   { value: 'sent', label: 'Sent' },
   { value: 'partially_paid', label: 'Partially Paid' },
   { value: 'paid', label: 'Paid' },
+  { value: 'paid_with_other', label: 'Paid with Other Invoice' },
   { value: 'overdue', label: 'Overdue' },
   { value: 'cancelled', label: 'Cancelled' },
 ];

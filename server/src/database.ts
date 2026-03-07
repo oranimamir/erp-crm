@@ -753,7 +753,49 @@ export async function initializeDatabase() {
           type TEXT NOT NULL CHECK (type IN ('customer', 'supplier')),
           amount REAL NOT NULL,
           currency TEXT NOT NULL DEFAULT 'USD',
-          status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'sent', 'paid', 'overdue', 'cancelled', 'partially_paid')),
+          status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'sent', 'paid', 'overdue', 'cancelled', 'partially_paid', 'paid_with_other')),
+          due_date TEXT,
+          notes TEXT,
+          file_path TEXT,
+          file_name TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          invoice_date TEXT,
+          payment_date TEXT,
+          our_ref TEXT,
+          po_number TEXT,
+          operation_id INTEGER,
+          fx_rate REAL,
+          eur_amount REAL,
+          remainder_due_date TEXT,
+          FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL,
+          FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE SET NULL,
+          CHECK (
+            (type = 'customer' AND customer_id IS NOT NULL AND supplier_id IS NULL) OR
+            (type = 'supplier' AND supplier_id IS NOT NULL AND customer_id IS NULL)
+          )
+        );
+        INSERT INTO invoices SELECT id, invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, notes, file_path, file_name, created_at, updated_at, invoice_date, payment_date, our_ref, po_number, operation_id, fx_rate, eur_amount, remainder_due_date FROM invoices_old;
+        DROP TABLE invoices_old;
+      `);
+    }
+  } catch (_) { /* already migrated or not needed */ }
+
+  // Migrate invoices CHECK constraint to allow 'paid_with_other' status
+  try {
+    const tableInfo2 = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='invoices'").get() as any;
+    if (tableInfo2?.sql && !tableInfo2.sql.includes('paid_with_other')) {
+      db.exec(`
+        ALTER TABLE invoices RENAME TO invoices_old;
+        CREATE TABLE invoices (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          invoice_number TEXT UNIQUE NOT NULL,
+          customer_id INTEGER,
+          supplier_id INTEGER,
+          type TEXT NOT NULL CHECK (type IN ('customer', 'supplier')),
+          amount REAL NOT NULL,
+          currency TEXT NOT NULL DEFAULT 'USD',
+          status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'sent', 'paid', 'overdue', 'cancelled', 'partially_paid', 'paid_with_other')),
           due_date TEXT,
           notes TEXT,
           file_path TEXT,

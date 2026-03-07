@@ -187,7 +187,7 @@ router.get('/summary', async (req: Request, res: Response) => {
   const outstandingRows = db.prepare(`
     SELECT amount, UPPER(COALESCE(currency, 'USD')) as currency
     FROM invoices
-    WHERE type = 'customer' AND status IN ('sent', 'overdue') AND due_date IS NOT NULL
+    WHERE type = 'customer' AND status IN ('sent', 'overdue', 'partially_paid') AND due_date IS NOT NULL
       AND strftime('%Y', due_date) = ? ${custWhereOnly}
   `).all(year) as any[];
   const outstanding = await sumLiveEur(outstandingRows);
@@ -205,7 +205,7 @@ router.get('/summary', async (req: Request, res: Response) => {
     SELECT i.amount, UPPER(COALESCE(i.currency, 'USD')) as currency
     FROM invoices i
     ${catJoin}
-    WHERE i.type = 'supplier' AND i.status IN ('draft', 'sent', 'overdue')
+    WHERE i.type = 'supplier' AND i.status IN ('draft', 'sent', 'overdue', 'partially_paid')
     ${suppWhereOnly} ${catCond}
   `).all() as any[];
   const outstandingPayable = await sumLiveEur(payableRows);
