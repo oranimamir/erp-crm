@@ -4,7 +4,7 @@ import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import {
   Briefcase, Search, Plus, ChevronLeft, ChevronRight, FileText, Receipt,
-  FileSpreadsheet, ChevronUp, ChevronDown, Eye, Download, X, Truck, Loader2, ArrowLeftRight,
+  FileSpreadsheet, ChevronUp, ChevronDown, Eye, Download, X, Truck, Loader2, ArrowLeftRight, Landmark,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
@@ -30,6 +30,7 @@ interface Operation {
   quantity_unit?: string;
   invoice_amount_raw: number;
   invoice_currency?: string;
+  wire_transfer_count: number;
   created_at: string;
 }
 
@@ -85,6 +86,7 @@ export default function OperationsPage() {
 
   // Invoice preview loading
   const [loadingInvoices, setLoadingInvoices] = useState<Set<number>>(new Set());
+  const [loadingWireTransfers, setLoadingWireTransfers] = useState<Set<number>>(new Set());
 
   const previewInvoice = async (opId: number) => {
     if (loadingInvoices.has(opId)) return;
@@ -101,6 +103,24 @@ export default function OperationsPage() {
       addToast('Failed to load invoice', 'error');
     } finally {
       setLoadingInvoices(prev => { const s = new Set(prev); s.delete(opId); return s; });
+    }
+  };
+
+  const previewWireTransfer = async (opId: number) => {
+    if (loadingWireTransfers.has(opId)) return;
+    setLoadingWireTransfers(prev => new Set(prev).add(opId));
+    try {
+      const { data } = await api.get(`/operations/${opId}`);
+      const wt = (data.wire_transfers || []).find((w: any) => w.file_path);
+      if (wt) {
+        openPreview({ fileName: wt.file_name, filePath: wt.file_path, subfolder: 'wire-transfers' });
+      } else if (data.invoices?.[0]) {
+        navigate(`/invoices/${data.invoices[0].id}`);
+      }
+    } catch {
+      addToast('Failed to load wire transfer', 'error');
+    } finally {
+      setLoadingWireTransfers(prev => { const s = new Set(prev); s.delete(opId); return s; });
     }
   };
 
@@ -353,6 +373,7 @@ export default function OperationsPage() {
                 </th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Docs</th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Invoices</th>
+                <th className="text-left px-4 py-3 font-medium text-gray-600">Wire</th>
                 <th className="text-right px-4 py-3 font-medium text-gray-600">{showRaw ? 'Quantity' : 'Quantity (MT)'}</th>
                 <th className="text-right px-4 py-3 font-medium text-gray-600">{showRaw ? 'Invoice Total' : 'Invoice Total (EUR)'}</th>
                 <th
@@ -443,6 +464,23 @@ export default function OperationsPage() {
                           title="Preview invoice"
                         >
                           {loadingInvoices.has(op.id)
+                            ? <Loader2 size={13} className="animate-spin" />
+                            : <Eye size={13} />}
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                    <div className="flex items-center gap-1 text-gray-600">
+                      <Landmark size={14} />
+                      {op.wire_transfer_count || 0}
+                      {op.wire_transfer_count > 0 && (
+                        <button
+                          onClick={() => previewWireTransfer(op.id)}
+                          className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-indigo-600"
+                          title="Preview wire transfer"
+                        >
+                          {loadingWireTransfers.has(op.id)
                             ? <Loader2 size={13} className="animate-spin" />
                             : <Eye size={13} />}
                         </button>
