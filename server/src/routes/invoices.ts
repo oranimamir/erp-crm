@@ -66,18 +66,19 @@ router.get('/:id', (req: Request, res: Response) => {
   `).get(req.params.id) as any;
   if (!invoice) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
-  const payments = db.prepare('SELECT * FROM payments WHERE invoice_id = ? ORDER BY payment_date DESC').all(invoice.id);
-  const invoice_payments = db.prepare('SELECT * FROM invoice_payments WHERE invoice_id = ? ORDER BY payment_date ASC').all(invoice.id);
+  const invoiceId = Number(req.params.id);
+  const payments = db.prepare('SELECT * FROM payments WHERE invoice_id = ? ORDER BY payment_date DESC').all(invoiceId);
+  const invoice_payments = db.prepare('SELECT * FROM invoice_payments WHERE invoice_id = ? ORDER BY payment_date ASC').all(invoiceId);
   const history = db.prepare(`
     SELECT sh.*, u.display_name as changed_by_name
     FROM status_history sh LEFT JOIN users u ON sh.changed_by = u.id
     WHERE sh.entity_type = 'invoice' AND sh.entity_id = ? ORDER BY sh.created_at DESC
-  `).all(invoice.id);
+  `).all(invoiceId);
   const wire_transfers = db.prepare(`
     SELECT wt.*, u.display_name as approved_by_name
     FROM wire_transfers wt LEFT JOIN users u ON wt.approved_by = u.id
     WHERE wt.invoice_id = ? ORDER BY wt.created_at DESC
-  `).all(invoice.id);
+  `).all(invoiceId);
 
   res.json({ ...invoice, payments, invoice_payments, status_history: history, wire_transfers });
 });
