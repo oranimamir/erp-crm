@@ -82,10 +82,13 @@ export default function InvoiceDetailPage() {
 
   const fetchInvoice = () => {
     setLoading(true);
-    api.get(`/invoices/${id}`)
-      .then(res => {
-        setInvoice(res.data);
-        setNewStatus(res.data.status);
+    Promise.all([
+      api.get(`/invoices/${id}`),
+      api.get(`/invoices/${id}/wire-transfers`),
+    ])
+      .then(([invoiceRes, wireRes]) => {
+        setInvoice({ ...invoiceRes.data, wire_transfers: wireRes.data });
+        setNewStatus(invoiceRes.data.status);
       })
       .finally(() => setLoading(false));
   };

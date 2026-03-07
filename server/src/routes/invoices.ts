@@ -320,7 +320,7 @@ router.get('/:id/wire-transfers', (req: Request, res: Response) => {
     SELECT wt.*, u.display_name as approved_by_name
     FROM wire_transfers wt LEFT JOIN users u ON wt.approved_by = u.id
     WHERE wt.invoice_id = ? ORDER BY wt.created_at DESC
-  `).all(req.params.id);
+  `).all(Number(req.params.id));
   res.json(transfers);
 });
 
@@ -342,7 +342,7 @@ router.post('/:id/wire-transfers', uploadWireTransfer.single('file'), async (req
     const result = db.prepare(`
       INSERT INTO wire_transfers (invoice_id, amount, transfer_date, bank_reference, fx_rate, eur_amount, status, file_path, file_name)
       VALUES (?, ?, ?, ?, ?, ?, 'approved', ?, ?)
-    `).run(req.params.id, amount, payment_date, bank_reference, fx_rate, eur_amount, file_path, file_name);
+    `).run(Number(req.params.id), amount, payment_date, bank_reference, fx_rate, eur_amount, file_path, file_name);
 
     // Immediately mark invoice as paid, and set payment_date from wire transfer date
     const prevStatus = invoice.status;
