@@ -356,7 +356,16 @@ export default function InvoiceDetailPage() {
             <span className="font-medium text-gray-500">
               {invoice.type === 'customer' ? 'Customer:' : 'Supplier:'}
             </span>
-            <span>{invoice.customer_name || invoice.supplier_name || '-'}</span>
+            {(invoice.customer_id || invoice.supplier_id) ? (
+              <Link
+                to={invoice.type === 'customer' ? `/customers/${invoice.customer_id}` : `/suppliers/${invoice.supplier_id}`}
+                className="text-primary-600 hover:text-primary-700 hover:underline font-medium"
+              >
+                {invoice.customer_name || invoice.supplier_name}
+              </Link>
+            ) : (
+              <span>{invoice.customer_name || invoice.supplier_name || '-'}</span>
+            )}
           </div>
           <div className="flex items-center gap-2 text-gray-600">
             <Calendar size={16} className="text-gray-400 shrink-0" />

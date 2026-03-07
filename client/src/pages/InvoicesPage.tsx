@@ -246,7 +246,17 @@ export default function InvoicesPage() {
                   <tr key={inv.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3 font-medium text-gray-900">{inv.invoice_number}</td>
                     <td className="px-4 py-3 text-gray-600">
-                      {inv.customer_name || inv.supplier_name || '-'}
+                      {(inv.customer_id || inv.supplier_id) ? (
+                        <Link
+                          to={inv.type === 'customer' ? `/customers/${inv.customer_id}` : `/suppliers/${inv.supplier_id}`}
+                          className="text-primary-600 hover:text-primary-700 hover:underline"
+                          onClick={e => e.stopPropagation()}
+                        >
+                          {inv.customer_name || inv.supplier_name}
+                        </Link>
+                      ) : (
+                        inv.customer_name || inv.supplier_name || '-'
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <Badge variant={typeColors[inv.type] || 'gray'}>

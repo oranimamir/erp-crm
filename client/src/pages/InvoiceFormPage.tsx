@@ -185,6 +185,12 @@ export default function InvoiceFormPage() {
   const [initialPaymentDate, setInitialPaymentDate] = useState(new Date().toISOString().slice(0, 10));
   const [remainderDueDate, setRemainderDueDate] = useState('');
 
+  // Edit-mode part payment
+  const [existingPayments, setExistingPayments] = useState<any[]>([]);
+  const [editPaymentAmount, setEditPaymentAmount] = useState('');
+  const [editPaymentDate, setEditPaymentDate] = useState(new Date().toISOString().slice(0, 10));
+  const [editPaymentNotes, setEditPaymentNotes] = useState('');
+
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
@@ -221,6 +227,7 @@ export default function InvoiceFormPage() {
             const filename = inv.file_path.split('/').pop() || inv.file_path;
             setCurrentFile({ name: filename, path: inv.file_path });
           }
+          setExistingPayments(res.data.invoice_payments || []);
         }
       } catch (err: any) {
         addToast(err.response?.data?.error || 'Failed to load data', 'error');
@@ -361,6 +368,14 @@ export default function InvoiceFormPage() {
         await api.put(`/invoices/${id}`, formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
+        // Record part payment if entered
+        if (form.type === 'supplier' && editPaymentAmount && Number(editPaymentAmount) > 0 && editPaymentDate) {
+          await api.post(`/invoices/${id}/payments`, {
+            amount: editPaymentAmount,
+            payment_date: editPaymentDate,
+            notes: editPaymentNotes || undefined,
+          });
+        }
         addToast('Invoice updated', 'success');
       } else {
         await api.post('/invoices', formData, {
@@ -551,6 +566,91 @@ export default function InvoiceFormPage() {
               placeholder="Optional notes..."
             />
           </div>
+
+          {/* Part Payments section — edit mode for supplier invoices */}
+          {isEdit && form.type === 'supplier' && (
+            <div className="border border-gray-200 rounded-lg overflow-hidden">
+              <div className="px-4 py-3 bg-gray-50 flex items-center gap-2 border-b border-gray-200">
+                <CreditCard size={15} className="text-gray-400" />
+                <span className="text-sm font-medium text-gray-700">Part Payments</span>
+                {existingPayments.length > 0 && (
+                  <span className="ml-auto text-xs text-gray-500">
+                    {existingPayments.length} payment{existingPayments.length !== 1 ? 's' : ''} recorded
+                  </span>
+                )}
+              </div>
+
+              {/* Existing payments */}
+              {existingPayments.length > 0 && (
+                <div className="divide-y divide-gray-100 px-4">
+                  {existingPayments.map((p: any, i: number) => {
+                    const sym = form.currency === 'EUR' ? '€' : form.currency === 'GBP' ? '£' : '$';
+                    return (
+                      <div key={p.id || i} className="py-2 flex items-center gap-3 text-sm">
+                        <span className="text-gray-500 w-24 shrink-0">{p.payment_date?.slice(0, 10) || '-'}</span>
+                        <span className="font-medium text-green-700">{sym}{Number(p.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                        {p.notes && <span className="text-gray-400 truncate">{p.notes}</span>}
+                      </div>
+                    );
+                  })}
+                  {(() => {
+                    const totalPaid = existingPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0);
+                    const rem = Number(form.amount) - totalPaid;
+                    const sym = form.currency === 'EUR' ? '€' : form.currency === 'GBP' ? '£' : '$';
+                    return (
+                      <div className="py-2 flex items-center gap-3 text-xs text-gray-500 border-t border-gray-100">
+                        <span className="text-green-600 font-medium">{sym}{totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2 })} paid</span>
+                        {rem > 0.005 && <span className="text-amber-600 font-medium">{sym}{rem.toLocaleString(undefined, { minimumFractionDigits: 2 })} remaining</span>}
+                        {rem <= 0.005 && <span className="text-green-600">Fully paid</span>}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
+              {/* Add new payment */}
+              {existingPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0) < Number(form.amount) && (
+                <div className="px-4 py-4 space-y-3 bg-white border-t border-gray-100">
+                  <p className="text-xs font-medium text-gray-600">Record a new payment</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <Input
+                      label="Amount *"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={editPaymentAmount}
+                      onChange={e => setEditPaymentAmount(e.target.value)}
+                      placeholder="0.00"
+                    />
+                    <Input
+                      label="Payment Date *"
+                      type="date"
+                      value={editPaymentDate}
+                      onChange={e => setEditPaymentDate(e.target.value)}
+                    />
+                  </div>
+                  <Input
+                    label="Notes (optional)"
+                    value={editPaymentNotes}
+                    onChange={e => setEditPaymentNotes(e.target.value)}
+                    placeholder="e.g. Second instalment"
+                  />
+                  {editPaymentAmount && form.amount && Number(editPaymentAmount) > 0 && (() => {
+                    const totalPaid = existingPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0) + Number(editPaymentAmount);
+                    const rem = Number(form.amount) - totalPaid;
+                    const sym = form.currency === 'EUR' ? '€' : form.currency === 'GBP' ? '£' : '$';
+                    return (
+                      <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                        {rem > 0.005
+                          ? <>Remaining balance after this payment: <strong>{sym}{rem.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong> — invoice will be marked as <strong>Partially Paid</strong></>
+                          : <>Invoice will be marked as <strong>Paid</strong></>}
+                      </p>
+                    );
+                  })()}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Initial Payment section — new supplier invoices only */}
           {!isEdit && form.type === 'supplier' && (
