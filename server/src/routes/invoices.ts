@@ -237,13 +237,21 @@ router.post('/:id/payments', async (req: Request, res: Response) => {
   }
 
   try {
-    const fx_rate = await getEurRate(invoice.currency || 'USD', payment_date);
-    const eur_amount = payAmt * fx_rate;
+    let fx_rate = 1;
+    let eur_amount = payAmt;
+    try {
+      fx_rate = await getEurRate(invoice.currency || 'USD', payment_date);
+      eur_amount = payAmt * fx_rate;
+    } catch (fxErr) {
+      console.warn(`[invoice-payments] FX lookup failed for ${invoice.currency}/${payment_date}, proceeding without conversion:`, fxErr);
+    }
 
     db.prepare(`
       INSERT INTO invoice_payments (invoice_id, amount, currency, fx_rate, eur_amount, payment_date, notes, created_by)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(req.params.id, payAmt, invoice.currency || 'EUR', fx_rate, eur_amount, payment_date, notes || null, req.user!.userId);
+
+    db.saveToDisk();
 
     // Recalculate total paid in invoice currency
     const { total: totalPaid } = db.prepare('SELECT COALESCE(SUM(amount), 0) as total FROM invoice_payments WHERE invoice_id = ?').get(req.params.id) as any;
@@ -351,11 +359,17 @@ router.post('/:id/wire-transfers', uploadWireTransfer.single('file'), async (req
       VALUES (?, ?, ?, ?, ?, ?, 'approved', ?, ?)
     `).run(Number(req.params.id), amount, payment_date, bank_reference, fx_rate, eur_amount, file_path, file_name);
 
+    // Force immediate disk save — do NOT rely on the 100ms debounce for critical financial data
+    db.saveToDisk();
+
     // Immediately mark invoice as paid, and set payment_date from wire transfer date
     const prevStatus = invoice.status;
     db.prepare(`UPDATE invoices SET status='paid', payment_date=?, updated_at=datetime('now') WHERE id=?`).run(payment_date, req.params.id);
     db.prepare(`INSERT INTO status_history (entity_type, entity_id, old_status, new_status, changed_by, notes) VALUES ('invoice', ?, ?, 'paid', ?, 'Auto-paid via wire transfer upload')`)
       .run(req.params.id, prevStatus, req.user!.userId);
+
+    // Force save again after status update
+    db.saveToDisk();
 
     // Auto-complete linked operation when delivered and all its invoices are paid/cancelled
     if (invoice.operation_id) {
@@ -378,6 +392,7 @@ router.post('/:id/wire-transfers', uploadWireTransfer.single('file'), async (req
     const transfer = db.prepare('SELECT * FROM wire_transfers WHERE id = ?').get(result.lastInsertRowid);
     res.status(201).json(transfer);
   } catch (err: any) {
+    console.error('[wire-transfer] Upload failed:', err);
     res.status(500).json({ error: err.message || 'Failed to process wire transfer' });
   }
 });
