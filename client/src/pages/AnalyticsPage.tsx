@@ -97,11 +97,18 @@ function FinancialChart({ monthly, isCustomers, maxBar }: {
               {monthly.map(m => {
                 const val = isCustomers ? m.received : m.paid_out;
                 return (
-                  <div key={m.month} className="flex-1 h-full flex items-end justify-center">
+                  <div key={m.month} className="flex-1 h-full flex flex-col items-center justify-end">
+                    {val > 0 ? (
+                      <span className={`text-[9px] tabular-nums leading-none mb-0.5 font-medium ${textColor}`}>
+                        {fmtAxis(val)}
+                      </span>
+                    ) : (
+                      <span className="text-[9px] leading-none mb-0.5 invisible">0</span>
+                    )}
                     {val > 0 ? (
                       <div
                         className={`w-4/5 ${color} rounded-t transition-all`}
-                        style={{ height: `${Math.max((val / maxBar) * 165, 2)}px` }}
+                        style={{ height: `${Math.max((val / maxBar) * 149, 2)}px` }}
                         title={`${isCustomers ? 'Received' : 'Paid out'}: ${fmt(val)}`}
                       />
                     ) : (
@@ -119,19 +126,6 @@ function FinancialChart({ monthly, isCustomers, maxBar }: {
               </div>
             ))}
           </div>
-        </div>
-      </div>
-      <div className="mt-3 flex gap-2">
-        <div className="w-14 shrink-0" />
-        <div className={`flex-1 flex gap-1 text-xs font-medium ${textColor}`}>
-          {monthly.map(m => {
-            const val = isCustomers ? m.received : m.paid_out;
-            return (
-              <div key={m.month} className="flex-1 text-center">
-                {val > 0 ? `€${Math.round(val / 1000)}k` : '—'}
-              </div>
-            );
-          })}
         </div>
       </div>
     </div>
@@ -159,16 +153,30 @@ function CombinedChart({ monthly }: { monthly: MonthData[] }) {
             ))}
             <div className="flex items-end gap-1 h-full">
               {monthly.map(m => {
-                const revH = m.received > 0 ? Math.max((m.received / maxBar) * 163, 2) : 0;
-                const expH = m.paid_out > 0 ? Math.max((m.paid_out / maxBar) * 163, 2) : 0;
+                const revH = m.received > 0 ? Math.max((m.received / maxBar) * 149, 2) : 0;
+                const expH = m.paid_out > 0 ? Math.max((m.paid_out / maxBar) * 149, 2) : 0;
                 const net = m.received - m.paid_out;
                 return (
                   <div key={m.month} className="flex-1 h-full flex items-end justify-center gap-px group relative">
-                    <div className="flex-1 flex items-end">
+                    <div className="flex-1 h-full flex flex-col items-center justify-end">
+                      {m.received > 0 ? (
+                        <span className="text-[9px] tabular-nums leading-none mb-0.5 font-medium text-green-600">
+                          {fmtAxis(m.received)}
+                        </span>
+                      ) : (
+                        <span className="text-[9px] leading-none mb-0.5 invisible">0</span>
+                      )}
                       <div className={`w-full rounded-t transition-all ${m.received > 0 ? 'bg-green-500' : 'bg-gray-100'}`}
                         style={{ height: `${revH || 2}px` }} title={`Revenue: ${fmt(m.received)}`} />
                     </div>
-                    <div className="flex-1 flex items-end">
+                    <div className="flex-1 h-full flex flex-col items-center justify-end">
+                      {m.paid_out > 0 ? (
+                        <span className="text-[9px] tabular-nums leading-none mb-0.5 font-medium text-red-400">
+                          {fmtAxis(m.paid_out)}
+                        </span>
+                      ) : (
+                        <span className="text-[9px] leading-none mb-0.5 invisible">0</span>
+                      )}
                       <div className={`w-full rounded-t transition-all ${m.paid_out > 0 ? 'bg-red-400' : 'bg-gray-100'}`}
                         style={{ height: `${expH || 2}px` }} title={`Expenses: ${fmt(m.paid_out)}`} />
                     </div>
@@ -876,11 +884,18 @@ export default function AnalyticsPage() {
                                 ))}
                                 <div className="flex items-end gap-1 h-full">
                                   {quantityData.monthly.map(m => (
-                                    <div key={m.month} className="flex-1 h-full flex items-end justify-center">
+                                    <div key={m.month} className="flex-1 h-full flex flex-col items-center justify-end">
+                                      {m.tons > 0 ? (
+                                        <span className="text-[9px] tabular-nums leading-none mb-0.5 font-medium text-indigo-600">
+                                          {fmtTons(m.tons)}
+                                        </span>
+                                      ) : (
+                                        <span className="text-[9px] leading-none mb-0.5 invisible">0</span>
+                                      )}
                                       {m.tons > 0 ? (
                                         <div
                                           className="w-4/5 bg-indigo-500 rounded-t transition-all"
-                                          style={{ height: `${Math.max((m.tons / maxTons) * 165, 2)}px` }}
+                                          style={{ height: `${Math.max((m.tons / maxTons) * 149, 2)}px` }}
                                           title={fmtTons(m.tons)}
                                         />
                                       ) : (
@@ -897,16 +912,6 @@ export default function AnalyticsPage() {
                                   </div>
                                 ))}
                               </div>
-                            </div>
-                          </div>
-                          <div className="mt-3 flex gap-2">
-                            <div className="w-14 shrink-0" />
-                            <div className="flex-1 flex gap-1 text-xs font-medium text-indigo-600">
-                              {quantityData.monthly.map(m => (
-                                <div key={m.month} className="flex-1 text-center">
-                                  {m.tons > 0 ? fmtTons(m.tons) : '—'}
-                                </div>
-                              ))}
                             </div>
                           </div>
                         </>
