@@ -121,6 +121,36 @@ app.use('/api/auth/verify-otp', otpLimiter);
 app.use('/api/auth/accept-invite', authLimiter);
 app.use('/api/auth', authRoutes);
 
+// ── Diagnostic endpoint (temporary — remove after debugging) ──────────────────
+app.get('/api/debug-data', (_req, res) => {
+  const version = 'v2-2026-03-08';
+  const wireTransfers = db.prepare('SELECT wt.*, i.invoice_number, i.operation_id FROM wire_transfers wt LEFT JOIN invoices i ON wt.invoice_id = i.id').all();
+  const invoicesWithOps = db.prepare('SELECT id, invoice_number, operation_id, type, status, payment_date, invoice_date FROM invoices WHERE operation_id IS NOT NULL').all();
+  const allInvoices = db.prepare('SELECT id, invoice_number, operation_id, type, status, payment_date, invoice_date FROM invoices').all();
+  const marchExpenses = db.prepare(`
+    SELECT 'wire_transfer' as source, wt.id, wt.amount, wt.transfer_date as date, wt.eur_amount, i.invoice_number, i.type
+    FROM wire_transfers wt JOIN invoices i ON wt.invoice_id = i.id
+    WHERE i.type = 'supplier' AND wt.transfer_date BETWEEN '2026-03-01' AND '2026-03-31'
+    UNION ALL
+    SELECT 'invoice_payment' as source, ip.id, ip.amount, ip.payment_date as date, ip.eur_amount, i.invoice_number, i.type
+    FROM invoice_payments ip JOIN invoices i ON ip.invoice_id = i.id
+    WHERE i.type = 'supplier' AND ip.payment_date BETWEEN '2026-03-01' AND '2026-03-31'
+    UNION ALL
+    SELECT 'payment' as source, p.id, p.amount, p.payment_date as date, NULL as eur_amount, i.invoice_number, i.type
+    FROM payments p JOIN invoices i ON p.invoice_id = i.id
+    WHERE i.type = 'supplier' AND p.payment_date BETWEEN '2026-03-01' AND '2026-03-31'
+    UNION ALL
+    SELECT 'legacy_paid' as source, i.id, i.amount, i.payment_date as date, i.eur_amount, i.invoice_number, i.type
+    FROM invoices i
+    WHERE i.type = 'supplier' AND i.status = 'paid' AND i.payment_date BETWEEN '2026-03-01' AND '2026-03-31'
+      AND NOT EXISTS (SELECT 1 FROM wire_transfers wt WHERE wt.invoice_id = i.id)
+      AND NOT EXISTS (SELECT 1 FROM invoice_payments ip WHERE ip.invoice_id = i.id)
+      AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
+  `).all();
+  const tableSchema = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='wire_transfers'").get();
+  res.json({ version, wireTransfers, invoicesWithOps, allInvoices, marchExpenses, tableSchema });
+});
+
 // ── Protected routes ──────────────────────────────────────────────────────────
 app.use('/api', apiLimiter);
 app.use('/api/customers', authenticateToken, customerRoutes);
