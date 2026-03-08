@@ -192,7 +192,7 @@ export async function initializeDatabase() {
       file_name TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE
+      FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE RESTRICT
     );
 
     CREATE TABLE IF NOT EXISTS orders (
@@ -334,7 +334,7 @@ export async function initializeDatabase() {
       notes TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE,
+      FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE RESTRICT,
       FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL
     );
 
@@ -741,7 +741,7 @@ export async function initializeDatabase() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS invoice_payments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+      invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE RESTRICT,
       amount REAL NOT NULL,
       currency TEXT NOT NULL DEFAULT 'EUR',
       fx_rate REAL,
@@ -805,6 +805,133 @@ export async function initializeDatabase() {
     }
   } catch (_) {
     try { db.exec(`PRAGMA foreign_keys = ON`, true); } catch (_) {}
+  }
+
+  // Remove ON DELETE CASCADE from wire_transfers — financial records must NEVER be silently deleted
+  try {
+    const wtInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='wire_transfers'").get() as any;
+    if (wtInfo?.sql && wtInfo.sql.includes('ON DELETE CASCADE')) {
+      console.log('[db] Migrating wire_transfers: removing ON DELETE CASCADE');
+      db.exec(`PRAGMA foreign_keys = OFF`, true);
+      db.exec(`
+        ALTER TABLE wire_transfers RENAME TO wire_transfers_old;
+        CREATE TABLE wire_transfers (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          invoice_id INTEGER NOT NULL,
+          amount REAL NOT NULL,
+          transfer_date TEXT NOT NULL,
+          bank_reference TEXT,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+          approved_by INTEGER,
+          approved_at TEXT,
+          rejection_reason TEXT,
+          file_path TEXT,
+          file_name TEXT,
+          notes TEXT,
+          fx_rate REAL,
+          eur_amount REAL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE RESTRICT,
+          FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL
+        );
+        INSERT INTO wire_transfers SELECT id, invoice_id, amount, transfer_date, bank_reference, status, approved_by, approved_at, rejection_reason, file_path, file_name, notes, fx_rate, eur_amount, created_at, updated_at FROM wire_transfers_old;
+        DROP TABLE wire_transfers_old;
+      `, true);
+      db.exec(`PRAGMA foreign_keys = ON`, true);
+      db.saveToDisk();
+      console.log('[db] wire_transfers migration complete — CASCADE removed');
+    }
+  } catch (err) {
+    console.error('[db] wire_transfers CASCADE migration failed:', err);
+    try { db.exec(`PRAGMA foreign_keys = ON`, true); } catch (_) {}
+  }
+
+  // Remove ON DELETE CASCADE from invoice_payments
+  try {
+    const ipInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='invoice_payments'").get() as any;
+    if (ipInfo?.sql && ipInfo.sql.includes('ON DELETE CASCADE')) {
+      console.log('[db] Migrating invoice_payments: removing ON DELETE CASCADE');
+      db.exec(`PRAGMA foreign_keys = OFF`, true);
+      db.exec(`
+        ALTER TABLE invoice_payments RENAME TO invoice_payments_old;
+        CREATE TABLE invoice_payments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE RESTRICT,
+          amount REAL NOT NULL,
+          currency TEXT NOT NULL DEFAULT 'EUR',
+          fx_rate REAL,
+          eur_amount REAL,
+          payment_date TEXT NOT NULL,
+          notes TEXT,
+          created_by INTEGER,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO invoice_payments SELECT * FROM invoice_payments_old;
+        DROP TABLE invoice_payments_old;
+      `, true);
+      db.exec(`PRAGMA foreign_keys = ON`, true);
+      db.saveToDisk();
+      console.log('[db] invoice_payments migration complete — CASCADE removed');
+    }
+  } catch (err) {
+    console.error('[db] invoice_payments CASCADE migration failed:', err);
+    try { db.exec(`PRAGMA foreign_keys = ON`, true); } catch (_) {}
+  }
+
+  // Remove ON DELETE CASCADE from payments table
+  try {
+    const pInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='payments'").get() as any;
+    if (pInfo?.sql && pInfo.sql.includes('ON DELETE CASCADE')) {
+      console.log('[db] Migrating payments: removing ON DELETE CASCADE');
+      db.exec(`PRAGMA foreign_keys = OFF`, true);
+      db.exec(`
+        ALTER TABLE payments RENAME TO payments_old;
+        CREATE TABLE payments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          invoice_id INTEGER NOT NULL,
+          amount REAL NOT NULL,
+          payment_date TEXT NOT NULL,
+          payment_method TEXT NOT NULL,
+          reference TEXT,
+          notes TEXT,
+          file_path TEXT,
+          file_name TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE RESTRICT
+        );
+        INSERT INTO payments SELECT * FROM payments_old;
+        DROP TABLE payments_old;
+      `, true);
+      db.exec(`PRAGMA foreign_keys = ON`, true);
+      db.saveToDisk();
+      console.log('[db] payments migration complete — CASCADE removed');
+    }
+  } catch (err) {
+    console.error('[db] payments CASCADE migration failed:', err);
+    try { db.exec(`PRAGMA foreign_keys = ON`, true); } catch (_) {}
+  }
+
+  // Self-healing: recover orphaned wire transfer files that exist on disk but not in DB
+  try {
+    const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', 'uploads');
+    const wtDir = path.join(uploadsBase, 'wire-transfers');
+    if (fs.existsSync(wtDir)) {
+      const filesOnDisk = fs.readdirSync(wtDir).filter(f => !f.startsWith('.'));
+      const dbFiles = db.prepare('SELECT file_path FROM wire_transfers WHERE file_path IS NOT NULL').all() as any[];
+      const dbFileSet = new Set(dbFiles.map((r: any) => r.file_path));
+
+      const orphanedFiles = filesOnDisk.filter(f => !dbFileSet.has(f));
+      if (orphanedFiles.length > 0) {
+        console.warn(`[db] Found ${orphanedFiles.length} orphaned wire transfer file(s) on disk not in DB:`);
+        orphanedFiles.forEach(f => console.warn(`  - ${f}`));
+        console.warn('[db] These files may be from wire transfers lost to a previous CASCADE DELETE.');
+        console.warn('[db] They are preserved in the wire-transfers folder for manual re-upload.');
+      }
+    }
+  } catch (err) {
+    console.error('[db] Wire transfer self-healing check failed:', err);
   }
 
   db.saveToDisk();
