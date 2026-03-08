@@ -39,9 +39,19 @@ class DatabaseWrapper {
     fs.writeFileSync(dbPath, buffer);
   }
 
-  exec(sql: string) {
+  /** Create a timestamped backup of the database file before risky operations */
+  backupToDisk() {
+    if (fs.existsSync(dbPath)) {
+      const backupPath = dbPath.replace(/\.db$/, '') + '_backup_' + Date.now() + '.db';
+      fs.copyFileSync(dbPath, backupPath);
+      console.log(`[db] Backup created: ${backupPath}`);
+    }
+  }
+
+  /** Run raw SQL. Pass skipSave=true during migrations to avoid persisting intermediate states. */
+  exec(sql: string, skipSave = false) {
     this.sqlDb.run(sql);
-    this.scheduleSave();
+    if (!skipSave) this.scheduleSave();
   }
 
   prepare(sql: string) {
@@ -108,6 +118,9 @@ const db = new DatabaseWrapper();
 
 export async function initializeDatabase() {
   await db.init();
+
+  // Create a backup before running any migrations (protects against data loss)
+  db.backupToDisk();
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -363,7 +376,7 @@ export async function initializeDatabase() {
   try {
     const tableInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='status_history'").get() as any;
     if (tableInfo?.sql && !tableInfo.sql.includes('production')) {
-      db.exec(`PRAGMA foreign_keys = OFF`);
+      db.exec(`PRAGMA foreign_keys = OFF`, true);
       db.exec(`
         ALTER TABLE status_history RENAME TO status_history_old;
         CREATE TABLE status_history (
@@ -379,11 +392,12 @@ export async function initializeDatabase() {
         );
         INSERT INTO status_history SELECT * FROM status_history_old;
         DROP TABLE status_history_old;
-      `);
-      db.exec(`PRAGMA foreign_keys = ON`);
+      `, true);
+      db.exec(`PRAGMA foreign_keys = ON`, true);
+      db.saveToDisk();
     }
   } catch (_) {
-    try { db.exec(`PRAGMA foreign_keys = ON`); } catch (_) {}
+    try { db.exec(`PRAGMA foreign_keys = ON`, true); } catch (_) {}
   }
 
   // Add email column to users
@@ -745,10 +759,11 @@ export async function initializeDatabase() {
 
   // Migrate invoices CHECK constraint to allow new statuses
   // CRITICAL: disable foreign keys to prevent CASCADE DELETE on wire_transfers/invoice_payments
+  // Use skipSave=true to avoid persisting intermediate states — only save after full migration
   try {
     const tableInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='invoices'").get() as any;
     if (tableInfo?.sql && !tableInfo.sql.includes('paid_with_other')) {
-      db.exec(`PRAGMA foreign_keys = OFF`);
+      db.exec(`PRAGMA foreign_keys = OFF`, true);
       db.exec(`
         ALTER TABLE invoices RENAME TO invoices_old;
         CREATE TABLE invoices (
@@ -783,11 +798,13 @@ export async function initializeDatabase() {
         );
         INSERT INTO invoices SELECT id, invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, notes, file_path, file_name, created_at, updated_at, invoice_date, payment_date, our_ref, po_number, operation_id, fx_rate, eur_amount, remainder_due_date FROM invoices_old;
         DROP TABLE invoices_old;
-      `);
-      db.exec(`PRAGMA foreign_keys = ON`);
+      `, true);
+      db.exec(`PRAGMA foreign_keys = ON`, true);
+      // Only persist AFTER the full migration succeeds atomically
+      db.saveToDisk();
     }
   } catch (_) {
-    try { db.exec(`PRAGMA foreign_keys = ON`); } catch (_) {}
+    try { db.exec(`PRAGMA foreign_keys = ON`, true); } catch (_) {}
   }
 
   db.saveToDisk();

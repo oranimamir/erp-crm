@@ -421,6 +421,9 @@ router.delete('/:id/wire-transfers/:transferId', (req: Request, res: Response) =
       .run(invoiceForRevert.operation_id);
   }
 
+  // Force immediate disk save — critical financial data
+  db.saveToDisk();
+
   res.json({ message: 'Wire transfer deleted' });
 });
 
