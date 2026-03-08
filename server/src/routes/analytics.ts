@@ -118,6 +118,12 @@ router.get('/summary', async (req: Request, res: Response) => {
       ${catJoin}
       WHERE i.type = 'supplier' AND wt.transfer_date BETWEEN ? AND ? ${suppWhere} ${catCond}
       UNION ALL
+      SELECT strftime('%Y-%m', ip.payment_date) as month,
+             COALESCE(ip.eur_amount, ip.amount) as amt
+      FROM invoice_payments ip JOIN invoices i ON ip.invoice_id = i.id
+      ${catJoin}
+      WHERE i.type = 'supplier' AND ip.payment_date BETWEEN ? AND ? ${suppWhere} ${catCond}
+      UNION ALL
       SELECT strftime('%Y-%m', p.payment_date) as month, p.amount as amt
       FROM payments p JOIN invoices i ON p.invoice_id = i.id
       ${catJoin}
@@ -130,10 +136,11 @@ router.get('/summary', async (req: Request, res: Response) => {
       WHERE i.type = 'supplier' AND i.status = 'paid'
         AND i.payment_date IS NOT NULL AND i.payment_date BETWEEN ? AND ?
         AND NOT EXISTS (SELECT 1 FROM wire_transfers wt WHERE wt.invoice_id = i.id)
+        AND NOT EXISTS (SELECT 1 FROM invoice_payments ip WHERE ip.invoice_id = i.id)
         AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
         ${suppWhere} ${catCond}
     ) GROUP BY month
-  `).all(dateStart, dateEnd, dateStart, dateEnd, dateStart, dateEnd) as any[];
+  `).all(dateStart, dateEnd, dateStart, dateEnd, dateStart, dateEnd, dateStart, dateEnd) as any[];
 
   // ── Build full month grid ──────────────────────────────────────────────────
   const months: Record<string, { month: string; received: number; paid_out: number }> = {};
@@ -298,6 +305,47 @@ router.get('/quantity', (req: Request, res: Response) => {
   `).all(dateStart, dateEnd) as any[];
 
   res.json({ monthly, total_tons: totalTons, by_customer: byCustomer });
+});
+
+// Debug: show exactly what data contributes to expenses for a given month
+router.get('/debug-expenses', (_req: Request, res: Response) => {
+  const month = (_req.query.month as string) || `${new Date().getFullYear()}-03`;
+  const dateStart = `${month}-01`;
+  const dateEnd = `${month}-31`;
+
+  const wireTransfers = db.prepare(`
+    SELECT wt.id, wt.amount, wt.transfer_date, wt.eur_amount, i.invoice_number, i.type as invoice_type, i.supplier_id, s.name as supplier_name
+    FROM wire_transfers wt JOIN invoices i ON wt.invoice_id = i.id
+    LEFT JOIN suppliers s ON i.supplier_id = s.id
+    WHERE i.type = 'supplier' AND wt.transfer_date BETWEEN ? AND ?
+  `).all(dateStart, dateEnd);
+
+  const invoicePayments = db.prepare(`
+    SELECT ip.id, ip.amount, ip.payment_date, ip.eur_amount, i.invoice_number, i.type as invoice_type, s.name as supplier_name
+    FROM invoice_payments ip JOIN invoices i ON ip.invoice_id = i.id
+    LEFT JOIN suppliers s ON i.supplier_id = s.id
+    WHERE i.type = 'supplier' AND ip.payment_date BETWEEN ? AND ?
+  `).all(dateStart, dateEnd);
+
+  const payments = db.prepare(`
+    SELECT p.id, p.amount, p.payment_date, i.invoice_number, i.type as invoice_type, s.name as supplier_name
+    FROM payments p JOIN invoices i ON p.invoice_id = i.id
+    LEFT JOIN suppliers s ON i.supplier_id = s.id
+    WHERE i.type = 'supplier' AND p.payment_date BETWEEN ? AND ?
+  `).all(dateStart, dateEnd);
+
+  const legacyPaid = db.prepare(`
+    SELECT i.id, i.invoice_number, i.amount, i.eur_amount, i.payment_date, i.invoice_date, s.name as supplier_name
+    FROM invoices i
+    LEFT JOIN suppliers s ON i.supplier_id = s.id
+    WHERE i.type = 'supplier' AND i.status = 'paid'
+      AND i.payment_date IS NOT NULL AND i.payment_date BETWEEN ? AND ?
+      AND NOT EXISTS (SELECT 1 FROM wire_transfers wt WHERE wt.invoice_id = i.id)
+      AND NOT EXISTS (SELECT 1 FROM invoice_payments ip WHERE ip.invoice_id = i.id)
+      AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
+  `).all(dateStart, dateEnd);
+
+  res.json({ month, wireTransfers, invoicePayments, payments, legacyPaid });
 });
 
 export default router;
