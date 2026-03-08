@@ -37,10 +37,24 @@ router.get('/', (req: Request, res: Response) => {
     conditions.push('(i.invoice_number LIKE ? OR c.name LIKE ? OR s.name LIKE ?)');
     params.push(`%${search}%`, `%${search}%`, `%${search}%`);
   }
-  if (status) { conditions.push('i.status = ?'); params.push(status); }
+  // Support comma-separated multi-values for status, month
+  if (status) {
+    const statuses = status.split(',').filter(Boolean);
+    if (statuses.length === 1) { conditions.push('i.status = ?'); params.push(statuses[0]); }
+    else { conditions.push(`i.status IN (${statuses.map(() => '?').join(',')})`); params.push(...statuses); }
+  }
   if (type)   { conditions.push('i.type = ?'); params.push(type); }
   if (year)   { conditions.push("strftime('%Y', COALESCE(i.invoice_date, i.created_at)) = ?"); params.push(year); }
-  if (month)  { conditions.push("strftime('%m', COALESCE(i.invoice_date, i.created_at)) = ?"); params.push(month.padStart(2, '0')); }
+  if (month) {
+    const months = month.split(',').filter(Boolean).map((m: string) => m.padStart(2, '0'));
+    if (months.length === 1) { conditions.push("strftime('%m', COALESCE(i.invoice_date, i.created_at)) = ?"); params.push(months[0]); }
+    else { conditions.push(`strftime('%m', COALESCE(i.invoice_date, i.created_at)) IN (${months.map(() => '?').join(',')})`); params.push(...months); }
+  }
+  // Date range filter (from/to)
+  const dateFrom = (req.query.date_from as string) || '';
+  const dateTo   = (req.query.date_to   as string) || '';
+  if (dateFrom) { conditions.push("COALESCE(i.invoice_date, date(i.created_at)) >= ?"); params.push(dateFrom); }
+  if (dateTo)   { conditions.push("COALESCE(i.invoice_date, date(i.created_at)) <= ?"); params.push(dateTo); }
   if (wire === 'yes') { conditions.push('COALESCE(wt.wire_transfer_count, 0) > 0'); }
   if (wire === 'no')  { conditions.push('(wt.wire_transfer_count IS NULL OR wt.wire_transfer_count = 0)'); }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';

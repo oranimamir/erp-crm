@@ -86,7 +86,7 @@ router.get('/', async (req: Request, res: Response) => {
       o.file_name as order_file_name,
       (SELECT COUNT(*) FROM operation_documents od WHERE od.operation_id = op.id) as doc_count,
       (SELECT COUNT(*) FROM invoices i WHERE i.operation_id = op.id) as invoice_count,
-      (SELECT COUNT(*) FROM wire_transfers wt WHERE wt.invoice_id IN (SELECT id FROM invoices WHERE operation_id = op.id)) as wire_transfer_count,
+      (SELECT COUNT(*) FROM wire_transfers wt JOIN invoices i ON wt.invoice_id = i.id WHERE i.operation_id = op.id) as wire_transfer_count,
       (SELECT COALESCE(SUM(CASE WHEN i.eur_amount IS NOT NULL THEN i.eur_amount WHEN UPPER(COALESCE(i.currency,'USD'))='EUR' THEN i.amount ELSE 0 END), 0) FROM invoices i WHERE i.operation_id = op.id) as invoice_eur_base,
       (SELECT COALESCE(SUM(CASE WHEN i.eur_amount IS NULL AND UPPER(COALESCE(i.currency,'USD'))!='EUR' THEN i.amount ELSE 0 END), 0) FROM invoices i WHERE i.operation_id = op.id) as invoice_fx_amount,
       (SELECT i.currency FROM invoices i WHERE i.eur_amount IS NULL AND UPPER(COALESCE(i.currency,'USD'))!='EUR' AND i.operation_id = op.id ORDER BY i.id LIMIT 1) as invoice_fx_currency,

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
@@ -10,7 +10,7 @@ import SearchBar from '../components/ui/SearchBar';
 import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
-import { Plus, FileText, Eye, Trash2, FileDown, ChevronUp, ChevronDown, FileSpreadsheet, Landmark, Download, X, Loader2 } from 'lucide-react';
+import { Plus, FileText, Eye, Trash2, FileDown, ChevronUp, ChevronDown, FileSpreadsheet, Landmark, Download, X, Loader2, Filter, CalendarDays } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
 
@@ -48,23 +48,86 @@ const currentYear = new Date().getFullYear();
 const yearOptions = Array.from({ length: currentYear - 2019 }, (_, i) => currentYear - i);
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
+const STORAGE_KEY = 'invoices-filters';
+
+function loadFilters(): Record<string, any> {
+  try { return JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; }
+}
+function saveFilters(f: Record<string, any>) { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(f)); }
+
+function MultiSelect({ options, selected, onChange, placeholder }: {
+  options: { value: string; label: string }[];
+  selected: string[];
+  onChange: (v: string[]) => void;
+  placeholder: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const toggle = (val: string) => {
+    onChange(selected.includes(val) ? selected.filter(v => v !== val) : [...selected, val]);
+  };
+
+  const label = selected.length === 0 ? placeholder
+    : selected.length <= 2 ? selected.map(v => options.find(o => o.value === v)?.label || v).join(', ')
+    : `${selected.length} selected`;
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        className={`rounded-lg border px-3 py-2 text-sm text-left min-w-[140px] flex items-center justify-between gap-2 ${
+          selected.length > 0 ? 'border-primary-400 bg-primary-50 text-primary-700' : 'border-gray-300 text-gray-600'
+        }`}
+      >
+        <span className="truncate">{label}</span>
+        <ChevronDown size={14} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[180px] max-h-60 overflow-auto">
+          {options.map(o => (
+            <label key={o.value} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer text-sm">
+              <input type="checkbox" checked={selected.includes(o.value)} onChange={() => toggle(o.value)} className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+              {o.label}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function InvoicesPage() {
   const { addToast } = useToast();
   const navigate = useNavigate();
+  const saved = loadFilters();
   const [invoices, setInvoices] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
-  const [typeFilter, setTypeFilter] = useState('');
-  const [yearFilter,  setYearFilter]  = useState('');
-  const [monthFilter, setMonthFilter] = useState('');
-  const [wireFilter,  setWireFilter]  = useState('');
+  const [search, setSearch] = useState(saved.search || '');
+  const [statusFilter, setStatusFilter] = useState<string[]>(saved.statusFilter || []);
+  const [typeFilter, setTypeFilter] = useState(saved.typeFilter || '');
+  const [yearFilter,  setYearFilter]  = useState(saved.yearFilter || '');
+  const [monthFilter, setMonthFilter] = useState<string[]>(saved.monthFilter || []);
+  const [wireFilter,  setWireFilter]  = useState(saved.wireFilter || '');
+  const [dateFrom,    setDateFrom]    = useState(saved.dateFrom || '');
+  const [dateTo,      setDateTo]      = useState(saved.dateTo || '');
   const [sortBy, setSortBy] = useState('date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [loading, setLoading] = useState(true);
   const [deleteId, setDeleteId] = useState<number | null>(null);
+
+  // Persist filters to sessionStorage
+  useEffect(() => {
+    saveFilters({ search, statusFilter, typeFilter, yearFilter, monthFilter, wireFilter, dateFrom, dateTo });
+  }, [search, statusFilter, typeFilter, yearFilter, monthFilter, wireFilter, dateFrom, dateTo]);
 
   // Preview modal
   const [previewItem, setPreviewItem] = useState<{ fileName: string; filePath: string; subfolder: string } | null>(null);
@@ -134,11 +197,13 @@ export default function InvoicesPage() {
         page,
         limit: 20,
         search,
-        status: statusFilter || undefined,
+        status: statusFilter.length ? statusFilter.join(',') : undefined,
         type: typeFilter || undefined,
         year:  yearFilter  || undefined,
-        month: monthFilter || undefined,
+        month: monthFilter.length ? monthFilter.join(',') : undefined,
         wire:  wireFilter  || undefined,
+        date_from: dateFrom || undefined,
+        date_to:   dateTo   || undefined,
         sort_by: sortBy,
         sort_dir: sortDir,
       },
@@ -151,7 +216,7 @@ export default function InvoicesPage() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchInvoices(); }, [page, search, statusFilter, typeFilter, yearFilter, monthFilter, wireFilter, sortBy, sortDir]);
+  useEffect(() => { fetchInvoices(); }, [page, search, statusFilter, typeFilter, yearFilter, monthFilter, wireFilter, dateFrom, dateTo, sortBy, sortDir]);
 
   const handleDelete = async () => {
     if (!deleteId) return;
@@ -178,7 +243,7 @@ export default function InvoicesPage() {
   const formatDateOrDash = (dateStr: string) => formatDate(dateStr) || '-';
 
   const handleExport = async () => {
-    const res = await api.get('/invoices', { params: { page: 1, limit: 9999, search, status: statusFilter || undefined, type: typeFilter || undefined, year: yearFilter || undefined, month: monthFilter || undefined } });
+    const res = await api.get('/invoices', { params: { page: 1, limit: 9999, search, status: statusFilter.length ? statusFilter.join(',') : undefined, type: typeFilter || undefined, year: yearFilter || undefined, month: monthFilter.length ? monthFilter.join(',') : undefined, date_from: dateFrom || undefined, date_to: dateTo || undefined } });
     const rows = res.data.data.map((inv: any) => [
       inv.invoice_number,
       inv.customer_name || inv.supplier_name || '',
@@ -215,19 +280,17 @@ export default function InvoicesPage() {
       </div>
 
       <Card>
-        <div className="p-4 border-b border-gray-100">
-          <div className="flex flex-wrap items-center gap-4">
+        <div className="p-4 border-b border-gray-100 space-y-3">
+          <div className="flex flex-wrap items-center gap-3">
             <div className="flex-1 min-w-[200px] max-w-sm">
               <SearchBar value={search} onChange={v => { setSearch(v); setPage(1); }} placeholder="Search invoices..." />
             </div>
-            <select
-              value={statusFilter}
-              onChange={e => { setStatusFilter(e.target.value); setPage(1); }}
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
-            >
-              <option value="">All Statuses</option>
-              {statusOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
+            <MultiSelect
+              options={statusOptions}
+              selected={statusFilter}
+              onChange={v => { setStatusFilter(v); setPage(1); }}
+              placeholder="All Statuses"
+            />
             <select
               value={typeFilter}
               onChange={e => { setTypeFilter(e.target.value); setPage(1); }}
@@ -244,14 +307,12 @@ export default function InvoicesPage() {
               <option value="">All Years</option>
               {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
             </select>
-            <select
-              value={monthFilter}
-              onChange={e => { setMonthFilter(e.target.value); setPage(1); }}
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
-            >
-              <option value="">All Months</option>
-              {MONTHS.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
-            </select>
+            <MultiSelect
+              options={MONTHS.map((m, i) => ({ value: String(i + 1), label: m }))}
+              selected={monthFilter}
+              onChange={v => { setMonthFilter(v); setPage(1); }}
+              placeholder="All Months"
+            />
             <select
               value={wireFilter}
               onChange={e => { setWireFilter(e.target.value); setPage(1); }}
@@ -262,6 +323,25 @@ export default function InvoicesPage() {
               <option value="no">Wire Transfer: No</option>
             </select>
             <span className="text-sm text-gray-500">{total} invoices</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <CalendarDays size={14} />
+              <span>Date range:</span>
+              <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPage(1); }}
+                className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm" />
+              <span>to</span>
+              <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setPage(1); }}
+                className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm" />
+            </div>
+            {(statusFilter.length > 0 || typeFilter || yearFilter || monthFilter.length > 0 || wireFilter || dateFrom || dateTo || search) && (
+              <button
+                onClick={() => { setSearch(''); setStatusFilter([]); setTypeFilter(''); setYearFilter(''); setMonthFilter([]); setWireFilter(''); setDateFrom(''); setDateTo(''); setPage(1); }}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100"
+              >
+                <X size={12} /> Clear all filters
+              </button>
+            )}
           </div>
         </div>
 
