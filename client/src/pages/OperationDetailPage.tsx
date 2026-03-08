@@ -5,7 +5,7 @@ import { useToast } from '../contexts/ToastContext';
 import {
   ArrowLeft, Briefcase, ShoppingCart, FileText, Upload, Trash2,
   Download, Eye, X, Plus, Receipt, ExternalLink, CheckCircle,
-  AlertCircle, Loader2, Edit2, Link2, Search, Truck,
+  AlertCircle, Loader2, Edit2, Link2, Search, Truck, Landmark,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 
@@ -48,6 +48,20 @@ interface OrderItem {
   total: number;
 }
 
+interface WireTransfer {
+  id: number;
+  invoice_id: number;
+  invoice_number: string;
+  amount: number;
+  transfer_date: string;
+  bank_reference?: string;
+  fx_rate?: number;
+  eur_amount?: number;
+  file_path?: string;
+  file_name?: string;
+  created_at: string;
+}
+
 interface Operation {
   id: number;
   operation_number: string;
@@ -74,6 +88,7 @@ interface Operation {
   documents: OperationDoc[];
   invoices: Invoice[];
   order_items: OrderItem[];
+  wire_transfers: WireTransfer[];
 }
 
 interface PreviewItem {
@@ -732,6 +747,63 @@ export default function OperationDetailPage() {
           </table>
         )}
       </div>
+
+      {/* ── Wire Transfers ──────────────────────────────────────────────────── */}
+      {operation.wire_transfers?.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-100">
+            <h2 className="font-semibold text-gray-800 flex items-center gap-2">
+              <Landmark size={16} className="text-gray-500" />
+              Wire Transfers ({operation.wire_transfers.length})
+            </h2>
+          </div>
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="text-left px-5 py-2 text-xs font-medium text-gray-500">Invoice</th>
+                <th className="text-right px-4 py-2 text-xs font-medium text-gray-500">Amount</th>
+                <th className="text-left px-4 py-2 text-xs font-medium text-gray-500">Date</th>
+                <th className="text-left px-4 py-2 text-xs font-medium text-gray-500">Reference</th>
+                <th className="text-right px-4 py-2 text-xs font-medium text-gray-500">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {operation.wire_transfers.map(wt => (
+                <tr key={wt.id} className="hover:bg-gray-50">
+                  <td className="px-5 py-2.5 font-medium text-primary-700">{wt.invoice_number}</td>
+                  <td className="px-4 py-2.5 text-right font-medium text-gray-900">
+                    {wt.eur_amount
+                      ? `€${Number(wt.eur_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                      : `$${Number(wt.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                  </td>
+                  <td className="px-4 py-2.5 text-gray-700">{formatDate(wt.transfer_date)}</td>
+                  <td className="px-4 py-2.5 text-gray-500">{wt.bank_reference || '—'}</td>
+                  <td className="px-4 py-2.5">
+                    <div className="flex items-center justify-end gap-2">
+                      {wt.file_path && (
+                        <>
+                          <button
+                            onClick={() => openPreview({ fileName: wt.file_name!, filePath: wt.file_path!, subfolder: 'wire-transfers', label: `Wire Transfer - ${wt.invoice_number}` })}
+                            className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
+                          >
+                            <Eye size={13} /> View
+                          </button>
+                          <button
+                            onClick={() => downloadFile(wt.file_path!, wt.file_name!, 'wire-transfers')}
+                            className="p-0.5 text-xs text-gray-400 hover:text-gray-600"
+                          >
+                            <Download size={13} />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* ── Documents ──────────────────────────────────────────────────────── */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
