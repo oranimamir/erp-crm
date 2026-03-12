@@ -682,6 +682,8 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE batches ADD COLUMN product TEXT`); } catch (_) {}
   // Add category field to batches
   try { db.exec(`ALTER TABLE batches ADD COLUMN category TEXT`); } catch (_) {}
+  // Add is_finished field to batches (0 = ongoing, 1 = finished)
+  try { db.exec(`ALTER TABLE batches ADD COLUMN is_finished INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
 
   // Batch documents (COA and other tagged documents per batch)
   db.exec(`

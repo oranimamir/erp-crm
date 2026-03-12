@@ -87,6 +87,8 @@ html.dark .text-red-800   { color: #fca5a5; }
 html.dark .bg-purple-100 { background-color: #4c1d95; }
 html.dark .text-purple-800 { color: #c4b5fd; }
 html.dark .bg-gray-100.text-gray-700 { background-color: #374151; color: #d1d5db; }
+html.dark .bg-orange-100 { background-color: #7c2d12; }
+html.dark .text-orange-800 { color: #fdba74; }
 
 /* Red accent text (overdue) */
 html.dark .text-red-600  { color: #f87171; }
@@ -98,3 +100,32 @@ html.dark .divide-red-100 > * + * { border-color: #7f1d1d; }
 
 /* Primary-50 highlight */
 html.dark .bg-primary-50 { background-color: #1e3a5f; }
+
+/* ── Mobile adjustments ──────────────────────────────────────────────────── */
+
+@media (max-width: 639px) {
+  /* Slightly reduce base font size on mobile for better density */
+  main {
+    font-size: 0.875rem;
+  }
+
+  /* Shrink page titles on mobile */
+  main h1 {
+    font-size: 1.25rem;
+  }
+
+  /* Compact tables on mobile */
+  main table {
+    font-size: 0.75rem;
+  }
+  main table th,
+  main table td {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+
+  /* Ensure all tables can scroll horizontally */
+  main .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+  }
+}

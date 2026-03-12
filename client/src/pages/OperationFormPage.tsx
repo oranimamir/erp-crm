@@ -9,10 +9,11 @@ import Select from '../components/ui/Select';
 import { ArrowLeft } from 'lucide-react';
 
 const statusOptions = [
-  { value: 'pre-ordered', label: 'Pre-ordered' },
-  { value: 'ordered',     label: 'Ordered' },
-  { value: 'shipped',     label: 'Shipped' },
-  { value: 'delivered',   label: 'Delivered' },
+  { value: 'pre-ordered',  label: 'Pre-ordered' },
+  { value: 'ordered',      label: 'Ordered' },
+  { value: 'shipped',      label: 'Shipped' },
+  { value: 'in clearance', label: 'In Clearance' },
+  { value: 'delivered',    label: 'Delivered' },
 ];
 
 const partyTypeOptions = [

@@ -48,14 +48,15 @@ interface PreviewItem {
   subfolder: string;
 }
 
-const STATUS_OPTIONS = ['pre-ordered', 'ordered', 'shipped', 'delivered', 'completed'];
+const STATUS_OPTIONS = ['pre-ordered', 'ordered', 'shipped', 'in clearance', 'delivered', 'completed'];
 
 const STATUS_COLORS: Record<string, string> = {
-  'pre-ordered': 'bg-purple-100 text-purple-800',
-  ordered:       'bg-yellow-100 text-yellow-800',
-  shipped:       'bg-blue-100   text-blue-800',
-  delivered:     'bg-green-100  text-green-800',
-  completed:     'bg-emerald-100 text-emerald-800',
+  'pre-ordered':   'bg-purple-100 text-purple-800',
+  ordered:         'bg-yellow-100 text-yellow-800',
+  shipped:         'bg-blue-100   text-blue-800',
+  'in clearance':  'bg-orange-100 text-orange-800',
+  delivered:       'bg-green-100  text-green-800',
+  completed:       'bg-emerald-100 text-emerald-800',
 };
 
 type SortField = 'order_date' | 'status' | 'name';
@@ -254,14 +255,14 @@ export default function OperationsPage() {
     'text-left px-4 py-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900 select-none';
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+    <div className="space-y-4 sm:space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Briefcase size={24} className="text-primary-600" />
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900 flex items-center gap-2">
+            <Briefcase size={22} className="text-primary-600" />
             Operations
           </h1>
-          <p className="text-sm text-gray-500 mt-0.5">{total} operation{total !== 1 ? 's' : ''}</p>
+          <p className="text-xs sm:text-sm text-gray-500 mt-0.5">{total} operation{total !== 1 ? 's' : ''}</p>
         </div>
         <div className="sm:ml-auto flex gap-2 flex-wrap">
           <div className="relative">
@@ -350,7 +351,8 @@ export default function OperationsPage() {
             <p className="text-sm mt-1">Create a new operation, or save an order with an Operation # to auto-create one.</p>
           </div>
         ) : (
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full text-xs sm:text-sm">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Operation #</th>
@@ -514,6 +516,7 @@ export default function OperationsPage() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 

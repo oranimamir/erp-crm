@@ -146,12 +146,12 @@ router.get('/batches', (_req: Request, res: Response) => {
 });
 
 router.post('/batches', (req: Request, res: Response) => {
-  const { batch_number, product, category } = req.body;
+  const { batch_number, product, category, is_finished } = req.body;
   if (!batch_number) { res.status(400).json({ error: 'batch_number is required' }); return; }
   try {
     const result = db.prepare(
-      `INSERT INTO batches (batch_number, product, category) VALUES (?, ?, ?)`
-    ).run(batch_number, product || null, category || null);
+      `INSERT INTO batches (batch_number, product, category, is_finished) VALUES (?, ?, ?, ?)`
+    ).run(batch_number, product || null, category || null, is_finished ? 1 : 0);
     const batch = db.prepare('SELECT * FROM batches WHERE id = ?').get(result.lastInsertRowid) as any;
     res.status(201).json({ ...batch, documents: [] });
   } catch (err: any) {
@@ -166,14 +166,15 @@ router.post('/batches', (req: Request, res: Response) => {
 router.put('/batches/:id', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT * FROM batches WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Batch not found' }); return; }
-  const { batch_number, product, category } = req.body;
+  const { batch_number, product, category, is_finished } = req.body;
   try {
     db.prepare(
-      `UPDATE batches SET batch_number=?, product=?, category=? WHERE id=?`
+      `UPDATE batches SET batch_number=?, product=?, category=?, is_finished=? WHERE id=?`
     ).run(
       batch_number || existing.batch_number,
       product !== undefined ? (product || null) : existing.product,
       category !== undefined ? (category || null) : existing.category,
+      is_finished !== undefined ? (is_finished ? 1 : 0) : existing.is_finished,
       req.params.id
     );
     const batch = db.prepare('SELECT * FROM batches WHERE id = ?').get(req.params.id) as any;
@@ -186,6 +187,16 @@ router.put('/batches/:id', (req: Request, res: Response) => {
       res.status(400).json({ error: err.message });
     }
   }
+});
+
+router.patch('/batches/:id/toggle-finished', (req: Request, res: Response) => {
+  const existing = db.prepare('SELECT * FROM batches WHERE id = ?').get(req.params.id) as any;
+  if (!existing) { res.status(404).json({ error: 'Batch not found' }); return; }
+  const newVal = existing.is_finished ? 0 : 1;
+  db.prepare('UPDATE batches SET is_finished = ? WHERE id = ?').run(newVal, req.params.id);
+  const batch = db.prepare('SELECT * FROM batches WHERE id = ?').get(req.params.id) as any;
+  const documents = db.prepare('SELECT id, document_type, document_name, file_path, file_name, created_at FROM batch_documents WHERE batch_id = ? ORDER BY created_at ASC').all(batch.id) as any[];
+  res.json({ ...batch, documents });
 });
 
 router.delete('/batches/:id', (req: Request, res: Response) => {

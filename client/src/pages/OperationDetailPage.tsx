@@ -110,12 +110,13 @@ interface PendingUpload {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const STATUS_OPTIONS = ['pre-ordered', 'ordered', 'shipped', 'delivered'];
+const STATUS_OPTIONS = ['pre-ordered', 'ordered', 'shipped', 'in clearance', 'delivered'];
 const STATUS_COLORS: Record<string, string> = {
-  'pre-ordered': 'bg-purple-100 text-purple-800',
-  ordered:       'bg-yellow-100 text-yellow-800',
-  shipped:       'bg-blue-100   text-blue-800',
-  delivered:     'bg-green-100  text-green-800',
+  'pre-ordered':   'bg-purple-100 text-purple-800',
+  ordered:         'bg-yellow-100 text-yellow-800',
+  shipped:         'bg-blue-100   text-blue-800',
+  'in clearance':  'bg-orange-100 text-orange-800',
+  delivered:       'bg-green-100  text-green-800',
 };
 const INVOICE_STATUS_COLORS: Record<string, string> = {
   draft:     'bg-gray-100  text-gray-700',
@@ -496,9 +497,9 @@ export default function OperationDetailPage() {
           <ArrowLeft size={20} />
         </button>
         <div className="flex-1">
-          <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-              <Briefcase size={22} className="text-primary-600" />
+          <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+            <h1 className="text-lg sm:text-2xl font-bold text-gray-900 flex items-center gap-2">
+              <Briefcase size={20} className="text-primary-600 shrink-0" />
               {operation.operation_number}
             </h1>
             <select
@@ -514,7 +515,7 @@ export default function OperationDetailPage() {
                 <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
               ))}
             </select>
-            {(operation.status === 'shipped' || operation.status === 'delivered') && (
+            {(operation.status === 'shipped' || operation.status === 'in clearance' || operation.status === 'delivered') && (
               <button
                 onClick={() => {
                   const today = operation.ship_date || todayISO();
@@ -539,32 +540,32 @@ export default function OperationDetailPage() {
       {/* ── Linked Order ───────────────────────────────────────────────────── */}
       {operation.order_id ? (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-            <h2 className="font-semibold text-gray-800 flex items-center gap-2">
-              <ShoppingCart size={16} className="text-gray-500" />
+          <div className="px-4 sm:px-5 py-3 sm:py-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center gap-2 sm:justify-between">
+            <h2 className="font-semibold text-gray-800 flex items-center gap-2 text-sm sm:text-base">
+              <ShoppingCart size={16} className="text-gray-500 shrink-0" />
               Linked Order
             </h2>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
               <button
                 onClick={() => navigate(`/orders/${operation.order_id}/edit`)}
-                className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2 py-1"
+                className="flex items-center gap-1 text-xs sm:text-sm text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2 py-1"
               >
                 <Edit2 size={13} /> Edit
               </button>
               <button
                 onClick={handleUnlinkOrder}
-                className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2 py-1"
+                className="flex items-center gap-1 text-xs sm:text-sm text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2 py-1"
                 title="Unlink order from this operation"
               >
                 <X size={13} /> Unlink
               </button>
               <button
                 onClick={handleDeleteOrder}
-                className="flex items-center gap-1 text-sm text-red-500 hover:text-red-700 border border-red-200 rounded-lg px-2 py-1"
+                className="flex items-center gap-1 text-xs sm:text-sm text-red-500 hover:text-red-700 border border-red-200 rounded-lg px-2 py-1"
               >
                 <Trash2 size={13} /> Delete
               </button>
-              <Link to={`/orders/${operation.order_id}`} className="flex items-center gap-1 text-sm text-primary-600 hover:underline ml-1">
+              <Link to={`/orders/${operation.order_id}`} className="flex items-center gap-1 text-xs sm:text-sm text-primary-600 hover:underline ml-1">
                 View <ExternalLink size={13} />
               </Link>
             </div>

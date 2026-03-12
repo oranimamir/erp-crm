@@ -21,10 +21,11 @@ interface Stats {
 }
 
 const OP_STATUS_COLORS: Record<string, string> = {
-  'pre-ordered': 'bg-purple-100 text-purple-800',
-  ordered:       'bg-yellow-100 text-yellow-800',
-  shipped:       'bg-blue-100   text-blue-800',
-  delivered:     'bg-green-100  text-green-800',
+  'pre-ordered':   'bg-purple-100 text-purple-800',
+  ordered:         'bg-yellow-100 text-yellow-800',
+  shipped:         'bg-blue-100   text-blue-800',
+  'in clearance':  'bg-orange-100 text-orange-800',
+  delivered:       'bg-green-100  text-green-800',
 };
 
 export default function DashboardPage() {
@@ -120,65 +121,65 @@ export default function DashboardPage() {
       )}
 
       {/* ── Financial summary ─────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <Link to="/invoices">
-          <Card className="p-5 hover:shadow-md transition-shadow h-full">
-            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Paid YTD {year}</p>
-            <p className="text-2xl font-bold text-green-600">{fmt(paidYTD)}</p>
-            <p className="text-xs text-gray-400 mt-1">Payments received this year</p>
+          <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
+            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Paid YTD {year}</p>
+            <p className="text-lg sm:text-2xl font-bold text-green-600 truncate">{fmt(paidYTD)}</p>
+            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Payments received this year</p>
           </Card>
         </Link>
         <Link to="/invoices">
-          <Card className="p-5 hover:shadow-md transition-shadow h-full">
-            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Pending</p>
-            <p className="text-2xl font-bold text-amber-500">{fmt(pending)}</p>
-            <p className="text-xs text-gray-400 mt-1">Sent invoices with due date</p>
+          <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
+            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Pending</p>
+            <p className="text-lg sm:text-2xl font-bold text-amber-500 truncate">{fmt(pending)}</p>
+            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Sent invoices with due date</p>
           </Card>
         </Link>
         <Link to="/invoices">
-          <Card className="p-5 hover:shadow-md transition-shadow h-full">
-            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Expected</p>
-            <p className="text-2xl font-bold text-blue-500">{fmt(expected)}</p>
-            <p className="text-xs text-gray-400 mt-1">Sent invoices without due date</p>
+          <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
+            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Expected</p>
+            <p className="text-lg sm:text-2xl font-bold text-blue-500 truncate">{fmt(expected)}</p>
+            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Sent invoices without due date</p>
           </Card>
         </Link>
         <Link to="/invoices">
-          <Card className="p-5 hover:shadow-md transition-shadow h-full border-2 border-gray-200">
-            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Total {year}</p>
-            <p className="text-2xl font-bold text-gray-900">{fmt(totalYear)}</p>
-            <p className="text-xs text-gray-400 mt-1">Paid + pending + expected</p>
+          <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full border-2 border-gray-200">
+            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Total {year}</p>
+            <p className="text-lg sm:text-2xl font-bold text-gray-900 truncate">{fmt(totalYear)}</p>
+            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Paid + pending + expected</p>
           </Card>
         </Link>
       </div>
 
       {/* ── Expenses + Tons summary ───────────────────────────────────────── */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
         <Link to="/invoices?type=supplier">
-          <Card className="p-5 hover:shadow-md transition-shadow h-full">
-            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Expenses YTD {year}</p>
-            <p className="text-2xl font-bold text-red-600">{fmt(expensesYTD)}</p>
-            <p className="text-xs text-gray-400 mt-1">Total paid to suppliers this year</p>
+          <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
+            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Expenses YTD {year}</p>
+            <p className="text-lg sm:text-2xl font-bold text-red-600 truncate">{fmt(expensesYTD)}</p>
+            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Total paid to suppliers this year</p>
           </Card>
         </Link>
         <Link to="/invoices?type=supplier">
-          <Card className="p-5 hover:shadow-md transition-shadow h-full">
-            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Avg / Month</p>
-            <p className="text-2xl font-bold text-orange-500">{fmt(expensesAvgPerMonth)}</p>
-            <p className="text-xs text-gray-400 mt-1">Average monthly expenses ({monthsElapsed} mo)</p>
+          <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
+            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Avg / Month</p>
+            <p className="text-lg sm:text-2xl font-bold text-orange-500 truncate">{fmt(expensesAvgPerMonth)}</p>
+            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Average monthly expenses ({monthsElapsed} mo)</p>
           </Card>
         </Link>
-        <Link to="/orders">
-          <Card className="p-5 hover:shadow-md transition-shadow h-full">
+        <Link to="/orders" className="col-span-2 sm:col-span-1">
+          <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
             <div className="flex items-center gap-2 mb-1">
               <Scale size={14} className="text-indigo-500" />
-              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Tons Sold {year}</p>
+              <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide">Tons Sold {year}</p>
             </div>
-            <p className="text-2xl font-bold text-indigo-600">
+            <p className="text-lg sm:text-2xl font-bold text-indigo-600">
               {tonsYTD >= 1000
                 ? `${(tonsYTD / 1000).toFixed(2)}k MT`
                 : `${tonsYTD.toFixed(2)} MT`}
             </p>
-            <p className="text-xs text-gray-400 mt-1">Total quantity from customer orders</p>
+            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Total quantity from customer orders</p>
           </Card>
         </Link>
       </div>

@@ -208,10 +208,10 @@ export default function Layout() {
                 )}
               </div>
             ) : null}
-            <span className="text-sm text-gray-600">{user?.display_name}</span>
-            <button onClick={logout} className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
+            <span className="text-xs sm:text-sm text-gray-600 hidden sm:inline">{user?.display_name}</span>
+            <button onClick={logout} className="flex items-center gap-1 text-xs sm:text-sm text-gray-500 hover:text-gray-700">
               <LogOut size={16} />
-              Logout
+              <span className="hidden sm:inline">Logout</span>
             </button>
           </div>
         </header>

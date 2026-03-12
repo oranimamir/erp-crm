@@ -11,7 +11,7 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
-import { Plus, Warehouse, Pencil, Trash2, PackagePlus, FileSpreadsheet, Package, Box, Upload, Mail, RefreshCw, ChevronRight, ChevronDown, Tag, Download, Loader2 } from 'lucide-react';
+import { Plus, Warehouse, Pencil, Trash2, PackagePlus, FileSpreadsheet, Package, Box, Upload, Mail, RefreshCw, ChevronRight, ChevronDown, Tag, Download, Loader2, CheckCircle2, ArchiveRestore } from 'lucide-react';
 import { downloadExcel } from '../lib/exportExcel';
 import { formatDate } from '../lib/dates';
 
@@ -1275,145 +1275,196 @@ function BatchesTab() {
     } catch { addToast('Failed to download file', 'error'); }
   };
 
+  const toggleFinished = async (batchId: number) => {
+    try {
+      const { data } = await api.patch(`/inventory/batches/${batchId}/toggle-finished`);
+      setBatches(prev => prev.map(b => b.id === batchId ? { ...b, is_finished: data.is_finished } : b));
+      addToast(data.is_finished ? 'Batch marked as finished' : 'Batch moved back to ongoing', 'success');
+    } catch { addToast('Failed to update batch', 'error'); }
+  };
+
+  const ongoingBatches = batches.filter(b => !b.is_finished);
+  const finishedBatches = batches.filter(b => b.is_finished);
+
+  const renderBatchTable = (items: any[], isFinished: boolean) => (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-gray-100 bg-gray-50">
+            <th className="text-left px-3 sm:px-4 py-3 font-medium text-gray-600 w-32 sm:w-40">Batch #</th>
+            <th className="text-left px-3 sm:px-4 py-3 font-medium text-gray-600">Product</th>
+            <th className="text-left px-3 sm:px-4 py-3 font-medium text-gray-600 w-36 sm:w-44 hidden sm:table-cell">Category</th>
+            <th className="text-left px-3 sm:px-4 py-3 font-medium text-gray-600 hidden md:table-cell">Documents</th>
+            <th className="text-right px-3 sm:px-4 py-3 font-medium text-gray-600 w-24 sm:w-28">Actions</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-100">
+          {items.map(batch => (
+            <tr key={batch.id} className="hover:bg-gray-50 align-top">
+              <td className="px-3 sm:px-4 py-3 font-semibold text-gray-900 font-mono text-xs">{batch.batch_number}</td>
+              <td className="px-3 sm:px-4 py-3 text-gray-700">
+                {batch.product || <span className="text-gray-400">—</span>}
+                {/* Show category on mobile under product */}
+                <span className="block sm:hidden text-xs text-gray-400 mt-0.5">{batch.category || ''}</span>
+              </td>
+              <td className="px-3 sm:px-4 py-3 hidden sm:table-cell">
+                <select
+                  value={batch.category || ''}
+                  onChange={async e => {
+                    const category = e.target.value;
+                    try {
+                      await api.put(`/inventory/batches/${batch.id}`, { category });
+                      setBatches(prev => prev.map(b => b.id === batch.id ? { ...b, category } : b));
+                    } catch { addToast('Failed to update category', 'error'); }
+                  }}
+                  className="text-sm border border-gray-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 text-gray-700"
+                >
+                  <option value="">— select —</option>
+                  <option value="TripleW Product">TripleW Product</option>
+                  <option value="Ingredient">Ingredient</option>
+                  <option value="Other">Other</option>
+                </select>
+              </td>
+              <td className="px-3 sm:px-4 py-3 hidden md:table-cell">
+                <div className="flex flex-wrap gap-1.5 items-center">
+                  {(batch.documents || []).map((doc: any) => (
+                    <span key={doc.id} className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full text-xs font-medium bg-sky-50 text-sky-700 border border-sky-200">
+                      <Tag size={10} className="shrink-0" />
+                      {doc.document_type === 'coa' ? 'COA' : (doc.document_name || 'Document')}
+                      <button
+                        onClick={() => downloadDoc(doc.file_path, doc.file_name)}
+                        className="text-sky-400 hover:text-sky-700 p-0.5"
+                        title="Download"
+                      ><Download size={11} /></button>
+                      <button
+                        onClick={() => handleDeleteDoc(doc.id)}
+                        disabled={docDeleting === doc.id}
+                        className="text-sky-300 hover:text-red-500 p-0.5 leading-none disabled:opacity-50"
+                        title="Remove"
+                      >{docDeleting === doc.id ? <Loader2 size={10} className="animate-spin" /> : '×'}</button>
+                    </span>
+                  ))}
+                  <label className={`cursor-pointer text-xs px-2 py-0.5 border border-dashed rounded-full transition-colors ${
+                    docUploading === batch.id ? 'border-sky-300 text-sky-400 cursor-not-allowed' : 'border-blue-300 text-blue-600 hover:bg-blue-50'
+                  }`}>
+                    {docUploading === batch.id ? <Loader2 size={12} className="animate-spin inline" /> : '+ COA'}
+                    <input
+                      type="file"
+                      className="hidden"
+                      disabled={docUploading === batch.id}
+                      onChange={e => {
+                        if (e.target.files?.[0]) handleUploadDoc(batch.id, 'coa', 'COA', e.target.files[0]);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                  {addingDocBatchId === batch.id ? (
+                    <span className="inline-flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-lg px-2 py-1">
+                      <input
+                        type="text"
+                        value={docName}
+                        onChange={e => setDocName(e.target.value)}
+                        placeholder="Document name"
+                        className="text-xs border border-gray-300 rounded px-1.5 py-0.5 w-28 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                        autoFocus
+                      />
+                      <label className={`cursor-pointer text-xs px-2 py-0.5 rounded transition-colors ${
+                        docName.trim() ? 'bg-gray-700 text-white hover:bg-gray-800 cursor-pointer' : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                      }`}>
+                        Choose file
+                        <input
+                          type="file"
+                          className="hidden"
+                          disabled={!docName.trim()}
+                          onChange={e => {
+                            if (e.target.files?.[0] && docName.trim()) {
+                              handleUploadDoc(batch.id, 'other', docName.trim(), e.target.files[0]);
+                            }
+                            e.target.value = '';
+                          }}
+                        />
+                      </label>
+                      <button
+                        onClick={() => { setAddingDocBatchId(null); setDocName(''); }}
+                        className="text-xs text-gray-400 hover:text-gray-600"
+                      >✕</button>
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => { setAddingDocBatchId(batch.id); setDocName(''); }}
+                      className="text-xs px-2 py-0.5 border border-dashed border-gray-300 rounded-full text-gray-400 hover:text-gray-600 hover:border-gray-400"
+                    >+ Document</button>
+                  )}
+                </div>
+              </td>
+              <td className="px-3 sm:px-4 py-3">
+                <div className="flex items-center justify-end gap-1">
+                  <button
+                    onClick={() => toggleFinished(batch.id)}
+                    className={`p-1.5 rounded ${isFinished ? 'text-gray-400 hover:text-blue-600' : 'text-gray-400 hover:text-green-600'}`}
+                    title={isFinished ? 'Move to ongoing' : 'Mark as finished'}
+                  >
+                    {isFinished ? <ArchiveRestore size={15} /> : <CheckCircle2 size={15} />}
+                  </button>
+                  <button onClick={() => openEdit(batch)} className="p-1.5 text-gray-400 hover:text-primary-600 rounded"><Pencil size={15} /></button>
+                  <button onClick={() => setDeleteId(batch.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded"><Trash2 size={15} /></button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="flex justify-end">
         <Button onClick={openCreate}><Plus size={16} /> Add Batch</Button>
       </div>
 
-      <Card>
-        {loading ? (
-          <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" /></div>
-        ) : batches.length === 0 ? (
+      {loading ? (
+        <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" /></div>
+      ) : batches.length === 0 ? (
+        <Card>
           <EmptyState
             icon={<Package size={24} />}
             title="No batches"
             description="Batches are created automatically when warehouse stock is uploaded, or add them manually."
             action={<Button onClick={openCreate} size="sm"><Plus size={14} /> Add Batch</Button>}
           />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="text-left px-4 py-3 font-medium text-gray-600 w-40">Batch #</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Product</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600 w-44">Category</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Documents</th>
-                  <th className="text-right px-4 py-3 font-medium text-gray-600 w-20">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {batches.map(batch => (
-                  <tr key={batch.id} className="hover:bg-gray-50 align-top">
-                    <td className="px-4 py-3 font-semibold text-gray-900 font-mono text-xs">{batch.batch_number}</td>
-                    <td className="px-4 py-3 text-gray-700">{batch.product || <span className="text-gray-400">—</span>}</td>
-                    <td className="px-4 py-3">
-                      <select
-                        value={batch.category || ''}
-                        onChange={async e => {
-                          const category = e.target.value;
-                          try {
-                            await api.put(`/inventory/batches/${batch.id}`, { category });
-                            setBatches(prev => prev.map(b => b.id === batch.id ? { ...b, category } : b));
-                          } catch { addToast('Failed to update category', 'error'); }
-                        }}
-                        className="text-sm border border-gray-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 text-gray-700"
-                      >
-                        <option value="">— select —</option>
-                        <option value="TripleW Product">TripleW Product</option>
-                        <option value="Ingredient">Ingredient</option>
-                        <option value="Other">Other</option>
-                      </select>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex flex-wrap gap-1.5 items-center">
-                        {/* Existing documents */}
-                        {(batch.documents || []).map((doc: any) => (
-                          <span key={doc.id} className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full text-xs font-medium bg-sky-50 text-sky-700 border border-sky-200">
-                            <Tag size={10} className="shrink-0" />
-                            {doc.document_type === 'coa' ? 'COA' : (doc.document_name || 'Document')}
-                            <button
-                              onClick={() => downloadDoc(doc.file_path, doc.file_name)}
-                              className="text-sky-400 hover:text-sky-700 p-0.5"
-                              title="Download"
-                            ><Download size={11} /></button>
-                            <button
-                              onClick={() => handleDeleteDoc(doc.id)}
-                              disabled={docDeleting === doc.id}
-                              className="text-sky-300 hover:text-red-500 p-0.5 leading-none disabled:opacity-50"
-                              title="Remove"
-                            >{docDeleting === doc.id ? <Loader2 size={10} className="animate-spin" /> : '×'}</button>
-                          </span>
-                        ))}
-                        {/* COA upload button */}
-                        <label className={`cursor-pointer text-xs px-2 py-0.5 border border-dashed rounded-full transition-colors ${
-                          docUploading === batch.id ? 'border-sky-300 text-sky-400 cursor-not-allowed' : 'border-blue-300 text-blue-600 hover:bg-blue-50'
-                        }`}>
-                          {docUploading === batch.id ? <Loader2 size={12} className="animate-spin inline" /> : '+ COA'}
-                          <input
-                            type="file"
-                            className="hidden"
-                            disabled={docUploading === batch.id}
-                            onChange={e => {
-                              if (e.target.files?.[0]) handleUploadDoc(batch.id, 'coa', 'COA', e.target.files[0]);
-                              e.target.value = '';
-                            }}
-                          />
-                        </label>
-                        {/* Other document: toggle mini-form */}
-                        {addingDocBatchId === batch.id ? (
-                          <span className="inline-flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-lg px-2 py-1">
-                            <input
-                              type="text"
-                              value={docName}
-                              onChange={e => setDocName(e.target.value)}
-                              placeholder="Document name"
-                              className="text-xs border border-gray-300 rounded px-1.5 py-0.5 w-28 focus:outline-none focus:ring-1 focus:ring-primary-500"
-                              autoFocus
-                            />
-                            <label className={`cursor-pointer text-xs px-2 py-0.5 rounded transition-colors ${
-                              docName.trim() ? 'bg-gray-700 text-white hover:bg-gray-800 cursor-pointer' : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                            }`}>
-                              Choose file
-                              <input
-                                type="file"
-                                className="hidden"
-                                disabled={!docName.trim()}
-                                onChange={e => {
-                                  if (e.target.files?.[0] && docName.trim()) {
-                                    handleUploadDoc(batch.id, 'other', docName.trim(), e.target.files[0]);
-                                  }
-                                  e.target.value = '';
-                                }}
-                              />
-                            </label>
-                            <button
-                              onClick={() => { setAddingDocBatchId(null); setDocName(''); }}
-                              className="text-xs text-gray-400 hover:text-gray-600"
-                            >✕</button>
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => { setAddingDocBatchId(batch.id); setDocName(''); }}
-                            className="text-xs px-2 py-0.5 border border-dashed border-gray-300 rounded-full text-gray-400 hover:text-gray-600 hover:border-gray-400"
-                          >+ Document</button>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-1">
-                        <button onClick={() => openEdit(batch)} className="p-1.5 text-gray-400 hover:text-primary-600 rounded"><Pencil size={15} /></button>
-                        <button onClick={() => setDeleteId(batch.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded"><Trash2 size={15} /></button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        </Card>
+      ) : (
+        <>
+          {/* Ongoing Batches */}
+          <div>
+            <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+              <Package size={16} className="text-blue-500" />
+              Ongoing Batches
+              <span className="text-xs font-normal text-gray-400">({ongoingBatches.length})</span>
+            </h3>
+            <Card>
+              {ongoingBatches.length === 0 ? (
+                <p className="px-4 py-6 text-center text-sm text-gray-400">No ongoing batches</p>
+              ) : renderBatchTable(ongoingBatches, false)}
+            </Card>
           </div>
-        )}
-      </Card>
+
+          {/* Finished Batches */}
+          <div>
+            <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+              <CheckCircle2 size={16} className="text-green-500" />
+              Finished Batches
+              <span className="text-xs font-normal text-gray-400">({finishedBatches.length})</span>
+            </h3>
+            <Card>
+              {finishedBatches.length === 0 ? (
+                <p className="px-4 py-6 text-center text-sm text-gray-400">No finished batches</p>
+              ) : renderBatchTable(finishedBatches, true)}
+            </Card>
+          </div>
+        </>
+      )}
 
       <Modal open={showModal} onClose={() => setShowModal(false)} title={editing ? 'Edit Batch' : 'New Batch'} size="md">
         <div className="space-y-4">
@@ -1467,13 +1518,13 @@ export default function InventoryPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold text-gray-900">Inventory</h1>
-      <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">
+      <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Inventory</h1>
+      <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit overflow-x-auto max-w-full">
         {tabs.map(t => (
           <button
             key={t.id}
             onClick={() => setActiveTab(t.id)}
-            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+            className={`px-3 sm:px-4 py-1.5 rounded-md text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${
               activeTab === t.id
                 ? 'bg-white text-gray-900 shadow-sm'
                 : 'text-gray-600 hover:text-gray-900'
