@@ -1283,8 +1283,11 @@ function BatchesTab() {
     } catch { addToast('Failed to update batch', 'error'); }
   };
 
+  const [batchTab, setBatchTab] = useState<'ongoing' | 'finished'>('ongoing');
+
   const ongoingBatches = batches.filter(b => !b.is_finished);
   const finishedBatches = batches.filter(b => b.is_finished);
+  const visibleBatches = batchTab === 'ongoing' ? ongoingBatches : finishedBatches;
 
   const renderBatchTable = (items: any[], isFinished: boolean) => (
     <div className="overflow-x-auto">
@@ -1418,8 +1421,26 @@ function BatchesTab() {
   );
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-end">
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex border-b border-gray-200">
+          {(['ongoing', 'finished'] as const).map(tab => (
+            <button
+              key={tab}
+              onClick={() => setBatchTab(tab)}
+              className={`px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                batchTab === tab
+                  ? 'border-primary-600 text-primary-700'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              {tab === 'ongoing' ? 'Ongoing Batches' : 'Finished Batches'}
+              <span className="ml-1.5 text-xs text-gray-400">
+                ({tab === 'ongoing' ? ongoingBatches.length : finishedBatches.length})
+              </span>
+            </button>
+          ))}
+        </div>
         <Button onClick={openCreate}><Plus size={16} /> Add Batch</Button>
       </div>
 
@@ -1435,35 +1456,13 @@ function BatchesTab() {
           />
         </Card>
       ) : (
-        <>
-          {/* Ongoing Batches */}
-          <div>
-            <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
-              <Package size={16} className="text-blue-500" />
-              Ongoing Batches
-              <span className="text-xs font-normal text-gray-400">({ongoingBatches.length})</span>
-            </h3>
-            <Card>
-              {ongoingBatches.length === 0 ? (
-                <p className="px-4 py-6 text-center text-sm text-gray-400">No ongoing batches</p>
-              ) : renderBatchTable(ongoingBatches, false)}
-            </Card>
-          </div>
-
-          {/* Finished Batches */}
-          <div>
-            <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
-              <CheckCircle2 size={16} className="text-green-500" />
-              Finished Batches
-              <span className="text-xs font-normal text-gray-400">({finishedBatches.length})</span>
-            </h3>
-            <Card>
-              {finishedBatches.length === 0 ? (
-                <p className="px-4 py-6 text-center text-sm text-gray-400">No finished batches</p>
-              ) : renderBatchTable(finishedBatches, true)}
-            </Card>
-          </div>
-        </>
+        <Card>
+          {visibleBatches.length === 0 ? (
+            <p className="px-4 py-12 text-center text-sm text-gray-400">
+              {batchTab === 'ongoing' ? 'No ongoing batches' : 'No finished batches'}
+            </p>
+          ) : renderBatchTable(visibleBatches, batchTab === 'finished')}
+        </Card>
       )}
 
       <Modal open={showModal} onClose={() => setShowModal(false)} title={editing ? 'Edit Batch' : 'New Batch'} size="md">

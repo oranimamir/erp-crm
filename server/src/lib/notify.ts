@@ -47,6 +47,9 @@ async function _sendOtp(to: string, code: string): Promise<void> {
 
 /** Fire-and-forget: logs activity and sends an email to all admin users with an email set. */
 export function notifyAdmin(payload: NotifyPayload): void {
+  // Skip login events — only notify on actual changes
+  if (payload.action === 'logged in') return;
+
   // Always log to activity_log (in-app notifications)
   try {
     db.prepare(
