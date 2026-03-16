@@ -936,6 +936,22 @@ export async function initializeDatabase() {
     console.error('[db] Wire transfer self-healing check failed:', err);
   }
 
+  // ── Demo expenses table ──────────────────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS demo_expenses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      supplier TEXT NOT NULL,
+      category TEXT NOT NULL,
+      amount REAL NOT NULL DEFAULT 0,
+      month TEXT NOT NULL,
+      created_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (created_by) REFERENCES users(id)
+    )
+  `);
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_demo_expenses_month ON demo_expenses(month)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_demo_expenses_category ON demo_expenses(category)`); } catch (_) {}
+
   db.saveToDisk();
 }
 

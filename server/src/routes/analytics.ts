@@ -109,38 +109,19 @@ router.get('/summary', async (req: Request, res: Response) => {
     ) GROUP BY month
   `).all(dateStart, dateEnd, dateStart, dateEnd, dateStart, dateEnd) as any[];
 
-  // ── Monthly paid out (supplier invoices paid) ──────────────────────────────
+  // ── Monthly paid out (supplier invoices by invoice_date) ─────────────────
   const paidRows = db.prepare(`
-    SELECT month, SUM(amt) as paid_out FROM (
-      SELECT strftime('%Y-%m', wt.transfer_date) as month,
-             COALESCE(wt.eur_amount, wt.amount) as amt
-      FROM wire_transfers wt JOIN invoices i ON wt.invoice_id = i.id
-      ${catJoin}
-      WHERE i.type = 'supplier' AND wt.transfer_date BETWEEN ? AND ? ${suppWhere} ${catCond}
-      UNION ALL
-      SELECT strftime('%Y-%m', ip.payment_date) as month,
-             COALESCE(ip.eur_amount, ip.amount) as amt
-      FROM invoice_payments ip JOIN invoices i ON ip.invoice_id = i.id
-      ${catJoin}
-      WHERE i.type = 'supplier' AND ip.payment_date BETWEEN ? AND ? ${suppWhere} ${catCond}
-      UNION ALL
-      SELECT strftime('%Y-%m', p.payment_date) as month, p.amount as amt
-      FROM payments p JOIN invoices i ON p.invoice_id = i.id
-      ${catJoin}
-      WHERE i.type = 'supplier' AND p.payment_date BETWEEN ? AND ? ${suppWhere} ${catCond}
-      UNION ALL
-      SELECT strftime('%Y-%m', i.payment_date) as month,
-             COALESCE(i.eur_amount, i.amount) as amt
-      FROM invoices i
-      ${catJoin}
-      WHERE i.type = 'supplier' AND i.status = 'paid'
-        AND i.payment_date IS NOT NULL AND i.payment_date BETWEEN ? AND ?
-        AND NOT EXISTS (SELECT 1 FROM wire_transfers wt WHERE wt.invoice_id = i.id)
-        AND NOT EXISTS (SELECT 1 FROM invoice_payments ip WHERE ip.invoice_id = i.id)
-        AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
-        ${suppWhere} ${catCond}
-    ) GROUP BY month
-  `).all(dateStart, dateEnd, dateStart, dateEnd, dateStart, dateEnd, dateStart, dateEnd) as any[];
+    SELECT strftime('%Y-%m', i.invoice_date) as month,
+           SUM(COALESCE(i.eur_amount, i.amount)) as paid_out
+    FROM invoices i
+    ${catJoin}
+    WHERE i.type = 'supplier'
+      AND i.status NOT IN ('cancelled')
+      AND i.invoice_date IS NOT NULL
+      AND i.invoice_date BETWEEN ? AND ?
+      ${suppWhere} ${catCond}
+    GROUP BY month
+  `).all(dateStart, dateEnd) as any[];
 
   // ── Build full month grid ──────────────────────────────────────────────────
   const months: Record<string, { month: string; received: number; paid_out: number }> = {};
@@ -177,11 +158,9 @@ router.get('/summary', async (req: Request, res: Response) => {
       COALESCE(SUM(COALESCE(i.eur_amount, i.amount)), 0) as total,
       COUNT(*) as invoice_count
     FROM invoices i JOIN suppliers s ON i.supplier_id = s.id
-    WHERE i.type = 'supplier' AND i.status = 'paid'
-      AND COALESCE(
-        (SELECT MAX(wt.transfer_date) FROM wire_transfers wt WHERE wt.invoice_id = i.id),
-        i.payment_date, i.invoice_date
-      ) BETWEEN ? AND ?
+    WHERE i.type = 'supplier' AND i.status NOT IN ('cancelled')
+      AND i.invoice_date IS NOT NULL
+      AND i.invoice_date BETWEEN ? AND ?
       ${suppWhere} ${catCond}
     GROUP BY i.supplier_id ORDER BY total DESC LIMIT 20
   `).all(dateStart, dateEnd) as any[];
@@ -207,12 +186,13 @@ router.get('/summary', async (req: Request, res: Response) => {
   `).all() as any[];
   const expectedReceivable = await sumLiveEur(expectedRows);
 
-  // Outstanding supplier payable — live FX
+  // Outstanding supplier payable — invoices with no invoice_date OR unpaid status
   const payableRows = db.prepare(`
     SELECT i.amount, UPPER(COALESCE(i.currency, 'USD')) as currency
     FROM invoices i
     ${catJoin}
-    WHERE i.type = 'supplier' AND i.status IN ('draft', 'sent', 'overdue', 'partially_paid')
+    WHERE i.type = 'supplier' AND i.status NOT IN ('paid', 'cancelled', 'paid_with_other')
+      AND i.invoice_date IS NULL
     ${suppWhereOnly} ${catCond}
   `).all() as any[];
   const outstandingPayable = await sumLiveEur(payableRows);

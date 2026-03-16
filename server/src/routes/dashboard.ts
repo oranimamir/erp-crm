@@ -143,30 +143,12 @@ router.get('/monthly-payments', (_req: Request, res: Response) => {
         )
       ), 0) as received,
       COALESCE((
-        SELECT SUM(eur_val) FROM (
-          -- Paid via invoice_payments installments (use payment_date)
-          SELECT COALESCE(ip.eur_amount, ip.amount) as eur_val
-          FROM invoice_payments ip
-          JOIN invoices i ON ip.invoice_id = i.id
-          WHERE i.type = 'supplier'
-            AND strftime('%Y-%m', ip.payment_date) = months.m
-          UNION ALL
-          -- Paid via wire_transfers (use transfer_date)
-          SELECT COALESCE(wt.eur_amount, wt.amount) as eur_val
-          FROM wire_transfers wt
-          JOIN invoices i ON wt.invoice_id = i.id
-          WHERE i.type = 'supplier'
-            AND strftime('%Y-%m', wt.transfer_date) = months.m
-          UNION ALL
-          -- Fully paid invoices with no invoice_payments and no wire_transfers (legacy)
-          SELECT COALESCE(i.eur_amount, i.amount) as eur_val
-          FROM invoices i
-          WHERE i.type = 'supplier' AND i.status = 'paid'
-            AND NOT EXISTS (SELECT 1 FROM invoice_payments ip WHERE ip.invoice_id = i.id)
-            AND NOT EXISTS (SELECT 1 FROM wire_transfers wt WHERE wt.invoice_id = i.id)
-            AND i.payment_date IS NOT NULL
-            AND strftime('%Y-%m', i.payment_date) = months.m
-        )
+        SELECT SUM(COALESCE(i.eur_amount, i.amount))
+        FROM invoices i
+        WHERE i.type = 'supplier'
+          AND i.status NOT IN ('cancelled')
+          AND i.invoice_date IS NOT NULL
+          AND strftime('%Y-%m', i.invoice_date) = months.m
       ), 0) as paid_out
     FROM months ORDER BY months.m
   `).all();

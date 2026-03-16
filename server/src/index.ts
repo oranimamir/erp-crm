@@ -31,6 +31,7 @@ import packagingRoutes from './routes/packaging.js';
 import backupRoutes from './routes/backup.js';
 import warehouseStockRoutes from './routes/warehouse-stock.js';
 import notificationRoutes from './routes/notifications.js';
+import demoExpenseRoutes from './routes/demo-expenses.js';
 import cron from 'node-cron';
 import { checkEmailForStockUpdates } from './lib/email-stock.js';
 import { startBackupScheduler, buildCronExpr } from './lib/backup-scheduler.js';
@@ -146,6 +147,7 @@ app.use('/api/packaging', authenticateToken, packagingRoutes);
 app.use('/api/backup', authenticateToken, backupRoutes);
 app.use('/api/warehouse-stock', authenticateToken, warehouseStockRoutes);
 app.use('/api/notifications', authenticateToken, notificationRoutes);
+app.use('/api/demo-expenses', authenticateToken, demoExpenseRoutes);
 
 // ── Serve built client in production ─────────────────────────────────────────
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');

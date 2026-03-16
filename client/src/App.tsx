@@ -30,6 +30,7 @@ import OperationDetailPage from './pages/OperationDetailPage';
 import OperationFormPage from './pages/OperationFormPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import SettingsPage from './pages/SettingsPage';
+import DemoExpensesPage from './pages/DemoExpensesPage';
 
 export default function App() {
   return (
@@ -67,6 +68,7 @@ export default function App() {
               <Route path="/operations/new" element={<OperationFormPage />} />
               <Route path="/operations/:id" element={<OperationDetailPage />} />
               <Route path="/analytics" element={<AnalyticsPage />} />
+              <Route path="/demo-expenses" element={<DemoExpensesPage />} />
               <Route path="/packaging" element={<Navigate to="/inventory" replace />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/admin/users" element={<AdminUsersPage />} />
