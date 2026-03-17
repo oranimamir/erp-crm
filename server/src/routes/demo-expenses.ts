@@ -278,18 +278,46 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     const zip = await JSZip.loadAsync(req.file.buffer);
     const xmlFiles: { name: string; content: string }[] = [];
     const pdfFiles: Map<string, Buffer> = new Map();
+    const allFileNames: string[] = [];
 
     for (const [name, entry] of Object.entries(zip.files)) {
       if (entry.dir) continue;
+      allFileNames.push(name);
       const lower = name.toLowerCase();
       if (lower.endsWith('.xml')) {
-        xmlFiles.push({ name, content: await entry.async('string') });
+        const content = await entry.async('string');
+        xmlFiles.push({ name, content });
       } else if (lower.endsWith('.pdf')) {
         pdfFiles.set((name.replace(/\.pdf$/i, '').split('/').pop() || '').toLowerCase(), await entry.async('nodebuffer'));
       }
     }
 
-    if (xmlFiles.length === 0) { res.status(400).json({ error: 'No XML invoices found in the ZIP' }); return; }
+    console.log(`[upload-zip] ZIP "${filename}" contains ${allFileNames.length} files:`, allFileNames.slice(0, 20));
+
+    // If no XML files found, check if there are files with UBL content but different extensions
+    if (xmlFiles.length === 0) {
+      // Try to detect XML content in non-.xml files (some systems use different extensions)
+      for (const [name, entry] of Object.entries(zip.files)) {
+        if (entry.dir) continue;
+        const lower = name.toLowerCase();
+        if (lower.endsWith('.xml')) continue; // already processed
+        if (lower.endsWith('.pdf') || lower.endsWith('.jpg') || lower.endsWith('.png')) continue;
+        try {
+          const content = await entry.async('string');
+          if (content.trim().startsWith('<?xml') || content.includes('<Invoice') || content.includes('<CreditNote')) {
+            xmlFiles.push({ name, content });
+          }
+        } catch { /* binary file, skip */ }
+      }
+    }
+
+    if (xmlFiles.length === 0) {
+      const extensions = [...new Set(allFileNames.map(f => f.split('.').pop()?.toLowerCase() || 'unknown'))];
+      res.status(400).json({
+        error: `No XML invoices found in the ZIP. Found ${allFileNames.length} file(s) with extensions: ${extensions.join(', ')}. This feature requires UBL/PEPPOL XML invoices.`,
+      });
+      return;
+    }
 
     // Parse all invoices
     const parsed: any[] = [];
