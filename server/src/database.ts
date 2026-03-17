@@ -936,21 +936,56 @@ export async function initializeDatabase() {
     console.error('[db] Wire transfer self-healing check failed:', err);
   }
 
-  // ── Demo expenses table ──────────────────────────────────────────────────
+  // ── Demo expenses tables (v2 — ZIP/UBL invoice based) ────────────────────
   db.exec(`
-    CREATE TABLE IF NOT EXISTS demo_expenses (
+    CREATE TABLE IF NOT EXISTS demo_upload_batches (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      supplier TEXT NOT NULL,
-      category TEXT NOT NULL,
-      amount REAL NOT NULL DEFAULT 0,
+      filename TEXT NOT NULL,
       month TEXT NOT NULL,
-      created_by INTEGER,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY (created_by) REFERENCES users(id)
+      invoice_count INTEGER NOT NULL DEFAULT 0,
+      total_amount REAL NOT NULL DEFAULT 0,
+      uploaded_by INTEGER,
+      uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (uploaded_by) REFERENCES users(id)
     )
   `);
-  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_demo_expenses_month ON demo_expenses(month)`); } catch (_) {}
-  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_demo_expenses_category ON demo_expenses(category)`); } catch (_) {}
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS demo_invoices (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      batch_id INTEGER NOT NULL,
+      invoice_id TEXT NOT NULL,
+      issue_date TEXT NOT NULL,
+      supplier TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'Other',
+      amount REAL NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'EUR',
+      month TEXT NOT NULL,
+      line_items TEXT,
+      embedded_pdf TEXT,
+      pdf_filename TEXT,
+      xml_filename TEXT,
+      duplicate_warning INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (batch_id) REFERENCES demo_upload_batches(id) ON DELETE CASCADE
+    )
+  `);
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_demo_invoices_month ON demo_invoices(month)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_demo_invoices_category ON demo_invoices(category)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_demo_invoices_supplier ON demo_invoices(supplier)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_demo_invoices_batch ON demo_invoices(batch_id)`); } catch (_) {}
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS demo_supplier_mappings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      supplier_pattern TEXT NOT NULL UNIQUE,
+      category TEXT NOT NULL,
+      is_user_defined INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
+  // Keep old demo_expenses table for backward compat (won't be used by new code)
 
   db.saveToDisk();
 }

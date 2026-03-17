@@ -68,7 +68,7 @@ app.use(cors({
 }));
 
 // ── Body parsing ─────────────────────────────────────────────────────────────
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '50mb' }));
 
 // ── Rate limiters ─────────────────────────────────────────────────────────────
 
