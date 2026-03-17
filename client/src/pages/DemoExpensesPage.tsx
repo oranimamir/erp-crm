@@ -3,8 +3,8 @@ import api from '../lib/api';
 import Card from '../components/ui/Card';
 import { useToast } from '../contexts/ToastContext';
 import {
-  Upload, Trash2, FileSpreadsheet, Filter, X, ChevronUp, ChevronDown,
-  Eye, AlertTriangle, Clock, ArrowRight, Check, XCircle, ChevronLeft,
+  Trash2, FileSpreadsheet, Filter, X, ChevronUp, ChevronDown,
+  Eye, AlertTriangle, Clock, ChevronLeft,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 
@@ -72,26 +72,6 @@ interface Summary {
   categories: string[];
 }
 
-interface ParsedUpload {
-  parsed: {
-    invoiceId: string;
-    issueDate: string;
-    supplier: string;
-    category: string | null;
-    amount: number;
-    currency: string;
-    lineItems: { description: string; amount: number }[];
-    xmlFilename: string;
-    hasPdf: boolean;
-    isAcerta: boolean;
-  }[];
-  inferredMonth: string;
-  unknownSuppliers: { supplier: string; amount: number; date: string; invoiceId: string }[];
-  duplicates: { new: any; existing: any }[];
-  existingBatch: { id: number; filename: string } | null;
-  filename: string;
-  _fullData: any[];
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // UTILITY
@@ -302,196 +282,6 @@ function AvgBarChart({ data }: { data: { category: string; avg_total: number }[]
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// UNKNOWN SUPPLIER MODAL
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function UnknownSupplierModal({
-  unknowns,
-  onResolve,
-  onCancel,
-}: {
-  unknowns: { supplier: string; amount: number; date: string; invoiceId: string }[];
-  onResolve: (assignments: Record<string, { category: string; remember: boolean }>) => void;
-  onCancel: () => void;
-}) {
-  const [assignments, setAssignments] = useState<Record<string, { category: string; remember: boolean }>>(
-    () => Object.fromEntries(unknowns.map(u => [u.supplier, { category: 'Other', remember: false }]))
-  );
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col">
-        <div className="p-6 border-b">
-          <h2 className="text-lg font-bold text-gray-900">Unknown Suppliers</h2>
-          <p className="text-sm text-gray-500 mt-1">
-            The following suppliers were not found in the category mapping. Please assign a category to each.
-          </p>
-        </div>
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
-          {unknowns.map(u => (
-            <div key={u.supplier} className="border border-gray-200 rounded-lg p-4">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="font-medium text-gray-900">{u.supplier}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">{fmt(u.amount)} &middot; {u.date}</p>
-                </div>
-                <select
-                  value={assignments[u.supplier]?.category || 'Other'}
-                  onChange={e => setAssignments(prev => ({ ...prev, [u.supplier]: { ...prev[u.supplier], category: e.target.value } }))}
-                  className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm"
-                >
-                  {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
-              <label className="flex items-center gap-2 mt-3 text-sm text-gray-600 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={assignments[u.supplier]?.remember || false}
-                  onChange={e => setAssignments(prev => ({ ...prev, [u.supplier]: { ...prev[u.supplier], remember: e.target.checked } }))}
-                  className="rounded border-gray-300"
-                />
-                Remember this supplier for future uploads
-              </label>
-            </div>
-          ))}
-        </div>
-        <div className="p-6 border-t flex justify-end gap-3">
-          <button onClick={onCancel} className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50">
-            Cancel
-          </button>
-          <button onClick={() => onResolve(assignments)} className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium">
-            Confirm &amp; Import
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// DUPLICATE MODAL
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function DuplicateModal({
-  duplicates,
-  onResolve,
-  onCancel,
-}: {
-  duplicates: { new: any; existing: any }[];
-  onResolve: (skipIds: string[]) => void;
-  onCancel: () => void;
-}) {
-  const [skipped, setSkipped] = useState<Set<string>>(new Set());
-
-  const toggle = (id: string) => {
-    setSkipped(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full mx-4 max-h-[80vh] flex flex-col">
-        <div className="p-6 border-b">
-          <div className="flex items-center gap-2">
-            <AlertTriangle size={20} className="text-amber-500" />
-            <h2 className="text-lg font-bold text-gray-900">Potential Duplicates Detected</h2>
-          </div>
-          <p className="text-sm text-gray-500 mt-1">
-            These invoices look like they may already exist. Choose which to include or skip.
-          </p>
-        </div>
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
-          {duplicates.map((dup, i) => (
-            <div key={i} className="border border-amber-200 bg-amber-50 rounded-lg p-4">
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <p className="text-xs font-medium text-amber-700 mb-2">NEW (from upload)</p>
-                  <p className="text-gray-900">{dup.new.supplier}</p>
-                  <p className="text-gray-500">{dup.new.invoiceId} &middot; {dup.new.date} &middot; {fmt(dup.new.amount)}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-medium text-gray-500 mb-2">EXISTING (already imported)</p>
-                  <p className="text-gray-900">{dup.existing.supplier}</p>
-                  <p className="text-gray-500">{dup.existing.invoiceId} &middot; {dup.existing.date} &middot; {fmt(dup.existing.amount)}</p>
-                </div>
-              </div>
-              <div className="mt-3 flex gap-3">
-                <button
-                  onClick={() => { const next = new Set(skipped); next.delete(dup.new.invoiceId); setSkipped(next); }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border transition-colors ${
-                    !skipped.has(dup.new.invoiceId) ? 'bg-primary-50 border-primary-300 text-primary-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  <Check size={14} /> Include anyway
-                </button>
-                <button
-                  onClick={() => toggle(dup.new.invoiceId)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border transition-colors ${
-                    skipped.has(dup.new.invoiceId) ? 'bg-red-50 border-red-300 text-red-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  <XCircle size={14} /> Skip
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="p-6 border-t flex justify-end gap-3">
-          <button onClick={onCancel} className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50">
-            Cancel
-          </button>
-          <button onClick={() => onResolve([...skipped])} className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium">
-            Continue
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// MONTH CONFLICT MODAL
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function MonthConflictModal({
-  month,
-  existingFilename,
-  onReplace,
-  onMerge,
-  onCancel,
-}: {
-  month: string;
-  existingFilename: string;
-  onReplace: () => void;
-  onMerge: () => void;
-  onCancel: () => void;
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 p-6">
-        <h2 className="text-lg font-bold text-gray-900 mb-2">Month Already Exists</h2>
-        <p className="text-sm text-gray-600 mb-4">
-          Data for <strong>{monthLabel(month)}</strong> already exists (from <em>{existingFilename}</em>). What would you like to do?
-        </p>
-        <div className="flex flex-col gap-2">
-          <button onClick={onReplace} className="w-full px-4 py-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded-lg hover:bg-red-100 text-left">
-            <strong>Replace</strong> — delete existing data and import new
-          </button>
-          <button onClick={onMerge} className="w-full px-4 py-3 text-sm bg-primary-50 border border-primary-200 text-primary-700 rounded-lg hover:bg-primary-100 text-left">
-            <strong>Merge</strong> — add new invoices alongside existing
-          </button>
-          <button onClick={onCancel} className="w-full px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INVOICE VIEWER SIDE PANEL
@@ -695,8 +485,6 @@ function MultiSelect({ label, options, selected, onChange }: {
 
 export default function DemoExpensesPage() {
   const { addToast } = useToast();
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
   // Data
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [batches, setBatches] = useState<Batch[]>([]);
@@ -715,16 +503,6 @@ export default function DemoExpensesPage() {
   const [sortBy, setSortBy] = useState<string>('issue_date');
   const [sortDir, setSortDir] = useState<'ASC' | 'DESC'>('DESC');
 
-  // Upload flow
-  const [uploading, setUploading] = useState(false);
-  const [pendingUpload, setPendingUpload] = useState<ParsedUpload | null>(null);
-  const [showUnknownModal, setShowUnknownModal] = useState(false);
-  const [showDuplicateModal, setShowDuplicateModal] = useState(false);
-  const [showMonthConflict, setShowMonthConflict] = useState(false);
-  const [categoryAssignments, setCategoryAssignments] = useState<Record<string, { category: string; remember: boolean }>>({});
-  const [skipInvoiceIds, setSkipInvoiceIds] = useState<string[]>([]);
-  const [replaceMonth, setReplaceMonth] = useState(false);
-
   // Invoice viewer
   const [viewingInvoice, setViewingInvoice] = useState<number | null>(null);
 
@@ -734,7 +512,7 @@ export default function DemoExpensesPage() {
   // ─── FETCH HELPERS ──────────────────────────────────────────────────────────
 
   const buildFilterParams = useCallback(() => {
-    const params: Record<string, string> = {};
+    const params: Record<string, string> = { domain: 'demo' };
     if (filterCategories.length > 0) params.categories = filterCategories.join(',');
     if (filterSuppliers.length > 0) params.suppliers = filterSuppliers.join(',');
     if (filterMonth) params.month = filterMonth;
@@ -749,7 +527,7 @@ export default function DemoExpensesPage() {
       const [invRes, sumRes, batRes] = await Promise.all([
         api.get('/demo-expenses/invoices', { params: { ...params, sort_by: sortBy, sort_dir: sortDir } }),
         api.get('/demo-expenses/summary', { params }),
-        api.get('/demo-expenses/batches'),
+        api.get('/demo-expenses/batches', { params: { domain: 'demo' } }),
       ]);
       setInvoices(invRes.data);
       setSummary(sumRes.data);
@@ -762,132 +540,6 @@ export default function DemoExpensesPage() {
   }, [buildFilterParams, sortBy, sortDir, addToast]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
-
-  // ─── FILE UPLOAD HANDLER ────────────────────────────────────────────────────
-
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = '';
-
-    if (!file.name.toLowerCase().endsWith('.zip')) {
-      addToast('Please upload a .zip file containing XML invoices', 'error');
-      return;
-    }
-
-    setUploading(true);
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const res = await api.post('/demo-expenses/upload-zip', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-
-      const data: ParsedUpload = res.data;
-      setPendingUpload(data);
-
-      if (data.unknownSuppliers.length > 0) {
-        setShowUnknownModal(true);
-      } else if (data.duplicates.length > 0) {
-        setShowDuplicateModal(true);
-      } else if (data.existingBatch) {
-        setShowMonthConflict(true);
-      } else {
-        await finalizeImport(data, {}, [], false);
-      }
-    } catch (err: any) {
-      addToast(err?.response?.data?.error || 'Upload failed', 'error');
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  // ─── IMPORT FINALIZATION ────────────────────────────────────────────────────
-
-  const finalizeImport = async (
-    upload: ParsedUpload,
-    catOverrides: Record<string, { category: string; remember: boolean }>,
-    skipIds: string[],
-    replace: boolean,
-  ) => {
-    try {
-      const categoryOverrides: Record<string, string> = {};
-      const rememberSuppliers: string[] = [];
-      for (const [supplier, { category, remember }] of Object.entries(catOverrides)) {
-        categoryOverrides[supplier] = category;
-        if (remember) rememberSuppliers.push(supplier);
-      }
-
-      await api.post('/demo-expenses/confirm-import', {
-        invoices: upload._fullData,
-        month: upload.inferredMonth,
-        filename: upload.filename,
-        categoryOverrides,
-        rememberSuppliers,
-        skipInvoiceIds: skipIds,
-        replaceMonth: replace,
-        duplicateInvoiceIds: upload.duplicates.map(d => d.new.invoiceId),
-      });
-
-      addToast(`Imported ${upload.parsed.length - skipIds.length} invoices for ${monthLabel(upload.inferredMonth)}`, 'success');
-      setPendingUpload(null);
-      setShowUnknownModal(false);
-      setShowDuplicateModal(false);
-      setShowMonthConflict(false);
-      setCategoryAssignments({});
-      setSkipInvoiceIds([]);
-      setReplaceMonth(false);
-      fetchAll();
-    } catch (err: any) {
-      addToast(err?.response?.data?.error || 'Import failed', 'error');
-    }
-  };
-
-  // ─── MODAL FLOW ─────────────────────────────────────────────────────────────
-
-  const handleUnknownResolved = (assignments: Record<string, { category: string; remember: boolean }>) => {
-    setCategoryAssignments(assignments);
-    setShowUnknownModal(false);
-
-    if (pendingUpload!.duplicates.length > 0) {
-      setShowDuplicateModal(true);
-    } else if (pendingUpload!.existingBatch) {
-      setShowMonthConflict(true);
-    } else {
-      finalizeImport(pendingUpload!, assignments, [], false);
-    }
-  };
-
-  const handleDuplicatesResolved = (skipIds: string[]) => {
-    setSkipInvoiceIds(skipIds);
-    setShowDuplicateModal(false);
-
-    if (pendingUpload!.existingBatch) {
-      setShowMonthConflict(true);
-    } else {
-      finalizeImport(pendingUpload!, categoryAssignments, skipIds, false);
-    }
-  };
-
-  const handleMonthReplace = () => {
-    setReplaceMonth(true);
-    setShowMonthConflict(false);
-    finalizeImport(pendingUpload!, categoryAssignments, skipInvoiceIds, true);
-  };
-
-  const handleMonthMerge = () => {
-    setShowMonthConflict(false);
-    finalizeImport(pendingUpload!, categoryAssignments, skipInvoiceIds, false);
-  };
-
-  const cancelUpload = () => {
-    setPendingUpload(null);
-    setShowUnknownModal(false);
-    setShowDuplicateModal(false);
-    setShowMonthConflict(false);
-    setCategoryAssignments({});
-    setSkipInvoiceIds([]);
-  };
 
   // ─── SORT HANDLER ──────────────────────────────────────────────────────────
 
@@ -992,7 +644,7 @@ export default function DemoExpensesPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Demo Expenses</h1>
             <p className="text-sm text-gray-500 mt-1">
-              Upload ZIP files with UBL/PEPPOL invoices to track spending by category and supplier
+              Track demo-related spending by category and supplier
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -1055,29 +707,11 @@ export default function DemoExpensesPage() {
           </Card>
         )}
 
-        {/* Upload */}
-        <Card className="p-5">
-          <div className="flex items-center gap-4">
-            <div className="flex-1">
-              <p className="text-sm font-medium text-gray-700 mb-1">Upload Invoice ZIP</p>
-              <p className="text-xs text-gray-500">
-                Upload a .zip file containing UBL/PEPPOL XML invoices. The month is inferred from invoice dates.
-              </p>
-            </div>
-            <input ref={fileInputRef} type="file" accept=".zip" onChange={handleFileSelect} className="hidden" />
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
-              className="flex items-center gap-2 px-5 py-2.5 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700 disabled:opacity-50 transition-colors shrink-0"
-            >
-              {uploading ? (
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
-              ) : (
-                <Upload size={16} />
-              )}
-              {uploading ? 'Processing...' : 'Upload ZIP'}
-            </button>
-          </div>
+        {/* Upload note */}
+        <Card className="p-4 bg-blue-50 border-blue-200">
+          <p className="text-sm text-blue-700">
+            Upload invoice ZIP files via the <a href="/invoices" className="font-medium underline hover:text-blue-900">Invoices tab</a>. Invoices from known Demo suppliers are automatically classified here.
+          </p>
         </Card>
 
         {/* Summary cards */}
@@ -1264,16 +898,10 @@ export default function DemoExpensesPage() {
         {invoices.length === 0 && !loading && (
           <Card className="p-12 text-center">
             <FileSpreadsheet size={48} className="mx-auto text-gray-300 mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">No invoices uploaded yet</h3>
-            <p className="text-sm text-gray-500 mb-4">
-              Upload a .zip file containing UBL/PEPPOL XML invoices to get started.
+            <h3 className="text-lg font-medium text-gray-900 mb-2">No demo invoices yet</h3>
+            <p className="text-sm text-gray-500">
+              Upload a ZIP file via the <a href="/invoices" className="text-primary-600 underline hover:text-primary-800">Invoices tab</a>. Invoices from known Demo suppliers will appear here automatically.
             </p>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700"
-            >
-              <Upload size={16} /> Upload ZIP
-            </button>
           </Card>
         )}
       </div>
@@ -1281,33 +909,6 @@ export default function DemoExpensesPage() {
       {/* Invoice Viewer Side Panel */}
       {viewingInvoice && (
         <InvoiceViewer invoiceId={viewingInvoice} onClose={() => setViewingInvoice(null)} />
-      )}
-
-      {/* Modals */}
-      {showUnknownModal && pendingUpload && (
-        <UnknownSupplierModal
-          unknowns={pendingUpload.unknownSuppliers}
-          onResolve={handleUnknownResolved}
-          onCancel={cancelUpload}
-        />
-      )}
-
-      {showDuplicateModal && pendingUpload && (
-        <DuplicateModal
-          duplicates={pendingUpload.duplicates}
-          onResolve={handleDuplicatesResolved}
-          onCancel={cancelUpload}
-        />
-      )}
-
-      {showMonthConflict && pendingUpload && pendingUpload.existingBatch && (
-        <MonthConflictModal
-          month={pendingUpload.inferredMonth}
-          existingFilename={pendingUpload.existingBatch.filename}
-          onReplace={handleMonthReplace}
-          onMerge={handleMonthMerge}
-          onCancel={cancelUpload}
-        />
       )}
 
       {overrideTarget && (

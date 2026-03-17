@@ -10,7 +10,7 @@ import SearchBar from '../components/ui/SearchBar';
 import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
-import { Plus, FileText, Eye, Trash2, FileDown, ChevronUp, ChevronDown, FileSpreadsheet, Landmark, Download, X, Loader2, Filter, CalendarDays } from 'lucide-react';
+import { Plus, FileText, Eye, Trash2, FileDown, ChevronUp, ChevronDown, FileSpreadsheet, Landmark, Download, X, Loader2, Filter, CalendarDays, Upload, AlertTriangle, Check, XCircle } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
 
@@ -123,6 +123,19 @@ export default function InvoicesPage() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [loading, setLoading] = useState(true);
   const [deleteId, setDeleteId] = useState<number | null>(null);
+
+  // ZIP upload state
+  const zipInputRef = useRef<HTMLInputElement>(null);
+  const [zipUploading, setZipUploading] = useState(false);
+  const [pendingUpload, setPendingUpload] = useState<any>(null);
+  const [showUnknownModal, setShowUnknownModal] = useState(false);
+  const [showDuplicateModal, setShowDuplicateModal] = useState(false);
+  const [showMonthConflict, setShowMonthConflict] = useState(false);
+  const [unknownAssignments, setUnknownAssignments] = useState<Record<string, { domain: string; category: string; remember: boolean }>>({});
+  const [skipIds, setSkipIds] = useState<string[]>([]);
+
+  const DEMO_CATS = ['Salaries','Cars','Overhead','Consumables','Materials','Utilities and Maintenance','Feedstock','Subcontractors and Consultants','Regulatory','Equipment','Couriers','Other'];
+  const SALES_CATS = ['Raw Materials','Logistics','Blenders','Shipping'];
 
   // Persist filters to sessionStorage
   useEffect(() => {
@@ -258,6 +271,89 @@ export default function InvoicesPage() {
     downloadExcel('invoices', ['Invoice #', 'Customer / Supplier', 'Type', 'Amount', 'Currency', 'EUR Amount', 'Status', 'Invoice Date', 'Due Date'], rows);
   };
 
+  // ─── ZIP UPLOAD HANDLERS ────────────────────────────────────────────────
+  const handleZipUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    if (!file.name.toLowerCase().endsWith('.zip')) { addToast('Please upload a .zip file', 'error'); return; }
+
+    setZipUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await api.post('/demo-expenses/upload-zip', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setPendingUpload(res.data);
+
+      if (res.data.unknownSuppliers.length > 0) {
+        setUnknownAssignments(Object.fromEntries(res.data.unknownSuppliers.map((u: any) => [u.supplier, { domain: 'demo', category: 'Other', remember: false }])));
+        setShowUnknownModal(true);
+      } else if (res.data.duplicates.length > 0) {
+        setShowDuplicateModal(true);
+      } else if (res.data.existingDemoBatch || res.data.existingSalesBatch) {
+        setShowMonthConflict(true);
+      } else {
+        await finalizeZipImport(res.data, {}, [], false, false);
+      }
+    } catch (err: any) {
+      addToast(err?.response?.data?.error || 'ZIP upload failed', 'error');
+    } finally {
+      setZipUploading(false);
+    }
+  };
+
+  const finalizeZipImport = async (upload: any, catOverrides: Record<string, { domain: string; category: string; remember: boolean }>, skipInvoiceIds: string[], replaceDemo: boolean, replaceSales: boolean) => {
+    try {
+      const categoryOverrides: Record<string, { domain: string; category: string }> = {};
+      const domainOverrides: Record<string, string> = {};
+      const rememberSuppliers: string[] = [];
+      for (const [supplier, { domain, category, remember }] of Object.entries(catOverrides)) {
+        categoryOverrides[supplier] = { domain, category };
+        domainOverrides[supplier] = domain;
+        if (remember) rememberSuppliers.push(supplier);
+      }
+
+      const res = await api.post('/demo-expenses/confirm-import', {
+        invoices: upload._fullData,
+        month: upload.inferredMonth,
+        filename: upload.filename,
+        categoryOverrides,
+        domainOverrides,
+        rememberSuppliers,
+        skipInvoiceIds,
+        replaceDemoMonth: replaceDemo,
+        replaceSalesMonth: replaceSales,
+        duplicateInvoiceIds: upload.duplicates.map((d: any) => d.new.invoiceId),
+      });
+
+      const results = res.data.results || [];
+      const demoCount = results.find((r: any) => r.domain === 'demo')?.count || 0;
+      const salesCount = results.find((r: any) => r.domain === 'sales')?.count || 0;
+      const parts = [];
+      if (demoCount > 0) parts.push(`${demoCount} to Demo Expenses`);
+      if (salesCount > 0) parts.push(`${salesCount} to Sales Activities`);
+      addToast(`Imported ${parts.join(', ') || 'invoices'}`, 'success');
+
+      setPendingUpload(null);
+      setShowUnknownModal(false);
+      setShowDuplicateModal(false);
+      setShowMonthConflict(false);
+      setUnknownAssignments({});
+      setSkipIds([]);
+    } catch (err: any) {
+      addToast(err?.response?.data?.error || 'Import failed', 'error');
+    }
+  };
+
+  const cancelZipUpload = () => {
+    setPendingUpload(null);
+    setShowUnknownModal(false);
+    setShowDuplicateModal(false);
+    setShowMonthConflict(false);
+    setUnknownAssignments({});
+    setSkipIds([]);
+  };
+
   const formatAmount = (amount: number, currency?: string) => {
     if (amount == null) return '-';
     const symbol = currency === 'EUR' ? '\u20AC' : currency === 'GBP' ? '\u00A3' : '$';
@@ -269,6 +365,11 @@ export default function InvoicesPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Invoices</h1>
         <div className="flex gap-2">
+          <input ref={zipInputRef} type="file" accept=".zip" onChange={handleZipUpload} className="hidden" />
+          <Button variant="secondary" onClick={() => zipInputRef.current?.click()} disabled={zipUploading}>
+            {zipUploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+            {zipUploading ? 'Processing...' : 'Upload ZIP'}
+          </Button>
           <Button variant="secondary" onClick={handleExport}><FileSpreadsheet size={16} /> Export Excel</Button>
           <Link to="/invoices/generate">
             <Button variant="secondary"><FileDown size={16} /> Generate PDF</Button>
@@ -501,6 +602,147 @@ export default function InvoicesPage() {
               ) : (
                 <p className="text-gray-500">Unable to preview this file.</p>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Unknown Supplier Modal — asks domain first, then category */}
+      {showUnknownModal && pendingUpload && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col">
+            <div className="p-6 border-b">
+              <h2 className="text-lg font-bold text-gray-900">Classify Unknown Suppliers</h2>
+              <p className="text-sm text-gray-500 mt-1">
+                For each supplier, choose whether it belongs to <strong>Demo Expenses</strong> or <strong>Sales Activities</strong>, then select a category.
+              </p>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {pendingUpload.unknownSuppliers.map((u: any) => {
+                const a = unknownAssignments[u.supplier] || { domain: 'demo', category: 'Other', remember: false };
+                const cats = a.domain === 'sales' ? SALES_CATS : DEMO_CATS;
+                return (
+                  <div key={u.supplier} className="border border-gray-200 rounded-lg p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="font-medium text-gray-900">{u.supplier}</p>
+                        <p className="text-xs text-gray-500 mt-0.5">€{Number(u.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })} · {u.date}</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-3 mt-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Domain</label>
+                        <select value={a.domain}
+                          onChange={e => setUnknownAssignments(prev => ({
+                            ...prev,
+                            [u.supplier]: { ...prev[u.supplier], domain: e.target.value, category: e.target.value === 'sales' ? 'Raw Materials' : 'Other' }
+                          }))}
+                          className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
+                          <option value="demo">Demo Expenses</option>
+                          <option value="sales">Sales Activities</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Category</label>
+                        <select value={a.category}
+                          onChange={e => setUnknownAssignments(prev => ({ ...prev, [u.supplier]: { ...prev[u.supplier], category: e.target.value } }))}
+                          className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
+                          {cats.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <label className="flex items-center gap-2 mt-3 text-sm text-gray-600 cursor-pointer">
+                      <input type="checkbox" checked={a.remember}
+                        onChange={e => setUnknownAssignments(prev => ({ ...prev, [u.supplier]: { ...prev[u.supplier], remember: e.target.checked } }))}
+                        className="rounded border-gray-300" />
+                      Remember this supplier for future uploads
+                    </label>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="p-6 border-t flex justify-end gap-3">
+              <button onClick={cancelZipUpload} className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+              <button onClick={() => {
+                setShowUnknownModal(false);
+                if (pendingUpload.duplicates.length > 0) setShowDuplicateModal(true);
+                else if (pendingUpload.existingDemoBatch || pendingUpload.existingSalesBatch) setShowMonthConflict(true);
+                else finalizeZipImport(pendingUpload, unknownAssignments, [], false, false);
+              }} className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium">Continue</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Duplicate Detection Modal */}
+      {showDuplicateModal && pendingUpload && (() => {
+        const [localSkip, setLocalSkip] = [skipIds, setSkipIds];
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full mx-4 max-h-[80vh] flex flex-col">
+              <div className="p-6 border-b">
+                <div className="flex items-center gap-2"><AlertTriangle size={20} className="text-amber-500" /><h2 className="text-lg font-bold text-gray-900">Potential Duplicates Detected</h2></div>
+                <p className="text-sm text-gray-500 mt-1">Choose which to include or skip.</p>
+              </div>
+              <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                {pendingUpload.duplicates.map((dup: any, i: number) => (
+                  <div key={i} className="border border-amber-200 bg-amber-50 rounded-lg p-4">
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <p className="text-xs font-medium text-amber-700 mb-2">NEW</p>
+                        <p className="text-gray-900">{dup.new.supplier}</p>
+                        <p className="text-gray-500">{dup.new.invoiceId} · {dup.new.date} · €{Number(dup.new.amount).toFixed(2)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-medium text-gray-500 mb-2">EXISTING{dup.existing.domain ? ` (${dup.existing.domain})` : ''}</p>
+                        <p className="text-gray-900">{dup.existing.supplier}</p>
+                        <p className="text-gray-500">{dup.existing.invoiceId} · {dup.existing.date} · €{Number(dup.existing.amount).toFixed(2)}</p>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex gap-3">
+                      <button onClick={() => setSkipIds(prev => prev.filter(id => id !== dup.new.invoiceId))}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border transition-colors ${!localSkip.includes(dup.new.invoiceId) ? 'bg-primary-50 border-primary-300 text-primary-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}>
+                        <Check size={14} /> Include anyway
+                      </button>
+                      <button onClick={() => setSkipIds(prev => prev.includes(dup.new.invoiceId) ? prev.filter(id => id !== dup.new.invoiceId) : [...prev, dup.new.invoiceId])}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border transition-colors ${localSkip.includes(dup.new.invoiceId) ? 'bg-red-50 border-red-300 text-red-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}>
+                        <XCircle size={14} /> Skip
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="p-6 border-t flex justify-end gap-3">
+                <button onClick={cancelZipUpload} className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+                <button onClick={() => {
+                  setShowDuplicateModal(false);
+                  if (pendingUpload.existingDemoBatch || pendingUpload.existingSalesBatch) setShowMonthConflict(true);
+                  else finalizeZipImport(pendingUpload, unknownAssignments, localSkip, false, false);
+                }} className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium">Continue</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Month Conflict Modal */}
+      {showMonthConflict && pendingUpload && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 p-6">
+            <h2 className="text-lg font-bold text-gray-900 mb-2">Month Already Exists</h2>
+            <p className="text-sm text-gray-600 mb-4">
+              Data for <strong>{pendingUpload.inferredMonth}</strong> already exists. What would you like to do?
+            </p>
+            <div className="flex flex-col gap-2">
+              <button onClick={() => { setShowMonthConflict(false); finalizeZipImport(pendingUpload, unknownAssignments, skipIds, true, true); }}
+                className="w-full px-4 py-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded-lg hover:bg-red-100 text-left">
+                <strong>Replace</strong> — delete existing data and import new
+              </button>
+              <button onClick={() => { setShowMonthConflict(false); finalizeZipImport(pendingUpload, unknownAssignments, skipIds, false, false); }}
+                className="w-full px-4 py-3 text-sm bg-primary-50 border border-primary-200 text-primary-700 rounded-lg hover:bg-primary-100 text-left">
+                <strong>Merge</strong> — add alongside existing
+              </button>
+              <button onClick={cancelZipUpload} className="w-full px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">Cancel</button>
             </div>
           </div>
         </div>

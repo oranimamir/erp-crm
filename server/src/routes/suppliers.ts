@@ -40,7 +40,7 @@ router.post('/', (req: Request, res: Response) => {
   if (!name || !category) { res.status(400).json({ error: 'Name and category are required' }); return; }
 
   const validCategories = ['logistics', 'blenders', 'raw_materials', 'shipping'];
-  if (!validCategories.includes(category)) {
+  if (category && !validCategories.includes(category)) {
     res.status(400).json({ error: `Category must be one of: ${validCategories.join(', ')}` });
     return;
   }

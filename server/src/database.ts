@@ -936,12 +936,13 @@ export async function initializeDatabase() {
     console.error('[db] Wire transfer self-healing check failed:', err);
   }
 
-  // ── Demo expenses tables (v2 — ZIP/UBL invoice based) ────────────────────
+  // ── Expense invoice tables (shared by Demo Expenses + Sales Activities) ───
   db.exec(`
     CREATE TABLE IF NOT EXISTS demo_upload_batches (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       filename TEXT NOT NULL,
       month TEXT NOT NULL,
+      domain TEXT NOT NULL DEFAULT 'demo',
       invoice_count INTEGER NOT NULL DEFAULT 0,
       total_amount REAL NOT NULL DEFAULT 0,
       uploaded_by INTEGER,
@@ -958,6 +959,7 @@ export async function initializeDatabase() {
       issue_date TEXT NOT NULL,
       supplier TEXT NOT NULL,
       category TEXT NOT NULL DEFAULT 'Other',
+      domain TEXT NOT NULL DEFAULT 'demo',
       amount REAL NOT NULL DEFAULT 0,
       currency TEXT NOT NULL DEFAULT 'EUR',
       month TEXT NOT NULL,
@@ -974,16 +976,23 @@ export async function initializeDatabase() {
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_demo_invoices_category ON demo_invoices(category)`); } catch (_) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_demo_invoices_supplier ON demo_invoices(supplier)`); } catch (_) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_demo_invoices_batch ON demo_invoices(batch_id)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_demo_invoices_domain ON demo_invoices(domain)`); } catch (_) {}
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS demo_supplier_mappings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       supplier_pattern TEXT NOT NULL UNIQUE,
+      domain TEXT NOT NULL DEFAULT 'demo',
       category TEXT NOT NULL,
       is_user_defined INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
+
+  // Migrations: add domain columns to existing tables
+  try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN domain TEXT NOT NULL DEFAULT 'demo'`); } catch (_) {}
+  try { db.exec(`ALTER TABLE demo_upload_batches ADD COLUMN domain TEXT NOT NULL DEFAULT 'demo'`); } catch (_) {}
+  try { db.exec(`ALTER TABLE demo_supplier_mappings ADD COLUMN domain TEXT NOT NULL DEFAULT 'demo'`); } catch (_) {}
 
   // Keep old demo_expenses table for backward compat (won't be used by new code)
 

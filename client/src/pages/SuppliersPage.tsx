@@ -12,7 +12,7 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
-import { Plus, Truck, Eye, Pencil, Trash2, BarChart3, FileSpreadsheet } from 'lucide-react';
+import { Plus, Truck, Eye, Pencil, Trash2, BarChart3, FileSpreadsheet, Beaker } from 'lucide-react';
 import { downloadExcel } from '../lib/exportExcel';
 
 const CHART_COLORS = [
@@ -39,8 +39,63 @@ const categoryLabels: Record<string, string> = {
   logistics: 'Logistics', blenders: 'Blenders', raw_materials: 'Raw Materials', shipping: 'Shipping',
 };
 
+const DEMO_CAT_COLORS: Record<string, string> = {
+  'Salaries': '#6366f1', 'Cars': '#8b5cf6', 'Overhead': '#3b82f6', 'Consumables': '#f59e0b',
+  'Materials': '#10b981', 'Utilities and Maintenance': '#ef4444', 'Feedstock': '#14b8a6',
+  'Subcontractors and Consultants': '#ec4899', 'Regulatory': '#f97316', 'Equipment': '#0ea5e9',
+  'Couriers': '#84cc16', 'Other': '#6b7280',
+};
+
+function DemoSuppliersTab() {
+  const [data, setData] = useState<{ hardcoded: any[]; userDefined: any[] }>({ hardcoded: [], userDefined: [] });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.get('/demo-expenses/demo-suppliers').then(r => setData(r.data)).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" /></div>;
+
+  // Group by category
+  const byCategory: Record<string, string[]> = {};
+  for (const s of [...data.hardcoded, ...data.userDefined]) {
+    if (!byCategory[s.category]) byCategory[s.category] = [];
+    byCategory[s.category].push(s.pattern);
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-gray-500">
+        Demo suppliers are used to automatically classify invoices uploaded via the Invoices tab into the Demo Expenses domain.
+      </p>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {Object.entries(byCategory).sort((a, b) => a[0].localeCompare(b[0])).map(([cat, suppliers]) => (
+          <Card key={cat} className="p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-3 h-3 rounded-sm" style={{ background: DEMO_CAT_COLORS[cat] || '#6b7280' }} />
+              <h3 className="text-sm font-semibold text-gray-900">{cat}</h3>
+              <span className="text-xs text-gray-400 ml-auto">{suppliers.length}</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {suppliers.map(s => (
+                <span key={s} className="inline-block px-2 py-0.5 bg-gray-100 text-gray-700 rounded text-xs capitalize">{s}</span>
+              ))}
+            </div>
+          </Card>
+        ))}
+      </div>
+      {data.userDefined.length > 0 && (
+        <p className="text-xs text-gray-400 mt-2">
+          {data.userDefined.length} user-defined mapping(s) learned from previous uploads.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function SuppliersPage() {
   const { addToast } = useToast();
+  const [activeTab, setActiveTab] = useState<'sales' | 'demo'>('sales');
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -116,6 +171,29 @@ export default function SuppliersPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Suppliers</h1>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex border-b border-gray-200">
+        <button
+          onClick={() => setActiveTab('sales')}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === 'sales' ? 'border-primary-600 text-primary-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+        >
+          <span className="flex items-center gap-2"><Truck size={16} /> Sales Activities</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('demo')}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === 'demo' ? 'border-primary-600 text-primary-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+        >
+          <span className="flex items-center gap-2"><Beaker size={16} /> Demo Expenses</span>
+        </button>
+      </div>
+
+      {activeTab === 'demo' ? (
+        <DemoSuppliersTab />
+      ) : (
+      <>
+      <div className="flex items-center justify-end">
         <div className="flex gap-2">
           <Button variant="secondary" onClick={async () => {
             const res = await api.get('/suppliers', { params: { page: 1, limit: 9999, search, category: categoryFilter } });
@@ -271,6 +349,8 @@ export default function SuppliersPage() {
           </Card>
         );
       })()}
+      </>
+      )}
     </div>
   );
 }

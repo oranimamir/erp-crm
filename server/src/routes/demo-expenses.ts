@@ -7,14 +7,27 @@ import multer from 'multer';
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 
-const CATEGORIES = [
+// ═══════════════════════════════════════════════════════════════════════════════
+// CATEGORY DEFINITIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const DEMO_CATEGORIES = [
   'Salaries', 'Cars', 'Overhead', 'Consumables', 'Materials',
   'Utilities and Maintenance', 'Feedstock', 'Subcontractors and Consultants',
   'Regulatory', 'Equipment', 'Couriers', 'Other',
 ];
 
-// Hardcoded supplier → category mapping
-const SUPPLIER_CATEGORY_MAP: { pattern: string; category: string }[] = [
+const SALES_CATEGORIES = [
+  'Raw Materials', 'Logistics', 'Blenders', 'Shipping',
+];
+
+const ALL_CATEGORIES = [...DEMO_CATEGORIES, ...SALES_CATEGORIES];
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HARDCODED DEMO SUPPLIER → CATEGORY MAPPING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const DEMO_SUPPLIER_MAP: { pattern: string; category: string }[] = [
   // Salaries — Acerta always first, highest priority
   { pattern: 'acerta', category: 'Salaries' },
   { pattern: 'dutch taxes', category: 'Salaries' },
@@ -107,21 +120,45 @@ const SUPPLIER_CATEGORY_MAP: { pattern: string; category: string }[] = [
   { pattern: 'ais antwerp', category: 'Other' },
 ];
 
-function matchSupplierCategory(supplierName: string): string | null {
+// Sales Activities category labels to DB category values
+const SALES_CAT_DB_MAP: Record<string, string> = {
+  logistics: 'Logistics',
+  blenders: 'Blenders',
+  raw_materials: 'Raw Materials',
+  shipping: 'Shipping',
+};
+
+/**
+ * Classify a supplier into domain + category.
+ * Returns { domain, category } or null if unknown.
+ */
+function classifySupplier(supplierName: string): { domain: string; category: string } | null {
   const lower = supplierName.toLowerCase();
 
-  // Acerta always takes priority
-  if (lower.includes('acerta')) return 'Salaries';
+  // Acerta always takes priority → Demo / Salaries
+  if (lower.includes('acerta')) return { domain: 'demo', category: 'Salaries' };
 
-  // Check hardcoded list
-  for (const { pattern, category } of SUPPLIER_CATEGORY_MAP) {
-    if (lower.includes(pattern)) return category;
+  // Check hardcoded demo list
+  for (const { pattern, category } of DEMO_SUPPLIER_MAP) {
+    if (lower.includes(pattern)) return { domain: 'demo', category };
+  }
+
+  // Check Sales Activities suppliers (from the suppliers table)
+  const salesSuppliers = db.prepare('SELECT name, category FROM suppliers').all() as any[];
+  for (const s of salesSuppliers) {
+    const sLower = s.name.toLowerCase();
+    if (lower.includes(sLower) || sLower.includes(lower)) {
+      const cat = SALES_CAT_DB_MAP[s.category] || s.category;
+      return { domain: 'sales', category: cat };
+    }
   }
 
   // Check user-defined mappings
-  const userMappings = db.prepare('SELECT supplier_pattern, category FROM demo_supplier_mappings').all() as any[];
+  const userMappings = db.prepare('SELECT supplier_pattern, domain, category FROM demo_supplier_mappings').all() as any[];
   for (const m of userMappings) {
-    if (lower.includes(m.supplier_pattern.toLowerCase())) return m.category;
+    if (lower.includes(m.supplier_pattern.toLowerCase())) {
+      return { domain: m.domain || 'demo', category: m.category };
+    }
   }
 
   return null;
@@ -131,7 +168,10 @@ function isAcerta(supplierName: string): boolean {
   return supplierName.toLowerCase().includes('acerta');
 }
 
-// Parse a UBL/PEPPOL XML invoice/credit note
+// ═══════════════════════════════════════════════════════════════════════════════
+// UBL/PEPPOL XML PARSER
+// ═══════════════════════════════════════════════════════════════════════════════
+
 function parseUBLInvoice(xmlString: string) {
   const parser = new XMLParser({
     ignoreAttributes: false,
@@ -157,7 +197,6 @@ function parseUBLInvoice(xmlString: string) {
       || supplier['PartyLegalEntity']?.['RegistrationName']
       || '';
   }
-  // Handle nested text nodes
   if (typeof supplierName === 'object' && supplierName['#text']) supplierName = supplierName['#text'];
 
   // Tax-exclusive amount
@@ -165,10 +204,9 @@ function parseUBLInvoice(xmlString: string) {
   let amount = 0;
   if (lmt) {
     const tea = lmt['TaxExclusiveAmount'];
-    amount = typeof tea === 'object' ? parseFloat(tea['#text'] || tea['@_currencyID'] ? Object.values(tea).find(v => typeof v === 'string' && !isNaN(parseFloat(v as string))) as any : 0) : parseFloat(tea) || 0;
-    if (typeof tea === 'object' && tea['#text']) amount = parseFloat(tea['#text']);
-    else if (typeof tea === 'object') {
-      // Try to get the numeric value
+    if (typeof tea === 'object' && tea['#text']) {
+      amount = parseFloat(tea['#text']);
+    } else if (typeof tea === 'object') {
       for (const v of Object.values(tea)) {
         const n = parseFloat(v as string);
         if (!isNaN(n) && n > 0) { amount = n; break; }
@@ -178,7 +216,6 @@ function parseUBLInvoice(xmlString: string) {
     }
   }
 
-  // For credit notes, amount should be negative
   if (isCreditNote && amount > 0) amount = -amount;
 
   // Line items
@@ -229,13 +266,13 @@ function parseUBLInvoice(xmlString: string) {
   };
 }
 
-// ─── POST /api/demo-expenses/upload-zip ─────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// UPLOAD ZIP — shared endpoint, classifies into demo/sales domains
+// ═══════════════════════════════════════════════════════════════════════════════
+
 router.post('/upload-zip', upload.single('file'), async (req: Request, res: Response) => {
   try {
-    if (!req.file) {
-      res.status(400).json({ error: 'No file uploaded' });
-      return;
-    }
+    if (!req.file) { res.status(400).json({ error: 'No file uploaded' }); return; }
 
     const filename = req.file.originalname || 'upload.zip';
     const zip = await JSZip.loadAsync(req.file.buffer);
@@ -246,88 +283,68 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       if (entry.dir) continue;
       const lower = name.toLowerCase();
       if (lower.endsWith('.xml')) {
-        const content = await entry.async('string');
-        xmlFiles.push({ name, content });
+        xmlFiles.push({ name, content: await entry.async('string') });
       } else if (lower.endsWith('.pdf')) {
-        const buf = await entry.async('nodebuffer');
-        const baseName = name.replace(/\.pdf$/i, '').split('/').pop() || '';
-        pdfFiles.set(baseName.toLowerCase(), buf);
+        pdfFiles.set((name.replace(/\.pdf$/i, '').split('/').pop() || '').toLowerCase(), await entry.async('nodebuffer'));
       }
     }
 
-    if (xmlFiles.length === 0) {
-      res.status(400).json({ error: 'No XML invoices found in the ZIP' });
-      return;
-    }
+    if (xmlFiles.length === 0) { res.status(400).json({ error: 'No XML invoices found in the ZIP' }); return; }
 
     // Parse all invoices
     const parsed: any[] = [];
     for (const xml of xmlFiles) {
       const inv = parseUBLInvoice(xml.content);
       if (!inv) continue;
-
-      // Check for paired PDF
       const xmlBaseName = xml.name.replace(/\.xml$/i, '').split('/').pop() || '';
       const pairedPdf = pdfFiles.get(xmlBaseName.toLowerCase());
-
       parsed.push({
         ...inv,
         xmlFilename: xml.name,
-        // Use embedded PDF from XML or paired PDF from ZIP
         embeddedPdf: inv.embeddedPdf || (pairedPdf ? pairedPdf.toString('base64') : null),
         pdfFilename: inv.pdfFilename || (pairedPdf ? xmlBaseName + '.pdf' : null),
       });
     }
 
-    if (parsed.length === 0) {
-      res.status(400).json({ error: 'No valid UBL invoices found in the XML files' });
-      return;
-    }
+    if (parsed.length === 0) { res.status(400).json({ error: 'No valid UBL invoices found in the XML files' }); return; }
 
-    // Infer month from invoice dates (most common month)
+    // Infer month
     const monthCounts: Record<string, number> = {};
     for (const inv of parsed) {
       if (inv.issueDate) {
-        const m = inv.issueDate.substring(0, 7); // YYYY-MM
+        const m = inv.issueDate.substring(0, 7);
         monthCounts[m] = (monthCounts[m] || 0) + 1;
       }
     }
     const inferredMonth = Object.entries(monthCounts).sort((a, b) => b[1] - a[1])[0]?.[0]
       || new Date().toISOString().substring(0, 7);
 
-    // Assign categories
-    const invoicesWithCategories = parsed.map(inv => {
-      const category = matchSupplierCategory(inv.supplierName);
+    // Classify each invoice into domain + category
+    const classified = parsed.map(inv => {
+      const match = classifySupplier(inv.supplierName);
       return {
         ...inv,
-        category: category || null,
+        domain: match?.domain || null,
+        category: match?.category || null,
         isAcerta: isAcerta(inv.supplierName),
       };
     });
 
-    // Find unknown suppliers
-    const unknownSuppliers = invoicesWithCategories
-      .filter(inv => !inv.category)
-      .map(inv => ({
-        supplier: inv.supplierName,
-        amount: inv.amount,
-        date: inv.issueDate,
-        invoiceId: inv.invoiceId,
-      }));
-    // Deduplicate by supplier name
+    // Find unknown suppliers (no domain match)
+    const unknownSuppliers = classified
+      .filter(inv => !inv.domain)
+      .map(inv => ({ supplier: inv.supplierName, amount: inv.amount, date: inv.issueDate, invoiceId: inv.invoiceId }));
     const uniqueUnknowns = [...new Map(unknownSuppliers.map(u => [u.supplier.toLowerCase(), u])).values()];
 
-    // Check for duplicates against existing data
-    const existingInvoices = db.prepare('SELECT invoice_id, supplier, amount, issue_date FROM demo_invoices').all() as any[];
+    // Duplicate detection across both domains
+    const existingInvoices = db.prepare('SELECT invoice_id, supplier, amount, issue_date, domain FROM demo_invoices').all() as any[];
     const duplicates: any[] = [];
-
-    for (const inv of invoicesWithCategories) {
+    for (const inv of classified) {
       for (const existing of existingInvoices) {
         let matchScore = 0;
         if (inv.invoiceId === existing.invoice_id) matchScore++;
         if (inv.supplierName.toLowerCase() === existing.supplier.toLowerCase() && Math.abs(inv.amount - existing.amount) < 0.01 && inv.issueDate === existing.issue_date) matchScore++;
         if (inv.supplierName.toLowerCase() === existing.supplier.toLowerCase() && Math.abs(inv.amount - existing.amount) < 0.01) {
-          // Check 7-day window
           const d1 = new Date(inv.issueDate);
           const d2 = new Date(existing.issue_date);
           if (Math.abs(d1.getTime() - d2.getTime()) <= 7 * 24 * 60 * 60 * 1000) matchScore++;
@@ -335,21 +352,23 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
         if (matchScore >= 2) {
           duplicates.push({
             new: { invoiceId: inv.invoiceId, supplier: inv.supplierName, date: inv.issueDate, amount: inv.amount },
-            existing: { invoiceId: existing.invoice_id, supplier: existing.supplier, date: existing.issue_date, amount: existing.amount },
+            existing: { invoiceId: existing.invoice_id, supplier: existing.supplier, date: existing.issue_date, amount: existing.amount, domain: existing.domain },
           });
           break;
         }
       }
     }
 
-    // Check if month already exists
-    const existingBatch = db.prepare('SELECT id, filename FROM demo_upload_batches WHERE month = ?').get(inferredMonth) as any;
+    // Check if month already exists in either domain
+    const existingDemoBatch = db.prepare("SELECT id, filename FROM demo_upload_batches WHERE month = ? AND domain = 'demo'").get(inferredMonth) as any;
+    const existingSalesBatch = db.prepare("SELECT id, filename FROM demo_upload_batches WHERE month = ? AND domain = 'sales'").get(inferredMonth) as any;
 
     res.json({
-      parsed: invoicesWithCategories.map(inv => ({
+      parsed: classified.map(inv => ({
         invoiceId: inv.invoiceId,
         issueDate: inv.issueDate,
         supplier: inv.supplierName,
+        domain: inv.domain,
         category: inv.category,
         amount: inv.amount,
         currency: inv.currency,
@@ -357,18 +376,18 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
         xmlFilename: inv.xmlFilename,
         hasPdf: !!inv.embeddedPdf,
         isAcerta: inv.isAcerta,
-        duplicateWarning: false,
       })),
       inferredMonth,
       unknownSuppliers: uniqueUnknowns,
       duplicates,
-      existingBatch: existingBatch ? { id: existingBatch.id, filename: existingBatch.filename } : null,
+      existingDemoBatch: existingDemoBatch ? { id: existingDemoBatch.id, filename: existingDemoBatch.filename } : null,
+      existingSalesBatch: existingSalesBatch ? { id: existingSalesBatch.id, filename: existingSalesBatch.filename } : null,
       filename,
-      // Store full data temporarily in the response for the confirm step
-      _fullData: invoicesWithCategories.map(inv => ({
+      _fullData: classified.map(inv => ({
         invoiceId: inv.invoiceId,
         issueDate: inv.issueDate,
         supplier: inv.supplierName,
+        domain: inv.domain,
         category: inv.category,
         amount: inv.amount,
         currency: inv.currency,
@@ -380,22 +399,27 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       })),
     });
   } catch (err: any) {
-    console.error('[demo-expenses] upload-zip error:', err);
+    console.error('[expense-upload] upload-zip error:', err);
     res.status(500).json({ error: 'Failed to process ZIP file: ' + (err.message || '') });
   }
 });
 
-// ─── POST /api/demo-expenses/confirm-import ─────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONFIRM IMPORT — creates batches per domain
+// ═══════════════════════════════════════════════════════════════════════════════
+
 router.post('/confirm-import', (req: Request, res: Response) => {
   try {
     const {
-      invoices, // full invoice data array
+      invoices,
       month,
       filename,
-      categoryOverrides, // { supplier: category } for unknowns
-      rememberSuppliers, // string[] of supplier names to persist
-      skipInvoiceIds, // string[] of invoice IDs to skip (duplicates)
-      replaceMonth, // boolean — replace existing month data
+      categoryOverrides,   // { supplier: { domain, category } }
+      domainOverrides,     // { supplier: domain } — for unknowns
+      rememberSuppliers,   // string[] of supplier names to persist
+      skipInvoiceIds,
+      replaceDemoMonth,
+      replaceSalesMonth,
     } = req.body;
 
     if (!invoices || !month || !filename) {
@@ -407,90 +431,115 @@ router.post('/confirm-import', (req: Request, res: Response) => {
     const skipSet = new Set(skipInvoiceIds || []);
 
     const doImport = db.transaction(() => {
-      // If replacing, delete existing batch for this month
-      if (replaceMonth) {
-        const oldBatch = db.prepare('SELECT id FROM demo_upload_batches WHERE month = ?').get(month) as any;
-        if (oldBatch) {
-          db.prepare('DELETE FROM demo_invoices WHERE batch_id = ?').run(oldBatch.id);
-          db.prepare('DELETE FROM demo_upload_batches WHERE id = ?').run(oldBatch.id);
+      // If replacing, delete existing batches
+      if (replaceDemoMonth) {
+        const old = db.prepare("SELECT id FROM demo_upload_batches WHERE month = ? AND domain = 'demo'").get(month) as any;
+        if (old) {
+          db.prepare('DELETE FROM demo_invoices WHERE batch_id = ?').run(old.id);
+          db.prepare('DELETE FROM demo_upload_batches WHERE id = ?').run(old.id);
+        }
+      }
+      if (replaceSalesMonth) {
+        const old = db.prepare("SELECT id FROM demo_upload_batches WHERE month = ? AND domain = 'sales'").get(month) as any;
+        if (old) {
+          db.prepare('DELETE FROM demo_invoices WHERE batch_id = ?').run(old.id);
+          db.prepare('DELETE FROM demo_upload_batches WHERE id = ?').run(old.id);
         }
       }
 
       // Save remembered supplier mappings
       if (rememberSuppliers && categoryOverrides) {
         const upsert = db.prepare(
-          'INSERT OR REPLACE INTO demo_supplier_mappings (supplier_pattern, category) VALUES (?, ?)'
+          'INSERT OR REPLACE INTO demo_supplier_mappings (supplier_pattern, domain, category) VALUES (?, ?, ?)'
         );
         for (const supplier of rememberSuppliers) {
-          const cat = categoryOverrides[supplier];
-          if (cat) upsert.run(supplier.toLowerCase(), cat);
+          const override = categoryOverrides[supplier];
+          if (override) {
+            upsert.run(supplier.toLowerCase(), override.domain || 'demo', override.category);
+          }
         }
       }
 
-      // Create batch
-      const filteredInvoices = invoices.filter((inv: any) => !skipSet.has(inv.invoiceId));
-      const totalAmount = filteredInvoices.reduce((s: number, inv: any) => s + (inv.amount || 0), 0);
+      // Split invoices by domain and create separate batches
+      const filtered = invoices.filter((inv: any) => !skipSet.has(inv.invoiceId));
 
-      const batchResult = db.prepare(
-        'INSERT INTO demo_upload_batches (filename, month, invoice_count, total_amount, uploaded_by) VALUES (?, ?, ?, ?, ?)'
-      ).run(filename, month, filteredInvoices.length, totalAmount, userId);
-      const batchId = batchResult.lastInsertRowid;
+      // Resolve final domain + category for each invoice
+      const resolved = filtered.map((inv: any) => {
+        let domain = inv.domain || 'demo';
+        let category = inv.category || 'Other';
 
-      // Insert invoices
+        if (inv.isAcerta) {
+          domain = 'demo';
+          category = 'Salaries';
+        } else if (!inv.domain && domainOverrides && domainOverrides[inv.supplier]) {
+          domain = domainOverrides[inv.supplier];
+        }
+        if (!inv.category && categoryOverrides && categoryOverrides[inv.supplier]) {
+          category = categoryOverrides[inv.supplier].category || category;
+          if (categoryOverrides[inv.supplier].domain) domain = categoryOverrides[inv.supplier].domain;
+        }
+
+        return { ...inv, domain, category };
+      });
+
+      // Group by domain
+      const byDomain: Record<string, any[]> = {};
+      for (const inv of resolved) {
+        if (!byDomain[inv.domain]) byDomain[inv.domain] = [];
+        byDomain[inv.domain].push(inv);
+      }
+
+      const results: any[] = [];
       const insertInv = db.prepare(`
-        INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, amount, currency, month, line_items, embedded_pdf, pdf_filename, xml_filename, duplicate_warning)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, domain, amount, currency, month, line_items, embedded_pdf, pdf_filename, xml_filename, duplicate_warning)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
-      let count = 0;
-      for (const inv of filteredInvoices) {
-        // Resolve category: Acerta locked, then overrides, then detected
-        let category = inv.category || 'Other';
-        if (inv.isAcerta) {
-          category = 'Salaries';
-        } else if (!inv.category && categoryOverrides && categoryOverrides[inv.supplier]) {
-          category = categoryOverrides[inv.supplier];
+      for (const [domain, domainInvoices] of Object.entries(byDomain)) {
+        const totalAmount = domainInvoices.reduce((s: number, inv: any) => s + (inv.amount || 0), 0);
+
+        const batchResult = db.prepare(
+          'INSERT INTO demo_upload_batches (filename, month, domain, invoice_count, total_amount, uploaded_by) VALUES (?, ?, ?, ?, ?, ?)'
+        ).run(filename, month, domain, domainInvoices.length, totalAmount, userId);
+        const batchId = batchResult.lastInsertRowid;
+
+        for (const inv of domainInvoices) {
+          const isDuplicateIncluded = skipInvoiceIds && !skipSet.has(inv.invoiceId) && (req.body.duplicateInvoiceIds || []).includes(inv.invoiceId);
+          insertInv.run(
+            batchId, inv.invoiceId, inv.issueDate, inv.supplier, inv.category, domain,
+            inv.amount, inv.currency || 'EUR', month,
+            inv.lineItems || '[]', inv.embeddedPdf || null, inv.pdfFilename || null,
+            inv.xmlFilename || null, isDuplicateIncluded ? 1 : 0,
+          );
         }
 
-        const isDuplicateIncluded = skipInvoiceIds && !skipSet.has(inv.invoiceId) && (req.body.duplicateInvoiceIds || []).includes(inv.invoiceId);
-
-        insertInv.run(
-          batchId,
-          inv.invoiceId,
-          inv.issueDate,
-          inv.supplier,
-          category,
-          inv.amount,
-          inv.currency || 'EUR',
-          month,
-          inv.lineItems || '[]',
-          inv.embeddedPdf || null,
-          inv.pdfFilename || null,
-          inv.xmlFilename || null,
-          isDuplicateIncluded ? 1 : 0,
-        );
-        count++;
+        results.push({ domain, count: domainInvoices.length, totalAmount });
       }
 
-      return { batchId, count, totalAmount };
+      return results;
     });
 
-    const result = doImport();
+    const results = doImport();
     db.saveToDisk();
-    res.json({ success: true, ...result });
+    res.json({ success: true, results });
   } catch (err: any) {
-    console.error('[demo-expenses] confirm-import error:', err);
+    console.error('[expense-upload] confirm-import error:', err);
     res.status(500).json({ error: 'Failed to import invoices' });
   }
 });
 
-// ─── GET /api/demo-expenses/invoices ────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// DOMAIN-FILTERED QUERY ENDPOINTS
+// All accept ?domain=demo|sales to filter
+// ═══════════════════════════════════════════════════════════════════════════════
+
 router.get('/invoices', (req: Request, res: Response) => {
   try {
-    const { categories, suppliers, month, date_from, date_to, sort_by, sort_dir } = req.query;
-    let sql = 'SELECT id, invoice_id, issue_date, supplier, category, amount, currency, month, xml_filename, duplicate_warning, created_at FROM demo_invoices WHERE 1=1';
+    const { domain, categories, suppliers, month, date_from, date_to, sort_by, sort_dir } = req.query;
+    let sql = 'SELECT id, invoice_id, issue_date, supplier, category, domain, amount, currency, month, xml_filename, duplicate_warning, created_at FROM demo_invoices WHERE 1=1';
     const params: any[] = [];
 
+    if (domain) { sql += ' AND domain = ?'; params.push(domain); }
     if (categories) {
       const cats = (categories as string).split(',');
       sql += ` AND category IN (${cats.map(() => '?').join(',')})`;
@@ -501,51 +550,39 @@ router.get('/invoices', (req: Request, res: Response) => {
       sql += ` AND supplier IN (${supps.map(() => '?').join(',')})`;
       params.push(...supps);
     }
-    if (month) {
-      sql += ' AND month = ?';
-      params.push(month);
-    }
-    if (date_from) {
-      sql += ' AND issue_date >= ?';
-      params.push(date_from);
-    }
-    if (date_to) {
-      sql += ' AND issue_date <= ?';
-      params.push(date_to);
-    }
+    if (month) { sql += ' AND month = ?'; params.push(month); }
+    if (date_from) { sql += ' AND issue_date >= ?'; params.push(date_from); }
+    if (date_to) { sql += ' AND issue_date <= ?'; params.push(date_to); }
 
     const validSortCols = ['invoice_id', 'issue_date', 'supplier', 'category', 'amount', 'month', 'created_at'];
     const sortCol = validSortCols.includes(sort_by as string) ? sort_by : 'issue_date';
     const sortDirection = (sort_dir as string)?.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
     sql += ` ORDER BY ${sortCol} ${sortDirection}`;
 
-    const rows = db.prepare(sql).all(...params);
-    res.json(rows);
+    res.json(db.prepare(sql).all(...params));
   } catch (err: any) {
     console.error('[demo-expenses] invoices error:', err);
     res.status(500).json({ error: 'Failed to fetch invoices' });
   }
 });
 
-// ─── GET /api/demo-expenses/invoices/:id — full invoice detail with PDF ─────
 router.get('/invoices/:id', (req: Request, res: Response) => {
   try {
     const inv = db.prepare('SELECT * FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
     if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
     res.json(inv);
   } catch (err: any) {
-    console.error('[demo-expenses] invoice detail error:', err);
     res.status(500).json({ error: 'Failed to fetch invoice' });
   }
 });
 
-// ─── GET /api/demo-expenses/summary ─────────────────────────────────────────
 router.get('/summary', (req: Request, res: Response) => {
   try {
-    const { categories, suppliers, month, date_from, date_to } = req.query;
+    const { domain, categories, suppliers, month, date_from, date_to } = req.query;
     let where = '1=1';
     const params: any[] = [];
 
+    if (domain) { where += ' AND domain = ?'; params.push(domain); }
     if (categories) {
       const cats = (categories as string).split(',');
       where += ` AND category IN (${cats.map(() => '?').join(',')})`;
@@ -560,23 +597,12 @@ router.get('/summary', (req: Request, res: Response) => {
     if (date_from) { where += ' AND issue_date >= ?'; params.push(date_from); }
     if (date_to) { where += ' AND issue_date <= ?'; params.push(date_to); }
 
-    const byCategory = db.prepare(
-      `SELECT category, SUM(amount) as total FROM demo_invoices WHERE ${where} GROUP BY category ORDER BY total DESC`
-    ).all(...params);
-
-    const bySupplier = db.prepare(
-      `SELECT supplier, SUM(amount) as total FROM demo_invoices WHERE ${where} GROUP BY supplier ORDER BY total DESC`
-    ).all(...params);
-
-    const monthlyByCategory = db.prepare(
-      `SELECT month, category, SUM(amount) as total FROM demo_invoices WHERE ${where} GROUP BY month, category ORDER BY month ASC`
-    ).all(...params);
-
-    const months = db.prepare('SELECT DISTINCT month FROM demo_invoices ORDER BY month ASC').all();
-    const allSuppliers = db.prepare('SELECT DISTINCT supplier FROM demo_invoices ORDER BY supplier ASC').all();
-    const allCategories = db.prepare('SELECT DISTINCT category FROM demo_invoices ORDER BY category ASC').all();
-
-    // Average monthly spend per category
+    const byCategory = db.prepare(`SELECT category, SUM(amount) as total FROM demo_invoices WHERE ${where} GROUP BY category ORDER BY total DESC`).all(...params);
+    const bySupplier = db.prepare(`SELECT supplier, SUM(amount) as total FROM demo_invoices WHERE ${where} GROUP BY supplier ORDER BY total DESC`).all(...params);
+    const monthlyByCategory = db.prepare(`SELECT month, category, SUM(amount) as total FROM demo_invoices WHERE ${where} GROUP BY month, category ORDER BY month ASC`).all(...params);
+    const months = db.prepare(`SELECT DISTINCT month FROM demo_invoices WHERE ${where.replace('1=1', '1=1')} ORDER BY month ASC`).all(...(domain ? [domain] : []));
+    const allSuppliers = db.prepare(`SELECT DISTINCT supplier FROM demo_invoices WHERE ${domain ? 'domain = ?' : '1=1'} ORDER BY supplier ASC`).all(...(domain ? [domain] : []));
+    const allCategories = db.prepare(`SELECT DISTINCT category FROM demo_invoices WHERE ${domain ? 'domain = ?' : '1=1'} ORDER BY category ASC`).all(...(domain ? [domain] : []));
     const avgByCategory = db.prepare(
       `SELECT category, AVG(monthly_total) as avg_total FROM (
         SELECT month, category, SUM(amount) as monthly_total FROM demo_invoices WHERE ${where} GROUP BY month, category
@@ -598,73 +624,76 @@ router.get('/summary', (req: Request, res: Response) => {
   }
 });
 
-// ─── GET /api/demo-expenses/batches — upload history ────────────────────────
-router.get('/batches', (_req: Request, res: Response) => {
+router.get('/batches', (req: Request, res: Response) => {
   try {
-    const batches = db.prepare(
-      'SELECT * FROM demo_upload_batches ORDER BY uploaded_at DESC'
-    ).all();
-    res.json(batches);
+    const { domain } = req.query;
+    let sql = 'SELECT * FROM demo_upload_batches';
+    const params: any[] = [];
+    if (domain) { sql += ' WHERE domain = ?'; params.push(domain); }
+    sql += ' ORDER BY uploaded_at DESC';
+    res.json(db.prepare(sql).all(...params));
   } catch (err: any) {
-    console.error('[demo-expenses] batches error:', err);
     res.status(500).json({ error: 'Failed to fetch batches' });
   }
 });
 
-// ─── DELETE /api/demo-expenses/batches/:id ──────────────────────────────────
 router.delete('/batches/:id', (req: Request, res: Response) => {
   try {
-    const batchId = req.params.id;
-    db.prepare('DELETE FROM demo_invoices WHERE batch_id = ?').run(batchId);
-    db.prepare('DELETE FROM demo_upload_batches WHERE id = ?').run(batchId);
+    db.prepare('DELETE FROM demo_invoices WHERE batch_id = ?').run(req.params.id);
+    db.prepare('DELETE FROM demo_upload_batches WHERE id = ?').run(req.params.id);
     db.saveToDisk();
     res.json({ success: true });
   } catch (err: any) {
-    console.error('[demo-expenses] delete batch error:', err);
     res.status(500).json({ error: 'Failed to delete batch' });
   }
 });
 
-// ─── PATCH /api/demo-expenses/invoices/:id/category — override category ─────
 router.patch('/invoices/:id/category', (req: Request, res: Response) => {
   try {
-    const { category, applyToAll } = req.body;
-    if (!category || !CATEGORIES.includes(category)) {
-      res.status(400).json({ error: 'Invalid category' });
-      return;
-    }
+    const { category, domain, applyToAll } = req.body;
+    if (!category) { res.status(400).json({ error: 'Category required' }); return; }
 
-    const inv = db.prepare('SELECT supplier FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
+    const inv = db.prepare('SELECT supplier, domain FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
     if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
-    // Block Acerta overrides
     if (isAcerta(inv.supplier)) {
       res.status(400).json({ error: 'Cannot override category for Acerta invoices' });
       return;
     }
 
-    db.prepare('UPDATE demo_invoices SET category = ? WHERE id = ?').run(category, req.params.id);
+    const newDomain = domain || inv.domain;
+    db.prepare('UPDATE demo_invoices SET category = ?, domain = ? WHERE id = ?').run(category, newDomain, req.params.id);
 
     if (applyToAll) {
-      // Update all invoices from this supplier
-      db.prepare('UPDATE demo_invoices SET category = ? WHERE LOWER(supplier) = LOWER(?) AND LOWER(supplier) NOT LIKE ?')
-        .run(category, inv.supplier, '%acerta%');
-      // Persist mapping
-      db.prepare('INSERT OR REPLACE INTO demo_supplier_mappings (supplier_pattern, category) VALUES (?, ?)')
-        .run(inv.supplier.toLowerCase(), category);
+      db.prepare('UPDATE demo_invoices SET category = ?, domain = ? WHERE LOWER(supplier) = LOWER(?) AND LOWER(supplier) NOT LIKE ?')
+        .run(category, newDomain, inv.supplier, '%acerta%');
+      db.prepare('INSERT OR REPLACE INTO demo_supplier_mappings (supplier_pattern, domain, category) VALUES (?, ?, ?)')
+        .run(inv.supplier.toLowerCase(), newDomain, category);
     }
 
     db.saveToDisk();
     res.json({ success: true });
   } catch (err: any) {
-    console.error('[demo-expenses] category update error:', err);
     res.status(500).json({ error: 'Failed to update category' });
   }
 });
 
-// ─── GET /api/demo-expenses/categories — list available categories ──────────
-router.get('/categories', (_req: Request, res: Response) => {
-  res.json(CATEGORIES);
+router.get('/categories', (req: Request, res: Response) => {
+  const { domain } = req.query;
+  if (domain === 'sales') res.json(SALES_CATEGORIES);
+  else if (domain === 'demo') res.json(DEMO_CATEGORIES);
+  else res.json(ALL_CATEGORIES);
+});
+
+// Demo supplier list (from hardcoded + user-defined demo mappings)
+router.get('/demo-suppliers', (_req: Request, res: Response) => {
+  try {
+    const hardcoded = [...new Set(DEMO_SUPPLIER_MAP.map(m => ({ pattern: m.pattern, category: m.category, source: 'hardcoded' })))];
+    const userDefined = db.prepare("SELECT supplier_pattern as pattern, category FROM demo_supplier_mappings WHERE domain = 'demo'").all() as any[];
+    res.json({ hardcoded, userDefined: userDefined.map((u: any) => ({ ...u, source: 'user' })) });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch demo suppliers' });
+  }
 });
 
 export default router;
