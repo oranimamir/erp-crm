@@ -530,9 +530,28 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       return;
     }
 
+    // --- Deduplicate within the ZIP itself (by invoiceId, or by supplier+amount+date) ---
+    const seenKeys = new Set<string>();
+    const deduped: typeof parsed = [];
+    let inZipDuplicateCount = 0;
+    for (const inv of parsed) {
+      const key1 = inv.invoiceId ? `id:${inv.invoiceId}` : null;
+      const key2 = `combo:${inv.supplierName.toLowerCase()}|${inv.amount}|${inv.issueDate}`;
+      if ((key1 && seenKeys.has(key1)) || seenKeys.has(key2)) {
+        inZipDuplicateCount++;
+        continue;
+      }
+      if (key1) seenKeys.add(key1);
+      seenKeys.add(key2);
+      deduped.push(inv);
+    }
+    if (inZipDuplicateCount > 0) {
+      console.log(`[upload-zip] Removed ${inZipDuplicateCount} duplicate(s) within the ZIP`);
+    }
+
     // Infer month
     const monthCounts: Record<string, number> = {};
-    for (const inv of parsed) {
+    for (const inv of deduped) {
       if (inv.issueDate) {
         const m = inv.issueDate.substring(0, 7);
         monthCounts[m] = (monthCounts[m] || 0) + 1;
@@ -542,7 +561,7 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       || new Date().toISOString().substring(0, 7);
 
     // Classify each invoice into domain + category
-    const classified = parsed.map(inv => {
+    const classified = deduped.map(inv => {
       const match = classifySupplier(inv.supplierName);
       return {
         ...inv,
@@ -558,26 +577,29 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       .map(inv => ({ supplier: inv.supplierName, amount: inv.amount, date: inv.issueDate, invoiceId: inv.invoiceId }));
     const uniqueUnknowns = [...new Map(unknownSuppliers.map(u => [u.supplier.toLowerCase(), u])).values()];
 
-    // Duplicate detection across both domains
+    // --- Duplicate detection against existing DB invoices ---
+    // An invoice is a duplicate if: same invoice_id, OR same supplier+amount+date
     const existingInvoices = db.prepare('SELECT invoice_id, supplier, amount, issue_date, domain FROM demo_invoices').all() as any[];
+    const existingIdSet = new Set(existingInvoices.map((e: any) => e.invoice_id));
+    const existingComboSet = new Set(existingInvoices.map((e: any) =>
+      `${e.supplier.toLowerCase()}|${e.amount}|${e.issue_date}`
+    ));
+
     const duplicates: any[] = [];
+    const duplicateInvoiceIds = new Set<string>();
     for (const inv of classified) {
-      for (const existing of existingInvoices) {
-        let matchScore = 0;
-        if (inv.invoiceId === existing.invoice_id) matchScore++;
-        if (inv.supplierName.toLowerCase() === existing.supplier.toLowerCase() && Math.abs(inv.amount - existing.amount) < 0.01 && inv.issueDate === existing.issue_date) matchScore++;
-        if (inv.supplierName.toLowerCase() === existing.supplier.toLowerCase() && Math.abs(inv.amount - existing.amount) < 0.01) {
-          const d1 = new Date(inv.issueDate);
-          const d2 = new Date(existing.issue_date);
-          if (Math.abs(d1.getTime() - d2.getTime()) <= 7 * 24 * 60 * 60 * 1000) matchScore++;
-        }
-        if (matchScore >= 2) {
-          duplicates.push({
-            new: { invoiceId: inv.invoiceId, supplier: inv.supplierName, date: inv.issueDate, amount: inv.amount },
-            existing: { invoiceId: existing.invoice_id, supplier: existing.supplier, date: existing.issue_date, amount: existing.amount, domain: existing.domain },
-          });
-          break;
-        }
+      const idMatch = inv.invoiceId && existingIdSet.has(inv.invoiceId);
+      const comboMatch = existingComboSet.has(`${inv.supplierName.toLowerCase()}|${inv.amount}|${inv.issueDate}`);
+      if (idMatch || comboMatch) {
+        duplicateInvoiceIds.add(inv.invoiceId);
+        const existing = existingInvoices.find((e: any) =>
+          e.invoice_id === inv.invoiceId ||
+          (e.supplier.toLowerCase() === inv.supplierName.toLowerCase() && Math.abs(e.amount - inv.amount) < 0.01 && e.issue_date === inv.issueDate)
+        );
+        duplicates.push({
+          new: { invoiceId: inv.invoiceId, supplier: inv.supplierName, date: inv.issueDate, amount: inv.amount },
+          existing: existing ? { invoiceId: existing.invoice_id, supplier: existing.supplier, date: existing.issue_date, amount: existing.amount, domain: existing.domain } : null,
+        });
       }
     }
 
@@ -585,8 +607,11 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     const existingDemoBatch = db.prepare("SELECT id, filename FROM demo_upload_batches WHERE month = ? AND domain = 'demo'").get(inferredMonth) as any;
     const existingSalesBatch = db.prepare("SELECT id, filename FROM demo_upload_batches WHERE month = ? AND domain = 'sales'").get(inferredMonth) as any;
 
+    // Auto-exclude duplicates: only return non-duplicate invoices for import
+    const newInvoices = classified.filter(inv => !duplicateInvoiceIds.has(inv.invoiceId));
+
     res.json({
-      parsed: classified.map(inv => ({
+      parsed: newInvoices.map(inv => ({
         invoiceId: inv.invoiceId,
         issueDate: inv.issueDate,
         supplier: inv.supplierName,
@@ -600,12 +625,15 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
         isAcerta: inv.isAcerta,
       })),
       inferredMonth,
-      unknownSuppliers: uniqueUnknowns,
+      unknownSuppliers: uniqueUnknowns.filter(u => !duplicateInvoiceIds.has(u.invoiceId)),
       duplicates,
+      duplicatesSkipped: duplicates.length,
+      inZipDuplicatesRemoved: inZipDuplicateCount,
+      totalParsed: parsed.length,
       existingDemoBatch: existingDemoBatch ? { id: existingDemoBatch.id, filename: existingDemoBatch.filename } : null,
       existingSalesBatch: existingSalesBatch ? { id: existingSalesBatch.id, filename: existingSalesBatch.filename } : null,
       filename,
-      _fullData: classified.map(inv => ({
+      _fullData: newInvoices.map(inv => ({
         invoiceId: inv.invoiceId,
         issueDate: inv.issueDate,
         supplier: inv.supplierName,
@@ -685,8 +713,27 @@ router.post('/confirm-import', (req: Request, res: Response) => {
       // Split invoices by domain and create separate batches
       const filtered = invoices.filter((inv: any) => !skipSet.has(inv.invoiceId));
 
+      // Server-side duplicate guard: remove any invoice already in the DB
+      const existingIds = new Set(
+        (db.prepare('SELECT invoice_id FROM demo_invoices').all() as any[]).map((r: any) => r.invoice_id)
+      );
+      const existingCombos = new Set(
+        (db.prepare('SELECT supplier, amount, issue_date FROM demo_invoices').all() as any[]).map(
+          (r: any) => `${r.supplier.toLowerCase()}|${r.amount}|${r.issue_date}`
+        )
+      );
+      const nonDuplicate = filtered.filter((inv: any) => {
+        if (inv.invoiceId && existingIds.has(inv.invoiceId)) return false;
+        if (existingCombos.has(`${(inv.supplier || '').toLowerCase()}|${inv.amount}|${inv.issueDate}`)) return false;
+        return true;
+      });
+
+      if (nonDuplicate.length === 0) {
+        return { skippedAll: true, message: 'All invoices already exist in the system' };
+      }
+
       // Resolve final domain + category for each invoice
-      const resolved = filtered.map((inv: any) => {
+      const resolved = nonDuplicate.map((inv: any) => {
         let domain = inv.domain || 'demo';
         let category = inv.category || 'Other';
 
@@ -742,6 +789,10 @@ router.post('/confirm-import', (req: Request, res: Response) => {
     });
 
     const results = doImport();
+    if (results && (results as any).skippedAll) {
+      res.json({ success: true, results: [], message: (results as any).message });
+      return;
+    }
     db.saveToDisk();
     res.json({ success: true, results });
   } catch (err: any) {

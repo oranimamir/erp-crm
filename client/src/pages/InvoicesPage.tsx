@@ -10,7 +10,7 @@ import SearchBar from '../components/ui/SearchBar';
 import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
-import { Plus, FileText, Eye, Trash2, FileDown, ChevronUp, ChevronDown, FileSpreadsheet, Landmark, Download, X, Loader2, Filter, CalendarDays, Upload, AlertTriangle, Check, XCircle } from 'lucide-react';
+import { Plus, FileText, Eye, Trash2, FileDown, ChevronUp, ChevronDown, FileSpreadsheet, Landmark, Download, X, Loader2, Filter, CalendarDays, Upload } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
 
@@ -129,7 +129,6 @@ export default function InvoicesPage() {
   const [zipUploading, setZipUploading] = useState(false);
   const [pendingUpload, setPendingUpload] = useState<any>(null);
   const [showUnknownModal, setShowUnknownModal] = useState(false);
-  const [showDuplicateModal, setShowDuplicateModal] = useState(false);
   const [showMonthConflict, setShowMonthConflict] = useState(false);
   const [unknownAssignments, setUnknownAssignments] = useState<Record<string, { domain: string; category: string; remember: boolean }>>({});
   const [skipIds, setSkipIds] = useState<string[]>([]);
@@ -285,11 +284,24 @@ export default function InvoicesPage() {
       const res = await api.post('/demo-expenses/upload-zip', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
       setPendingUpload(res.data);
 
+      // Notify about auto-skipped duplicates
+      if (res.data.duplicatesSkipped > 0) {
+        addToast(`${res.data.duplicatesSkipped} duplicate invoice(s) already in the system — skipped automatically`, 'info');
+      }
+      if (res.data.inZipDuplicatesRemoved > 0) {
+        addToast(`${res.data.inZipDuplicatesRemoved} duplicate(s) within the ZIP removed`, 'info');
+      }
+
+      // If all invoices were duplicates, nothing to import
+      if (res.data.parsed.length === 0) {
+        addToast('All invoices in this ZIP already exist in the system. Nothing to import.', 'error');
+        setPendingUpload(null);
+        return;
+      }
+
       if (res.data.unknownSuppliers.length > 0) {
         setUnknownAssignments(Object.fromEntries(res.data.unknownSuppliers.map((u: any) => [u.supplier, { domain: 'demo', category: 'Other', remember: false }])));
         setShowUnknownModal(true);
-      } else if (res.data.duplicates.length > 0) {
-        setShowDuplicateModal(true);
       } else if (res.data.existingDemoBatch || res.data.existingSalesBatch) {
         setShowMonthConflict(true);
       } else {
@@ -326,17 +338,21 @@ export default function InvoicesPage() {
         duplicateInvoiceIds: upload.duplicates.map((d: any) => d.new.invoiceId),
       });
 
-      const results = res.data.results || [];
-      const demoCount = results.find((r: any) => r.domain === 'demo')?.count || 0;
-      const salesCount = results.find((r: any) => r.domain === 'sales')?.count || 0;
-      const parts = [];
-      if (demoCount > 0) parts.push(`${demoCount} to Demo Expenses`);
-      if (salesCount > 0) parts.push(`${salesCount} to Sales Activities`);
-      addToast(`Imported ${parts.join(', ') || 'invoices'}`, 'success');
+      if (res.data.message) {
+        addToast(res.data.message, 'info');
+      } else {
+        const results = res.data.results || [];
+        const demoCount = results.find((r: any) => r.domain === 'demo')?.count || 0;
+        const salesCount = results.find((r: any) => r.domain === 'sales')?.count || 0;
+        const parts = [];
+        if (demoCount > 0) parts.push(`${demoCount} to Demo Expenses`);
+        if (salesCount > 0) parts.push(`${salesCount} to Sales Activities`);
+        addToast(`Imported ${parts.join(', ') || 'invoices'}`, 'success');
+      }
 
       setPendingUpload(null);
       setShowUnknownModal(false);
-      setShowDuplicateModal(false);
+      
       setShowMonthConflict(false);
       setUnknownAssignments({});
       setSkipIds([]);
@@ -348,7 +364,7 @@ export default function InvoicesPage() {
   const cancelZipUpload = () => {
     setPendingUpload(null);
     setShowUnknownModal(false);
-    setShowDuplicateModal(false);
+    
     setShowMonthConflict(false);
     setUnknownAssignments({});
     setSkipIds([]);
@@ -665,65 +681,13 @@ export default function InvoicesPage() {
               <button onClick={cancelZipUpload} className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
               <button onClick={() => {
                 setShowUnknownModal(false);
-                if (pendingUpload.duplicates.length > 0) setShowDuplicateModal(true);
-                else if (pendingUpload.existingDemoBatch || pendingUpload.existingSalesBatch) setShowMonthConflict(true);
+                if (pendingUpload.existingDemoBatch || pendingUpload.existingSalesBatch) setShowMonthConflict(true);
                 else finalizeZipImport(pendingUpload, unknownAssignments, [], false, false);
               }} className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium">Continue</button>
             </div>
           </div>
         </div>
       )}
-
-      {/* Duplicate Detection Modal */}
-      {showDuplicateModal && pendingUpload && (() => {
-        const [localSkip, setLocalSkip] = [skipIds, setSkipIds];
-        return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full mx-4 max-h-[80vh] flex flex-col">
-              <div className="p-6 border-b">
-                <div className="flex items-center gap-2"><AlertTriangle size={20} className="text-amber-500" /><h2 className="text-lg font-bold text-gray-900">Potential Duplicates Detected</h2></div>
-                <p className="text-sm text-gray-500 mt-1">Choose which to include or skip.</p>
-              </div>
-              <div className="flex-1 overflow-y-auto p-6 space-y-4">
-                {pendingUpload.duplicates.map((dup: any, i: number) => (
-                  <div key={i} className="border border-amber-200 bg-amber-50 rounded-lg p-4">
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div>
-                        <p className="text-xs font-medium text-amber-700 mb-2">NEW</p>
-                        <p className="text-gray-900">{dup.new.supplier}</p>
-                        <p className="text-gray-500">{dup.new.invoiceId} · {dup.new.date} · €{Number(dup.new.amount).toFixed(2)}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs font-medium text-gray-500 mb-2">EXISTING{dup.existing.domain ? ` (${dup.existing.domain})` : ''}</p>
-                        <p className="text-gray-900">{dup.existing.supplier}</p>
-                        <p className="text-gray-500">{dup.existing.invoiceId} · {dup.existing.date} · €{Number(dup.existing.amount).toFixed(2)}</p>
-                      </div>
-                    </div>
-                    <div className="mt-3 flex gap-3">
-                      <button onClick={() => setSkipIds(prev => prev.filter(id => id !== dup.new.invoiceId))}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border transition-colors ${!localSkip.includes(dup.new.invoiceId) ? 'bg-primary-50 border-primary-300 text-primary-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}>
-                        <Check size={14} /> Include anyway
-                      </button>
-                      <button onClick={() => setSkipIds(prev => prev.includes(dup.new.invoiceId) ? prev.filter(id => id !== dup.new.invoiceId) : [...prev, dup.new.invoiceId])}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border transition-colors ${localSkip.includes(dup.new.invoiceId) ? 'bg-red-50 border-red-300 text-red-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}>
-                        <XCircle size={14} /> Skip
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="p-6 border-t flex justify-end gap-3">
-                <button onClick={cancelZipUpload} className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
-                <button onClick={() => {
-                  setShowDuplicateModal(false);
-                  if (pendingUpload.existingDemoBatch || pendingUpload.existingSalesBatch) setShowMonthConflict(true);
-                  else finalizeZipImport(pendingUpload, unknownAssignments, localSkip, false, false);
-                }} className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium">Continue</button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
 
       {/* Month Conflict Modal */}
       {showMonthConflict && pendingUpload && (
