@@ -1,8 +1,8 @@
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import Anthropic from '@anthropic-ai/sdk';
-// @ts-ignore — pdf-parse v1
-import pdfParse from 'pdf-parse';
+// @ts-ignore — import lib directly to avoid pdf-parse's debug-mode crash in ESM
+import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import db from '../database.js';
 import path from 'path';
 import fs from 'fs';

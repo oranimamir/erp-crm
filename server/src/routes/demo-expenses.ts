@@ -3,8 +3,8 @@ import db from '../database.js';
 import JSZip from 'jszip';
 import { XMLParser } from 'fast-xml-parser';
 import multer from 'multer';
-// @ts-ignore — pdf-parse v1 has no proper ESM types
-import pdfParse from 'pdf-parse';
+// @ts-ignore — import lib directly to avoid pdf-parse's debug-mode crash in ESM
+import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
