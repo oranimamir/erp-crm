@@ -3,6 +3,8 @@ import db from '../database.js';
 import JSZip from 'jszip';
 import { XMLParser } from 'fast-xml-parser';
 import multer from 'multer';
+// @ts-ignore — pdf-parse v1 has no proper ESM types
+import pdfParse from 'pdf-parse';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
@@ -267,6 +269,172 @@ function parseUBLInvoice(xmlString: string) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// PDF INVOICE PARSER — extracts data from PDF text
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
+  let text = '';
+  try {
+    const result = await (pdfParse as any)(pdfBuffer);
+    text = result.text || '';
+  } catch (err) {
+    console.error(`[pdf-parse] Failed to parse ${pdfFilename}:`, err);
+    return null;
+  }
+
+  if (!text.trim()) return null;
+
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+
+  // Extract invoice ID — look for patterns like "Invoice 12345", "Factuurnummer: F2026-001", "Invoice Number: INV-123"
+  let invoiceId = '';
+  const invIdPatterns = [
+    /(?:invoice\s*(?:no|nr|number|#|id)?[\s.:]*)\s*([A-Z0-9][\w\-\/]+)/i,
+    /(?:factu(?:ur|re)\s*(?:no|nr|nummer)?[\s.:]*)\s*([A-Z0-9][\w\-\/]+)/i,
+    /(?:credit\s*(?:note|nota)\s*(?:no|nr)?[\s.:]*)\s*([A-Z0-9][\w\-\/]+)/i,
+    /(?:document\s*(?:no|nr|number)?[\s.:]*)\s*([A-Z0-9][\w\-\/]+)/i,
+    /\b(INV[\-\/]?\d[\w\-]*)\b/i,
+    /\b(F\d{4}[\-\/]\d+)\b/i,
+    /\b(CR[\-\/]?\d[\w\-]*)\b/i,
+  ];
+  for (const pat of invIdPatterns) {
+    const m = text.match(pat);
+    if (m) { invoiceId = m[1]; break; }
+  }
+  if (!invoiceId) {
+    // Fallback: use filename without extension
+    invoiceId = pdfFilename.replace(/\.pdf$/i, '').split('/').pop() || pdfFilename;
+  }
+
+  // Extract date — look for DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD, DD.MM.YYYY
+  let issueDate = '';
+  const datePatterns = [
+    // Near "date" keyword
+    /(?:invoice\s*date|datum|factuurdatum|date\s*de\s*facture|date)[\s.:]*(\d{1,2}[\/.\\-]\d{1,2}[\/.\\-]\d{2,4})/i,
+    /(?:invoice\s*date|datum|factuurdatum|date)[\s.:]*(\d{4}[\-\/]\d{1,2}[\-\/]\d{1,2})/i,
+    // Any date in the first portion of text
+    /(\d{1,2}[\/.]\d{1,2}[\/.]\d{4})/,
+    /(\d{4}-\d{2}-\d{2})/,
+  ];
+  for (const pat of datePatterns) {
+    const m = text.match(pat);
+    if (m) {
+      let d = m[1];
+      // Convert DD/MM/YYYY or DD.MM.YYYY to YYYY-MM-DD
+      const euMatch = d.match(/^(\d{1,2})[\/.](\d{1,2})[\/.](\d{4})$/);
+      if (euMatch) {
+        d = `${euMatch[3]}-${euMatch[2].padStart(2, '0')}-${euMatch[1].padStart(2, '0')}`;
+      }
+      const dmMatch = d.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+      if (dmMatch) {
+        d = `${dmMatch[3]}-${dmMatch[2].padStart(2, '0')}-${dmMatch[1].padStart(2, '0')}`;
+      }
+      if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+        issueDate = d;
+        break;
+      }
+    }
+  }
+  if (!issueDate) {
+    // Default to today
+    issueDate = new Date().toISOString().substring(0, 10);
+  }
+
+  // Extract supplier name — typically first meaningful line or near "from" / company name at top
+  let supplierName = '';
+  // Look for company patterns: lines with BV, NV, BVBA, SA, SRL, GmbH, etc.
+  const companyPatterns = /^(.+?)\s*(?:BV|NV|BVBA|SA\/NV|SA|SRL|GmbH|B\.V\.|N\.V\.|S\.A\.|VOF|CV|CVBA)\b/im;
+  const companyMatch = text.match(companyPatterns);
+  if (companyMatch) {
+    supplierName = companyMatch[0].trim();
+  } else {
+    // Take the first non-trivial line that looks like a company name (not a date, not a number)
+    for (const line of lines.slice(0, 15)) {
+      if (line.length < 3 || line.length > 100) continue;
+      if (/^\d+[\/.\\-]/.test(line)) continue; // date
+      if (/^(page|pagina|invoice|factu|credit|btw|tva|date|datum|total|amount|€|eur)/i.test(line)) continue;
+      if (/^\d+[,.]?\d*$/.test(line)) continue; // just a number
+      supplierName = line;
+      break;
+    }
+  }
+
+  // Extract amount — look for total excl. BTW/VAT patterns
+  let amount = 0;
+  const amountPatterns = [
+    // Tax exclusive totals
+    /(?:total\s*(?:excl|hors|zonder|ex)\.?\s*(?:btw|tva|vat)?|subtotal|sous[\s-]*total|netto|taxable\s*amount|maatstaf\s*van\s*heffing)[\s.:€]*\s*([\d.,]+(?:\s*(?:€|EUR))?)/i,
+    /(?:totaal\s*(?:excl|exclusief|zonder)\.?\s*(?:btw|tva)?|bedrag\s*excl)[\s.:€]*\s*([\d.,]+)/i,
+    // "Total HT" (French)
+    /(?:total\s*h\.?t\.?)[\s.:€]*\s*([\d.,]+)/i,
+    // Generic total (fallback)
+    /(?:total|totaal|totale|montant)[\s.:€]*\s*([\d.,]+(?:\s*(?:€|EUR))?)/i,
+    // Amount with € symbol
+    /€\s*([\d.,]+)/,
+  ];
+  for (const pat of amountPatterns) {
+    const m = text.match(pat);
+    if (m) {
+      // Parse European number format: 1.234,56 or 1234,56 or 1,234.56
+      let numStr = m[1].replace(/[€EUR\s]/g, '').trim();
+      // If has both . and , determine format
+      if (numStr.includes(',') && numStr.includes('.')) {
+        if (numStr.lastIndexOf(',') > numStr.lastIndexOf('.')) {
+          // European: 1.234,56
+          numStr = numStr.replace(/\./g, '').replace(',', '.');
+        } else {
+          // US: 1,234.56
+          numStr = numStr.replace(/,/g, '');
+        }
+      } else if (numStr.includes(',')) {
+        // Could be European decimal or thousands
+        const parts = numStr.split(',');
+        if (parts[parts.length - 1].length === 2) {
+          // Likely decimal: 1234,56
+          numStr = numStr.replace(',', '.');
+        } else {
+          // Likely thousands: 1,234
+          numStr = numStr.replace(/,/g, '');
+        }
+      }
+      const parsed = parseFloat(numStr);
+      if (!isNaN(parsed) && parsed > 0) {
+        amount = parsed;
+        break;
+      }
+    }
+  }
+
+  // If no amount found via patterns, look for the largest number that could be a total
+  if (amount === 0) {
+    const allAmounts: number[] = [];
+    const numPattern = /€?\s*([\d]+[.,]\d{2})\b/g;
+    let match;
+    while ((match = numPattern.exec(text)) !== null) {
+      let ns = match[1].replace(/\./g, '').replace(',', '.');
+      if (ns.includes('.') === false) ns = match[1].replace(',', '.');
+      const n = parseFloat(ns);
+      if (!isNaN(n) && n > 0) allAmounts.push(n);
+    }
+    if (allAmounts.length > 0) {
+      // Use the largest amount as the likely total
+      amount = Math.max(...allAmounts);
+    }
+  }
+
+  return {
+    invoiceId,
+    issueDate,
+    supplierName: supplierName || pdfFilename.replace(/\.pdf$/i, '').split('/').pop() || 'Unknown',
+    amount,
+    currency: 'EUR',
+    lineItems: [] as { description: string; amount: number }[],
+    embeddedPdf: null as string | null, // will be set by caller
+    pdfFilename,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // UPLOAD ZIP — shared endpoint, classifies into demo/sales domains
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -311,16 +479,10 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       }
     }
 
-    if (xmlFiles.length === 0) {
-      const extensions = [...new Set(allFileNames.map(f => f.split('.').pop()?.toLowerCase() || 'unknown'))];
-      res.status(400).json({
-        error: `No XML invoices found in the ZIP. Found ${allFileNames.length} file(s) with extensions: ${extensions.join(', ')}. This feature requires UBL/PEPPOL XML invoices.`,
-      });
-      return;
-    }
-
     // Parse all invoices
     const parsed: any[] = [];
+
+    // Process XML files (UBL/PEPPOL)
     for (const xml of xmlFiles) {
       const inv = parseUBLInvoice(xml.content);
       if (!inv) continue;
@@ -334,7 +496,39 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       });
     }
 
-    if (parsed.length === 0) { res.status(400).json({ error: 'No valid UBL invoices found in the XML files' }); return; }
+    // Process PDF files that weren't paired with XML files
+    const pairedPdfNames = new Set<string>();
+    for (const xml of xmlFiles) {
+      const xmlBaseName = (xml.name.replace(/\.xml$/i, '').split('/').pop() || '').toLowerCase();
+      if (pdfFiles.has(xmlBaseName)) pairedPdfNames.add(xmlBaseName);
+    }
+
+    // Parse standalone PDFs (not paired with XML)
+    for (const [name, entry] of Object.entries(zip.files)) {
+      if (entry.dir) continue;
+      if (!name.toLowerCase().endsWith('.pdf')) continue;
+      const pdfBaseName = (name.replace(/\.pdf$/i, '').split('/').pop() || '').toLowerCase();
+      if (pairedPdfNames.has(pdfBaseName)) continue; // already paired with XML
+      try {
+        const pdfBuffer = await entry.async('nodebuffer');
+        const inv = await parsePDFInvoice(pdfBuffer, name);
+        if (!inv) continue;
+        parsed.push({
+          ...inv,
+          xmlFilename: null,
+          embeddedPdf: pdfBuffer.toString('base64'),
+          pdfFilename: name,
+        });
+      } catch (err) {
+        console.error(`[upload-zip] Failed to parse PDF ${name}:`, err);
+      }
+    }
+
+    if (parsed.length === 0) {
+      const extensions = [...new Set(allFileNames.map(f => f.split('.').pop()?.toLowerCase() || 'unknown'))];
+      res.status(400).json({ error: `No valid invoices found in the ZIP. Found ${allFileNames.length} file(s) with extensions: ${extensions.join(', ')}.` });
+      return;
+    }
 
     // Infer month
     const monthCounts: Record<string, number> = {};

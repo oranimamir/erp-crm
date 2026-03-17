@@ -1,7 +1,8 @@
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import Anthropic from '@anthropic-ai/sdk';
-import { PDFParse } from 'pdf-parse';
+// @ts-ignore — pdf-parse v1
+import pdfParse from 'pdf-parse';
 import db from '../database.js';
 
 const router = Router();
@@ -61,9 +62,8 @@ async function extractWithClaude(file: Express.Multer.File): Promise<Record<stri
   if (isPdf) {
     let text = '';
     try {
-      const parser = new PDFParse({ data: new Uint8Array(file.buffer) });
-      const textResult = await parser.getText();
-      text = textResult.text.slice(0, 8000);
+      const textResult = await (pdfParse as any)(file.buffer);
+      text = (textResult.text || '').slice(0, 8000);
     } catch (pdfErr) {
       console.warn('PDF text extraction failed, sending minimal info to Claude:', pdfErr);
       text = `[PDF file: ${file.originalname}, size: ${file.size} bytes. Text extraction failed. Please extract what you can.]`;

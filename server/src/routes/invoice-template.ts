@@ -2,7 +2,8 @@ import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { PDFParse } from 'pdf-parse';
+// @ts-ignore — pdf-parse v1
+import pdfParse from 'pdf-parse';
 
 const router = Router();
 
@@ -89,9 +90,8 @@ async function extractTextFromFile(filePath: string): Promise<string> {
   } else {
     // PDF
     try {
-      const parser = new PDFParse({ data: new Uint8Array(buffer) });
-      const result = await parser.getText();
-      return result.text;
+      const result = await (pdfParse as any)(buffer);
+      return result.text || '';
     } catch {
       return '';
     }
