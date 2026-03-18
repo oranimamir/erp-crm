@@ -449,30 +449,74 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
   }
 
   // ─── SUPPLIER NAME ──────────────────────────────────────────────────
-  // Strategy: find ALL company names (with legal suffixes), exclude own company, take the first non-own one
+  // STRATEGY: Match known suppliers first (highest accuracy), then fall back to extraction
   let supplierName = '';
-  const companySuffixRegex = /^(.+?)\s*(?:BV|NV|BVBA|SA\/NV|SA|SRL|GmbH|B\.V\.|N\.V\.|S\.A\.|VOF|CV|CVBA|AG|Ltd|LLC|Inc)\b/im;
+  const textLower = text.toLowerCase();
 
-  // Collect all company names found
-  const companyNames: string[] = [];
-  const companyGlobalRegex = /(.{2,60}?)\s*\b(?:BV|NV|BVBA|SA\/NV|SRL|GmbH|B\.V\.|N\.V\.|S\.A\.|VOF|CV|CVBA|AG|Ltd|LLC|Inc)\b/gi;
-  let cm;
-  while ((cm = companyGlobalRegex.exec(text)) !== null) {
-    const name = cm[0].trim();
-    // Clean up: remove leading punctuation / numbers
-    const cleaned = name.replace(/^[\d\s.,:;()\-]+/, '').trim();
-    if (cleaned.length > 2) companyNames.push(cleaned);
+  // 1. Search for known suppliers from hardcoded map, DB suppliers, and user-defined mappings
+  const knownSuppliers: { name: string; pattern: string }[] = [];
+  for (const { pattern } of DEMO_SUPPLIER_MAP) {
+    knownSuppliers.push({ name: pattern, pattern: pattern.toLowerCase() });
   }
+  try {
+    const salesSuppliers = db.prepare('SELECT name FROM suppliers').all() as any[];
+    for (const s of salesSuppliers) {
+      if (s.name) knownSuppliers.push({ name: s.name, pattern: s.name.toLowerCase() });
+    }
+    const userMappings = db.prepare('SELECT supplier_pattern FROM demo_supplier_mappings').all() as any[];
+    for (const m of userMappings) {
+      if (m.supplier_pattern) knownSuppliers.push({ name: m.supplier_pattern, pattern: m.supplier_pattern.toLowerCase() });
+    }
+  } catch { /* ignore DB errors during parsing */ }
 
-  // Pick the first company that is NOT our own company
-  for (const name of companyNames) {
-    if (!isOwnCompany(name)) {
-      supplierName = name;
+  // Sort by pattern length descending so longer/more specific names match first
+  knownSuppliers.sort((a, b) => b.pattern.length - a.pattern.length);
+
+  // Search the full text for each known supplier (skip very short patterns that cause false positives)
+  for (const ks of knownSuppliers) {
+    if (ks.pattern.length < 3) continue;
+    // Use word boundary check to avoid partial matches (e.g. "gas" inside "gastronomie")
+    const escaped = ks.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const wordBoundaryRegex = ks.pattern.length <= 4
+      ? new RegExp(`\\b${escaped}\\b`, 'i')  // short patterns need strict word boundaries
+      : new RegExp(escaped, 'i');              // longer patterns can be substring matches
+    if (wordBoundaryRegex.test(textLower) && !isOwnCompany(ks.name)) {
+      // Try to find the actual full name from the text (with legal suffix if present)
+      const nameEscaped = ks.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const fullNameMatch = text.match(new RegExp(`(${nameEscaped}[^\\n]{0,40}?)(?:\\n|$)`, 'i'));
+      if (fullNameMatch) {
+        let extracted = fullNameMatch[1].trim();
+        // Trim trailing noise (numbers, punctuation, common labels)
+        extracted = extracted.replace(/[\s]*[-–—:;,.]?\s*(?:€|EUR|BTW|VAT|TVA|\d{2}[\/.-]\d{2}[\/.-]\d{4}|BE\s?\d).*/i, '').trim();
+        // Keep it reasonable length
+        if (extracted.length > 80) extracted = extracted.substring(0, 80).trim();
+        supplierName = extracted || ks.name;
+      } else {
+        supplierName = ks.name;
+      }
       break;
     }
   }
 
-  // If all found companies are own company, try "From" / "Van" / "Leverancier" label approach
+  // 2. If no known supplier matched, try extracting company names with legal suffixes
+  if (!supplierName) {
+    const companyNames: string[] = [];
+    const companyGlobalRegex = /(.{2,60}?)\s*\b(?:BV|NV|BVBA|SA\/NV|SRL|GmbH|B\.V\.|N\.V\.|S\.A\.|VOF|CV|CVBA|AG|Ltd|LLC|Inc)\b/gi;
+    let cm;
+    while ((cm = companyGlobalRegex.exec(text)) !== null) {
+      const name = cm[0].trim();
+      const cleaned = name.replace(/^[\d\s.,:;()\-]+/, '').trim();
+      if (cleaned.length > 2) companyNames.push(cleaned);
+    }
+    for (const name of companyNames) {
+      if (!isOwnCompany(name)) {
+        supplierName = name;
+        break;
+      }
+    }
+  }
+
+  // 3. Try "From" / "Van" / "Leverancier" label approach
   if (!supplierName) {
     const fromPatterns = [
       /(?:van|from|leverancier|supplier|fournisseur)[\s.:]+(.{3,80})/i,
@@ -486,7 +530,7 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
     }
   }
 
-  // Last resort: first non-trivial, non-own-company line
+  // 4. Last resort: first non-trivial, non-own-company line
   if (!supplierName) {
     for (const line of lines.slice(0, 20)) {
       if (line.length < 3 || line.length > 100) continue;
