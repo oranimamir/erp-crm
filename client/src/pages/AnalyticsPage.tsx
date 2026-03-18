@@ -4,16 +4,18 @@ import Card from '../components/ui/Card';
 import {
   BarChart3, TrendingUp, TrendingDown, DollarSign, Clock,
   RefreshCw, FileSpreadsheet, Users, Truck, Scale,
+  ChevronDown, ChevronRight, Eye, EyeOff,
 } from 'lucide-react';
 import { downloadExcel } from '../lib/exportExcel';
 
+// ── Interfaces ────────────────────────────────────────────────────────────────
+
 interface MonthData { month: string; received: number; paid_out: number; }
 interface CustomerData { customer_id: number; customer_name: string; total: number; invoice_count: number; }
-interface SupplierData { supplier_id: number; supplier_name: string; category: string; total: number; invoice_count: number; }
 interface Summary {
   monthly: MonthData[];
   by_customer: CustomerData[];
-  by_supplier: SupplierData[];
+  by_supplier: any[];
   totals: { received: number; paid_out: number; net: number; outstanding: number; expected: number; outstanding_payable: number; };
 }
 interface QuantityData {
@@ -21,15 +23,31 @@ interface QuantityData {
   total_tons: number;
   by_customer: { customer_id: number; customer_name: string; tons: number }[];
 }
+interface DemoExpensesData {
+  monthly: { month: string; demo: number; sales: number; demo_vat: number; sales_vat: number }[];
+  by_category: { category: string; domain: string; total: number; vat_total: number; count: number }[];
+  by_supplier: { supplier: string; domain: string; category: string; total: number; vat_total: number; count: number }[];
+  domain_totals: { domain: string; total: number; vat_total: number; count: number }[];
+  totals: { total_amount: number; total_vat: number; invoice_count: number };
+  years: string[];
+  categories: string[];
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────────
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-const SUPPLIER_CATEGORIES = [
-  { value: 'logistics',     label: 'Logistics' },
-  { value: 'blenders',      label: 'Blenders' },
-  { value: 'raw_materials', label: 'Raw Materials' },
-  { value: 'shipping',      label: 'Shipping' },
-];
+const DEMO_CAT_COLORS: Record<string, string> = {
+  'Salaries': '#6366f1', 'Cars': '#8b5cf6', 'Overhead': '#3b82f6',
+  'Consumables': '#f59e0b', 'Materials': '#10b981', 'Utilities and Maintenance': '#ef4444',
+  'Feedstock': '#14b8a6', 'Subcontractors and Consultants': '#ec4899',
+  'Regulatory': '#f97316', 'Equipment': '#0ea5e9', 'Couriers': '#84cc16', 'Other': '#6b7280',
+  'Raw Materials': '#059669', 'Logistics': '#7c3aed', 'Blenders': '#db2777', 'Shipping': '#0284c7',
+};
+
+const DONUT_COLORS = ['#22c55e', '#3b82f6', '#8b5cf6', '#06b6d4', '#14b8a6', '#f59e0b', '#6366f1', '#ec4899', '#f97316'];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmt(n: number) {
   return `€${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -42,11 +60,7 @@ function fmtAxis(n: number): string {
   return `€${Math.round(n)}`;
 }
 
-function monthLabel(m: string) {
-  return new Date(m + '-02').toLocaleDateString('en-GB', { month: 'short' });
-}
-
-function fmtTons(n: number): string {
+function fmtTons(n: number) {
   if (n >= 1000) return `${(n / 1000).toFixed(2)}k MT`;
   return `${n.toFixed(2)} MT`;
 }
@@ -57,6 +71,11 @@ function fmtTonsAxis(n: number): string {
   return n >= 10 ? Math.round(n).toString() : n.toFixed(1);
 }
 
+function monthLabel(m: string) {
+  const idx = parseInt(m.split('-')[1]) - 1;
+  return MONTHS[idx] || m;
+}
+
 function periodLabel(year: string, monthFrom: string, monthTo: string) {
   const from = parseInt(monthFrom);
   const to = parseInt(monthTo);
@@ -65,66 +84,29 @@ function periodLabel(year: string, monthFrom: string, monthTo: string) {
   return `${MONTHS[from - 1]}–${MONTHS[to - 1]} ${year}`;
 }
 
-function FinancialChart({ monthly, isCustomers, maxBar }: {
-  monthly: MonthData[];
-  isCustomers: boolean;
-  maxBar: number;
+// ── Chart components ──────────────────────────────────────────────────────────
+
+function BarChartGrid({ height, maxVal, fmtFn, children }: {
+  height: number;
+  maxVal: number;
+  fmtFn: (n: number) => string;
+  children: React.ReactNode;
 }) {
-  const hasData = monthly.some(m => isCustomers ? m.received > 0 : m.paid_out > 0);
-  if (!hasData) {
-    return <p className="text-center text-sm text-gray-500 py-8">No payment data for this period</p>;
-  }
-  const color = isCustomers ? 'bg-green-500' : 'bg-red-400';
-  const textColor = isCustomers ? 'text-green-600' : 'text-red-400';
   return (
-    <div>
-      <div className="flex gap-2">
-        <div className="flex flex-col justify-between items-end shrink-0 w-14" style={{ height: 165 }}>
-          {[maxBar, maxBar * 0.75, maxBar * 0.5, maxBar * 0.25, 0].map((v, i) => (
-            <span key={i} className="text-[10px] text-gray-400 leading-none tabular-nums">{fmtAxis(v)}</span>
+    <div className="flex gap-2">
+      <div className="flex flex-col justify-between items-end shrink-0 w-14" style={{ height }}>
+        {[maxVal, maxVal * 0.75, maxVal * 0.5, maxVal * 0.25, 0].map((v, i) => (
+          <span key={i} className="text-[10px] text-gray-400 leading-none tabular-nums">{fmtFn(v)}</span>
+        ))}
+      </div>
+      <div className="flex-1 min-w-0 flex flex-col">
+        <div className="relative" style={{ height }}>
+          {[0, 25, 50, 75, 100].map(pct => (
+            <div key={pct} className={`absolute left-0 right-0 pointer-events-none ${pct === 0 ? 'border-t border-gray-300' : 'border-t border-gray-100'}`}
+              style={{ bottom: `${(pct / 100) * height}px` }} />
           ))}
-        </div>
-        <div className="flex-1 min-w-0 flex flex-col">
-          <div className="relative" style={{ height: 165 }}>
-            {[0, 25, 50, 75, 100].map(pct => (
-              <div
-                key={pct}
-                className={`absolute left-0 right-0 pointer-events-none ${pct === 0 ? 'border-t border-gray-300' : 'border-t border-gray-100'}`}
-                style={{ bottom: `${(pct / 100) * 165}px` }}
-              />
-            ))}
-            <div className="flex items-end gap-1 h-full">
-              {monthly.map(m => {
-                const val = isCustomers ? m.received : m.paid_out;
-                return (
-                  <div key={m.month} className="flex-1 h-full flex flex-col items-center justify-end">
-                    {val > 0 ? (
-                      <span className={`text-[9px] tabular-nums leading-none mb-0.5 font-medium ${textColor}`}>
-                        {fmtAxis(val)}
-                      </span>
-                    ) : (
-                      <span className="text-[9px] leading-none mb-0.5 invisible">0</span>
-                    )}
-                    {val > 0 ? (
-                      <div
-                        className={`w-4/5 ${color} rounded-t transition-all`}
-                        style={{ height: `${Math.max((val / maxBar) * 149, 2)}px` }}
-                        title={`${isCustomers ? 'Received' : 'Paid out'}: ${fmt(val)}`}
-                      />
-                    ) : (
-                      <div className="w-4/5 bg-gray-100 rounded-t" style={{ height: '2px' }} />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-          <div className="flex gap-1 mt-1.5">
-            {monthly.map(m => (
-              <div key={m.month} className="flex-1 text-center">
-                <span className="text-[10px] text-gray-400">{monthLabel(m.month)}</span>
-              </div>
-            ))}
+          <div className="flex items-end gap-1 h-full">
+            {children}
           </div>
         </div>
       </div>
@@ -132,80 +114,17 @@ function FinancialChart({ monthly, isCustomers, maxBar }: {
   );
 }
 
-// ── Combined Revenue vs Expenses bar chart ─────────────────────────────────
-function CombinedChart({ monthly }: { monthly: MonthData[] }) {
-  const maxBar = Math.max(...monthly.map(m => Math.max(m.received, m.paid_out)), 1);
-  const hasData = monthly.some(m => m.received > 0 || m.paid_out > 0);
-  if (!hasData) return <p className="text-center text-sm text-gray-500 py-8">No data for this period</p>;
+function MonthLabels({ months }: { months: string[] }) {
   return (
-    <div>
-      <div className="flex gap-2">
-        <div className="flex flex-col justify-between items-end shrink-0 w-14" style={{ height: 165 }}>
-          {[maxBar, maxBar * 0.75, maxBar * 0.5, maxBar * 0.25, 0].map((v, i) => (
-            <span key={i} className="text-[10px] text-gray-400 leading-none tabular-nums">{fmtAxis(v)}</span>
-          ))}
+    <div className="flex gap-1 mt-1.5 ml-16">
+      {months.map(m => (
+        <div key={m} className="flex-1 text-center">
+          <span className="text-[10px] text-gray-400">{monthLabel(m)}</span>
         </div>
-        <div className="flex-1 min-w-0 flex flex-col">
-          <div className="relative" style={{ height: 165 }}>
-            {[0, 25, 50, 75, 100].map(pct => (
-              <div key={pct} className={`absolute left-0 right-0 pointer-events-none ${pct === 0 ? 'border-t border-gray-300' : 'border-t border-gray-100'}`}
-                style={{ bottom: `${(pct / 100) * 165}px` }} />
-            ))}
-            <div className="flex items-end gap-1 h-full">
-              {monthly.map(m => {
-                const revH = m.received > 0 ? Math.max((m.received / maxBar) * 149, 2) : 0;
-                const expH = m.paid_out > 0 ? Math.max((m.paid_out / maxBar) * 149, 2) : 0;
-                const net = m.received - m.paid_out;
-                return (
-                  <div key={m.month} className="flex-1 h-full flex items-end justify-center gap-px group relative">
-                    <div className="flex-1 h-full flex flex-col items-center justify-end">
-                      {m.received > 0 ? (
-                        <span className="text-[9px] tabular-nums leading-none mb-0.5 font-medium text-green-600">
-                          {fmtAxis(m.received)}
-                        </span>
-                      ) : (
-                        <span className="text-[9px] leading-none mb-0.5 invisible">0</span>
-                      )}
-                      <div className={`w-full rounded-t transition-all ${m.received > 0 ? 'bg-green-500' : 'bg-gray-100'}`}
-                        style={{ height: `${revH || 2}px` }} title={`Revenue: ${fmt(m.received)}`} />
-                    </div>
-                    <div className="flex-1 h-full flex flex-col items-center justify-end">
-                      {m.paid_out > 0 ? (
-                        <span className="text-[9px] tabular-nums leading-none mb-0.5 font-medium text-red-400">
-                          {fmtAxis(m.paid_out)}
-                        </span>
-                      ) : (
-                        <span className="text-[9px] leading-none mb-0.5 invisible">0</span>
-                      )}
-                      <div className={`w-full rounded-t transition-all ${m.paid_out > 0 ? 'bg-red-400' : 'bg-gray-100'}`}
-                        style={{ height: `${expH || 2}px` }} title={`Expenses: ${fmt(m.paid_out)}`} />
-                    </div>
-                    {/* Net tooltip */}
-                    <div className="absolute -top-7 left-1/2 -translate-x-1/2 hidden group-hover:block z-10 whitespace-nowrap">
-                      <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded shadow ${net >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                        {net >= 0 ? '+' : ''}{fmtAxis(net)}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-          <div className="flex gap-1 mt-1.5">
-            {monthly.map(m => (
-              <div key={m.month} className="flex-1 text-center">
-                <span className="text-[10px] text-gray-400">{monthLabel(m.month)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+      ))}
     </div>
   );
 }
-
-// ── SVG Donut chart ────────────────────────────────────────────────────────
-const DONUT_COLORS = ['#22c55e', '#3b82f6', '#8b5cf6', '#06b6d4', '#14b8a6', '#f59e0b', '#6366f1', '#ec4899', '#f97316'];
 
 function DonutChart({ slices }: { slices: { label: string; value: number }[] }) {
   const total = slices.reduce((s, d) => s + d.value, 0);
@@ -236,92 +155,141 @@ function DonutChart({ slices }: { slices: { label: string; value: number }[] }) 
   );
 }
 
-type View = 'customers' | 'suppliers' | 'demo_expenses' | 'tonnage';
+// ── Collapsible section wrapper ───────────────────────────────────────────────
+
+function ChartSection({ id, title, icon, visible, onToggle, children, badge }: {
+  id: string;
+  title: string;
+  icon: React.ReactNode;
+  visible: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+  badge?: React.ReactNode;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  return (
+    <Card>
+      <div
+        className="px-5 py-3 border-b border-gray-100 flex items-center justify-between cursor-pointer select-none hover:bg-gray-50 transition-colors"
+        onClick={() => setCollapsed(c => !c)}
+      >
+        <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+          {collapsed ? <ChevronRight size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
+          {icon}
+          {title}
+          {badge}
+        </h2>
+        <button
+          onClick={e => { e.stopPropagation(); onToggle(); }}
+          className={`p-1 rounded transition-colors ${visible ? 'text-gray-500 hover:text-gray-700' : 'text-gray-300 hover:text-gray-500'}`}
+          title={visible ? 'Hide section' : 'Show section'}
+        >
+          {visible ? <Eye size={14} /> : <EyeOff size={14} />}
+        </button>
+      </div>
+      {!collapsed && visible && <div className="p-5">{children}</div>}
+    </Card>
+  );
+}
+
+// ── Toggle button ─────────────────────────────────────────────────────────────
+
+function ToggleBtn({ active, onClick, color, children }: {
+  active: boolean; onClick: () => void; color: string; children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
+        active
+          ? `${color} text-white shadow-sm`
+          : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-50'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+// ── Main tabs ─────────────────────────────────────────────────────────────────
+
+type View = 'revenue' | 'expenses' | 'tonnage';
 
 const VIEW_OPTIONS: { value: View; label: string; active: string }[] = [
-  { value: 'customers',     label: 'Revenue',         active: 'bg-green-600 text-white' },
-  { value: 'suppliers',     label: 'Expenses',        active: 'bg-red-500 text-white' },
-  { value: 'demo_expenses', label: 'Demo & Sales',    active: 'bg-orange-500 text-white' },
-  { value: 'tonnage',       label: 'Tonnage Sold',    active: 'bg-indigo-600 text-white' },
+  { value: 'revenue',  label: 'Revenue',           active: 'bg-green-600 text-white' },
+  { value: 'expenses', label: 'Supplier Expenses',  active: 'bg-indigo-600 text-white' },
+  { value: 'tonnage',  label: 'Tonnage Sold',       active: 'bg-gray-700 text-white' },
 ];
 
-const DEMO_CAT_COLORS: Record<string, string> = {
-  'Salaries': '#6366f1', 'Cars': '#8b5cf6', 'Overhead': '#3b82f6',
-  'Consumables': '#f59e0b', 'Materials': '#10b981', 'Utilities and Maintenance': '#ef4444',
-  'Feedstock': '#14b8a6', 'Subcontractors and Consultants': '#ec4899',
-  'Regulatory': '#f97316', 'Equipment': '#0ea5e9', 'Couriers': '#84cc16', 'Other': '#6b7280',
-  'Raw Materials': '#059669', 'Logistics': '#7c3aed', 'Blenders': '#db2777', 'Shipping': '#0284c7',
-};
-
-interface DemoExpensesData {
-  monthly: { month: string; demo: number; sales: number; demo_vat: number; sales_vat: number }[];
-  by_category: { category: string; domain: string; total: number; vat_total: number; count: number }[];
-  by_supplier: { supplier: string; domain: string; category: string; total: number; vat_total: number; count: number }[];
-  domain_totals: { domain: string; total: number; vat_total: number; count: number }[];
-  totals: { total_amount: number; total_vat: number; invoice_count: number };
-  years: string[];
-  categories: string[];
-}
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN COMPONENT
+// ═══════════════════════════════════════════════════════════════════════════════
 
 export default function AnalyticsPage() {
   const currentYear = new Date().getFullYear().toString();
 
-  const [view, setView] = useState<View>('customers');
+  // ── Global filters ────────────────────────────────────────────────────────
+  const [view, setView] = useState<View>('expenses');
   const [year, setYear] = useState(currentYear);
   const [monthFrom, setMonthFrom] = useState('1');
   const [monthTo, setMonthTo] = useState('12');
   const [customerId, setCustomerId] = useState('');
-  const [supplierId, setSupplierId] = useState('');
-  const [supplierCategory, setSupplierCategory] = useState('');
 
+  // ── Expenses tab toggles ──────────────────────────────────────────────────
+  const [showDemo, setShowDemo] = useState(true);
+  const [showSales, setShowSales] = useState(true);
+  const [compareRevenue, setCompareRevenue] = useState(false);
+
+  // ── Expenses tab filters ──────────────────────────────────────────────────
+  const [demoCategory, setDemoCategory] = useState('');
+  const [demoSupplier, setDemoSupplier] = useState('');
+
+  // ── Section visibility ────────────────────────────────────────────────────
+  const [sections, setSections] = useState({
+    monthlyTrend: true,
+    revenueComparison: true,
+    byCategory: true,
+    bySupplier: true,
+    summaryTable: true,
+  });
+  const toggleSection = (key: keyof typeof sections) =>
+    setSections(s => ({ ...s, [key]: !s[key] }));
+
+  // ── Data state ────────────────────────────────────────────────────────────
   const [years, setYears] = useState<string[]>([currentYear]);
   const [customers, setCustomers] = useState<any[]>([]);
-  const [suppliers, setSuppliers] = useState<any[]>([]);
-
   const [data, setData] = useState<Summary | null>(null);
   const [quantityData, setQuantityData] = useState<QuantityData | null>(null);
   const [demoData, setDemoData] = useState<DemoExpensesData | null>(null);
-  const [demoDomain, setDemoDomain] = useState('');
-  const [demoCategory, setDemoCategory] = useState('');
   const [loading, setLoading] = useState(true);
 
+  // ── Load filter options ───────────────────────────────────────────────────
   useEffect(() => {
     Promise.all([api.get('/analytics/years'), api.get('/analytics/filters')])
       .then(([y, f]) => {
         if (y.data.length) setYears(y.data);
         setCustomers(f.data.customers);
-        setSuppliers(f.data.suppliers);
       })
       .catch(() => {});
   }, []);
 
+  // ── Compute effective domain filter based on toggles ──────────────────────
+  const effectiveDomain = showDemo && showSales ? '' : showDemo ? 'demo' : showSales ? 'sales' : '';
+
+  // ── Load data ─────────────────────────────────────────────────────────────
   useEffect(() => {
     setLoading(true);
     Promise.all([
       api.get('/analytics/summary', {
-        params: {
-          year,
-          month_from: monthFrom,
-          month_to: monthTo,
-          customer_id: customerId || undefined,
-          supplier_id: supplierId || undefined,
-          supplier_category: supplierCategory || undefined,
-        },
+        params: { year, month_from: monthFrom, month_to: monthTo, customer_id: customerId || undefined },
       }),
       api.get('/analytics/quantity', {
-        params: {
-          year,
-          month_from: monthFrom,
-          month_to: monthTo,
-          customer_id: customerId || undefined,
-        },
+        params: { year, month_from: monthFrom, month_to: monthTo, customer_id: customerId || undefined },
       }),
       api.get('/analytics/demo-expenses', {
         params: {
-          year,
-          month_from: monthFrom,
-          month_to: monthTo,
-          domain: demoDomain || undefined,
+          year, month_from: monthFrom, month_to: monthTo,
+          domain: effectiveDomain || undefined,
           category: demoCategory || undefined,
         },
       }),
@@ -333,104 +301,80 @@ export default function AnalyticsPage() {
       })
       .catch(() => { setData(null); setQuantityData(null); setDemoData(null); })
       .finally(() => setLoading(false));
-  }, [year, monthFrom, monthTo, customerId, supplierId, supplierCategory, demoDomain, demoCategory]);
+  }, [year, monthFrom, monthTo, customerId, effectiveDomain, demoCategory]);
 
+  // ── Misc handlers ─────────────────────────────────────────────────────────
   const handleMonthFromChange = (val: string) => {
     setMonthFrom(val);
     if (parseInt(val) > parseInt(monthTo)) setMonthTo(val);
   };
-
   const handleMonthToChange = (val: string) => {
     setMonthTo(val);
     if (parseInt(val) < parseInt(monthFrom)) setMonthFrom(val);
   };
 
-  const handleCategoryChange = (val: string) => {
-    setSupplierCategory(val);
-    if (val && supplierId) {
-      const sup = suppliers.find(s => s.id === parseInt(supplierId));
-      if (sup && sup.category !== val) setSupplierId('');
-    }
-  };
-
   const resetFilters = () => {
-    setView('customers');
+    setView('expenses');
     setYear(currentYear);
     setMonthFrom('1');
     setMonthTo('12');
     setCustomerId('');
-    setSupplierId('');
-    setSupplierCategory('');
-    setDemoDomain('');
+    setShowDemo(true);
+    setShowSales(true);
+    setCompareRevenue(false);
     setDemoCategory('');
+    setDemoSupplier('');
   };
 
-  const isFiltered = view !== 'customers' || year !== currentYear || monthFrom !== '1' || monthTo !== '12'
-    || customerId !== '' || supplierId !== '' || supplierCategory !== '' || demoDomain !== '' || demoCategory !== '';
-
-  const filteredSuppliers = supplierCategory
-    ? suppliers.filter(s => s.category === supplierCategory)
-    : suppliers;
-
-  const maxBarCustomers = data ? Math.max(...data.monthly.map(m => m.received), 1) : 1;
-  const maxBarSuppliers = data ? Math.max(...data.monthly.map(m => m.paid_out), 1) : 1;
+  const isFiltered = year !== currentYear || monthFrom !== '1' || monthTo !== '12'
+    || customerId !== '' || !showDemo || !showSales || compareRevenue
+    || demoCategory !== '' || demoSupplier !== '';
 
   const period = periodLabel(year, monthFrom, monthTo);
+  const chartH = 180;
+  const barH = chartH - 16;
+
+  // ── Filtered supplier data ────────────────────────────────────────────────
+  const filteredBySupplier = demoData?.by_supplier.filter(s =>
+    (!demoSupplier || s.supplier.toLowerCase().includes(demoSupplier.toLowerCase()))
+  ) || [];
+
+  const filteredByCategory = demoData?.by_category || [];
+
+  // ── Revenue data for comparison ───────────────────────────────────────────
+  const revenueByMonth = data?.monthly || [];
+
+  // ── Export handler ────────────────────────────────────────────────────────
+  const handleExport = () => {
+    if (view === 'revenue' && data) {
+      downloadExcel(`revenue-by-customer-${period}`, ['Customer', 'Total (EUR)', 'Invoices'],
+        data.by_customer.map(c => [c.customer_name, c.total, c.invoice_count]));
+    } else if (view === 'expenses' && demoData) {
+      const rows = filteredBySupplier.map(s => [s.supplier, s.domain, s.category, s.total, s.vat_total, s.count]);
+      downloadExcel(`supplier-expenses-${period}`, ['Supplier', 'Domain', 'Category', 'Amount (excl. BTW)', 'VAT', 'Invoices'], rows);
+    } else if (view === 'tonnage' && quantityData) {
+      downloadExcel(`tonnage-by-customer-${period}`, ['Customer', 'Tons'],
+        quantityData.by_customer.map(c => [c.customer_name, c.tons]));
+    }
+  };
+
+  // ── Computed totals for KPI cards ─────────────────────────────────────────
+  const demoTotal = demoData?.domain_totals.find(d => d.domain === 'demo');
+  const salesTotal = demoData?.domain_totals.find(d => d.domain === 'sales');
 
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
           <BarChart3 size={24} className="text-primary-600" />
           Analytics
         </h1>
         <div className="flex items-center gap-3">
-          {/* Export button */}
-          {data && view === 'customers' && (
-            <button
-              onClick={() => {
-                const rows = data.by_customer.map(c => [c.customer_name, c.total, c.invoice_count]);
-                downloadExcel(`revenue-by-customer-${period}`, ['Customer', 'Total (EUR)', 'Invoices'], rows);
-              }}
-              className="flex items-center gap-1 text-sm text-gray-600 border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50"
-            >
-              <FileSpreadsheet size={14} /> Export Excel
-            </button>
-          )}
-          {data && view === 'suppliers' && (
-            <button
-              onClick={() => {
-                const rows = data.by_supplier.map(s => [s.supplier_name, s.category, s.total, s.invoice_count]);
-                downloadExcel(`expenses-by-supplier-${period}`, ['Supplier', 'Category', 'Total (EUR)', 'Invoices'], rows);
-              }}
-              className="flex items-center gap-1 text-sm text-gray-600 border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50"
-            >
-              <FileSpreadsheet size={14} /> Export Excel
-            </button>
-          )}
-          {demoData && view === 'demo_expenses' && (
-            <button
-              onClick={() => {
-                const rows = demoData.by_supplier.map(s => [s.supplier, s.domain, s.category, s.total, s.vat_total, s.count]);
-                downloadExcel(`demo-sales-expenses-${period}`, ['Supplier', 'Domain', 'Category', 'Amount (excl. BTW)', 'VAT', 'Invoices'], rows);
-              }}
-              className="flex items-center gap-1 text-sm text-gray-600 border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50"
-            >
-              <FileSpreadsheet size={14} /> Export Excel
-            </button>
-          )}
-          {quantityData && view === 'tonnage' && quantityData.by_customer.length > 0 && (
-            <button
-              onClick={() => {
-                const rows = quantityData.by_customer.map(c => [c.customer_name, c.tons]);
-                downloadExcel(`tonnage-by-customer-${period}`, ['Customer', 'Tons'], rows);
-              }}
-              className="flex items-center gap-1 text-sm text-gray-600 border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50"
-            >
-              <FileSpreadsheet size={14} /> Export Excel
-            </button>
-          )}
+          <button onClick={handleExport}
+            className="flex items-center gap-1 text-sm text-gray-600 border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50">
+            <FileSpreadsheet size={14} /> Export Excel
+          </button>
           {isFiltered && (
             <button onClick={resetFilters} className="flex items-center gap-1 text-sm text-primary-600 hover:underline">
               <RefreshCw size={14} /> Reset filters
@@ -439,59 +383,45 @@ export default function AnalyticsPage() {
         </div>
       </div>
 
-      {/* Filters */}
+      {/* ── Filters ────────────────────────────────────────────────────────── */}
       <Card className="p-4 space-y-4">
+        {/* Row 1: View tabs + time filters */}
         <div className="flex flex-wrap items-end gap-4">
-          {/* View toggle */}
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">View</label>
             <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm font-medium">
               {VIEW_OPTIONS.map((opt, i) => (
-                <button
-                  key={opt.value}
+                <button key={opt.value}
                   onClick={() => setView(opt.value)}
                   className={`px-3 py-2 transition-colors ${
                     view === opt.value ? opt.active : 'bg-white text-gray-600 hover:bg-gray-50'
-                  } ${i > 0 ? 'border-l border-gray-300' : ''}`}
-                >
+                  } ${i > 0 ? 'border-l border-gray-300' : ''}`}>
                   {opt.label}
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Year */}
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Year</label>
-            <select
-              value={year}
-              onChange={e => setYear(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-            >
+            <select value={year} onChange={e => setYear(e.target.value)}
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500">
               {years.map(y => <option key={y} value={y}>{y}</option>)}
             </select>
           </div>
 
-          {/* From month */}
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">From</label>
-            <select
-              value={monthFrom}
-              onChange={e => handleMonthFromChange(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-            >
+            <select value={monthFrom} onChange={e => handleMonthFromChange(e.target.value)}
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500">
               {MONTHS.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
             </select>
           </div>
 
-          {/* To month */}
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">To</label>
-            <select
-              value={monthTo}
-              onChange={e => handleMonthToChange(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-            >
+            <select value={monthTo} onChange={e => handleMonthToChange(e.target.value)}
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500">
               {MONTHS.map((m, i) => (
                 <option key={i + 1} value={i + 1} disabled={i + 1 < parseInt(monthFrom)}>{m}</option>
               ))}
@@ -499,731 +429,790 @@ export default function AnalyticsPage() {
           </div>
         </div>
 
-        {/* Row 2: entity filters */}
-        <div className="flex flex-wrap items-end gap-4 pt-1 border-t border-gray-100">
-          {/* Customer filter — Revenue and Tonnage views */}
-          {view !== 'suppliers' && (
+        {/* Row 2: View-specific filters */}
+        <div className="flex flex-wrap items-end gap-4 pt-3 border-t border-gray-100">
+          {/* Revenue / Tonnage: customer filter */}
+          {(view === 'revenue' || view === 'tonnage') && (
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1">
                 <Users size={11} /> Customer
               </label>
-              <select
-                value={customerId}
-                onChange={e => setCustomerId(e.target.value)}
-                className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-              >
+              <select value={customerId} onChange={e => setCustomerId(e.target.value)}
+                className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500">
                 <option value="">All Customers</option>
                 {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
           )}
 
-          {/* Demo Expenses filters */}
-          {view === 'demo_expenses' && (
+          {/* Expenses: data series toggles */}
+          {view === 'expenses' && (
             <>
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1">
-                  <Truck size={11} /> Domain
-                </label>
-                <select
-                  value={demoDomain}
-                  onChange={e => { setDemoDomain(e.target.value); setDemoCategory(''); }}
-                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                >
-                  <option value="">All Domains</option>
-                  <option value="demo">Demo Expenses</option>
-                  <option value="sales">Sales Activities</option>
-                </select>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Data Series</label>
+                <div className="flex gap-2">
+                  <ToggleBtn active={showDemo} onClick={() => { if (showDemo && !showSales) return; setShowDemo(d => !d); }}
+                    color="bg-indigo-600 border-indigo-600">
+                    Demo Expenses
+                  </ToggleBtn>
+                  <ToggleBtn active={showSales} onClick={() => { if (showSales && !showDemo) return; setShowSales(s => !s); }}
+                    color="bg-emerald-600 border-emerald-600">
+                    Sales Activities
+                  </ToggleBtn>
+                  <ToggleBtn active={compareRevenue} onClick={() => setCompareRevenue(c => !c)}
+                    color="bg-green-600 border-green-600">
+                    + Revenue
+                  </ToggleBtn>
+                </div>
               </div>
+
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1">
                   <Truck size={11} /> Category
                 </label>
-                <select
-                  value={demoCategory}
-                  onChange={e => setDemoCategory(e.target.value)}
-                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                >
+                <select value={demoCategory} onChange={e => setDemoCategory(e.target.value)}
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500">
                   <option value="">All Categories</option>
                   {(demoData?.categories || []).map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
-            </>
-          )}
 
-          {/* Supplier filters — Expenses view only */}
-          {view === 'suppliers' && (
-            <>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1">
-                  <Truck size={11} /> Category
+                  <Truck size={11} /> Supplier search
                 </label>
-                <select
-                  value={supplierCategory}
-                  onChange={e => handleCategoryChange(e.target.value)}
-                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                >
-                  <option value="">All Categories</option>
-                  {SUPPLIER_CATEGORIES.map(c => (
-                    <option key={c.value} value={c.value}>{c.label}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1">
-                  <Truck size={11} /> Supplier
-                </label>
-                <select
-                  value={supplierId}
-                  onChange={e => setSupplierId(e.target.value)}
-                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                >
-                  <option value="">All Suppliers{supplierCategory ? ` (${SUPPLIER_CATEGORIES.find(c => c.value === supplierCategory)?.label})` : ''}</option>
-                  {filteredSuppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
+                <input type="text" value={demoSupplier} onChange={e => setDemoSupplier(e.target.value)}
+                  placeholder="Filter suppliers..."
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 w-48" />
               </div>
             </>
           )}
         </div>
       </Card>
 
+      {/* ── Loading ────────────────────────────────────────────────────────── */}
       {loading ? (
         <div className="flex justify-center py-20">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
         </div>
-      ) : data ? (
+      ) : (
+
+      <>
+      {/* ═══════════════════════════════════════════════════════════════════ */}
+      {/* REVENUE VIEW                                                      */}
+      {/* ═══════════════════════════════════════════════════════════════════ */}
+      {view === 'revenue' && data && (
         <>
-          {/* ── REVENUE VIEW ──────────────────────────────────────────────────── */}
-          {view === 'customers' && (
-            <>
-              {/* ── KPI summary ── */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                <Card className="p-5">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center shrink-0">
-                      <TrendingUp size={20} className="text-green-600" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs text-gray-500">Revenue Received</p>
-                      <p className="text-xl font-bold text-green-700 truncate">{fmt(data.totals.received)}</p>
-                    </div>
-                  </div>
-                </Card>
-                <Card className="p-5">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${data.totals.net >= 0 ? 'bg-emerald-100' : 'bg-red-100'}`}>
-                      <DollarSign size={20} className={data.totals.net >= 0 ? 'text-emerald-600' : 'text-red-500'} />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs text-gray-500">Net (Revenue − Expenses)</p>
-                      <p className={`text-xl font-bold truncate ${data.totals.net >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
-                        {data.totals.net >= 0 ? '+' : ''}{fmt(data.totals.net)}
-                      </p>
-                    </div>
-                  </div>
-                </Card>
-                <Card className="p-5">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
-                      <Clock size={20} className="text-amber-600" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs text-gray-500">Pending (w/ due date)</p>
-                      <p className="text-xl font-bold text-amber-600 truncate">{fmt(data.totals.outstanding)}</p>
-                    </div>
-                  </div>
-                </Card>
-                <Card className="p-5">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center shrink-0">
-                      <Clock size={20} className="text-blue-500" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs text-gray-500">Expected (no due date)</p>
-                      <p className="text-xl font-bold text-blue-600 truncate">{fmt(data.totals.expected ?? 0)}</p>
-                    </div>
-                  </div>
-                </Card>
+          {/* KPI cards */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <Card className="p-5">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center shrink-0">
+                  <TrendingUp size={20} className="text-green-600" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-gray-500">Revenue Received</p>
+                  <p className="text-xl font-bold text-green-700 truncate">{fmt(data.totals.received)}</p>
+                </div>
               </div>
-
-              {/* ── Monthly Revenue chart ── */}
-              <Card>
-                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                  <h2 className="font-semibold text-gray-900">Revenue Received — {period}</h2>
-                  <span className="flex items-center gap-1.5 text-xs text-gray-500">
-                    <span className="w-3 h-3 rounded bg-green-500 inline-block" /> Received
-                  </span>
+            </Card>
+            <Card className="p-5">
+              <div className="flex items-center gap-3">
+                <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${data.totals.net >= 0 ? 'bg-emerald-100' : 'bg-red-100'}`}>
+                  <DollarSign size={20} className={data.totals.net >= 0 ? 'text-emerald-600' : 'text-red-500'} />
                 </div>
-                <div className="p-5">
-                  <FinancialChart monthly={data.monthly} isCustomers={true} maxBar={maxBarCustomers} />
+                <div className="min-w-0">
+                  <p className="text-xs text-gray-500">Net (Revenue − Expenses)</p>
+                  <p className={`text-xl font-bold truncate ${data.totals.net >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+                    {data.totals.net >= 0 ? '+' : ''}{fmt(data.totals.net)}
+                  </p>
                 </div>
-              </Card>
-
-              {/* ── Revenue vs Expenses — combined chart ── */}
-              <Card>
-                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                  <h2 className="font-semibold text-gray-900">Revenue vs Expenses — {period}</h2>
-                  <div className="flex items-center gap-4 text-xs text-gray-500">
-                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-green-500 inline-block" /> Revenue</span>
-                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-400 inline-block" /> Expenses</span>
-                  </div>
-                </div>
-                <div className="p-5">
-                  <CombinedChart monthly={data.monthly} />
-                  <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-3 gap-4 text-center">
-                    <div>
-                      <p className="text-xs text-gray-400 mb-0.5">Total Revenue</p>
-                      <p className="text-base font-bold text-green-600">{fmt(data.totals.received)}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-400 mb-0.5">Total Expenses</p>
-                      <p className="text-base font-bold text-red-500">{fmt(data.totals.paid_out)}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-400 mb-0.5">Net</p>
-                      <p className={`text-base font-bold ${data.totals.net >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                        {data.totals.net >= 0 ? '+' : ''}{fmt(data.totals.net)}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </Card>
-
-              {/* ── Customer revenue mix + breakdown ── */}
-              <Card>
-                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                  <h2 className="font-semibold text-gray-900 flex items-center gap-2">
-                    <Users size={16} className="text-green-600" /> Revenue by Customer
-                  </h2>
-                  <span className="text-xs text-gray-400">{period}</span>
-                </div>
-                {data.by_customer.length === 0 ? (
-                  <p className="px-5 py-8 text-center text-sm text-gray-500">No data for this period</p>
-                ) : (
-                  <div className="p-5">
-                    {/* Donut + legend side by side */}
-                    <div className="flex gap-6 items-start mb-6">
-                      <DonutChart slices={data.by_customer.map(c => ({ label: c.customer_name, value: c.total }))} />
-                      <div className="flex-1 min-w-0 space-y-2">
-                        {data.by_customer.map((c, i) => {
-                          const totalAll = data.by_customer.reduce((s, x) => s + x.total, 0);
-                          const pct = totalAll > 0 ? Math.round((c.total / totalAll) * 100) : 0;
-                          return (
-                            <div key={c.customer_id} className="flex items-center gap-2">
-                              <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: DONUT_COLORS[i % DONUT_COLORS.length] }} />
-                              <span className="text-sm text-gray-700 truncate flex-1 min-w-0">{c.customer_name}</span>
-                              <span className="text-xs text-gray-400 shrink-0">{pct}%</span>
-                              <span className="text-sm font-semibold text-gray-900 shrink-0 min-w-[80px] text-right">{fmt(c.total)}</span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                    {/* Horizontal bar breakdown */}
-                    <div className="divide-y divide-gray-100 border-t border-gray-100">
-                      {data.by_customer.map((c, i) => {
-                        const maxC = data.by_customer[0]?.total || 1;
-                        const pct = maxC > 0 ? Math.round((c.total / maxC) * 100) : 0;
-                        return (
-                          <div key={c.customer_id} className="py-2.5">
-                            <div className="flex items-center justify-between mb-1">
-                              <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
-                                <span className="text-xs text-gray-400 font-normal w-5">{i + 1}.</span>
-                                {c.customer_name}
-                              </span>
-                              <div className="text-right shrink-0 ml-2">
-                                <span className="text-sm font-bold text-gray-900">{fmt(c.total)}</span>
-                                <span className="text-xs text-gray-400 ml-1">{c.invoice_count} inv</span>
-                              </div>
-                            </div>
-                            <div className="w-full bg-gray-100 rounded-full h-2">
-                              <div className="h-2 rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: DONUT_COLORS[i % DONUT_COLORS.length] }} />
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </Card>
-            </>
-          )}
-
-          {/* ── EXPENSES VIEW ─────────────────────────────────────────────────── */}
-          {view === 'suppliers' && (
-            <>
-              <div className="grid grid-cols-2 gap-4">
-                <Card className="p-5">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-red-100 flex items-center justify-center shrink-0">
-                      <TrendingDown size={20} className="text-red-500" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs text-gray-500">Total Expenses Paid</p>
-                      <p className="text-xl font-bold text-gray-900 truncate">{fmt(data.totals.paid_out)}</p>
-                    </div>
-                  </div>
-                </Card>
-                <Card className="p-5">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-orange-100 flex items-center justify-center shrink-0">
-                      <Clock size={20} className="text-orange-500" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs text-gray-500">Outstanding Payable</p>
-                      <p className="text-xl font-bold text-gray-900 truncate">{fmt(data.totals.outstanding_payable)}</p>
-                    </div>
-                  </div>
-                </Card>
               </div>
-
-              <Card>
-                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                  <h2 className="font-semibold text-gray-900">Supplier Expenses — {period}</h2>
-                  <span className="flex items-center gap-1.5 text-xs text-gray-500">
-                    <span className="w-3 h-3 rounded bg-red-400 inline-block" /> Paid out
-                  </span>
+            </Card>
+            <Card className="p-5">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
+                  <Clock size={20} className="text-amber-600" />
                 </div>
-                <div className="p-5">
-                  <FinancialChart monthly={data.monthly} isCustomers={false} maxBar={maxBarSuppliers} />
+                <div className="min-w-0">
+                  <p className="text-xs text-gray-500">Pending (w/ due date)</p>
+                  <p className="text-xl font-bold text-amber-600 truncate">{fmt(data.totals.outstanding)}</p>
                 </div>
-              </Card>
+              </div>
+            </Card>
+            <Card className="p-5">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center shrink-0">
+                  <Clock size={20} className="text-blue-500" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-gray-500">Expected (no due date)</p>
+                  <p className="text-xl font-bold text-blue-600 truncate">{fmt(data.totals.expected ?? 0)}</p>
+                </div>
+              </div>
+            </Card>
+          </div>
 
-              {/* Expenses by Category */}
-              {data.by_supplier.length > 0 && (() => {
-                const byCategory = SUPPLIER_CATEGORIES.map(cat => {
-                  const matching = data.by_supplier.filter(s => s.category === cat.value);
-                  return {
-                    label: cat.label,
-                    value: cat.value,
-                    total: matching.reduce((sum, s) => sum + s.total, 0),
-                    count: matching.reduce((sum, s) => sum + s.invoice_count, 0),
-                  };
-                }).filter(c => c.total > 0).sort((a, b) => b.total - a.total);
-
-                if (byCategory.length === 0) return null;
-                const maxCat = byCategory[0]?.total || 1;
+          {/* Monthly revenue chart */}
+          <Card>
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h2 className="font-semibold text-gray-900">Revenue Received — {period}</h2>
+              <span className="flex items-center gap-1.5 text-xs text-gray-500">
+                <span className="w-3 h-3 rounded bg-green-500 inline-block" /> Received
+              </span>
+            </div>
+            <div className="p-5">
+              {(() => {
+                const maxBar = Math.max(...data.monthly.map(m => m.received), 1);
                 return (
-                  <Card>
-                    <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                      <h2 className="font-semibold text-gray-900 flex items-center gap-2">
-                        <Truck size={16} className="text-orange-500" /> Expenses by Category
-                      </h2>
-                      <span className="text-xs text-gray-400">{period}</span>
-                    </div>
-                    <div className="divide-y divide-gray-100">
-                      {byCategory.map(cat => (
-                        <div key={cat.value} className="px-5 py-4">
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-sm font-medium text-gray-700">{cat.label}</span>
-                            <div className="text-right">
-                              <span className="text-sm font-bold text-gray-900">{fmt(cat.total)}</span>
-                              <span className="text-xs text-gray-400 ml-2">{cat.count} inv</span>
-                            </div>
-                          </div>
-                          <div className="w-full bg-gray-100 rounded-full h-2">
-                            <div className="bg-orange-400 h-2 rounded-full" style={{ width: `${(cat.total / maxCat) * 100}%` }} />
-                          </div>
+                  <>
+                    <BarChartGrid height={chartH} maxVal={maxBar} fmtFn={fmtAxis}>
+                      {data.monthly.map(m => (
+                        <div key={m.month} className="flex-1 h-full flex flex-col items-center justify-end">
+                          {m.received > 0 && (
+                            <span className="text-[9px] tabular-nums leading-none mb-0.5 font-medium text-green-600">{fmtAxis(m.received)}</span>
+                          )}
+                          <div className={`w-4/5 rounded-t transition-all ${m.received > 0 ? 'bg-green-500' : 'bg-gray-100'}`}
+                            style={{ height: `${m.received > 0 ? Math.max((m.received / maxBar) * barH, 2) : 2}px` }}
+                            title={`Revenue: ${fmt(m.received)}`} />
                         </div>
                       ))}
-                    </div>
-                  </Card>
+                    </BarChartGrid>
+                    <MonthLabels months={data.monthly.map(m => m.month)} />
+                  </>
                 );
               })()}
+            </div>
+          </Card>
 
-              <Card>
-                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                  <h2 className="font-semibold text-gray-900 flex items-center gap-2">
-                    <Truck size={16} className="text-red-500" /> Expenses by Supplier
-                    {supplierCategory && (
-                      <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full font-normal">
-                        {SUPPLIER_CATEGORIES.find(c => c.value === supplierCategory)?.label}
-                      </span>
-                    )}
-                  </h2>
-                  <span className="text-xs text-gray-400">{period}</span>
-                </div>
-                {data.by_supplier.length === 0 ? (
-                  <p className="px-5 py-8 text-center text-sm text-gray-500">No data for this period</p>
-                ) : (
-                  <div className="divide-y divide-gray-100">
-                    {data.by_supplier.map((s, i) => {
-                      const maxS = data.by_supplier[0]?.total || 1;
+          {/* Revenue by Customer — donut + bars */}
+          <Card>
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                <Users size={16} className="text-green-600" /> Revenue by Customer
+              </h2>
+              <span className="text-xs text-gray-400">{period}</span>
+            </div>
+            {data.by_customer.length === 0 ? (
+              <p className="px-5 py-8 text-center text-sm text-gray-500">No data for this period</p>
+            ) : (
+              <div className="p-5">
+                <div className="flex gap-6 items-start mb-6">
+                  <DonutChart slices={data.by_customer.map(c => ({ label: c.customer_name, value: c.total }))} />
+                  <div className="flex-1 min-w-0 space-y-2">
+                    {data.by_customer.map((c, i) => {
+                      const totalAll = data.by_customer.reduce((s, x) => s + x.total, 0);
+                      const pct = totalAll > 0 ? Math.round((c.total / totalAll) * 100) : 0;
                       return (
-                        <div key={s.supplier_id} className="px-5 py-3">
-                          <div className="flex items-center justify-between mb-1.5">
-                            <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
-                              <span className="text-xs text-gray-400 font-normal w-5">{i + 1}.</span>
-                              {s.supplier_name}
-                              {!supplierCategory && s.category && (
-                                <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded capitalize">
-                                  {s.category.replace('_', ' ')}
-                                </span>
-                              )}
-                            </span>
-                            <div className="text-right shrink-0 ml-2">
-                              <span className="text-sm font-bold text-gray-900">{fmt(s.total)}</span>
-                              <span className="text-xs text-gray-400 ml-1">{s.invoice_count} inv</span>
-                            </div>
-                          </div>
-                          <div className="w-full bg-gray-100 rounded-full h-1.5">
-                            <div className="bg-red-400 h-1.5 rounded-full" style={{ width: `${(s.total / maxS) * 100}%` }} />
-                          </div>
+                        <div key={c.customer_id} className="flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: DONUT_COLORS[i % DONUT_COLORS.length] }} />
+                          <span className="text-sm text-gray-700 truncate flex-1 min-w-0">{c.customer_name}</span>
+                          <span className="text-xs text-gray-400 shrink-0">{pct}%</span>
+                          <span className="text-sm font-semibold text-gray-900 shrink-0 min-w-[80px] text-right">{fmt(c.total)}</span>
                         </div>
                       );
                     })}
                   </div>
-                )}
-              </Card>
-            </>
-          )}
-
-          {/* ── DEMO & SALES EXPENSES VIEW ────────────────────────────────────── */}
-          {view === 'demo_expenses' && demoData && (
-            <>
-              {/* KPI cards */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                <Card className="p-5">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-orange-100 flex items-center justify-center shrink-0">
-                      <TrendingDown size={20} className="text-orange-500" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs text-gray-500">Total (excl. BTW)</p>
-                      <p className="text-xl font-bold text-gray-900 truncate">{fmt(demoData.totals.total_amount)}</p>
-                    </div>
-                  </div>
-                </Card>
-                <Card className="p-5">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
-                      <Clock size={20} className="text-amber-600" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs text-gray-500">VAT Outstanding</p>
-                      <p className="text-xl font-bold text-amber-600 truncate">{fmt(demoData.totals.total_vat)}</p>
-                    </div>
-                  </div>
-                </Card>
-                {demoData.domain_totals.map(dt => (
-                  <Card key={dt.domain} className="p-5">
-                    <div className="flex items-center gap-3">
-                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${dt.domain === 'demo' ? 'bg-indigo-100' : 'bg-emerald-100'}`}>
-                        <Truck size={20} className={dt.domain === 'demo' ? 'text-indigo-600' : 'text-emerald-600'} />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-xs text-gray-500">{dt.domain === 'demo' ? 'Demo Expenses' : 'Sales Activities'}</p>
-                        <p className="text-xl font-bold text-gray-900 truncate">{fmt(dt.total)}</p>
-                        <p className="text-xs text-gray-400">{dt.count} invoices</p>
-                      </div>
-                    </div>
-                  </Card>
-                ))}
-              </div>
-
-              {/* Monthly chart — Demo vs Sales side by side */}
-              <Card>
-                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                  <h2 className="font-semibold text-gray-900">Demo vs Sales Expenses — {period}</h2>
-                  <div className="flex items-center gap-4 text-xs text-gray-500">
-                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-indigo-500 inline-block" /> Demo</span>
-                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-emerald-500 inline-block" /> Sales</span>
-                  </div>
                 </div>
-                <div className="p-5">
-                  {(() => {
-                    const maxBar = Math.max(...demoData.monthly.map(m => Math.max(m.demo + m.sales, 1)), 1);
+                <div className="divide-y divide-gray-100 border-t border-gray-100">
+                  {data.by_customer.map((c, i) => {
+                    const maxC = data.by_customer[0]?.total || 1;
+                    const pct = maxC > 0 ? Math.round((c.total / maxC) * 100) : 0;
                     return (
-                      <div>
-                        <div className="flex gap-2">
-                          <div className="flex flex-col justify-between items-end shrink-0 w-14" style={{ height: 165 }}>
-                            {[maxBar, maxBar * 0.75, maxBar * 0.5, maxBar * 0.25, 0].map((v, i) => (
-                              <span key={i} className="text-[10px] text-gray-400 leading-none tabular-nums">{fmtAxis(v)}</span>
-                            ))}
+                      <div key={c.customer_id} className="py-2.5">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
+                            <span className="text-xs text-gray-400 font-normal w-5">{i + 1}.</span>
+                            {c.customer_name}
+                          </span>
+                          <div className="text-right shrink-0 ml-2">
+                            <span className="text-sm font-bold text-gray-900">{fmt(c.total)}</span>
+                            <span className="text-xs text-gray-400 ml-1">{c.invoice_count} inv</span>
                           </div>
-                          <div className="flex-1 min-w-0 flex flex-col">
-                            <div className="relative" style={{ height: 165 }}>
-                              {[0, 25, 50, 75, 100].map(pct => (
-                                <div key={pct} className={`absolute left-0 right-0 pointer-events-none ${pct === 0 ? 'border-t border-gray-300' : 'border-t border-gray-100'}`}
-                                  style={{ bottom: `${(pct / 100) * 165}px` }} />
-                              ))}
-                              <div className="flex items-end gap-1 h-full">
-                                {demoData.monthly.map(m => {
-                                  const demoH = m.demo > 0 ? Math.max((m.demo / maxBar) * 149, 2) : 0;
-                                  const salesH = m.sales > 0 ? Math.max((m.sales / maxBar) * 149, 2) : 0;
-                                  return (
-                                    <div key={m.month} className="flex-1 h-full flex items-end justify-center gap-px group relative">
-                                      <div className="flex-1 h-full flex flex-col items-center justify-end">
-                                        {m.demo > 0 && <span className="text-[9px] tabular-nums leading-none mb-0.5 font-medium text-indigo-600">{fmtAxis(m.demo)}</span>}
-                                        <div className={`w-full rounded-t ${m.demo > 0 ? 'bg-indigo-500' : 'bg-gray-100'}`}
-                                          style={{ height: `${demoH || 2}px` }} title={`Demo: ${fmt(m.demo)}`} />
-                                      </div>
-                                      <div className="flex-1 h-full flex flex-col items-center justify-end">
-                                        {m.sales > 0 && <span className="text-[9px] tabular-nums leading-none mb-0.5 font-medium text-emerald-600">{fmtAxis(m.sales)}</span>}
-                                        <div className={`w-full rounded-t ${m.sales > 0 ? 'bg-emerald-500' : 'bg-gray-100'}`}
-                                          style={{ height: `${salesH || 2}px` }} title={`Sales: ${fmt(m.sales)}`} />
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                            <div className="flex gap-1 mt-1.5">
-                              {demoData.monthly.map(m => (
-                                <div key={m.month} className="flex-1 text-center">
-                                  <span className="text-[10px] text-gray-400">{monthLabel(m.month)}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
+                        </div>
+                        <div className="w-full bg-gray-100 rounded-full h-2">
+                          <div className="h-2 rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: DONUT_COLORS[i % DONUT_COLORS.length] }} />
                         </div>
                       </div>
                     );
-                  })()}
+                  })}
+                </div>
+              </div>
+            )}
+          </Card>
+        </>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════════════ */}
+      {/* SUPPLIER EXPENSES VIEW  (modular)                                 */}
+      {/* ═══════════════════════════════════════════════════════════════════ */}
+      {view === 'expenses' && demoData && (
+        <>
+          {/* ── KPI cards ─────────────────────────────────────────────────── */}
+          <div className={`grid gap-4 ${compareRevenue ? 'grid-cols-2 lg:grid-cols-5' : 'grid-cols-2 lg:grid-cols-4'}`}>
+            <Card className="p-5">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-orange-100 flex items-center justify-center shrink-0">
+                  <TrendingDown size={20} className="text-orange-500" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-gray-500">Total Expenses (excl. BTW)</p>
+                  <p className="text-xl font-bold text-gray-900 truncate">{fmt(demoData.totals.total_amount)}</p>
+                </div>
+              </div>
+            </Card>
+            <Card className="p-5">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
+                  <Clock size={20} className="text-amber-600" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-gray-500">VAT Total</p>
+                  <p className="text-xl font-bold text-amber-600 truncate">{fmt(demoData.totals.total_vat)}</p>
+                </div>
+              </div>
+            </Card>
+            {showDemo && demoTotal && (
+              <Card className="p-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center shrink-0">
+                    <Truck size={20} className="text-indigo-600" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs text-gray-500">Demo Expenses</p>
+                    <p className="text-xl font-bold text-indigo-700 truncate">{fmt(demoTotal.total)}</p>
+                    <p className="text-xs text-gray-400">{demoTotal.count} invoices</p>
+                  </div>
                 </div>
               </Card>
-
-              {/* Expenses by Category */}
-              {demoData.by_category.length > 0 && (() => {
-                const maxCat = demoData.by_category[0]?.total || 1;
-                return (
-                  <Card>
-                    <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                      <h2 className="font-semibold text-gray-900 flex items-center gap-2">
-                        <Truck size={16} className="text-orange-500" /> Expenses by Category
-                      </h2>
-                      <span className="text-xs text-gray-400">{period}</span>
-                    </div>
-                    <div className="divide-y divide-gray-100">
-                      {demoData.by_category.map(cat => (
-                        <div key={`${cat.domain}-${cat.category}`} className="px-5 py-3">
-                          <div className="flex items-center justify-between mb-1.5">
-                            <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
-                              <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: DEMO_CAT_COLORS[cat.category] || '#6b7280' }} />
-                              {cat.category}
-                              <span className={`text-[10px] px-1.5 py-0.5 rounded font-normal ${cat.domain === 'demo' ? 'bg-indigo-50 text-indigo-600' : 'bg-emerald-50 text-emerald-600'}`}>
-                                {cat.domain === 'demo' ? 'Demo' : 'Sales'}
-                              </span>
-                            </span>
-                            <div className="text-right shrink-0 ml-2">
-                              <span className="text-sm font-bold text-gray-900">{fmt(cat.total)}</span>
-                              <span className="text-xs text-gray-400 ml-1">{cat.count} inv</span>
-                            </div>
-                          </div>
-                          <div className="w-full bg-gray-100 rounded-full h-1.5">
-                            <div className="h-1.5 rounded-full" style={{ width: `${(cat.total / maxCat) * 100}%`, background: DEMO_CAT_COLORS[cat.category] || '#6b7280' }} />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </Card>
-                );
-              })()}
-
-              {/* Expenses by Supplier */}
-              <Card>
-                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                  <h2 className="font-semibold text-gray-900 flex items-center gap-2">
-                    <Truck size={16} className="text-red-500" /> Expenses by Supplier
-                  </h2>
-                  <span className="text-xs text-gray-400">{period}</span>
+            )}
+            {showSales && salesTotal && (
+              <Card className="p-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-emerald-100 flex items-center justify-center shrink-0">
+                    <Truck size={20} className="text-emerald-600" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs text-gray-500">Sales Activities</p>
+                    <p className="text-xl font-bold text-emerald-700 truncate">{fmt(salesTotal.total)}</p>
+                    <p className="text-xs text-gray-400">{salesTotal.count} invoices</p>
+                  </div>
                 </div>
-                {demoData.by_supplier.length === 0 ? (
-                  <p className="px-5 py-8 text-center text-sm text-gray-500">No data for this period</p>
-                ) : (
-                  <div className="divide-y divide-gray-100">
-                    {demoData.by_supplier.map((s, i) => {
-                      const maxS = demoData.by_supplier[0]?.total || 1;
+              </Card>
+            )}
+            {compareRevenue && data && (
+              <Card className="p-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center shrink-0">
+                    <TrendingUp size={20} className="text-green-600" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs text-gray-500">Revenue</p>
+                    <p className="text-xl font-bold text-green-700 truncate">{fmt(data.totals.received)}</p>
+                  </div>
+                </div>
+              </Card>
+            )}
+          </div>
+
+          {/* ── Monthly Trend ─────────────────────────────────────────────── */}
+          <ChartSection
+            id="monthlyTrend"
+            title={`Monthly Expenses — ${period}`}
+            icon={<BarChart3 size={16} className="text-indigo-500" />}
+            visible={sections.monthlyTrend}
+            onToggle={() => toggleSection('monthlyTrend')}
+            badge={
+              <div className="flex items-center gap-3 ml-4 text-xs text-gray-500 font-normal">
+                {showDemo && <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-indigo-500 inline-block" /> Demo</span>}
+                {showSales && <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-emerald-500 inline-block" /> Sales</span>}
+                {compareRevenue && <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-green-500 inline-block" /> Revenue</span>}
+              </div>
+            }
+          >
+            {(() => {
+              // Build combined monthly data
+              const months = demoData.monthly;
+              const maxVal = Math.max(
+                ...months.map(m => {
+                  let v = 0;
+                  if (showDemo) v = Math.max(v, m.demo);
+                  if (showSales) v = Math.max(v, m.sales);
+                  if (compareRevenue) {
+                    const rev = revenueByMonth.find(r => r.month === m.month);
+                    if (rev) v = Math.max(v, rev.received);
+                  }
+                  return v;
+                }),
+                1
+              );
+
+              // How many bars per month?
+              const barCount = (showDemo ? 1 : 0) + (showSales ? 1 : 0) + (compareRevenue ? 1 : 0);
+              if (barCount === 0) return <p className="text-center text-sm text-gray-500">Select at least one data series</p>;
+
+              return (
+                <>
+                  <BarChartGrid height={chartH} maxVal={maxVal} fmtFn={fmtAxis}>
+                    {months.map(m => {
+                      const rev = revenueByMonth.find(r => r.month === m.month);
+                      const bars: { val: number; color: string; label: string; textColor: string }[] = [];
+                      if (showDemo) bars.push({ val: m.demo, color: 'bg-indigo-500', label: `Demo: ${fmt(m.demo)}`, textColor: 'text-indigo-600' });
+                      if (showSales) bars.push({ val: m.sales, color: 'bg-emerald-500', label: `Sales: ${fmt(m.sales)}`, textColor: 'text-emerald-600' });
+                      if (compareRevenue) bars.push({ val: rev?.received || 0, color: 'bg-green-500', label: `Revenue: ${fmt(rev?.received || 0)}`, textColor: 'text-green-600' });
+
                       return (
-                        <div key={s.supplier} className="px-5 py-3">
-                          <div className="flex items-center justify-between mb-1.5">
-                            <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
-                              <span className="text-xs text-gray-400 font-normal w-5">{i + 1}.</span>
-                              {s.supplier}
-                              <span className={`text-[10px] px-1.5 py-0.5 rounded font-normal ${s.domain === 'demo' ? 'bg-indigo-50 text-indigo-600' : 'bg-emerald-50 text-emerald-600'}`}>
-                                {s.domain === 'demo' ? 'Demo' : 'Sales'}
-                              </span>
-                              <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded font-normal">{s.category}</span>
-                            </span>
-                            <div className="text-right shrink-0 ml-2">
-                              <span className="text-sm font-bold text-gray-900">{fmt(s.total)}</span>
-                              <span className="text-xs text-gray-400 ml-1">{s.count} inv</span>
+                        <div key={m.month} className="flex-1 h-full flex items-end justify-center gap-px group relative">
+                          {bars.map((b, bi) => (
+                            <div key={bi} className="flex-1 h-full flex flex-col items-center justify-end">
+                              {b.val > 0 && barCount <= 2 && (
+                                <span className={`text-[9px] tabular-nums leading-none mb-0.5 font-medium ${b.textColor}`}>
+                                  {fmtAxis(b.val)}
+                                </span>
+                              )}
+                              <div className={`w-full rounded-t transition-all ${b.val > 0 ? b.color : 'bg-gray-100'}`}
+                                style={{ height: `${b.val > 0 ? Math.max((b.val / maxVal) * barH, 2) : 2}px` }}
+                                title={b.label} />
                             </div>
-                          </div>
-                          <div className="w-full bg-gray-100 rounded-full h-1.5">
-                            <div className="bg-orange-400 h-1.5 rounded-full" style={{ width: `${(s.total / maxS) * 100}%` }} />
+                          ))}
+                          {/* Hover tooltip with all values */}
+                          <div className="absolute -top-8 left-1/2 -translate-x-1/2 hidden group-hover:block z-10 whitespace-nowrap">
+                            <div className="bg-gray-800 text-white text-[10px] px-2 py-1 rounded shadow-lg flex gap-2">
+                              {bars.map((b, bi) => (
+                                <span key={bi}>{b.label.split(':')[0]}: {fmtAxis(b.val)}</span>
+                              ))}
+                            </div>
                           </div>
                         </div>
                       );
                     })}
-                  </div>
-                )}
-              </Card>
-            </>
-          )}
+                  </BarChartGrid>
+                  <MonthLabels months={months.map(m => m.month)} />
 
-          {/* ── TONNAGE VIEW ──────────────────────────────────────────────────── */}
-          {view === 'tonnage' && quantityData && (
-            quantityData.total_tons === 0 ? (
-              <Card className="p-10 text-center">
-                <Scale size={36} className="text-gray-300 mx-auto mb-3" />
-                <p className="text-gray-500 font-medium">No tonnage data for this period</p>
-                <p className="text-xs text-gray-400 mt-1">
-                  Tonnage is read from customer order line items (unit: tons / t / mt).
-                </p>
-              </Card>
-            ) : (
-              <>
-                {/* Summary cards */}
-                <div className="grid grid-cols-3 gap-4">
-                  <Card className="p-5">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center shrink-0">
-                        <Scale size={20} className="text-indigo-600" />
+                  {/* Totals summary below chart */}
+                  <div className="mt-4 pt-4 border-t border-gray-100 flex flex-wrap gap-6 justify-center text-center">
+                    {showDemo && (
+                      <div>
+                        <p className="text-xs text-gray-400 mb-0.5">Demo Total</p>
+                        <p className="text-base font-bold text-indigo-600">{fmt(demoTotal?.total || 0)}</p>
                       </div>
-                      <div className="min-w-0">
-                        <p className="text-xs text-gray-500">Total Tons Sold</p>
-                        <p className="text-xl font-bold text-indigo-600 truncate">{fmtTons(quantityData.total_tons)}</p>
+                    )}
+                    {showSales && (
+                      <div>
+                        <p className="text-xs text-gray-400 mb-0.5">Sales Total</p>
+                        <p className="text-base font-bold text-emerald-600">{fmt(salesTotal?.total || 0)}</p>
                       </div>
-                    </div>
-                  </Card>
-                  <Card className="p-5">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center shrink-0">
-                        <TrendingUp size={20} className="text-green-600" />
+                    )}
+                    {showDemo && showSales && (
+                      <div>
+                        <p className="text-xs text-gray-400 mb-0.5">Combined</p>
+                        <p className="text-base font-bold text-gray-900">{fmt(demoData.totals.total_amount)}</p>
                       </div>
-                      <div className="min-w-0">
-                        <p className="text-xs text-gray-500">Revenue (Period)</p>
-                        <p className="text-xl font-bold text-green-600 truncate">{fmt(data.totals.received)}</p>
-                      </div>
-                    </div>
-                  </Card>
-                  <Card className="p-5">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center shrink-0">
-                        <DollarSign size={20} className="text-gray-600" />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-xs text-gray-500">EUR / Ton</p>
-                        <p className="text-xl font-bold text-gray-900 truncate">
-                          {data.totals.received > 0 && quantityData.total_tons > 0
-                            ? fmt(data.totals.received / quantityData.total_tons)
-                            : '—'}
-                        </p>
-                      </div>
-                    </div>
-                  </Card>
+                    )}
+                    {compareRevenue && data && (
+                      <>
+                        <div className="border-l border-gray-200 pl-6">
+                          <p className="text-xs text-gray-400 mb-0.5">Revenue</p>
+                          <p className="text-base font-bold text-green-600">{fmt(data.totals.received)}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-400 mb-0.5">Net (Rev − Exp)</p>
+                          {(() => {
+                            const net = data.totals.received - demoData.totals.total_amount;
+                            return (
+                              <p className={`text-base font-bold ${net >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {net >= 0 ? '+' : ''}{fmt(net)}
+                              </p>
+                            );
+                          })()}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </>
+              );
+            })()}
+          </ChartSection>
+
+          {/* ── Revenue vs Expenses Comparison (only when compare is on) ── */}
+          {compareRevenue && data && (
+            <ChartSection
+              id="revenueComparison"
+              title={`Revenue vs Supplier Expenses — ${period}`}
+              icon={<DollarSign size={16} className="text-green-600" />}
+              visible={sections.revenueComparison}
+              onToggle={() => toggleSection('revenueComparison')}
+              badge={
+                <div className="flex items-center gap-3 ml-4 text-xs text-gray-500 font-normal">
+                  <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-green-500 inline-block" /> Revenue</span>
+                  <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-orange-400 inline-block" /> Expenses</span>
                 </div>
+              }
+            >
+              {(() => {
+                // Merge revenue + expenses by month
+                const merged = demoData.monthly.map(m => {
+                  const rev = revenueByMonth.find(r => r.month === m.month);
+                  const exp = (showDemo ? m.demo : 0) + (showSales ? m.sales : 0);
+                  return { month: m.month, revenue: rev?.received || 0, expenses: exp };
+                });
+                const maxVal = Math.max(...merged.map(m => Math.max(m.revenue, m.expenses)), 1);
 
-                {/* Monthly tons chart */}
-                <Card>
-                  <div className="px-5 py-4 border-b border-gray-100">
-                    <h2 className="font-semibold text-gray-900 flex items-center gap-2">
-                      <Scale size={16} className="text-indigo-500" /> Tons Sold per Month — {period}
-                    </h2>
-                  </div>
-                  <div className="p-5">
-                    {(() => {
-                      const maxTons = Math.max(...quantityData.monthly.map(m => m.tons), 1);
-                      return (
-                        <>
-                          <div className="flex gap-2">
-                            <div className="flex flex-col justify-between items-end shrink-0 w-14" style={{ height: 165 }}>
-                              {[maxTons, maxTons * 0.75, maxTons * 0.5, maxTons * 0.25, 0].map((v, i) => (
-                                <span key={i} className="text-[10px] text-gray-400 leading-none tabular-nums">
-                                  {fmtTonsAxis(v)}
-                                </span>
-                              ))}
-                            </div>
-                            <div className="flex-1 min-w-0 flex flex-col">
-                              <div className="relative" style={{ height: 165 }}>
-                                {[0, 25, 50, 75, 100].map(pct => (
-                                  <div
-                                    key={pct}
-                                    className={`absolute left-0 right-0 pointer-events-none ${pct === 0 ? 'border-t border-gray-300' : 'border-t border-gray-100'}`}
-                                    style={{ bottom: `${(pct / 100) * 165}px` }}
-                                  />
-                                ))}
-                                <div className="flex items-end gap-1 h-full">
-                                  {quantityData.monthly.map(m => (
-                                    <div key={m.month} className="flex-1 h-full flex flex-col items-center justify-end">
-                                      {m.tons > 0 ? (
-                                        <span className="text-[9px] tabular-nums leading-none mb-0.5 font-medium text-indigo-600">
-                                          {fmtTons(m.tons)}
-                                        </span>
-                                      ) : (
-                                        <span className="text-[9px] leading-none mb-0.5 invisible">0</span>
-                                      )}
-                                      {m.tons > 0 ? (
-                                        <div
-                                          className="w-4/5 bg-indigo-500 rounded-t transition-all"
-                                          style={{ height: `${Math.max((m.tons / maxTons) * 149, 2)}px` }}
-                                          title={fmtTons(m.tons)}
-                                        />
-                                      ) : (
-                                        <div className="w-4/5 bg-gray-100 rounded-t" style={{ height: '2px' }} />
-                                      )}
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                              <div className="flex gap-1 mt-1.5">
-                                {quantityData.monthly.map(m => (
-                                  <div key={m.month} className="flex-1 text-center">
-                                    <span className="text-[10px] text-gray-400">{monthLabel(m.month)}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-                        </>
-                      );
-                    })()}
-                  </div>
-                </Card>
-
-                {/* Tonnage by customer */}
-                {quantityData.by_customer.length > 0 && (
-                  <Card>
-                    <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                      <h2 className="font-semibold text-gray-900 flex items-center gap-2">
-                        <Users size={16} className="text-indigo-600" /> Tonnage by Customer
-                      </h2>
-                      <span className="text-xs text-gray-400">{period}</span>
-                    </div>
-                    <div className="divide-y divide-gray-100">
-                      {quantityData.by_customer.map((c, i) => {
-                        const maxC = quantityData.by_customer[0]?.tons || 1;
-                        const pct = quantityData.total_tons > 0
-                          ? Math.round((c.tons / quantityData.total_tons) * 100)
-                          : 0;
+                return (
+                  <>
+                    <BarChartGrid height={chartH} maxVal={maxVal} fmtFn={fmtAxis}>
+                      {merged.map(m => {
+                        const net = m.revenue - m.expenses;
                         return (
-                          <div key={c.customer_id} className="px-5 py-3">
-                            <div className="flex items-center justify-between mb-1.5">
-                              <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
-                                <span className="text-xs text-gray-400 font-normal w-5">{i + 1}.</span>
-                                {c.customer_name}
-                              </span>
-                              <div className="text-right shrink-0 ml-2">
-                                <span className="text-sm font-bold text-indigo-700">{fmtTons(c.tons)}</span>
-                                <span className="text-xs text-gray-400 ml-1">{pct}%</span>
-                              </div>
+                          <div key={m.month} className="flex-1 h-full flex items-end justify-center gap-px group relative">
+                            <div className="flex-1 h-full flex flex-col items-center justify-end">
+                              {m.revenue > 0 && (
+                                <span className="text-[9px] tabular-nums leading-none mb-0.5 font-medium text-green-600">{fmtAxis(m.revenue)}</span>
+                              )}
+                              <div className={`w-full rounded-t transition-all ${m.revenue > 0 ? 'bg-green-500' : 'bg-gray-100'}`}
+                                style={{ height: `${m.revenue > 0 ? Math.max((m.revenue / maxVal) * barH, 2) : 2}px` }}
+                                title={`Revenue: ${fmt(m.revenue)}`} />
                             </div>
-                            <div className="w-full bg-gray-100 rounded-full h-1.5">
-                              <div className="bg-indigo-500 h-1.5 rounded-full" style={{ width: `${(c.tons / maxC) * 100}%` }} />
+                            <div className="flex-1 h-full flex flex-col items-center justify-end">
+                              {m.expenses > 0 && (
+                                <span className="text-[9px] tabular-nums leading-none mb-0.5 font-medium text-orange-500">{fmtAxis(m.expenses)}</span>
+                              )}
+                              <div className={`w-full rounded-t transition-all ${m.expenses > 0 ? 'bg-orange-400' : 'bg-gray-100'}`}
+                                style={{ height: `${m.expenses > 0 ? Math.max((m.expenses / maxVal) * barH, 2) : 2}px` }}
+                                title={`Expenses: ${fmt(m.expenses)}`} />
+                            </div>
+                            {/* Net hover tooltip */}
+                            <div className="absolute -top-7 left-1/2 -translate-x-1/2 hidden group-hover:block z-10 whitespace-nowrap">
+                              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded shadow ${net >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                Net: {net >= 0 ? '+' : ''}{fmtAxis(net)}
+                              </span>
                             </div>
                           </div>
                         );
                       })}
+                    </BarChartGrid>
+                    <MonthLabels months={merged.map(m => m.month)} />
+
+                    {/* Totals row */}
+                    <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-3 gap-4 text-center">
+                      <div>
+                        <p className="text-xs text-gray-400 mb-0.5">Total Revenue</p>
+                        <p className="text-base font-bold text-green-600">{fmt(data.totals.received)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-400 mb-0.5">Total Expenses</p>
+                        <p className="text-base font-bold text-orange-500">{fmt(demoData.totals.total_amount)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-400 mb-0.5">Net</p>
+                        {(() => {
+                          const net = data.totals.received - demoData.totals.total_amount;
+                          return (
+                            <p className={`text-base font-bold ${net >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {net >= 0 ? '+' : ''}{fmt(net)}
+                            </p>
+                          );
+                        })()}
+                      </div>
                     </div>
-                  </Card>
-                )}
-              </>
-            )
+                  </>
+                );
+              })()}
+            </ChartSection>
           )}
+
+          {/* ── By Category ───────────────────────────────────────────────── */}
+          <ChartSection
+            id="byCategory"
+            title="Expenses by Category"
+            icon={<Truck size={16} className="text-orange-500" />}
+            visible={sections.byCategory}
+            onToggle={() => toggleSection('byCategory')}
+            badge={<span className="text-xs text-gray-400 font-normal ml-2">{period}</span>}
+          >
+            {filteredByCategory.length === 0 ? (
+              <p className="text-center text-sm text-gray-500">No data for this period</p>
+            ) : (() => {
+              const maxCat = filteredByCategory[0]?.total || 1;
+              // Group categories: show domain badge when both domains visible
+              return (
+                <div className="divide-y divide-gray-100">
+                  {filteredByCategory.map(cat => (
+                    <div key={`${cat.domain}-${cat.category}`} className="py-3">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: DEMO_CAT_COLORS[cat.category] || '#6b7280' }} />
+                          {cat.category}
+                          {showDemo && showSales && (
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-normal ${cat.domain === 'demo' ? 'bg-indigo-50 text-indigo-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                              {cat.domain === 'demo' ? 'Demo' : 'Sales'}
+                            </span>
+                          )}
+                        </span>
+                        <div className="text-right shrink-0 ml-2">
+                          <span className="text-sm font-bold text-gray-900">{fmt(cat.total)}</span>
+                          <span className="text-xs text-gray-400 ml-1">{cat.count} inv</span>
+                          {cat.vat_total > 0 && (
+                            <span className="text-xs text-amber-500 ml-1">(+{fmt(cat.vat_total)} VAT)</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="w-full bg-gray-100 rounded-full h-2">
+                        <div className="h-2 rounded-full transition-all" style={{
+                          width: `${(cat.total / maxCat) * 100}%`,
+                          background: DEMO_CAT_COLORS[cat.category] || '#6b7280',
+                        }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </ChartSection>
+
+          {/* ── By Supplier ───────────────────────────────────────────────── */}
+          <ChartSection
+            id="bySupplier"
+            title={`Expenses by Supplier${demoSupplier ? ` (filtered: "${demoSupplier}")` : ''}`}
+            icon={<Truck size={16} className="text-red-500" />}
+            visible={sections.bySupplier}
+            onToggle={() => toggleSection('bySupplier')}
+            badge={<span className="text-xs text-gray-400 font-normal ml-2">{period} · {filteredBySupplier.length} suppliers</span>}
+          >
+            {filteredBySupplier.length === 0 ? (
+              <p className="text-center text-sm text-gray-500">No data for this period</p>
+            ) : (
+              <div className="divide-y divide-gray-100">
+                {filteredBySupplier.map((s, i) => {
+                  const maxS = filteredBySupplier[0]?.total || 1;
+                  return (
+                    <div key={`${s.supplier}-${s.domain}`} className="py-3">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
+                          <span className="text-xs text-gray-400 font-normal w-5">{i + 1}.</span>
+                          {s.supplier}
+                          {showDemo && showSales && (
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-normal ${s.domain === 'demo' ? 'bg-indigo-50 text-indigo-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                              {s.domain === 'demo' ? 'Demo' : 'Sales'}
+                            </span>
+                          )}
+                          <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded font-normal">{s.category}</span>
+                        </span>
+                        <div className="text-right shrink-0 ml-2">
+                          <span className="text-sm font-bold text-gray-900">{fmt(s.total)}</span>
+                          <span className="text-xs text-gray-400 ml-1">{s.count} inv</span>
+                        </div>
+                      </div>
+                      <div className="w-full bg-gray-100 rounded-full h-1.5">
+                        <div className="h-1.5 rounded-full transition-all" style={{
+                          width: `${(s.total / maxS) * 100}%`,
+                          background: DEMO_CAT_COLORS[s.category] || '#6b7280',
+                        }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </ChartSection>
+
+          {/* ── Monthly Summary Table ─────────────────────────────────────── */}
+          <ChartSection
+            id="summaryTable"
+            title="Monthly Summary Table"
+            icon={<BarChart3 size={16} className="text-gray-500" />}
+            visible={sections.summaryTable}
+            onToggle={() => toggleSection('summaryTable')}
+            badge={<span className="text-xs text-gray-400 font-normal ml-2">{period}</span>}
+          >
+            <div className="overflow-x-auto -mx-5">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    <th className="text-left text-xs font-medium text-gray-500 px-4 py-2">Month</th>
+                    {showDemo && <th className="text-right text-xs font-medium text-indigo-600 px-4 py-2">Demo</th>}
+                    {showSales && <th className="text-right text-xs font-medium text-emerald-600 px-4 py-2">Sales</th>}
+                    <th className="text-right text-xs font-medium text-gray-700 px-4 py-2">Total Exp.</th>
+                    <th className="text-right text-xs font-medium text-amber-600 px-4 py-2">VAT</th>
+                    {compareRevenue && <th className="text-right text-xs font-medium text-green-600 px-4 py-2">Revenue</th>}
+                    {compareRevenue && <th className="text-right text-xs font-medium text-gray-700 px-4 py-2">Net</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {demoData.monthly.map(m => {
+                    const totalExp = (showDemo ? m.demo : 0) + (showSales ? m.sales : 0);
+                    const totalVat = (showDemo ? m.demo_vat : 0) + (showSales ? m.sales_vat : 0);
+                    const rev = revenueByMonth.find(r => r.month === m.month);
+                    const net = (rev?.received || 0) - totalExp;
+                    return (
+                      <tr key={m.month} className="border-b border-gray-50 hover:bg-gray-50">
+                        <td className="px-4 py-2 font-medium text-gray-700">{monthLabel(m.month)} {m.month.split('-')[0]}</td>
+                        {showDemo && <td className="px-4 py-2 text-right tabular-nums text-indigo-600">{fmt(m.demo)}</td>}
+                        {showSales && <td className="px-4 py-2 text-right tabular-nums text-emerald-600">{fmt(m.sales)}</td>}
+                        <td className="px-4 py-2 text-right tabular-nums font-semibold">{fmt(totalExp)}</td>
+                        <td className="px-4 py-2 text-right tabular-nums text-amber-600">{fmt(totalVat)}</td>
+                        {compareRevenue && <td className="px-4 py-2 text-right tabular-nums text-green-600">{fmt(rev?.received || 0)}</td>}
+                        {compareRevenue && (
+                          <td className={`px-4 py-2 text-right tabular-nums font-semibold ${net >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            {net >= 0 ? '+' : ''}{fmt(net)}
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t-2 border-gray-200 bg-gray-50 font-bold">
+                    <td className="px-4 py-2 text-gray-700">Total</td>
+                    {showDemo && <td className="px-4 py-2 text-right tabular-nums text-indigo-700">{fmt(demoTotal?.total || 0)}</td>}
+                    {showSales && <td className="px-4 py-2 text-right tabular-nums text-emerald-700">{fmt(salesTotal?.total || 0)}</td>}
+                    <td className="px-4 py-2 text-right tabular-nums">{fmt(demoData.totals.total_amount)}</td>
+                    <td className="px-4 py-2 text-right tabular-nums text-amber-700">{fmt(demoData.totals.total_vat)}</td>
+                    {compareRevenue && data && <td className="px-4 py-2 text-right tabular-nums text-green-700">{fmt(data.totals.received)}</td>}
+                    {compareRevenue && data && (() => {
+                      const net = data.totals.received - demoData.totals.total_amount;
+                      return (
+                        <td className={`px-4 py-2 text-right tabular-nums ${net >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                          {net >= 0 ? '+' : ''}{fmt(net)}
+                        </td>
+                      );
+                    })()}
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </ChartSection>
         </>
-      ) : (
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════════════ */}
+      {/* TONNAGE VIEW                                                      */}
+      {/* ═══════════════════════════════════════════════════════════════════ */}
+      {view === 'tonnage' && quantityData && data && (
+        quantityData.total_tons === 0 ? (
+          <Card className="p-10 text-center">
+            <Scale size={36} className="text-gray-300 mx-auto mb-3" />
+            <p className="text-gray-500 font-medium">No tonnage data for this period</p>
+            <p className="text-xs text-gray-400 mt-1">
+              Tonnage is read from customer order line items (unit: tons / t / mt).
+            </p>
+          </Card>
+        ) : (
+          <>
+            <div className="grid grid-cols-3 gap-4">
+              <Card className="p-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center shrink-0">
+                    <Scale size={20} className="text-indigo-600" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs text-gray-500">Total Tons Sold</p>
+                    <p className="text-xl font-bold text-indigo-600 truncate">{fmtTons(quantityData.total_tons)}</p>
+                  </div>
+                </div>
+              </Card>
+              <Card className="p-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center shrink-0">
+                    <TrendingUp size={20} className="text-green-600" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs text-gray-500">Revenue (Period)</p>
+                    <p className="text-xl font-bold text-green-600 truncate">{fmt(data.totals.received)}</p>
+                  </div>
+                </div>
+              </Card>
+              <Card className="p-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center shrink-0">
+                    <DollarSign size={20} className="text-gray-600" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs text-gray-500">EUR / Ton</p>
+                    <p className="text-xl font-bold text-gray-900 truncate">
+                      {data.totals.received > 0 && quantityData.total_tons > 0
+                        ? fmt(data.totals.received / quantityData.total_tons)
+                        : '—'}
+                    </p>
+                  </div>
+                </div>
+              </Card>
+            </div>
+
+            {/* Monthly tons chart */}
+            <Card>
+              <div className="px-5 py-4 border-b border-gray-100">
+                <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                  <Scale size={16} className="text-indigo-500" /> Tons Sold per Month — {period}
+                </h2>
+              </div>
+              <div className="p-5">
+                {(() => {
+                  const maxTons = Math.max(...quantityData.monthly.map(m => m.tons), 1);
+                  return (
+                    <>
+                      <BarChartGrid height={chartH} maxVal={maxTons} fmtFn={fmtTonsAxis}>
+                        {quantityData.monthly.map(m => (
+                          <div key={m.month} className="flex-1 h-full flex flex-col items-center justify-end">
+                            {m.tons > 0 && (
+                              <span className="text-[9px] tabular-nums leading-none mb-0.5 font-medium text-indigo-600">{fmtTons(m.tons)}</span>
+                            )}
+                            <div className={`w-4/5 rounded-t transition-all ${m.tons > 0 ? 'bg-indigo-500' : 'bg-gray-100'}`}
+                              style={{ height: `${m.tons > 0 ? Math.max((m.tons / maxTons) * barH, 2) : 2}px` }}
+                              title={fmtTons(m.tons)} />
+                          </div>
+                        ))}
+                      </BarChartGrid>
+                      <MonthLabels months={quantityData.monthly.map(m => m.month)} />
+                    </>
+                  );
+                })()}
+              </div>
+            </Card>
+
+            {/* Tonnage by customer */}
+            {quantityData.by_customer.length > 0 && (
+              <Card>
+                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                  <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                    <Users size={16} className="text-indigo-600" /> Tonnage by Customer
+                  </h2>
+                  <span className="text-xs text-gray-400">{period}</span>
+                </div>
+                <div className="divide-y divide-gray-100">
+                  {quantityData.by_customer.map((c, i) => {
+                    const maxC = quantityData.by_customer[0]?.tons || 1;
+                    const pct = quantityData.total_tons > 0 ? Math.round((c.tons / quantityData.total_tons) * 100) : 0;
+                    return (
+                      <div key={c.customer_id} className="px-5 py-3">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
+                            <span className="text-xs text-gray-400 font-normal w-5">{i + 1}.</span>
+                            {c.customer_name}
+                          </span>
+                          <div className="text-right shrink-0 ml-2">
+                            <span className="text-sm font-bold text-indigo-700">{fmtTons(c.tons)}</span>
+                            <span className="text-xs text-gray-400 ml-1">{pct}%</span>
+                          </div>
+                        </div>
+                        <div className="w-full bg-gray-100 rounded-full h-1.5">
+                          <div className="bg-indigo-500 h-1.5 rounded-full" style={{ width: `${(c.tons / maxC) * 100}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+            )}
+          </>
+        )
+      )}
+
+      {/* No data fallback */}
+      {!data && !demoData && !quantityData && (
         <p className="text-center text-gray-500 py-12">Failed to load analytics data.</p>
+      )}
+      </>
       )}
     </div>
   );
