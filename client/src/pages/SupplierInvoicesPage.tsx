@@ -300,7 +300,9 @@ function InvoiceViewer({ invoiceId, onClose }: { invoiceId: number; onClose: () 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl mx-4 max-h-[85vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-xl shadow-2xl flex flex-col overflow-hidden"
+        style={{ resize: 'both', overflow: 'auto', minWidth: 400, minHeight: 300, width: 700, height: '80vh', maxWidth: '95vw', maxHeight: '95vh' }}
+        onClick={e => e.stopPropagation()}>
         {loading ? (
           <div className="flex items-center justify-center py-20"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" /></div>
         ) : !inv ? (
@@ -443,7 +445,11 @@ export default function SupplierInvoicesPage() {
   const fetchAll = useCallback(async () => {
     try {
       if (activeTab === 'summary') {
-        await fetchMonthlySummary();
+        const [, batRes] = await Promise.all([
+          fetchMonthlySummary(),
+          api.get('/demo-expenses/batches'),
+        ]);
+        setBatches(batRes.data);
       } else {
         const params = buildFilterParams();
         const [invRes, sumRes, batRes] = await Promise.all([
@@ -933,7 +939,36 @@ export default function SupplierInvoicesPage() {
               </>
             )}
 
-            {!monthlySummary && (
+            {/* Upload History */}
+            {batches.length > 0 && (
+              <Card className="p-5">
+                <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                  <Clock size={16} className="text-gray-400" />
+                  Upload History
+                </h3>
+                <div className="space-y-2">
+                  {batches.map(b => (
+                    <div key={b.id} className="flex items-center gap-4 bg-gray-50 border border-gray-200 rounded-lg px-4 py-3">
+                      <FileSpreadsheet size={16} className="text-gray-400 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">{b.filename}</p>
+                        <p className="text-xs text-gray-500">
+                          {b.domain === 'demo' ? 'Demo' : 'Sales'} &middot; {monthLabel(b.month)} &middot; {b.invoice_count} invoices &middot; {fmt(b.total_amount)}
+                        </p>
+                      </div>
+                      <span className="text-xs text-gray-400 shrink-0">
+                        {new Date(b.uploaded_at).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                      <button onClick={() => handleDeleteBatch(b)} className="text-gray-400 hover:text-red-500 transition-colors shrink-0" title="Delete this upload">
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
+
+            {!monthlySummary && batches.length === 0 && (
               <Card className="p-12 text-center">
                 <FileSpreadsheet size={48} className="mx-auto text-gray-300 mb-4" />
                 <h3 className="text-lg font-medium text-gray-900 mb-2">No invoice data yet</h3>
@@ -1062,35 +1097,6 @@ export default function SupplierInvoicesPage() {
               </Card>
             )}
 
-            {/* Upload History */}
-            {batches.length > 0 && (
-              <Card className="p-5">
-                <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                  <Clock size={16} className="text-gray-400" />
-                  Upload History
-                </h3>
-                <div className="space-y-2">
-                  {batches.map(b => (
-                    <div key={b.id} className="flex items-center gap-4 bg-gray-50 border border-gray-200 rounded-lg px-4 py-3">
-                      <FileSpreadsheet size={16} className="text-gray-400 shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate">{b.filename}</p>
-                        <p className="text-xs text-gray-500">
-                          {monthLabel(b.month)} &middot; {b.invoice_count} invoices &middot; {fmt(b.total_amount)}
-                        </p>
-                      </div>
-                      <span className="text-xs text-gray-400 shrink-0">
-                        {new Date(b.uploaded_at).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                      <button onClick={() => handleDeleteBatch(b)} className="text-gray-400 hover:text-red-500 transition-colors shrink-0" title="Delete this upload">
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </Card>
-            )}
-
             {/* Empty state */}
             {invoices.length === 0 && (
               <Card className="p-12 text-center">
@@ -1099,7 +1105,7 @@ export default function SupplierInvoicesPage() {
                   No {activeTab === 'demo' ? 'demo expense' : 'sales activity'} invoices yet
                 </h3>
                 <p className="text-sm text-gray-500">
-                  Upload a ZIP file using the button above. Invoices will be automatically classified by supplier.
+                  Upload a ZIP file from the Monthly Summary tab. Invoices will be automatically classified by supplier.
                 </p>
               </Card>
             )}
