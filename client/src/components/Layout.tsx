@@ -5,7 +5,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import {
   LayoutDashboard, Users, Truck, FileText, ShoppingCart,
   LogOut, Menu, Shield, Warehouse, Briefcase, BarChart3,
-  Settings, Sun, Moon, BellRing, Receipt, TrendingUp,
+  Settings, Sun, Moon, BellRing, Receipt,
 } from 'lucide-react';
 import api from '../lib/api';
 
@@ -38,13 +38,12 @@ const navItems = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/customers', icon: Users, label: 'Customers' },
   { to: '/suppliers', icon: Truck, label: 'Suppliers' },
-  { to: '/invoices', icon: FileText, label: 'Invoices' },
+  { to: '/invoices', icon: FileText, label: 'Customer Invoices' },
+  { to: '/supplier-invoices', icon: Receipt, label: 'Supplier Invoices' },
   { to: '/orders', icon: ShoppingCart, label: 'Orders' },
   { to: '/operations', icon: Briefcase, label: 'Operations' },
   { to: '/inventory', icon: Warehouse, label: 'Inventory' },
   { to: '/analytics', icon: BarChart3, label: 'Analytics' },
-  { to: '/demo-expenses', icon: Receipt, label: 'Demo Expenses' },
-  { to: '/sales-activities', icon: TrendingUp, label: 'Sales Activities' },
 ];
 
 export default function Layout() {

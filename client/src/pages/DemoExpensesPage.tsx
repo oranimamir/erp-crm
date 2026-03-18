@@ -12,11 +12,17 @@ import { formatDate } from '../lib/dates';
 // TYPES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const CATEGORIES = [
+const DEMO_CATEGORIES = [
   'Salaries', 'Cars', 'Overhead', 'Consumables', 'Materials',
   'Utilities and Maintenance', 'Feedstock', 'Subcontractors and Consultants',
   'Regulatory', 'Equipment', 'Couriers', 'Other',
 ];
+
+const SALES_CATEGORIES = [
+  'Raw Materials', 'Logistics', 'Blenders', 'Shipping',
+];
+
+const ALL_CATEGORIES = [...DEMO_CATEGORIES, ...SALES_CATEGORIES];
 
 const CAT_COLORS: Record<string, string> = {
   'Salaries': '#6366f1',
@@ -31,6 +37,15 @@ const CAT_COLORS: Record<string, string> = {
   'Equipment': '#0ea5e9',
   'Couriers': '#84cc16',
   'Other': '#6b7280',
+  'Raw Materials': '#059669',
+  'Logistics': '#7c3aed',
+  'Blenders': '#db2777',
+  'Shipping': '#0284c7',
+};
+
+const DOMAIN_COLORS: Record<string, string> = {
+  demo: 'bg-emerald-100 text-emerald-700',
+  sales: 'bg-blue-100 text-blue-700',
 };
 
 const SUPPLIER_COLORS = [
@@ -45,6 +60,7 @@ interface Invoice {
   issue_date: string;
   supplier: string;
   category: string;
+  domain: string;
   amount: number;
   currency: string;
   month: string;
@@ -57,6 +73,7 @@ interface Batch {
   id: number;
   filename: string;
   month: string;
+  domain: string;
   invoice_count: number;
   total_amount: number;
   uploaded_at: string;
@@ -492,6 +509,7 @@ export default function DemoExpensesPage() {
   const [loading, setLoading] = useState(true);
 
   // Filters
+  const [filterDomain, setFilterDomain] = useState<string>('');
   const [filterCategories, setFilterCategories] = useState<string[]>([]);
   const [filterSuppliers, setFilterSuppliers] = useState<string[]>([]);
   const [filterMonth, setFilterMonth] = useState('');
@@ -512,22 +530,25 @@ export default function DemoExpensesPage() {
   // ─── FETCH HELPERS ──────────────────────────────────────────────────────────
 
   const buildFilterParams = useCallback(() => {
-    const params: Record<string, string> = { domain: 'demo' };
+    const params: Record<string, string> = {};
+    if (filterDomain) params.domain = filterDomain;
     if (filterCategories.length > 0) params.categories = filterCategories.join(',');
     if (filterSuppliers.length > 0) params.suppliers = filterSuppliers.join(',');
     if (filterMonth) params.month = filterMonth;
     if (filterDateFrom) params.date_from = filterDateFrom;
     if (filterDateTo) params.date_to = filterDateTo;
     return params;
-  }, [filterCategories, filterSuppliers, filterMonth, filterDateFrom, filterDateTo]);
+  }, [filterDomain, filterCategories, filterSuppliers, filterMonth, filterDateFrom, filterDateTo]);
 
   const fetchAll = useCallback(async () => {
     try {
       const params = buildFilterParams();
+      const batchParams: Record<string, string> = {};
+      if (filterDomain) batchParams.domain = filterDomain;
       const [invRes, sumRes, batRes] = await Promise.all([
         api.get('/demo-expenses/invoices', { params: { ...params, sort_by: sortBy, sort_dir: sortDir } }),
         api.get('/demo-expenses/summary', { params }),
-        api.get('/demo-expenses/batches', { params: { domain: 'demo' } }),
+        api.get('/demo-expenses/batches', { params: batchParams }),
       ]);
       setInvoices(invRes.data);
       setSummary(sumRes.data);
@@ -603,11 +624,17 @@ export default function DemoExpensesPage() {
     return Object.keys(monthMap).sort().map(m => ({ month: m, values: monthMap[m] }));
   }, [summary]);
 
+  const domainCategories = useMemo(() => {
+    if (filterDomain === 'demo') return DEMO_CATEGORIES;
+    if (filterDomain === 'sales') return SALES_CATEGORIES;
+    return ALL_CATEGORIES;
+  }, [filterDomain]);
+
   const allCategories = useMemo(() => {
-    if (!summary) return CATEGORIES;
-    const set = new Set([...CATEGORIES, ...summary.categories]);
+    if (!summary) return domainCategories;
+    const set = new Set([...domainCategories, ...summary.categories]);
     return [...set];
-  }, [summary]);
+  }, [summary, domainCategories]);
 
   const supplierColorMap = useMemo(() => {
     if (!summary) return {};
@@ -616,9 +643,10 @@ export default function DemoExpensesPage() {
 
   const grandTotal = summary?.by_category.reduce((s, c) => s + c.total, 0) || 0;
 
-  const hasFilters = filterCategories.length > 0 || filterSuppliers.length > 0 || filterMonth || filterDateFrom || filterDateTo;
+  const hasFilters = filterDomain || filterCategories.length > 0 || filterSuppliers.length > 0 || filterMonth || filterDateFrom || filterDateTo;
 
   const clearFilters = () => {
+    setFilterDomain('');
     setFilterCategories([]);
     setFilterSuppliers([]);
     setFilterMonth('');
@@ -642,9 +670,11 @@ export default function DemoExpensesPage() {
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Demo Expenses</h1>
+            <h1 className="text-2xl font-bold text-gray-900">
+              {filterDomain === 'demo' ? 'Demo Expenses' : filterDomain === 'sales' ? 'Sales Activities' : 'Supplier Invoices'}
+            </h1>
             <p className="text-sm text-gray-500 mt-1">
-              Track demo-related spending by category and supplier
+              Track spending by domain, category, and supplier
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -665,6 +695,18 @@ export default function DemoExpensesPage() {
         {showFilters && (
           <Card className="p-4">
             <div className="flex flex-wrap items-end gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Domain</label>
+                <select
+                  value={filterDomain}
+                  onChange={e => { setFilterDomain(e.target.value); setFilterCategories([]); }}
+                  className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm"
+                >
+                  <option value="">All Domains</option>
+                  <option value="demo">Demo Expenses</option>
+                  <option value="sales">Sales Activities</option>
+                </select>
+              </div>
               <MultiSelect
                 label="Categories"
                 options={allCategories}
@@ -710,7 +752,7 @@ export default function DemoExpensesPage() {
         {/* Upload note */}
         <Card className="p-4 bg-blue-50 border-blue-200">
           <p className="text-sm text-blue-700">
-            Upload invoice ZIP files via the <a href="/invoices" className="font-medium underline hover:text-blue-900">Invoices tab</a>. Invoices from known Demo suppliers are automatically classified here.
+            Upload invoice ZIP files via the <a href="/invoices" className="font-medium underline hover:text-blue-900">Invoices tab</a>. Invoices are automatically classified into Demo Expenses or Sales Activities based on the supplier.
           </p>
         </Card>
 
@@ -777,6 +819,7 @@ export default function DemoExpensesPage() {
                       { key: 'created_at', label: 'Upload Date' },
                       { key: 'issue_date', label: 'Invoice Date' },
                       { key: 'supplier', label: 'Supplier' },
+                      { key: 'domain', label: 'Domain' },
                       { key: 'category', label: 'Category' },
                       { key: 'amount', label: 'Amount (excl. BTW)' },
                       { key: 'month', label: 'Month' },
@@ -815,6 +858,11 @@ export default function DemoExpensesPage() {
                         <td className="px-4 py-3 text-gray-700">{formatDate(inv.issue_date)}</td>
                         <td className="px-4 py-3 text-gray-700">{inv.supplier}</td>
                         <td className="px-4 py-3">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${DOMAIN_COLORS[inv.domain] || 'bg-gray-100 text-gray-700'}`}>
+                            {inv.domain === 'demo' ? 'Demo' : inv.domain === 'sales' ? 'Sales' : inv.domain}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
                           {acerta ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded text-xs font-medium">
                               {inv.category}
@@ -847,7 +895,7 @@ export default function DemoExpensesPage() {
                 </tbody>
                 <tfoot>
                   <tr className="bg-gray-50 border-t border-gray-200">
-                    <td colSpan={5} className="px-4 py-3 text-sm font-medium text-gray-700 text-right">
+                    <td colSpan={6} className="px-4 py-3 text-sm font-medium text-gray-700 text-right">
                       Total ({invoices.length} invoices)
                     </td>
                     <td className="px-4 py-3 text-sm font-bold text-gray-900 tabular-nums">
@@ -875,6 +923,9 @@ export default function DemoExpensesPage() {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-900 truncate">{b.filename}</p>
                     <p className="text-xs text-gray-500">
+                      <span className={`inline-flex items-center px-1.5 py-0 rounded text-[10px] font-medium mr-1 ${DOMAIN_COLORS[b.domain] || ''}`}>
+                        {b.domain === 'demo' ? 'Demo' : b.domain === 'sales' ? 'Sales' : b.domain}
+                      </span>
                       {monthLabel(b.month)} &middot; {b.invoice_count} invoices &middot; {fmt(b.total_amount)}
                     </p>
                   </div>
@@ -898,9 +949,9 @@ export default function DemoExpensesPage() {
         {invoices.length === 0 && !loading && (
           <Card className="p-12 text-center">
             <FileSpreadsheet size={48} className="mx-auto text-gray-300 mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">No demo invoices yet</h3>
+            <h3 className="text-lg font-medium text-gray-900 mb-2">No invoices yet</h3>
             <p className="text-sm text-gray-500">
-              Upload a ZIP file via the <a href="/invoices" className="text-primary-600 underline hover:text-primary-800">Invoices tab</a>. Invoices from known Demo suppliers will appear here automatically.
+              Upload a ZIP file via the <a href="/invoices" className="text-primary-600 underline hover:text-primary-800">Invoices tab</a>. Invoices will be automatically classified by domain and category.
             </p>
           </Card>
         )}

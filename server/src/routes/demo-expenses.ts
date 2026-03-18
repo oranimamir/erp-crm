@@ -171,6 +171,17 @@ function isAcerta(supplierName: string): boolean {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// OWN-COMPANY DETECTION (used by both UBL and PDF parsers)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const OWN_COMPANY_PATTERNS = ['triplew', '3plw', 'triple w', 'triple-w'];
+
+function isOwnCompany(name: string): boolean {
+  const lower = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return OWN_COMPANY_PATTERNS.some(p => lower.includes(p.replace(/[^a-z0-9]/g, '')));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // UBL/PEPPOL XML PARSER
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -191,15 +202,22 @@ function parseUBLInvoice(xmlString: string) {
   const issueDate = root['IssueDate'] || '';
   const currency = root['DocumentCurrencyCode'] || 'EUR';
 
-  // Supplier name
-  const supplier = root['AccountingSupplierParty']?.['Party'];
-  let supplierName = '';
-  if (supplier) {
-    supplierName = supplier['PartyName']?.['Name']
-      || supplier['PartyLegalEntity']?.['RegistrationName']
+  // Supplier name — extract both parties, use the one that isn't our own company
+  function extractPartyName(party: any): string {
+    if (!party) return '';
+    let name = party['PartyName']?.['Name']
+      || party['PartyLegalEntity']?.['RegistrationName']
       || '';
+    if (typeof name === 'object' && name['#text']) name = name['#text'];
+    return String(name).trim();
   }
-  if (typeof supplierName === 'object' && supplierName['#text']) supplierName = supplierName['#text'];
+  const supplierParty = root['AccountingSupplierParty']?.['Party'];
+  const customerParty = root['AccountingCustomerParty']?.['Party'];
+  let supplierName = extractPartyName(supplierParty);
+  // If the "supplier" is actually our own company, the real counterparty is the customer
+  if (isOwnCompany(supplierName) && customerParty) {
+    supplierName = extractPartyName(customerParty) || supplierName;
+  }
 
   // Tax-exclusive amount
   const lmt = root['LegalMonetaryTotal'];
@@ -272,6 +290,53 @@ function parseUBLInvoice(xmlString: string) {
 // PDF INVOICE PARSER — extracts data from PDF text
 // ═══════════════════════════════════════════════════════════════════════════════
 
+function parseEuropeanNumber(raw: string): number {
+  let numStr = raw.replace(/[€EUR\s]/g, '').trim();
+  if (!numStr) return 0;
+  if (numStr.includes(',') && numStr.includes('.')) {
+    if (numStr.lastIndexOf(',') > numStr.lastIndexOf('.')) {
+      numStr = numStr.replace(/\./g, '').replace(',', '.');
+    } else {
+      numStr = numStr.replace(/,/g, '');
+    }
+  } else if (numStr.includes(',')) {
+    const parts = numStr.split(',');
+    if (parts[parts.length - 1].length <= 2) {
+      numStr = numStr.replace(/,/g, '.'); // decimal comma
+    } else {
+      numStr = numStr.replace(/,/g, ''); // thousands comma
+    }
+  }
+  const n = parseFloat(numStr);
+  return isNaN(n) ? 0 : n;
+}
+
+/** Reject numbers that look like date fragments (YYYYMMDD, YYYYMM, or year-like) */
+function looksLikeDateNumber(raw: string, parsed: number): boolean {
+  const stripped = raw.replace(/[€EUR\s.,]/g, '');
+  // Exactly 8 digits starting with 20XX → YYYYMMDD
+  if (/^20\d{6}$/.test(stripped)) return true;
+  // Exactly 6 digits starting with 20XX → YYYYMM
+  if (/^20\d{4}$/.test(stripped)) return true;
+  // Plain year 2020-2035 with no decimal separators
+  if (parsed >= 2020 && parsed <= 2035 && !raw.includes(',') && !raw.includes('.')) return true;
+  // Unreasonably large: > €999,999 for a single expense invoice
+  if (parsed > 999999) return true;
+  return false;
+}
+
+function parseDateToISO(d: string): string | null {
+  // DD/MM/YYYY or DD.MM.YYYY
+  const eu = d.match(/^(\d{1,2})[\/.](\d{1,2})[\/.](\d{4})$/);
+  if (eu) return `${eu[3]}-${eu[2].padStart(2, '0')}-${eu[1].padStart(2, '0')}`;
+  // DD-MM-YYYY
+  const dm = d.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (dm) return `${dm[3]}-${dm[2].padStart(2, '0')}-${dm[1].padStart(2, '0')}`;
+  // Already YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+  return null;
+}
+
 async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
   let text = '';
   try {
@@ -279,157 +344,205 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
     text = result.text || '';
   } catch (err) {
     console.error(`[pdf-parse] Failed to parse ${pdfFilename}:`, err);
-    return null;
   }
 
-  if (!text.trim()) return null;
+  // Even if text extraction fails, still create an entry from filename
+  const fileBaseName = pdfFilename.replace(/\.pdf$/i, '').split('/').pop() || pdfFilename;
+  if (!text.trim()) {
+    return {
+      invoiceId: fileBaseName,
+      issueDate: new Date().toISOString().substring(0, 10),
+      supplierName: 'Unknown',
+      amount: 0,
+      currency: 'EUR',
+      lineItems: [] as { description: string; amount: number }[],
+      embeddedPdf: null as string | null,
+      pdfFilename,
+    };
+  }
 
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
 
-  // Extract invoice ID — look for patterns like "Invoice 12345", "Factuurnummer: F2026-001", "Invoice Number: INV-123"
+  // ─── INVOICE ID ──────────────────────────────────────────────────────
+  // Require a label followed by separator then the actual value
   let invoiceId = '';
   const invIdPatterns = [
-    /(?:invoice\s*(?:no|nr|number|#|id)?[\s.:]*)\s*([A-Z0-9][\w\-\/]+)/i,
-    /(?:factu(?:ur|re)\s*(?:no|nr|nummer)?[\s.:]*)\s*([A-Z0-9][\w\-\/]+)/i,
-    /(?:credit\s*(?:note|nota)\s*(?:no|nr)?[\s.:]*)\s*([A-Z0-9][\w\-\/]+)/i,
-    /(?:document\s*(?:no|nr|number)?[\s.:]*)\s*([A-Z0-9][\w\-\/]+)/i,
-    /\b(INV[\-\/]?\d[\w\-]*)\b/i,
-    /\b(F\d{4}[\-\/]\d+)\b/i,
-    /\b(CR[\-\/]?\d[\w\-]*)\b/i,
+    // "Factuurnummer: F2026-001", "Factuur nr: 123", "Factuurnr.: ABC-123"
+    /(?:factu(?:ur|re)\s*(?:no|nr|nummer|num)?\.?)[\s.:]+([A-Z0-9][\w\-\/\.]+)/i,
+    // "Invoice Number: INV-123", "Invoice nr.: 456", "Invoice: ABC/2026"
+    /(?:invoice\s*(?:no|nr|number|num|#|id)\.?)[\s.:]+([A-Z0-9][\w\-\/\.]+)/i,
+    // "Credit note nr: CN-123"
+    /(?:credit\s*(?:note|nota)\s*(?:no|nr|num)?\.?)[\s.:]+([A-Z0-9][\w\-\/\.]+)/i,
+    // "Document nr: 12345"
+    /(?:document\s*(?:no|nr|number|num)?\.?)[\s.:]+([A-Z0-9][\w\-\/\.]+)/i,
+    // "Bestellnummer: PO-123"  "Bestelnummer: 123"
+    /(?:bestell?\s*(?:nummer|nr)\.?)[\s.:]+([A-Z0-9][\w\-\/\.]+)/i,
+    // Standalone invoice-like codes: INV-2026-001, F2026/001, VF20260001
+    /\b((?:INV|VF|F|CR|CN)[\-\/]?\d{2,}[\w\-\/]*)\b/,
   ];
   for (const pat of invIdPatterns) {
     const m = text.match(pat);
-    if (m) { invoiceId = m[1]; break; }
+    if (m && m[1].length >= 2) {
+      // Reject if the "ID" is just a common label word
+      const val = m[1].trim();
+      if (/^(invoice|factuur|facture|credit|debiteur|datum|date|nummer|number|btw|tva|page|total)$/i.test(val)) continue;
+      // Reject if it looks like a date
+      if (/^\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}$/.test(val)) continue;
+      invoiceId = val;
+      break;
+    }
   }
   if (!invoiceId) {
-    // Fallback: use filename without extension
-    invoiceId = pdfFilename.replace(/\.pdf$/i, '').split('/').pop() || pdfFilename;
+    invoiceId = fileBaseName;
   }
 
-  // Extract date — look for DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD, DD.MM.YYYY
+  // ─── DATE ────────────────────────────────────────────────────────────
   let issueDate = '';
-  const datePatterns = [
-    // Near "date" keyword
-    /(?:invoice\s*date|datum|factuurdatum|date\s*de\s*facture|date)[\s.:]*(\d{1,2}[\/.\\-]\d{1,2}[\/.\\-]\d{2,4})/i,
-    /(?:invoice\s*date|datum|factuurdatum|date)[\s.:]*(\d{4}[\-\/]\d{1,2}[\-\/]\d{1,2})/i,
-    // Any date in the first portion of text
-    /(\d{1,2}[\/.]\d{1,2}[\/.]\d{4})/,
-    /(\d{4}-\d{2}-\d{2})/,
+  // Try near date-related keywords first
+  const dateKwPatterns = [
+    /(?:invoice\s*date|factuurdatum|datum\s*factuur|date\s*de\s*facture|datum|date)[\s.:]*(\d{1,2}[\/.]\d{1,2}[\/.]\d{4})/i,
+    /(?:invoice\s*date|factuurdatum|datum|date)[\s.:]*(\d{4}[\-\/]\d{1,2}[\-\/]\d{1,2})/i,
+    /(?:invoice\s*date|factuurdatum|datum|date)[\s.:]*(\d{1,2}-\d{1,2}-\d{4})/i,
   ];
-  for (const pat of datePatterns) {
+  for (const pat of dateKwPatterns) {
     const m = text.match(pat);
     if (m) {
-      let d = m[1];
-      // Convert DD/MM/YYYY or DD.MM.YYYY to YYYY-MM-DD
-      const euMatch = d.match(/^(\d{1,2})[\/.](\d{1,2})[\/.](\d{4})$/);
-      if (euMatch) {
-        d = `${euMatch[3]}-${euMatch[2].padStart(2, '0')}-${euMatch[1].padStart(2, '0')}`;
-      }
-      const dmMatch = d.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
-      if (dmMatch) {
-        d = `${dmMatch[3]}-${dmMatch[2].padStart(2, '0')}-${dmMatch[1].padStart(2, '0')}`;
-      }
-      if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
-        issueDate = d;
+      const d = parseDateToISO(m[1]);
+      if (d) { issueDate = d; break; }
+    }
+  }
+  // Fallback: any date in the first ~30 lines
+  if (!issueDate) {
+    const topText = lines.slice(0, 30).join('\n');
+    const anyDate = topText.match(/(\d{1,2}[\/.]\d{1,2}[\/.]\d{4})/);
+    if (anyDate) {
+      const d = parseDateToISO(anyDate[1]);
+      if (d) issueDate = d;
+    }
+    if (!issueDate) {
+      const isoDate = topText.match(/(\d{4}-\d{2}-\d{2})/);
+      if (isoDate) issueDate = isoDate[1];
+    }
+  }
+  if (!issueDate) {
+    issueDate = new Date().toISOString().substring(0, 10);
+  }
+
+  // ─── SUPPLIER NAME ──────────────────────────────────────────────────
+  // Strategy: find ALL company names (with legal suffixes), exclude own company, take the first non-own one
+  let supplierName = '';
+  const companySuffixRegex = /^(.+?)\s*(?:BV|NV|BVBA|SA\/NV|SA|SRL|GmbH|B\.V\.|N\.V\.|S\.A\.|VOF|CV|CVBA|AG|Ltd|LLC|Inc)\b/im;
+
+  // Collect all company names found
+  const companyNames: string[] = [];
+  const companyGlobalRegex = /(.{2,60}?)\s*\b(?:BV|NV|BVBA|SA\/NV|SRL|GmbH|B\.V\.|N\.V\.|S\.A\.|VOF|CV|CVBA|AG|Ltd|LLC|Inc)\b/gi;
+  let cm;
+  while ((cm = companyGlobalRegex.exec(text)) !== null) {
+    const name = cm[0].trim();
+    // Clean up: remove leading punctuation / numbers
+    const cleaned = name.replace(/^[\d\s.,:;()\-]+/, '').trim();
+    if (cleaned.length > 2) companyNames.push(cleaned);
+  }
+
+  // Pick the first company that is NOT our own company
+  for (const name of companyNames) {
+    if (!isOwnCompany(name)) {
+      supplierName = name;
+      break;
+    }
+  }
+
+  // If all found companies are own company, try "From" / "Van" / "Leverancier" label approach
+  if (!supplierName) {
+    const fromPatterns = [
+      /(?:van|from|leverancier|supplier|fournisseur)[\s.:]+(.{3,80})/i,
+    ];
+    for (const pat of fromPatterns) {
+      const m = text.match(pat);
+      if (m && !isOwnCompany(m[1].trim())) {
+        supplierName = m[1].split('\n')[0].trim();
         break;
       }
     }
   }
-  if (!issueDate) {
-    // Default to today
-    issueDate = new Date().toISOString().substring(0, 10);
-  }
 
-  // Extract supplier name — typically first meaningful line or near "from" / company name at top
-  let supplierName = '';
-  // Look for company patterns: lines with BV, NV, BVBA, SA, SRL, GmbH, etc.
-  const companyPatterns = /^(.+?)\s*(?:BV|NV|BVBA|SA\/NV|SA|SRL|GmbH|B\.V\.|N\.V\.|S\.A\.|VOF|CV|CVBA)\b/im;
-  const companyMatch = text.match(companyPatterns);
-  if (companyMatch) {
-    supplierName = companyMatch[0].trim();
-  } else {
-    // Take the first non-trivial line that looks like a company name (not a date, not a number)
-    for (const line of lines.slice(0, 15)) {
+  // Last resort: first non-trivial, non-own-company line
+  if (!supplierName) {
+    for (const line of lines.slice(0, 20)) {
       if (line.length < 3 || line.length > 100) continue;
-      if (/^\d+[\/.\\-]/.test(line)) continue; // date
-      if (/^(page|pagina|invoice|factu|credit|btw|tva|date|datum|total|amount|€|eur)/i.test(line)) continue;
-      if (/^\d+[,.]?\d*$/.test(line)) continue; // just a number
+      if (/^\d+[\/.\\-]/.test(line)) continue;
+      if (/^(page|pagina|invoice|factu|credit|btw|tva|date|datum|total|amount|€|eur|debiteur|bestelling|bestel|order|iban|bic|rek)/i.test(line)) continue;
+      if (/^\d+[,.]?\d*$/.test(line)) continue;
+      if (isOwnCompany(line)) continue;
       supplierName = line;
       break;
     }
   }
 
-  // Extract amount — look for total excl. BTW/VAT patterns
+  // ─── AMOUNT (excl. BTW/VAT) ─────────────────────────────────────────
   let amount = 0;
   const amountPatterns = [
     // Tax exclusive totals
-    /(?:total\s*(?:excl|hors|zonder|ex)\.?\s*(?:btw|tva|vat)?|subtotal|sous[\s-]*total|netto|taxable\s*amount|maatstaf\s*van\s*heffing)[\s.:€]*\s*([\d.,]+(?:\s*(?:€|EUR))?)/i,
+    /(?:total\s*(?:excl|hors|zonder|ex)\.?\s*(?:btw|tva|vat)?|subtotal|sous[\s-]*total|netto\s*bedrag|netto|taxable\s*amount|maatstaf\s*van\s*heffing)[\s.:€]*\s*([\d.,]+)/i,
     /(?:totaal\s*(?:excl|exclusief|zonder)\.?\s*(?:btw|tva)?|bedrag\s*excl)[\s.:€]*\s*([\d.,]+)/i,
-    // "Total HT" (French)
     /(?:total\s*h\.?t\.?)[\s.:€]*\s*([\d.,]+)/i,
-    // Generic total (fallback)
-    /(?:total|totaal|totale|montant)[\s.:€]*\s*([\d.,]+(?:\s*(?:€|EUR))?)/i,
-    // Amount with € symbol
-    /€\s*([\d.,]+)/,
+    // Generic total — but avoid "total pages", "total items"
+    /(?:total|totaal|totale|montant)\s*(?:€|eur)?[\s.:]*\s*([\d.,]+)/i,
   ];
   for (const pat of amountPatterns) {
     const m = text.match(pat);
     if (m) {
-      // Parse European number format: 1.234,56 or 1234,56 or 1,234.56
-      let numStr = m[1].replace(/[€EUR\s]/g, '').trim();
-      // If has both . and , determine format
-      if (numStr.includes(',') && numStr.includes('.')) {
-        if (numStr.lastIndexOf(',') > numStr.lastIndexOf('.')) {
-          // European: 1.234,56
-          numStr = numStr.replace(/\./g, '').replace(',', '.');
-        } else {
-          // US: 1,234.56
-          numStr = numStr.replace(/,/g, '');
-        }
-      } else if (numStr.includes(',')) {
-        // Could be European decimal or thousands
-        const parts = numStr.split(',');
-        if (parts[parts.length - 1].length === 2) {
-          // Likely decimal: 1234,56
-          numStr = numStr.replace(',', '.');
-        } else {
-          // Likely thousands: 1,234
-          numStr = numStr.replace(/,/g, '');
-        }
-      }
-      const parsed = parseFloat(numStr);
-      if (!isNaN(parsed) && parsed > 0) {
+      const parsed = parseEuropeanNumber(m[1]);
+      if (parsed > 0 && !looksLikeDateNumber(m[1], parsed)) {
         amount = parsed;
         break;
       }
     }
   }
 
-  // If no amount found via patterns, look for the largest number that could be a total
+  // Fallback: find €-prefixed amounts, take the largest reasonable one
+  if (amount === 0) {
+    const euroAmounts: number[] = [];
+    const euroPattern = /€\s*([\d.,]+)/g;
+    let em;
+    while ((em = euroPattern.exec(text)) !== null) {
+      const n = parseEuropeanNumber(em[1]);
+      if (n > 1 && !looksLikeDateNumber(em[1], n)) {
+        euroAmounts.push(n);
+      }
+    }
+    if (euroAmounts.length > 0) {
+      // The largest € amount is likely the total
+      amount = Math.max(...euroAmounts);
+    }
+  }
+
+  // Second fallback: look for the largest number with decimals that isn't a year
   if (amount === 0) {
     const allAmounts: number[] = [];
-    const numPattern = /€?\s*([\d]+[.,]\d{2})\b/g;
-    let match;
-    while ((match = numPattern.exec(text)) !== null) {
-      let ns = match[1].replace(/\./g, '').replace(',', '.');
-      if (ns.includes('.') === false) ns = match[1].replace(',', '.');
-      const n = parseFloat(ns);
-      if (!isNaN(n) && n > 0) allAmounts.push(n);
+    const numPattern = /([\d]+[.,]\d{2})\b/g;
+    let nm;
+    while ((nm = numPattern.exec(text)) !== null) {
+      const n = parseEuropeanNumber(nm[1]);
+      if (n > 1 && !looksLikeDateNumber(nm[1], n)) {
+        allAmounts.push(n);
+      }
     }
     if (allAmounts.length > 0) {
-      // Use the largest amount as the likely total
       amount = Math.max(...allAmounts);
     }
   }
 
+  console.log(`[pdf-parse] ${pdfFilename}: id="${invoiceId}" supplier="${supplierName}" date=${issueDate} amount=${amount}`);
+
   return {
     invoiceId,
     issueDate,
-    supplierName: supplierName || pdfFilename.replace(/\.pdf$/i, '').split('/').pop() || 'Unknown',
+    supplierName: supplierName || fileBaseName,
     amount,
     currency: 'EUR',
     lineItems: [] as { description: string; amount: number }[],
-    embeddedPdf: null as string | null, // will be set by caller
+    embeddedPdf: null as string | null,
     pdfFilename,
   };
 }
@@ -460,7 +573,7 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       }
     }
 
-    console.log(`[upload-zip] ZIP "${filename}" contains ${allFileNames.length} files:`, allFileNames.slice(0, 20));
+    console.log(`[upload-zip] ZIP "${filename}" contains ${allFileNames.length} files:`, allFileNames.slice(0, 30));
 
     // If no XML files found, check if there are files with UBL content but different extensions
     if (xmlFiles.length === 0) {
@@ -531,18 +644,22 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     }
 
     // --- Deduplicate within the ZIP itself (by invoiceId, or by supplier+amount+date) ---
+    // Only dedup by combo when amount > 0 (don't lump together unparsed invoices)
     const seenKeys = new Set<string>();
     const deduped: typeof parsed = [];
     let inZipDuplicateCount = 0;
     for (const inv of parsed) {
       const key1 = inv.invoiceId ? `id:${inv.invoiceId}` : null;
-      const key2 = `combo:${inv.supplierName.toLowerCase()}|${inv.amount}|${inv.issueDate}`;
-      if ((key1 && seenKeys.has(key1)) || seenKeys.has(key2)) {
+      const key2 = inv.amount > 0
+        ? `combo:${inv.supplierName.toLowerCase()}|${inv.amount}|${inv.issueDate}`
+        : null;
+      if ((key1 && seenKeys.has(key1)) || (key2 && seenKeys.has(key2))) {
+        console.log(`[upload-zip] Dedup skipping: "${inv.supplierName}" ${inv.invoiceId} €${inv.amount} (key1=${key1}, key2=${key2})`);
         inZipDuplicateCount++;
         continue;
       }
       if (key1) seenKeys.add(key1);
-      seenKeys.add(key2);
+      if (key2) seenKeys.add(key2);
       deduped.push(inv);
     }
     if (inZipDuplicateCount > 0) {
@@ -571,9 +688,9 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       };
     });
 
-    // Find unknown suppliers (no domain match)
+    // Find unknown suppliers (no domain match), excluding own-company names
     const unknownSuppliers = classified
-      .filter(inv => !inv.domain)
+      .filter(inv => !inv.domain && !isOwnCompany(inv.supplierName))
       .map(inv => ({ supplier: inv.supplierName, amount: inv.amount, date: inv.issueDate, invoiceId: inv.invoiceId }));
     const uniqueUnknowns = [...new Map(unknownSuppliers.map(u => [u.supplier.toLowerCase(), u])).values()];
 
@@ -608,7 +725,12 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     const existingSalesBatch = db.prepare("SELECT id, filename FROM demo_upload_batches WHERE month = ? AND domain = 'sales'").get(inferredMonth) as any;
 
     // Auto-exclude duplicates: only return non-duplicate invoices for import
-    const newInvoices = classified.filter(inv => !duplicateInvoiceIds.has(inv.invoiceId));
+    // Also exclude invoices where supplier is still own company (outgoing invoices with no counterparty found)
+    const newInvoices = classified.filter(inv =>
+      !duplicateInvoiceIds.has(inv.invoiceId) && !isOwnCompany(inv.supplierName)
+    );
+
+    console.log(`[upload-zip] Summary: ${allFileNames.length} files → ${xmlFiles.length} XML + ${pdfFiles.size} PDF → ${parsed.length} parsed → ${deduped.length} deduped → ${classified.length} classified → ${newInvoices.length} new (${duplicates.length} DB duplicates, ${inZipDuplicateCount} in-ZIP duplicates)`);
 
     res.json({
       parsed: newInvoices.map(inv => ({
@@ -827,7 +949,7 @@ router.get('/invoices', (req: Request, res: Response) => {
     if (date_from) { sql += ' AND issue_date >= ?'; params.push(date_from); }
     if (date_to) { sql += ' AND issue_date <= ?'; params.push(date_to); }
 
-    const validSortCols = ['invoice_id', 'issue_date', 'supplier', 'category', 'amount', 'month', 'created_at'];
+    const validSortCols = ['invoice_id', 'issue_date', 'supplier', 'category', 'domain', 'amount', 'month', 'created_at'];
     const sortCol = validSortCols.includes(sort_by as string) ? sort_by : 'issue_date';
     const sortDirection = (sort_dir as string)?.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
     sql += ` ORDER BY ${sortCol} ${sortDirection}`;

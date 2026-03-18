@@ -4,13 +4,11 @@ import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
-import Badge from '../components/ui/Badge';
-import StatusBadge from '../components/ui/StatusBadge';
 import SearchBar from '../components/ui/SearchBar';
 import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
-import { Plus, FileText, Eye, Trash2, FileDown, ChevronUp, ChevronDown, FileSpreadsheet, Landmark, Download, X, Loader2, Filter, CalendarDays, Upload } from 'lucide-react';
+import { Plus, FileText, Eye, Trash2, FileDown, ChevronUp, ChevronDown, FileSpreadsheet, Landmark, Download, X, Loader2, Filter, CalendarDays } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
 
@@ -33,16 +31,6 @@ const statusOptions = [
   { value: 'overdue', label: 'Overdue' },
   { value: 'cancelled', label: 'Cancelled' },
 ];
-
-const typeOptions = [
-  { value: 'customer', label: 'Customer' },
-  { value: 'supplier', label: 'Supplier' },
-];
-
-const typeColors: Record<string, 'blue' | 'purple'> = {
-  customer: 'blue',
-  supplier: 'purple',
-};
 
 const currentYear = new Date().getFullYear();
 const yearOptions = Array.from({ length: currentYear - 2019 }, (_, i) => currentYear - i);
@@ -113,7 +101,6 @@ export default function InvoicesPage() {
   const [totalPages, setTotalPages] = useState(1);
   const [search, setSearch] = useState(saved.search || '');
   const [statusFilter, setStatusFilter] = useState<string[]>(saved.statusFilter || []);
-  const [typeFilter, setTypeFilter] = useState(saved.typeFilter || '');
   const [yearFilter,  setYearFilter]  = useState(saved.yearFilter || '');
   const [monthFilter, setMonthFilter] = useState<string[]>(saved.monthFilter || []);
   const [wireFilter,  setWireFilter]  = useState(saved.wireFilter || '');
@@ -124,22 +111,10 @@ export default function InvoicesPage() {
   const [loading, setLoading] = useState(true);
   const [deleteId, setDeleteId] = useState<number | null>(null);
 
-  // ZIP upload state
-  const zipInputRef = useRef<HTMLInputElement>(null);
-  const [zipUploading, setZipUploading] = useState(false);
-  const [pendingUpload, setPendingUpload] = useState<any>(null);
-  const [showUnknownModal, setShowUnknownModal] = useState(false);
-  const [showMonthConflict, setShowMonthConflict] = useState(false);
-  const [unknownAssignments, setUnknownAssignments] = useState<Record<string, { domain: string; category: string; remember: boolean }>>({});
-  const [skipIds, setSkipIds] = useState<string[]>([]);
-
-  const DEMO_CATS = ['Salaries','Cars','Overhead','Consumables','Materials','Utilities and Maintenance','Feedstock','Subcontractors and Consultants','Regulatory','Equipment','Couriers','Other'];
-  const SALES_CATS = ['Raw Materials','Logistics','Blenders','Shipping'];
-
   // Persist filters to sessionStorage
   useEffect(() => {
-    saveFilters({ search, statusFilter, typeFilter, yearFilter, monthFilter, wireFilter, dateFrom, dateTo });
-  }, [search, statusFilter, typeFilter, yearFilter, monthFilter, wireFilter, dateFrom, dateTo]);
+    saveFilters({ search, statusFilter, yearFilter, monthFilter, wireFilter, dateFrom, dateTo });
+  }, [search, statusFilter, yearFilter, monthFilter, wireFilter, dateFrom, dateTo]);
 
   // Preview modal
   const [previewItem, setPreviewItem] = useState<{ fileName: string; filePath: string; subfolder: string } | null>(null);
@@ -210,7 +185,7 @@ export default function InvoicesPage() {
         limit: 20,
         search,
         status: statusFilter.length ? statusFilter.join(',') : undefined,
-        type: typeFilter || undefined,
+        type: 'customer',
         year:  yearFilter  || undefined,
         month: monthFilter.length ? monthFilter.join(',') : undefined,
         wire:  wireFilter  || undefined,
@@ -228,7 +203,7 @@ export default function InvoicesPage() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchInvoices(); }, [page, search, statusFilter, typeFilter, yearFilter, monthFilter, wireFilter, dateFrom, dateTo, sortBy, sortDir]);
+  useEffect(() => { fetchInvoices(); }, [page, search, statusFilter, yearFilter, monthFilter, wireFilter, dateFrom, dateTo, sortBy, sortDir]);
 
   const handleDelete = async () => {
     if (!deleteId) return;
@@ -255,7 +230,7 @@ export default function InvoicesPage() {
   const formatDateOrDash = (dateStr: string) => formatDate(dateStr) || '-';
 
   const handleExport = async () => {
-    const res = await api.get('/invoices', { params: { page: 1, limit: 9999, search, status: statusFilter.length ? statusFilter.join(',') : undefined, type: typeFilter || undefined, year: yearFilter || undefined, month: monthFilter.length ? monthFilter.join(',') : undefined, date_from: dateFrom || undefined, date_to: dateTo || undefined } });
+    const res = await api.get('/invoices', { params: { page: 1, limit: 9999, search, status: statusFilter.length ? statusFilter.join(',') : undefined, type: 'customer', year: yearFilter || undefined, month: monthFilter.length ? monthFilter.join(',') : undefined, date_from: dateFrom || undefined, date_to: dateTo || undefined } });
     const rows = res.data.data.map((inv: any) => [
       inv.invoice_number,
       inv.customer_name || inv.supplier_name || '',
@@ -270,106 +245,6 @@ export default function InvoicesPage() {
     downloadExcel('invoices', ['Invoice #', 'Customer / Supplier', 'Type', 'Amount', 'Currency', 'EUR Amount', 'Status', 'Invoice Date', 'Due Date'], rows);
   };
 
-  // ─── ZIP UPLOAD HANDLERS ────────────────────────────────────────────────
-  const handleZipUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = '';
-    if (!file.name.toLowerCase().endsWith('.zip')) { addToast('Please upload a .zip file', 'error'); return; }
-
-    setZipUploading(true);
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const res = await api.post('/demo-expenses/upload-zip', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
-      setPendingUpload(res.data);
-
-      // Notify about auto-skipped duplicates
-      if (res.data.duplicatesSkipped > 0) {
-        addToast(`${res.data.duplicatesSkipped} duplicate invoice(s) already in the system — skipped automatically`, 'info');
-      }
-      if (res.data.inZipDuplicatesRemoved > 0) {
-        addToast(`${res.data.inZipDuplicatesRemoved} duplicate(s) within the ZIP removed`, 'info');
-      }
-
-      // If all invoices were duplicates, nothing to import
-      if (res.data.parsed.length === 0) {
-        addToast('All invoices in this ZIP already exist in the system. Nothing to import.', 'error');
-        setPendingUpload(null);
-        return;
-      }
-
-      if (res.data.unknownSuppliers.length > 0) {
-        setUnknownAssignments(Object.fromEntries(res.data.unknownSuppliers.map((u: any) => [u.supplier, { domain: 'demo', category: 'Other', remember: false }])));
-        setShowUnknownModal(true);
-      } else if (res.data.existingDemoBatch || res.data.existingSalesBatch) {
-        setShowMonthConflict(true);
-      } else {
-        await finalizeZipImport(res.data, {}, [], false, false);
-      }
-    } catch (err: any) {
-      addToast(err?.response?.data?.error || 'ZIP upload failed', 'error');
-    } finally {
-      setZipUploading(false);
-    }
-  };
-
-  const finalizeZipImport = async (upload: any, catOverrides: Record<string, { domain: string; category: string; remember: boolean }>, skipInvoiceIds: string[], replaceDemo: boolean, replaceSales: boolean) => {
-    try {
-      const categoryOverrides: Record<string, { domain: string; category: string }> = {};
-      const domainOverrides: Record<string, string> = {};
-      const rememberSuppliers: string[] = [];
-      for (const [supplier, { domain, category, remember }] of Object.entries(catOverrides)) {
-        categoryOverrides[supplier] = { domain, category };
-        domainOverrides[supplier] = domain;
-        if (remember) rememberSuppliers.push(supplier);
-      }
-
-      const res = await api.post('/demo-expenses/confirm-import', {
-        invoices: upload._fullData,
-        month: upload.inferredMonth,
-        filename: upload.filename,
-        categoryOverrides,
-        domainOverrides,
-        rememberSuppliers,
-        skipInvoiceIds,
-        replaceDemoMonth: replaceDemo,
-        replaceSalesMonth: replaceSales,
-        duplicateInvoiceIds: upload.duplicates.map((d: any) => d.new.invoiceId),
-      });
-
-      if (res.data.message) {
-        addToast(res.data.message, 'info');
-      } else {
-        const results = res.data.results || [];
-        const demoCount = results.find((r: any) => r.domain === 'demo')?.count || 0;
-        const salesCount = results.find((r: any) => r.domain === 'sales')?.count || 0;
-        const parts = [];
-        if (demoCount > 0) parts.push(`${demoCount} to Demo Expenses`);
-        if (salesCount > 0) parts.push(`${salesCount} to Sales Activities`);
-        addToast(`Imported ${parts.join(', ') || 'invoices'}`, 'success');
-      }
-
-      setPendingUpload(null);
-      setShowUnknownModal(false);
-      
-      setShowMonthConflict(false);
-      setUnknownAssignments({});
-      setSkipIds([]);
-    } catch (err: any) {
-      addToast(err?.response?.data?.error || 'Import failed', 'error');
-    }
-  };
-
-  const cancelZipUpload = () => {
-    setPendingUpload(null);
-    setShowUnknownModal(false);
-    
-    setShowMonthConflict(false);
-    setUnknownAssignments({});
-    setSkipIds([]);
-  };
-
   const formatAmount = (amount: number, currency?: string) => {
     if (amount == null) return '-';
     const symbol = currency === 'EUR' ? '\u20AC' : currency === 'GBP' ? '\u00A3' : '$';
@@ -379,13 +254,8 @@ export default function InvoicesPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">Invoices</h1>
+        <h1 className="text-2xl font-bold text-gray-900">Customer Invoices</h1>
         <div className="flex gap-2">
-          <input ref={zipInputRef} type="file" accept=".zip" onChange={handleZipUpload} className="hidden" />
-          <Button variant="secondary" onClick={() => zipInputRef.current?.click()} disabled={zipUploading}>
-            {zipUploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-            {zipUploading ? 'Processing...' : 'Upload ZIP'}
-          </Button>
           <Button variant="secondary" onClick={handleExport}><FileSpreadsheet size={16} /> Export Excel</Button>
           <Link to="/invoices/generate">
             <Button variant="secondary"><FileDown size={16} /> Generate PDF</Button>
@@ -408,14 +278,6 @@ export default function InvoicesPage() {
               onChange={v => { setStatusFilter(v); setPage(1); }}
               placeholder="All Statuses"
             />
-            <select
-              value={typeFilter}
-              onChange={e => { setTypeFilter(e.target.value); setPage(1); }}
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
-            >
-              <option value="">All Types</option>
-              {typeOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
             <select
               value={yearFilter}
               onChange={e => { setYearFilter(e.target.value); setPage(1); }}
@@ -451,9 +313,9 @@ export default function InvoicesPage() {
               <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setPage(1); }}
                 className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm" />
             </div>
-            {(statusFilter.length > 0 || typeFilter || yearFilter || monthFilter.length > 0 || wireFilter || dateFrom || dateTo || search) && (
+            {(statusFilter.length > 0 || yearFilter || monthFilter.length > 0 || wireFilter || dateFrom || dateTo || search) && (
               <button
-                onClick={() => { setSearch(''); setStatusFilter([]); setTypeFilter(''); setYearFilter(''); setMonthFilter([]); setWireFilter(''); setDateFrom(''); setDateTo(''); setPage(1); }}
+                onClick={() => { setSearch(''); setStatusFilter([]); setYearFilter(''); setMonthFilter([]); setWireFilter(''); setDateFrom(''); setDateTo(''); setPage(1); }}
                 className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100"
               >
                 <X size={12} /> Clear all filters
@@ -481,9 +343,8 @@ export default function InvoicesPage() {
                     className="text-left px-4 py-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900 select-none"
                     onClick={() => handleSort('name')}
                   >
-                    <span className="flex items-center gap-1">Customer / Supplier <SortIcon field="name" /></span>
+                    <span className="flex items-center gap-1">Customer <SortIcon field="name" /></span>
                   </th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Type</th>
                   <th
                     className="text-right px-4 py-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900 select-none"
                     onClick={() => handleSort('amount')}
@@ -530,11 +391,6 @@ export default function InvoicesPage() {
                       ) : (
                         inv.customer_name || inv.supplier_name || '-'
                       )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge variant={typeColors[inv.type] || 'gray'}>
-                        {inv.type === 'customer' ? 'Customer' : 'Supplier'}
-                      </Badge>
                     </td>
                     <td className="px-4 py-3 text-right text-gray-900 font-medium">
                       {formatAmount(inv.amount, inv.currency)}
@@ -623,94 +479,6 @@ export default function InvoicesPage() {
         </div>
       )}
 
-      {/* Unknown Supplier Modal — asks domain first, then category */}
-      {showUnknownModal && pendingUpload && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col">
-            <div className="p-6 border-b">
-              <h2 className="text-lg font-bold text-gray-900">Classify Unknown Suppliers</h2>
-              <p className="text-sm text-gray-500 mt-1">
-                For each supplier, choose whether it belongs to <strong>Demo Expenses</strong> or <strong>Sales Activities</strong>, then select a category.
-              </p>
-            </div>
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
-              {pendingUpload.unknownSuppliers.map((u: any) => {
-                const a = unknownAssignments[u.supplier] || { domain: 'demo', category: 'Other', remember: false };
-                const cats = a.domain === 'sales' ? SALES_CATS : DEMO_CATS;
-                return (
-                  <div key={u.supplier} className="border border-gray-200 rounded-lg p-4">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <p className="font-medium text-gray-900">{u.supplier}</p>
-                        <p className="text-xs text-gray-500 mt-0.5">€{Number(u.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })} · {u.date}</p>
-                      </div>
-                    </div>
-                    <div className="flex gap-3 mt-3">
-                      <div>
-                        <label className="block text-xs font-medium text-gray-500 mb-1">Domain</label>
-                        <select value={a.domain}
-                          onChange={e => setUnknownAssignments(prev => ({
-                            ...prev,
-                            [u.supplier]: { ...prev[u.supplier], domain: e.target.value, category: e.target.value === 'sales' ? 'Raw Materials' : 'Other' }
-                          }))}
-                          className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
-                          <option value="demo">Demo Expenses</option>
-                          <option value="sales">Sales Activities</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-500 mb-1">Category</label>
-                        <select value={a.category}
-                          onChange={e => setUnknownAssignments(prev => ({ ...prev, [u.supplier]: { ...prev[u.supplier], category: e.target.value } }))}
-                          className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
-                          {cats.map(c => <option key={c} value={c}>{c}</option>)}
-                        </select>
-                      </div>
-                    </div>
-                    <label className="flex items-center gap-2 mt-3 text-sm text-gray-600 cursor-pointer">
-                      <input type="checkbox" checked={a.remember}
-                        onChange={e => setUnknownAssignments(prev => ({ ...prev, [u.supplier]: { ...prev[u.supplier], remember: e.target.checked } }))}
-                        className="rounded border-gray-300" />
-                      Remember this supplier for future uploads
-                    </label>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="p-6 border-t flex justify-end gap-3">
-              <button onClick={cancelZipUpload} className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
-              <button onClick={() => {
-                setShowUnknownModal(false);
-                if (pendingUpload.existingDemoBatch || pendingUpload.existingSalesBatch) setShowMonthConflict(true);
-                else finalizeZipImport(pendingUpload, unknownAssignments, [], false, false);
-              }} className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium">Continue</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Month Conflict Modal */}
-      {showMonthConflict && pendingUpload && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 p-6">
-            <h2 className="text-lg font-bold text-gray-900 mb-2">Month Already Exists</h2>
-            <p className="text-sm text-gray-600 mb-4">
-              Data for <strong>{pendingUpload.inferredMonth}</strong> already exists. What would you like to do?
-            </p>
-            <div className="flex flex-col gap-2">
-              <button onClick={() => { setShowMonthConflict(false); finalizeZipImport(pendingUpload, unknownAssignments, skipIds, true, true); }}
-                className="w-full px-4 py-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded-lg hover:bg-red-100 text-left">
-                <strong>Replace</strong> — delete existing data and import new
-              </button>
-              <button onClick={() => { setShowMonthConflict(false); finalizeZipImport(pendingUpload, unknownAssignments, skipIds, false, false); }}
-                className="w-full px-4 py-3 text-sm bg-primary-50 border border-primary-200 text-primary-700 rounded-lg hover:bg-primary-100 text-left">
-                <strong>Merge</strong> — add alongside existing
-              </button>
-              <button onClick={cancelZipUpload} className="w-full px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
