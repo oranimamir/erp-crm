@@ -41,7 +41,7 @@ const SUPPLIER_COLORS = [
 
 interface Invoice {
   id: number; invoice_id: string; issue_date: string; supplier: string;
-  category: string; domain: string; amount: number; currency: string;
+  category: string; domain: string; amount: number; vat_amount: number; currency: string;
   month: string; xml_filename: string; duplicate_warning: number; created_at: string;
 }
 
@@ -51,11 +51,26 @@ interface Batch {
 }
 
 interface Summary {
-  by_category: { category: string; total: number }[];
-  by_supplier: { supplier: string; total: number }[];
-  monthly_by_category: { month: string; category: string; total: number }[];
+  by_category: { category: string; total: number; vat_total: number }[];
+  by_supplier: { supplier: string; total: number; vat_total: number }[];
+  monthly_by_category: { month: string; category: string; total: number; vat_total: number }[];
   avg_by_category: { category: string; avg_total: number }[];
   months: string[]; suppliers: string[]; categories: string[];
+  total_amount: number; total_vat: number; invoice_count: number;
+}
+
+interface MonthlySummary {
+  by_month: { month: string; domain: string; total: number; vat_total: number; count: number }[];
+  by_month_category: { month: string; domain: string; category: string; total: number; vat_total: number; count: number }[];
+  grand_totals: { total_amount: number; total_vat: number; invoice_count: number };
+  domain_totals: { domain: string; total: number; vat_total: number; count: number }[];
+  months: string[];
+}
+
+interface SingleUploadPreview {
+  invoiceId: string; date: string; supplier: string; amount: number; vatAmount: number;
+  currency: string; domain: string; category: string; month: string; lineItems: string;
+  pdfFilename: string | null; xmlFilename: string | null; embeddedPdf: string | null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -272,7 +287,7 @@ function MultiSelect({ label, options, selected, onChange }: { label: string; op
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// INVOICE VIEWER SIDE PANEL
+// INVOICE VIEWER MODAL
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function InvoiceViewer({ invoiceId, onClose }: { invoiceId: number; onClose: () => void }) {
@@ -283,47 +298,57 @@ function InvoiceViewer({ invoiceId, onClose }: { invoiceId: number; onClose: () 
     api.get(`/demo-expenses/invoices/${invoiceId}`).then(res => setInv(res.data)).catch(() => {}).finally(() => setLoading(false));
   }, [invoiceId]);
 
-  if (loading) return <div className="w-[480px] border-l border-gray-200 bg-white flex items-center justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" /></div>;
-  if (!inv) return <div className="w-[480px] border-l border-gray-200 bg-white p-6"><button onClick={onClose} className="mb-4 text-gray-500 hover:text-gray-700"><ChevronLeft size={20} /></button><p className="text-gray-500">Invoice not found</p></div>;
-
-  const lineItems = (() => { try { return typeof inv.line_items === 'string' ? JSON.parse(inv.line_items) : inv.line_items || []; } catch { return []; } })();
-
   return (
-    <div className="w-[480px] border-l border-gray-200 bg-white flex flex-col shrink-0 overflow-hidden">
-      <div className="p-4 border-b flex items-center gap-3">
-        <button onClick={onClose} className="text-gray-500 hover:text-gray-700"><ChevronLeft size={20} /></button>
-        <div className="min-w-0 flex-1">
-          <h3 className="font-semibold text-gray-900 truncate">{inv.invoice_id}</h3>
-          <p className="text-xs text-gray-500">{inv.supplier}</p>
-        </div>
-      </div>
-      <div className="flex-1 overflow-y-auto">
-        {inv.embedded_pdf ? (
-          <iframe src={`data:application/pdf;base64,${inv.embedded_pdf}`} className="w-full h-full min-h-[600px]" title="Invoice PDF" />
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl mx-4 max-h-[85vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+        {loading ? (
+          <div className="flex items-center justify-center py-20"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" /></div>
+        ) : !inv ? (
+          <div className="p-6"><p className="text-gray-500">Invoice not found</p><button onClick={onClose} className="mt-4 text-sm text-primary-600 hover:text-primary-700">Close</button></div>
         ) : (
-          <div className="p-6 space-y-4">
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div><p className="text-xs text-gray-400 mb-0.5">Invoice ID</p><p className="font-medium text-gray-900">{inv.invoice_id}</p></div>
-              <div><p className="text-xs text-gray-400 mb-0.5">Issue Date</p><p className="font-medium text-gray-900">{formatDate(inv.issue_date)}</p></div>
-              <div><p className="text-xs text-gray-400 mb-0.5">Supplier</p><p className="font-medium text-gray-900">{inv.supplier}</p></div>
-              <div><p className="text-xs text-gray-400 mb-0.5">Amount (excl. BTW)</p><p className="font-medium text-gray-900">{fmt(inv.amount)}</p></div>
-              <div><p className="text-xs text-gray-400 mb-0.5">Category</p><p className="font-medium text-gray-900">{inv.category}</p></div>
-              <div><p className="text-xs text-gray-400 mb-0.5">Month</p><p className="font-medium text-gray-900">{monthLabel(inv.month)}</p></div>
-            </div>
-            {lineItems.length > 0 && (
-              <div>
-                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Line Items</h4>
-                <div className="border border-gray-200 rounded-lg divide-y divide-gray-100">
-                  {lineItems.map((li: any, i: number) => (
-                    <div key={i} className="px-3 py-2 flex items-start justify-between gap-3 text-sm">
-                      <span className="text-gray-700 min-w-0">{li.description || '(no description)'}</span>
-                      <span className="text-gray-500 tabular-nums shrink-0">{fmt(li.amount)}</span>
-                    </div>
-                  ))}
-                </div>
+          <>
+            <div className="p-5 border-b flex items-center justify-between">
+              <div className="min-w-0">
+                <h3 className="text-lg font-semibold text-gray-900 truncate">{inv.invoice_id}</h3>
+                <p className="text-sm text-gray-500">{inv.supplier}</p>
               </div>
-            )}
-          </div>
+              <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><X size={20} /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {inv.embedded_pdf ? (
+                <iframe src={`data:application/pdf;base64,${inv.embedded_pdf}`} className="w-full h-full min-h-[600px]" title="Invoice PDF" />
+              ) : (
+                <div className="p-6 space-y-4">
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div><p className="text-xs text-gray-400 mb-0.5">Invoice ID</p><p className="font-medium text-gray-900">{inv.invoice_id}</p></div>
+                    <div><p className="text-xs text-gray-400 mb-0.5">Issue Date</p><p className="font-medium text-gray-900">{formatDate(inv.issue_date)}</p></div>
+                    <div><p className="text-xs text-gray-400 mb-0.5">Supplier</p><p className="font-medium text-gray-900">{inv.supplier}</p></div>
+                    <div><p className="text-xs text-gray-400 mb-0.5">Amount (excl. BTW)</p><p className="font-medium text-gray-900">{fmt(inv.amount)}</p></div>
+                    <div><p className="text-xs text-gray-400 mb-0.5">VAT</p><p className="font-medium text-gray-900">{fmt(inv.vat_amount || 0)}</p></div>
+                    <div><p className="text-xs text-gray-400 mb-0.5">Category</p><p className="font-medium text-gray-900">{inv.category}</p></div>
+                    <div><p className="text-xs text-gray-400 mb-0.5">Domain</p><p className="font-medium text-gray-900 capitalize">{inv.domain}</p></div>
+                    <div><p className="text-xs text-gray-400 mb-0.5">Month</p><p className="font-medium text-gray-900">{monthLabel(inv.month)}</p></div>
+                  </div>
+                  {(() => {
+                    const lineItems = (() => { try { return typeof inv.line_items === 'string' ? JSON.parse(inv.line_items) : inv.line_items || []; } catch { return []; } })();
+                    return lineItems.length > 0 ? (
+                      <div>
+                        <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Line Items</h4>
+                        <div className="border border-gray-200 rounded-lg divide-y divide-gray-100">
+                          {lineItems.map((li: any, i: number) => (
+                            <div key={i} className="px-3 py-2 flex items-start justify-between gap-3 text-sm">
+                              <span className="text-gray-700 min-w-0">{li.description || '(no description)'}</span>
+                              <span className="text-gray-500 tabular-nums shrink-0">{fmt(li.amount)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null;
+                  })()}
+                </div>
+              )}
+            </div>
+          </>
         )}
       </div>
     </div>
@@ -334,7 +359,7 @@ function InvoiceViewer({ invoiceId, onClose }: { invoiceId: number; onClose: () 
 // MAIN PAGE
 // ═══════════════════════════════════════════════════════════════════════════════
 
-type SubTab = 'demo' | 'sales';
+type SubTab = 'demo' | 'sales' | 'summary';
 
 export default function SupplierInvoicesPage() {
   const { addToast } = useToast();
@@ -346,7 +371,13 @@ export default function SupplierInvoicesPage() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [batches, setBatches] = useState<Batch[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [monthlySummary, setMonthlySummary] = useState<MonthlySummary | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Single upload
+  const singleInputRef = useRef<HTMLInputElement>(null);
+  const [singleUploading, setSingleUploading] = useState(false);
+  const [singlePreview, setSinglePreview] = useState<SingleUploadPreview | null>(null);
 
   // Filters
   const [filterCategories, setFilterCategories] = useState<string[]>([]);
@@ -400,23 +431,36 @@ export default function SupplierInvoicesPage() {
     return params;
   }, [activeTab, filterCategories, filterSuppliers, filterMonth, filterDateFrom, filterDateTo]);
 
+  const fetchMonthlySummary = useCallback(async () => {
+    try {
+      const res = await api.get('/demo-expenses/monthly-summary');
+      setMonthlySummary(res.data);
+    } catch {
+      addToast('Failed to load monthly summary', 'error');
+    }
+  }, [addToast]);
+
   const fetchAll = useCallback(async () => {
     try {
-      const params = buildFilterParams();
-      const [invRes, sumRes, batRes] = await Promise.all([
-        api.get('/demo-expenses/invoices', { params: { ...params, sort_by: sortBy, sort_dir: sortDir } }),
-        api.get('/demo-expenses/summary', { params }),
-        api.get('/demo-expenses/batches', { params: { domain: activeTab } }),
-      ]);
-      setInvoices(invRes.data);
-      setSummary(sumRes.data);
-      setBatches(batRes.data);
+      if (activeTab === 'summary') {
+        await fetchMonthlySummary();
+      } else {
+        const params = buildFilterParams();
+        const [invRes, sumRes, batRes] = await Promise.all([
+          api.get('/demo-expenses/invoices', { params: { ...params, sort_by: sortBy, sort_dir: sortDir } }),
+          api.get('/demo-expenses/summary', { params }),
+          api.get('/demo-expenses/batches', { params: { domain: activeTab } }),
+        ]);
+        setInvoices(invRes.data);
+        setSummary(sumRes.data);
+        setBatches(batRes.data);
+      }
     } catch {
       addToast('Failed to load supplier invoices', 'error');
     } finally {
       setLoading(false);
     }
-  }, [buildFilterParams, sortBy, sortDir, activeTab, addToast]);
+  }, [buildFilterParams, sortBy, sortDir, activeTab, addToast, fetchMonthlySummary]);
 
   useEffect(() => { setLoading(true); fetchAll(); }, [fetchAll]);
 
@@ -564,6 +608,42 @@ export default function SupplierInvoicesPage() {
     setSkipIds([]);
   };
 
+  // ─── SINGLE UPLOAD HANDLERS ────────────────────────────────────────────────
+
+  const handleSingleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    const name = file.name.toLowerCase();
+    if (!name.endsWith('.xml') && !name.endsWith('.pdf')) {
+      addToast('Please upload an XML or PDF file', 'error');
+      return;
+    }
+    setSingleUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await api.post('/demo-expenses/upload-single', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setSinglePreview(res.data.invoice);
+    } catch (err: any) {
+      addToast(err?.response?.data?.error || 'Upload failed', 'error');
+    } finally {
+      setSingleUploading(false);
+    }
+  };
+
+  const confirmSingleUpload = async () => {
+    if (!singlePreview) return;
+    try {
+      await api.post('/demo-expenses/confirm-single', { invoice: singlePreview });
+      addToast(`Invoice ${singlePreview.invoiceId || singlePreview.supplier} imported`, 'success');
+      setSinglePreview(null);
+      fetchAll();
+    } catch (err: any) {
+      addToast(err?.response?.data?.error || 'Import failed', 'error');
+    }
+  };
+
   // ─── CHART DATA ─────────────────────────────────────────────────────────────
 
   const stackedData = useMemo(() => {
@@ -600,8 +680,7 @@ export default function SupplierInvoicesPage() {
   // ─── RENDER ─────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex h-full">
-      <div className={`flex-1 min-w-0 space-y-6 ${viewingInvoice ? 'mr-0' : ''}`}>
+    <div className="space-y-6">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
@@ -611,21 +690,18 @@ export default function SupplierInvoicesPage() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <input ref={zipInputRef} type="file" accept=".zip" onChange={handleZipUpload} className="hidden" />
-            <Button variant="secondary" onClick={() => zipInputRef.current?.click()} disabled={zipUploading}>
-              {zipUploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-              {zipUploading ? 'Processing...' : 'Upload ZIP'}
-            </Button>
-            <button
-              onClick={() => setShowFilters(f => !f)}
-              className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg border transition-colors ${
-                hasFilters ? 'bg-primary-50 border-primary-300 text-primary-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'
-              }`}
-            >
-              <Filter size={16} />
-              Filters
-              {hasFilters && <span className="w-2 h-2 rounded-full bg-primary-500" />}
-            </button>
+            {activeTab !== 'summary' && (
+              <button
+                onClick={() => setShowFilters(f => !f)}
+                className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg border transition-colors ${
+                  hasFilters ? 'bg-primary-50 border-primary-300 text-primary-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <Filter size={16} />
+                Filters
+                {hasFilters && <span className="w-2 h-2 rounded-full bg-primary-500" />}
+              </button>
+            )}
           </div>
         </div>
 
@@ -652,11 +728,21 @@ export default function SupplierInvoicesPage() {
             >
               Sales Activities
             </button>
+            <button
+              onClick={() => handleTabChange('summary')}
+              className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'summary'
+                  ? 'border-primary-600 text-primary-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Monthly Summary
+            </button>
           </nav>
         </div>
 
         {/* Filters */}
-        {showFilters && (
+        {showFilters && activeTab !== 'summary' && (
           <Card className="p-4">
             <div className="flex flex-wrap items-end gap-4">
               <MultiSelect label="Categories" options={allCategories} selected={filterCategories} onChange={setFilterCategories} />
@@ -689,15 +775,185 @@ export default function SupplierInvoicesPage() {
           <div className="flex items-center justify-center py-20">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
           </div>
+        ) : activeTab === 'summary' ? (
+          /* ─── MONTHLY SUMMARY TAB ──────────────────────────────────────────── */
+          <div className="space-y-6">
+            {/* Upload buttons */}
+            <div className="flex flex-wrap items-center gap-3">
+              <input ref={zipInputRef} type="file" accept=".zip" onChange={handleZipUpload} className="hidden" />
+              <Button variant="secondary" onClick={() => zipInputRef.current?.click()} disabled={zipUploading}>
+                {zipUploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                {zipUploading ? 'Processing...' : 'Upload ZIP'}
+              </Button>
+              <input ref={singleInputRef} type="file" accept=".xml,.pdf" onChange={handleSingleUpload} className="hidden" />
+              <Button variant="secondary" onClick={() => singleInputRef.current?.click()} disabled={singleUploading}>
+                {singleUploading ? <Loader2 size={16} className="animate-spin" /> : <FileSpreadsheet size={16} />}
+                {singleUploading ? 'Parsing...' : 'Upload Single Invoice'}
+              </Button>
+            </div>
+
+            {monthlySummary && (
+              <>
+                {/* Grand totals */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  <Card className="p-4">
+                    <p className="text-xs text-gray-500">Total Expenses (excl. BTW)</p>
+                    <p className="text-lg font-bold text-gray-900 mt-1">{fmt(monthlySummary.grand_totals.total_amount)}</p>
+                  </Card>
+                  <Card className="p-4">
+                    <p className="text-xs text-gray-500">VAT Reimbursement Outstanding</p>
+                    <p className="text-lg font-bold text-amber-600 mt-1">{fmt(monthlySummary.grand_totals.total_vat)}</p>
+                  </Card>
+                  <Card className="p-4">
+                    <p className="text-xs text-gray-500">Total Invoices</p>
+                    <p className="text-lg font-bold text-gray-900 mt-1">{monthlySummary.grand_totals.invoice_count}</p>
+                  </Card>
+                  <Card className="p-4">
+                    <p className="text-xs text-gray-500">Months Covered</p>
+                    <p className="text-lg font-bold text-gray-900 mt-1">{monthlySummary.months.length}</p>
+                  </Card>
+                </div>
+
+                {/* Domain breakdown */}
+                {monthlySummary.domain_totals.length > 0 && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {monthlySummary.domain_totals.map(dt => (
+                      <Card key={dt.domain} className="p-4">
+                        <h3 className="text-sm font-semibold text-gray-900 capitalize mb-2">{dt.domain === 'demo' ? 'Demo Expenses' : 'Sales Activities'}</h3>
+                        <div className="grid grid-cols-3 gap-3 text-sm">
+                          <div>
+                            <p className="text-xs text-gray-400">Amount</p>
+                            <p className="font-medium text-gray-900">{fmt(dt.total)}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-gray-400">VAT</p>
+                            <p className="font-medium text-amber-600">{fmt(dt.vat_total)}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-gray-400">Invoices</p>
+                            <p className="font-medium text-gray-900">{dt.count}</p>
+                          </div>
+                        </div>
+                      </Card>
+                    ))}
+                  </div>
+                )}
+
+                {/* Monthly breakdown table */}
+                {monthlySummary.by_month.length > 0 && (
+                  <Card className="overflow-hidden">
+                    <div className="p-4 border-b">
+                      <h3 className="text-sm font-semibold text-gray-900">Monthly Breakdown</h3>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-gray-50 border-b border-gray-200">
+                            <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Month</th>
+                            <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Domain</th>
+                            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">Amount (excl. BTW)</th>
+                            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">VAT</th>
+                            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">Total (incl. BTW)</th>
+                            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">Invoices</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {monthlySummary.by_month.map((row, i) => (
+                            <tr key={i} className="hover:bg-gray-50">
+                              <td className="px-4 py-3 font-medium text-gray-900">{monthLabel(row.month)}</td>
+                              <td className="px-4 py-3">
+                                <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${row.domain === 'demo' ? 'bg-indigo-50 text-indigo-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                                  {row.domain === 'demo' ? 'Demo' : 'Sales'}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-right tabular-nums text-gray-900">{fmt(row.total)}</td>
+                              <td className="px-4 py-3 text-right tabular-nums text-amber-600">{fmt(row.vat_total)}</td>
+                              <td className="px-4 py-3 text-right tabular-nums font-medium text-gray-900">{fmt(row.total + row.vat_total)}</td>
+                              <td className="px-4 py-3 text-right tabular-nums text-gray-500">{row.count}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr className="bg-gray-50 border-t border-gray-200 font-medium">
+                            <td colSpan={2} className="px-4 py-3 text-sm text-gray-700">Grand Total</td>
+                            <td className="px-4 py-3 text-right tabular-nums text-gray-900">{fmt(monthlySummary.grand_totals.total_amount)}</td>
+                            <td className="px-4 py-3 text-right tabular-nums text-amber-600">{fmt(monthlySummary.grand_totals.total_vat)}</td>
+                            <td className="px-4 py-3 text-right tabular-nums font-bold text-gray-900">{fmt(monthlySummary.grand_totals.total_amount + monthlySummary.grand_totals.total_vat)}</td>
+                            <td className="px-4 py-3 text-right tabular-nums text-gray-500">{monthlySummary.grand_totals.invoice_count}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </Card>
+                )}
+
+                {/* Category breakdown per month */}
+                {monthlySummary.by_month_category.length > 0 && (
+                  <Card className="overflow-hidden">
+                    <div className="p-4 border-b">
+                      <h3 className="text-sm font-semibold text-gray-900">Category Detail by Month</h3>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-gray-50 border-b border-gray-200">
+                            <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Month</th>
+                            <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Domain</th>
+                            <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Category</th>
+                            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">Amount</th>
+                            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">VAT</th>
+                            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">Invoices</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {monthlySummary.by_month_category.map((row, i) => (
+                            <tr key={i} className="hover:bg-gray-50">
+                              <td className="px-4 py-2 text-gray-700">{monthLabel(row.month)}</td>
+                              <td className="px-4 py-2">
+                                <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${row.domain === 'demo' ? 'bg-indigo-50 text-indigo-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                                  {row.domain === 'demo' ? 'Demo' : 'Sales'}
+                                </span>
+                              </td>
+                              <td className="px-4 py-2 text-gray-700">
+                                <span className="inline-flex items-center gap-1.5">
+                                  <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: CAT_COLORS[row.category] || '#6b7280' }} />
+                                  {row.category}
+                                </span>
+                              </td>
+                              <td className="px-4 py-2 text-right tabular-nums text-gray-900">{fmt(row.total)}</td>
+                              <td className="px-4 py-2 text-right tabular-nums text-amber-600">{fmt(row.vat_total)}</td>
+                              <td className="px-4 py-2 text-right tabular-nums text-gray-500">{row.count}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </Card>
+                )}
+              </>
+            )}
+
+            {!monthlySummary && (
+              <Card className="p-12 text-center">
+                <FileSpreadsheet size={48} className="mx-auto text-gray-300 mb-4" />
+                <h3 className="text-lg font-medium text-gray-900 mb-2">No invoice data yet</h3>
+                <p className="text-sm text-gray-500">Upload a ZIP or single invoice file to get started.</p>
+              </Card>
+            )}
+          </div>
         ) : (
           <>
             {/* Summary cards */}
             {grandTotal > 0 && (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
                 <Card className="p-4">
-                  <p className="text-xs text-gray-500">Total Expenses</p>
+                  <p className="text-xs text-gray-500">Total Expenses (excl. BTW)</p>
                   <p className="text-lg font-bold text-gray-900 mt-1">{fmt(grandTotal)}</p>
                   {hasFilters && <p className="text-[10px] text-primary-600 mt-0.5">filtered</p>}
+                </Card>
+                <Card className="p-4">
+                  <p className="text-xs text-gray-500">VAT Reimbursement Outstanding</p>
+                  <p className="text-lg font-bold text-amber-600 mt-1">{fmt(summary?.total_vat || 0)}</p>
                 </Card>
                 <Card className="p-4">
                   <p className="text-xs text-gray-500">Invoices</p>
@@ -849,9 +1105,8 @@ export default function SupplierInvoicesPage() {
             )}
           </>
         )}
-      </div>
 
-      {/* Invoice Viewer Side Panel */}
+      {/* Invoice Viewer Modal */}
       {viewingInvoice && <InvoiceViewer invoiceId={viewingInvoice} onClose={() => setViewingInvoice(null)} />}
 
       {/* Category Override Confirm */}
@@ -953,6 +1208,47 @@ export default function SupplierInvoicesPage() {
                 <strong>Merge</strong> — add alongside existing
               </button>
               <button onClick={cancelZipUpload} className="w-full px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Single Upload Preview Modal */}
+      {singlePreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full mx-4 p-6">
+            <h2 className="text-lg font-bold text-gray-900 mb-4">Review Invoice Before Import</h2>
+            <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+              <div><p className="text-xs text-gray-400 mb-0.5">Invoice ID</p><p className="font-medium text-gray-900">{singlePreview.invoiceId || '—'}</p></div>
+              <div><p className="text-xs text-gray-400 mb-0.5">Issue Date</p><p className="font-medium text-gray-900">{singlePreview.date ? formatDate(singlePreview.date) : '—'}</p></div>
+              <div><p className="text-xs text-gray-400 mb-0.5">Supplier</p><p className="font-medium text-gray-900">{singlePreview.supplier}</p></div>
+              <div><p className="text-xs text-gray-400 mb-0.5">Amount (excl. BTW)</p><p className="font-medium text-gray-900">{fmt(singlePreview.amount)}</p></div>
+              <div><p className="text-xs text-gray-400 mb-0.5">VAT Amount</p><p className="font-medium text-amber-600">{fmt(singlePreview.vatAmount)}</p></div>
+              <div><p className="text-xs text-gray-400 mb-0.5">Currency</p><p className="font-medium text-gray-900">{singlePreview.currency}</p></div>
+              <div><p className="text-xs text-gray-400 mb-0.5">Month</p><p className="font-medium text-gray-900">{singlePreview.month ? monthLabel(singlePreview.month) : '—'}</p></div>
+            </div>
+            <div className="grid grid-cols-2 gap-4 text-sm mb-6">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Domain</label>
+                <select value={singlePreview.domain}
+                  onChange={e => setSinglePreview(prev => prev ? { ...prev, domain: e.target.value, category: e.target.value === 'sales' ? 'Raw Materials' : 'Other' } : null)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
+                  <option value="demo">Demo Expenses</option>
+                  <option value="sales">Sales Activities</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Category</label>
+                <select value={singlePreview.category}
+                  onChange={e => setSinglePreview(prev => prev ? { ...prev, category: e.target.value } : null)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
+                  {(singlePreview.domain === 'sales' ? SALES_CATEGORIES : DEMO_CATEGORIES).map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="flex gap-3 justify-end">
+              <button onClick={() => setSinglePreview(null)} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+              <button onClick={confirmSingleUpload} className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium">Import Invoice</button>
             </div>
           </div>
         </div>

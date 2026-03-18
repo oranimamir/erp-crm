@@ -238,6 +238,24 @@ function parseUBLInvoice(xmlString: string) {
 
   if (isCreditNote && amount > 0) amount = -amount;
 
+  // VAT/Tax amount
+  let vatAmount = 0;
+  const taxTotal = root['TaxTotal'];
+  if (taxTotal) {
+    const ta = Array.isArray(taxTotal) ? taxTotal[0]?.['TaxAmount'] : taxTotal['TaxAmount'];
+    if (typeof ta === 'object' && ta?.['#text']) {
+      vatAmount = parseFloat(ta['#text']) || 0;
+    } else if (typeof ta === 'object') {
+      for (const v of Object.values(ta)) {
+        const n = parseFloat(v as string);
+        if (!isNaN(n) && n > 0) { vatAmount = n; break; }
+      }
+    } else {
+      vatAmount = parseFloat(ta) || 0;
+    }
+  }
+  if (isCreditNote && vatAmount > 0) vatAmount = -vatAmount;
+
   // Line items
   const lineItems: { description: string; amount: number }[] = [];
   const lines = root['InvoiceLine'] || root['CreditNoteLine'] || [];
@@ -279,6 +297,7 @@ function parseUBLInvoice(xmlString: string) {
     issueDate: typeof issueDate === 'object' ? (issueDate as any)['#text'] || String(issueDate) : String(issueDate),
     supplierName: String(supplierName).trim(),
     amount,
+    vatAmount,
     currency: typeof currency === 'object' ? (currency as any)['#text'] || 'EUR' : String(currency),
     lineItems,
     embeddedPdf,
@@ -354,6 +373,7 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
       issueDate: new Date().toISOString().substring(0, 10),
       supplierName: 'Unknown',
       amount: 0,
+      vatAmount: 0,
       currency: 'EUR',
       lineItems: [] as { description: string; amount: number }[],
       embeddedPdf: null as string | null,
@@ -480,14 +500,19 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
   }
 
   // ─── AMOUNT (excl. BTW/VAT) ─────────────────────────────────────────
+  // European number regex fragment: handles "1.431,25" or "1,431.25" or "431,25"
+  const eurNum = '([\\d]+(?:[.,]\\d{3})*[.,]\\d{2})';
+
   let amount = 0;
   const amountPatterns = [
+    // "Totaal van de items" (Belgian/Dutch — excl. BTW)
+    new RegExp(`(?:totaal\\s*van\\s*de\\s*items|totaal\\s*van\\s*de\\s*artikelen)\\s*[:.]*\\s*(?:€|EUR)?\\s*${eurNum}`, 'i'),
     // Tax exclusive totals
-    /(?:total\s*(?:excl|hors|zonder|ex)\.?\s*(?:btw|tva|vat)?|subtotal|sous[\s-]*total|netto\s*bedrag|netto|taxable\s*amount|maatstaf\s*van\s*heffing)[\s.:€]*\s*([\d.,]+)/i,
-    /(?:totaal\s*(?:excl|exclusief|zonder)\.?\s*(?:btw|tva)?|bedrag\s*excl)[\s.:€]*\s*([\d.,]+)/i,
-    /(?:total\s*h\.?t\.?)[\s.:€]*\s*([\d.,]+)/i,
-    // Generic total — but avoid "total pages", "total items"
-    /(?:total|totaal|totale|montant)\s*(?:€|eur)?[\s.:]*\s*([\d.,]+)/i,
+    new RegExp(`(?:total\\s*(?:excl|hors|zonder|ex)\\.?\\s*(?:btw|tva|vat)?|subtotal|sous[\\s-]*total|netto\\s*bedrag|netto|taxable\\s*amount|maatstaf\\s*van\\s*heffing)\\s*[:.€]*\\s*(?:EUR)?\\s*${eurNum}`, 'i'),
+    new RegExp(`(?:totaal\\s*(?:excl|exclusief|zonder)\\.?\\s*(?:btw|tva)?|bedrag\\s*excl)\\s*[:.€]*\\s*(?:EUR)?\\s*${eurNum}`, 'i'),
+    new RegExp(`(?:total\\s*h\\.?t\\.?)\\s*[:.€]*\\s*(?:EUR)?\\s*${eurNum}`, 'i'),
+    // Generic total (but NOT "totaal van factuur" which is incl. VAT)
+    new RegExp(`(?:totaal|total|totale|montant)\\s*[:.]*\\s*(?:€|EUR)?\\s*${eurNum}`, 'i'),
   ];
   for (const pat of amountPatterns) {
     const m = text.match(pat);
@@ -500,10 +525,10 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
     }
   }
 
-  // Fallback: find €-prefixed amounts, take the largest reasonable one
+  // Fallback: find €-prefixed or EUR-prefixed amounts, take the largest reasonable one
   if (amount === 0) {
     const euroAmounts: number[] = [];
-    const euroPattern = /€\s*([\d.,]+)/g;
+    const euroPattern = new RegExp(`(?:€|EUR)\\s*${eurNum}`, 'gi');
     let em;
     while ((em = euroPattern.exec(text)) !== null) {
       const n = parseEuropeanNumber(em[1]);
@@ -512,15 +537,14 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
       }
     }
     if (euroAmounts.length > 0) {
-      // The largest € amount is likely the total
       amount = Math.max(...euroAmounts);
     }
   }
 
-  // Second fallback: look for the largest number with decimals that isn't a year
+  // Second fallback: look for the largest European-format number with decimals
   if (amount === 0) {
     const allAmounts: number[] = [];
-    const numPattern = /([\d]+[.,]\d{2})\b/g;
+    const numPattern = /([\d]+(?:[.,]\d{3})*[.,]\d{2})\b/g;
     let nm;
     while ((nm = numPattern.exec(text)) !== null) {
       const n = parseEuropeanNumber(nm[1]);
@@ -533,13 +557,33 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
     }
   }
 
-  console.log(`[pdf-parse] ${pdfFilename}: id="${invoiceId}" supplier="${supplierName}" date=${issueDate} amount=${amount}`);
+  // ─── VAT/BTW AMOUNT ──────────────────────────────────────────────────
+  let vatAmount = 0;
+  const vatPatterns = [
+    // "BTW 21,00%: EUR 300,56" or "BTW: EUR 300,56" or "BTW 21%: 300,56"
+    new RegExp(`(?:btw|tva)\\s*(?:\\d+[.,]?\\d*\\s*%)?\\s*[:.]*\\s*(?:€|EUR)?\\s*${eurNum}`, 'i'),
+    // "VAT Amount: 300.56" or "Tax amount: EUR 300,56"
+    new RegExp(`(?:vat|tax|mwst)\\s*(?:amount|bedrag)?\\s*[:.]*\\s*(?:€|EUR)?\\s*${eurNum}`, 'i'),
+  ];
+  for (const pat of vatPatterns) {
+    const m = text.match(pat);
+    if (m) {
+      const parsed = parseEuropeanNumber(m[1]);
+      if (parsed > 0 && !looksLikeDateNumber(m[1], parsed)) {
+        vatAmount = parsed;
+        break;
+      }
+    }
+  }
+
+  console.log(`[pdf-parse] ${pdfFilename}: id="${invoiceId}" supplier="${supplierName}" date=${issueDate} amount=${amount} vat=${vatAmount}`);
 
   return {
     invoiceId,
     issueDate,
     supplierName: supplierName || fileBaseName,
     amount,
+    vatAmount,
     currency: 'EUR',
     lineItems: [] as { description: string; amount: number }[],
     embeddedPdf: null as string | null,
@@ -740,6 +784,7 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
         domain: inv.domain,
         category: inv.category,
         amount: inv.amount,
+        vatAmount: inv.vatAmount || 0,
         currency: inv.currency,
         lineItems: inv.lineItems,
         xmlFilename: inv.xmlFilename,
@@ -762,6 +807,7 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
         domain: inv.domain,
         category: inv.category,
         amount: inv.amount,
+        vatAmount: inv.vatAmount || 0,
         currency: inv.currency,
         lineItems: JSON.stringify(inv.lineItems),
         embeddedPdf: inv.embeddedPdf,
@@ -882,8 +928,8 @@ router.post('/confirm-import', (req: Request, res: Response) => {
 
       const results: any[] = [];
       const insertInv = db.prepare(`
-        INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, domain, amount, currency, month, line_items, embedded_pdf, pdf_filename, xml_filename, duplicate_warning)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, line_items, embedded_pdf, pdf_filename, xml_filename, duplicate_warning)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       for (const [domain, domainInvoices] of Object.entries(byDomain)) {
@@ -898,7 +944,7 @@ router.post('/confirm-import', (req: Request, res: Response) => {
           const isDuplicateIncluded = skipInvoiceIds && !skipSet.has(inv.invoiceId) && (req.body.duplicateInvoiceIds || []).includes(inv.invoiceId);
           insertInv.run(
             batchId, inv.invoiceId, inv.issueDate, inv.supplier, inv.category, domain,
-            inv.amount, inv.currency || 'EUR', month,
+            inv.amount, inv.vatAmount || 0, inv.currency || 'EUR', month,
             inv.lineItems || '[]', inv.embeddedPdf || null, inv.pdfFilename || null,
             inv.xmlFilename || null, isDuplicateIncluded ? 1 : 0,
           );
@@ -931,7 +977,7 @@ router.post('/confirm-import', (req: Request, res: Response) => {
 router.get('/invoices', (req: Request, res: Response) => {
   try {
     const { domain, categories, suppliers, month, date_from, date_to, sort_by, sort_dir } = req.query;
-    let sql = 'SELECT id, invoice_id, issue_date, supplier, category, domain, amount, currency, month, xml_filename, duplicate_warning, created_at FROM demo_invoices WHERE 1=1';
+    let sql = 'SELECT id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, xml_filename, duplicate_warning, created_at FROM demo_invoices WHERE 1=1';
     const params: any[] = [];
 
     if (domain) { sql += ' AND domain = ?'; params.push(domain); }
@@ -992,9 +1038,9 @@ router.get('/summary', (req: Request, res: Response) => {
     if (date_from) { where += ' AND issue_date >= ?'; params.push(date_from); }
     if (date_to) { where += ' AND issue_date <= ?'; params.push(date_to); }
 
-    const byCategory = db.prepare(`SELECT category, SUM(amount) as total FROM demo_invoices WHERE ${where} GROUP BY category ORDER BY total DESC`).all(...params);
-    const bySupplier = db.prepare(`SELECT supplier, SUM(amount) as total FROM demo_invoices WHERE ${where} GROUP BY supplier ORDER BY total DESC`).all(...params);
-    const monthlyByCategory = db.prepare(`SELECT month, category, SUM(amount) as total FROM demo_invoices WHERE ${where} GROUP BY month, category ORDER BY month ASC`).all(...params);
+    const byCategory = db.prepare(`SELECT category, SUM(amount) as total, SUM(vat_amount) as vat_total FROM demo_invoices WHERE ${where} GROUP BY category ORDER BY total DESC`).all(...params);
+    const bySupplier = db.prepare(`SELECT supplier, SUM(amount) as total, SUM(vat_amount) as vat_total FROM demo_invoices WHERE ${where} GROUP BY supplier ORDER BY total DESC`).all(...params);
+    const monthlyByCategory = db.prepare(`SELECT month, category, SUM(amount) as total, SUM(vat_amount) as vat_total FROM demo_invoices WHERE ${where} GROUP BY month, category ORDER BY month ASC`).all(...params);
     const months = db.prepare(`SELECT DISTINCT month FROM demo_invoices WHERE ${where.replace('1=1', '1=1')} ORDER BY month ASC`).all(...(domain ? [domain] : []));
     const allSuppliers = db.prepare(`SELECT DISTINCT supplier FROM demo_invoices WHERE ${domain ? 'domain = ?' : '1=1'} ORDER BY supplier ASC`).all(...(domain ? [domain] : []));
     const allCategories = db.prepare(`SELECT DISTINCT category FROM demo_invoices WHERE ${domain ? 'domain = ?' : '1=1'} ORDER BY category ASC`).all(...(domain ? [domain] : []));
@@ -1003,6 +1049,7 @@ router.get('/summary', (req: Request, res: Response) => {
         SELECT month, category, SUM(amount) as monthly_total FROM demo_invoices WHERE ${where} GROUP BY month, category
       ) GROUP BY category ORDER BY avg_total DESC`
     ).all(...params);
+    const totals = db.prepare(`SELECT SUM(amount) as total_amount, SUM(vat_amount) as total_vat, COUNT(*) as invoice_count FROM demo_invoices WHERE ${where}`).get(...params) as any;
 
     res.json({
       by_category: byCategory,
@@ -1012,6 +1059,9 @@ router.get('/summary', (req: Request, res: Response) => {
       months: months.map((m: any) => m.month),
       suppliers: allSuppliers.map((s: any) => s.supplier),
       categories: allCategories.map((c: any) => c.category),
+      total_amount: totals?.total_amount || 0,
+      total_vat: totals?.total_vat || 0,
+      invoice_count: totals?.invoice_count || 0,
     });
   } catch (err: any) {
     console.error('[demo-expenses] summary error:', err);
@@ -1088,6 +1138,187 @@ router.get('/demo-suppliers', (_req: Request, res: Response) => {
     res.json({ hardcoded, userDefined: userDefined.map((u: any) => ({ ...u, source: 'user' })) });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to fetch demo suppliers' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MONTHLY SUMMARY (cross-domain aggregation for Summary tab)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.get('/monthly-summary', (req: Request, res: Response) => {
+  try {
+    const { month } = req.query;
+    let where = '1=1';
+    const params: any[] = [];
+    if (month) { where += ' AND month = ?'; params.push(month); }
+
+    // Per-month totals by domain
+    const byMonth = db.prepare(
+      `SELECT month, domain, SUM(amount) as total, SUM(vat_amount) as vat_total, COUNT(*) as count
+       FROM demo_invoices WHERE ${where} GROUP BY month, domain ORDER BY month ASC`
+    ).all(...params) as any[];
+
+    // Per-month + category breakdown
+    const byMonthCategory = db.prepare(
+      `SELECT month, domain, category, SUM(amount) as total, SUM(vat_amount) as vat_total, COUNT(*) as count
+       FROM demo_invoices WHERE ${where} GROUP BY month, domain, category ORDER BY month ASC, total DESC`
+    ).all(...params) as any[];
+
+    // Grand totals
+    const grandTotals = db.prepare(
+      `SELECT SUM(amount) as total_amount, SUM(vat_amount) as total_vat, COUNT(*) as invoice_count
+       FROM demo_invoices WHERE ${where}`
+    ).get(...params) as any;
+
+    // Domain totals
+    const domainTotals = db.prepare(
+      `SELECT domain, SUM(amount) as total, SUM(vat_amount) as vat_total, COUNT(*) as count
+       FROM demo_invoices WHERE ${where} GROUP BY domain`
+    ).all(...params) as any[];
+
+    // Available months
+    const months = db.prepare('SELECT DISTINCT month FROM demo_invoices ORDER BY month ASC').all() as any[];
+
+    res.json({
+      by_month: byMonth,
+      by_month_category: byMonthCategory,
+      grand_totals: {
+        total_amount: grandTotals?.total_amount || 0,
+        total_vat: grandTotals?.total_vat || 0,
+        invoice_count: grandTotals?.invoice_count || 0,
+      },
+      domain_totals: domainTotals,
+      months: months.map((m: any) => m.month),
+    });
+  } catch (err: any) {
+    console.error('[demo-expenses] monthly-summary error:', err);
+    res.status(500).json({ error: 'Failed to fetch monthly summary' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SINGLE INVOICE UPLOAD (manual upload with review-before-confirm)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.post('/upload-single', upload.single('file'), async (req: Request, res: Response) => {
+  try {
+    const file = req.file;
+    if (!file) { res.status(400).json({ error: 'No file uploaded' }); return; }
+
+    const filename = file.originalname.toLowerCase();
+    let parsed: any = null;
+
+    if (filename.endsWith('.xml')) {
+      const xmlString = file.buffer.toString('utf-8');
+      parsed = parseUBLInvoice(xmlString);
+      if (parsed) {
+        parsed.xmlFilename = file.originalname;
+        parsed.pdfFilename = null;
+        parsed.embeddedPdf = null;
+      }
+    } else if (filename.endsWith('.pdf')) {
+      parsed = await parsePDFInvoice(file.buffer, file.originalname);
+      if (parsed) {
+        parsed.pdfFilename = file.originalname;
+        parsed.embeddedPdf = file.buffer.toString('base64');
+        parsed.xmlFilename = null;
+      }
+    } else {
+      res.status(400).json({ error: 'Unsupported file type. Please upload XML or PDF.' });
+      return;
+    }
+
+    if (!parsed) {
+      res.status(400).json({ error: 'Could not parse invoice from file' });
+      return;
+    }
+
+    // Auto-classify
+    const classification = classifySupplier(parsed.supplier || '');
+    if (classification) {
+      parsed.domain = classification.domain;
+      parsed.category = classification.category;
+    } else {
+      parsed.domain = 'demo';
+      parsed.category = 'Other';
+    }
+
+    // Derive month
+    if (parsed.date) {
+      const d = new Date(parsed.date);
+      if (!isNaN(d.getTime())) {
+        parsed.month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      }
+    }
+
+    res.json({
+      invoice: {
+        invoiceId: parsed.invoiceId || '',
+        date: parsed.date || '',
+        supplier: parsed.supplier || 'Unknown',
+        amount: parsed.amount || 0,
+        vatAmount: parsed.vatAmount || 0,
+        currency: parsed.currency || 'EUR',
+        domain: parsed.domain,
+        category: parsed.category,
+        month: parsed.month || '',
+        lineItems: parsed.lineItems || '',
+        pdfFilename: parsed.pdfFilename || null,
+        xmlFilename: parsed.xmlFilename || null,
+        embeddedPdf: parsed.embeddedPdf || null,
+      },
+    });
+  } catch (err: any) {
+    console.error('[demo-expenses] upload-single error:', err);
+    res.status(500).json({ error: 'Failed to parse invoice' });
+  }
+});
+
+router.post('/confirm-single', (req: Request, res: Response) => {
+  try {
+    const { invoice } = req.body;
+    if (!invoice) { res.status(400).json({ error: 'No invoice data' }); return; }
+
+    // Check for duplicate
+    if (invoice.invoiceId) {
+      const existing = db.prepare('SELECT id FROM demo_invoices WHERE invoice_id = ?').get(invoice.invoiceId) as any;
+      if (existing) {
+        res.status(409).json({ error: `Invoice ${invoice.invoiceId} already exists` });
+        return;
+      }
+    }
+
+    // Create a single-invoice batch
+    const batchResult = db.prepare(
+      'INSERT INTO demo_upload_batches (filename, invoice_count, domain, uploaded_at) VALUES (?, 1, ?, ?)'
+    ).run(invoice.pdfFilename || invoice.xmlFilename || 'manual-upload', invoice.domain, new Date().toISOString());
+    const batchId = batchResult.lastInsertRowid;
+
+    db.prepare(
+      `INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, line_items, embedded_pdf, pdf_filename, xml_filename, duplicate_warning)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+    ).run(
+      batchId,
+      invoice.invoiceId || '',
+      invoice.date || '',
+      invoice.supplier || 'Unknown',
+      invoice.category || 'Other',
+      invoice.domain || 'demo',
+      invoice.amount || 0,
+      invoice.vatAmount || 0,
+      invoice.currency || 'EUR',
+      invoice.month || '',
+      invoice.lineItems || '',
+      invoice.embeddedPdf || null,
+      invoice.pdfFilename || null,
+      invoice.xmlFilename || null,
+    );
+
+    db.saveToDisk();
+    res.json({ success: true, batchId });
+  } catch (err: any) {
+    console.error('[demo-expenses] confirm-single error:', err);
+    res.status(500).json({ error: 'Failed to save invoice' });
   }
 });
 
