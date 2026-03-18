@@ -408,6 +408,8 @@ export default function SupplierInvoicesPage() {
   const [showUnknownModal, setShowUnknownModal] = useState(false);
   const [showMonthConflict, setShowMonthConflict] = useState(false);
   const [unknownAssignments, setUnknownAssignments] = useState<Record<string, { domain: string; category: string; remember: boolean }>>({});
+  const [nameOverrides, setNameOverrides] = useState<Record<string, string>>({});
+  const [previewingUnknown, setPreviewingUnknown] = useState<string | null>(null);
   const [skipIds, setSkipIds] = useState<string[]>([]);
 
   const domainCategories = activeTab === 'demo' ? DEMO_CATEGORIES : SALES_CATEGORIES;
@@ -574,12 +576,21 @@ export default function SupplierInvoicesPage() {
         if (remember) rememberSuppliers.push(supplier);
       }
 
+      // Only include name overrides that actually changed
+      const activeNameOverrides: Record<string, string> = {};
+      for (const [original, corrected] of Object.entries(nameOverrides)) {
+        if (corrected && corrected !== original) {
+          activeNameOverrides[original] = corrected;
+        }
+      }
+
       const res = await api.post('/demo-expenses/confirm-import', {
         invoices: upload._fullData,
         month: upload.inferredMonth,
         filename: upload.filename,
         categoryOverrides,
         domainOverrides,
+        nameOverrides: activeNameOverrides,
         rememberSuppliers,
         skipInvoiceIds,
         replaceDemoMonth: replaceDemo,
@@ -615,6 +626,8 @@ export default function SupplierInvoicesPage() {
     setShowUnknownModal(false);
     setShowMonthConflict(false);
     setUnknownAssignments({});
+    setNameOverrides({});
+    setPreviewingUnknown(null);
     setSkipIds([]);
   };
 
@@ -1145,51 +1158,110 @@ export default function SupplierInvoicesPage() {
       {/* Unknown Supplier Modal */}
       {showUnknownModal && pendingUpload && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col">
+          <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full mx-4 max-h-[90vh] flex flex-col">
             <div className="p-6 border-b">
               <h2 className="text-lg font-bold text-gray-900">Classify Unknown Suppliers</h2>
               <p className="text-sm text-gray-500 mt-1">
-                For each supplier, choose whether it belongs to <strong>Demo Expenses</strong> or <strong>Sales Activities</strong>, then select a category.
+                Review each invoice, correct the supplier name if needed, and classify into <strong>Demo Expenses</strong> or <strong>Sales Activities</strong>.
               </p>
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
               {pendingUpload.unknownSuppliers.map((u: any) => {
                 const a = unknownAssignments[u.supplier] || { domain: 'demo', category: 'Other', remember: false };
                 const cats = a.domain === 'sales' ? SALES_CATEGORIES : DEMO_CATEGORIES;
+                const isPreviewing = previewingUnknown === u.supplier;
                 return (
-                  <div key={u.supplier} className="border border-gray-200 rounded-lg p-4">
-                    <div>
-                      <p className="font-medium text-gray-900">{u.supplier}</p>
-                      <p className="text-xs text-gray-500 mt-0.5">{'\u20AC'}{Number(u.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })} · {u.date}</p>
-                    </div>
-                    <div className="flex gap-3 mt-3">
-                      <div>
-                        <label className="block text-xs font-medium text-gray-500 mb-1">Domain</label>
-                        <select value={a.domain}
-                          onChange={e => setUnknownAssignments(prev => ({
-                            ...prev,
-                            [u.supplier]: { ...prev[u.supplier], domain: e.target.value, category: e.target.value === 'sales' ? 'Raw Materials' : 'Other' }
-                          }))}
-                          className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
-                          <option value="demo">Demo Expenses</option>
-                          <option value="sales">Sales Activities</option>
-                        </select>
+                  <div key={u.supplier} className="border border-gray-200 rounded-lg overflow-hidden">
+                    <div className="p-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs text-gray-400 mb-0.5">Detected supplier name</p>
+                          <p className="font-medium text-gray-900">{u.supplier}</p>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            {fmt(u.amount)} · {u.date} · {u.invoiceId || 'no ID'}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => setPreviewingUnknown(isPreviewing ? null : u.supplier)}
+                          className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
+                        >
+                          <Eye size={14} />
+                          {isPreviewing ? 'Hide' : 'Preview'}
+                        </button>
                       </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-500 mb-1">Category</label>
-                        <select value={a.category}
-                          onChange={e => setUnknownAssignments(prev => ({ ...prev, [u.supplier]: { ...prev[u.supplier], category: e.target.value } }))}
-                          className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
-                          {cats.map(c => <option key={c} value={c}>{c}</option>)}
-                        </select>
+
+                      {/* Editable supplier name */}
+                      <div className="mt-3">
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Correct supplier name</label>
+                        <input
+                          type="text"
+                          value={nameOverrides[u.supplier] ?? u.supplier}
+                          onChange={e => setNameOverrides(prev => ({ ...prev, [u.supplier]: e.target.value }))}
+                          placeholder={u.supplier}
+                          className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                        />
+                        {nameOverrides[u.supplier] && nameOverrides[u.supplier] !== u.supplier && (
+                          <p className="text-xs text-primary-600 mt-1">
+                            Will rename "{u.supplier}" to "{nameOverrides[u.supplier]}"
+                          </p>
+                        )}
                       </div>
+
+                      <div className="flex flex-wrap gap-3 mt-3">
+                        <div>
+                          <label className="block text-xs font-medium text-gray-500 mb-1">Domain</label>
+                          <select value={a.domain}
+                            onChange={e => setUnknownAssignments(prev => ({
+                              ...prev,
+                              [u.supplier]: { ...prev[u.supplier], domain: e.target.value, category: e.target.value === 'sales' ? 'Raw Materials' : 'Other' }
+                            }))}
+                            className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
+                            <option value="demo">Demo Expenses</option>
+                            <option value="sales">Sales Activities</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-500 mb-1">Category</label>
+                          <select value={a.category}
+                            onChange={e => setUnknownAssignments(prev => ({ ...prev, [u.supplier]: { ...prev[u.supplier], category: e.target.value } }))}
+                            className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
+                            {cats.map(c => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                      <label className="flex items-center gap-2 mt-3 text-sm text-gray-600 cursor-pointer">
+                        <input type="checkbox" checked={a.remember}
+                          onChange={e => setUnknownAssignments(prev => ({ ...prev, [u.supplier]: { ...prev[u.supplier], remember: e.target.checked } }))}
+                          className="rounded border-gray-300" />
+                        Remember this supplier for future uploads
+                      </label>
                     </div>
-                    <label className="flex items-center gap-2 mt-3 text-sm text-gray-600 cursor-pointer">
-                      <input type="checkbox" checked={a.remember}
-                        onChange={e => setUnknownAssignments(prev => ({ ...prev, [u.supplier]: { ...prev[u.supplier], remember: e.target.checked } }))}
-                        className="rounded border-gray-300" />
-                      Remember this supplier for future uploads
-                    </label>
+
+                    {/* Invoice preview */}
+                    {isPreviewing && (
+                      <div className="border-t border-gray-200 bg-gray-50">
+                        {u.embeddedPdf ? (
+                          <iframe src={`data:application/pdf;base64,${u.embeddedPdf}`} className="w-full h-[400px]" title="Invoice preview" />
+                        ) : u.lineItems && (() => {
+                          const items = typeof u.lineItems === 'string' ? (() => { try { return JSON.parse(u.lineItems); } catch { return []; } })() : u.lineItems || [];
+                          return items.length > 0 ? (
+                            <div className="p-4 space-y-2">
+                              <h4 className="text-xs font-semibold text-gray-500 uppercase">Line Items</h4>
+                              <div className="border border-gray-200 rounded-lg bg-white divide-y divide-gray-100">
+                                {items.map((li: any, i: number) => (
+                                  <div key={i} className="px-3 py-2 flex justify-between gap-3 text-sm">
+                                    <span className="text-gray-700">{li.description || '(no description)'}</span>
+                                    <span className="text-gray-500 tabular-nums shrink-0">{fmt(li.amount)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="p-4 text-sm text-gray-400">No preview available for this invoice</p>
+                          );
+                        })()}
+                      </div>
+                    )}
                   </div>
                 );
               })}

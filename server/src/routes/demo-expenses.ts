@@ -134,7 +134,7 @@ const SALES_CAT_DB_MAP: Record<string, string> = {
  * Classify a supplier into domain + category.
  * Returns { domain, category } or null if unknown.
  */
-function classifySupplier(supplierName: string): { domain: string; category: string } | null {
+function classifySupplier(supplierName: string): { domain: string; category: string; displayName?: string } | null {
   const lower = supplierName.toLowerCase();
 
   // Acerta always takes priority → Demo / Salaries
@@ -155,11 +155,15 @@ function classifySupplier(supplierName: string): { domain: string; category: str
     }
   }
 
-  // Check user-defined mappings
-  const userMappings = db.prepare('SELECT supplier_pattern, domain, category FROM demo_supplier_mappings').all() as any[];
+  // Check user-defined mappings (may include display_name for renamed suppliers)
+  const userMappings = db.prepare('SELECT supplier_pattern, domain, category, display_name FROM demo_supplier_mappings').all() as any[];
   for (const m of userMappings) {
     if (lower.includes(m.supplier_pattern.toLowerCase())) {
-      return { domain: m.domain || 'demo', category: m.category };
+      return {
+        domain: m.domain || 'demo',
+        category: m.category,
+        displayName: m.display_name || undefined,
+      };
     }
   }
 
@@ -770,6 +774,8 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       const match = classifySupplier(inv.supplierName);
       return {
         ...inv,
+        // Apply display name if the mapping has one (renamed supplier)
+        supplierName: match?.displayName || inv.supplierName,
         domain: match?.domain || null,
         category: match?.category || null,
         isAcerta: isAcerta(inv.supplierName),
@@ -777,9 +783,19 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     });
 
     // Find unknown suppliers (no domain match), excluding own-company names
+    // Include embeddedPdf + lineItems so client can show a preview
     const unknownSuppliers = classified
       .filter(inv => !inv.domain && !isOwnCompany(inv.supplierName))
-      .map(inv => ({ supplier: inv.supplierName, amount: inv.amount, date: inv.issueDate, invoiceId: inv.invoiceId }));
+      .map(inv => ({
+        supplier: inv.supplierName,
+        amount: inv.amount,
+        vatAmount: inv.vatAmount || 0,
+        date: inv.issueDate,
+        invoiceId: inv.invoiceId,
+        currency: inv.currency,
+        lineItems: inv.lineItems,
+        embeddedPdf: inv.embeddedPdf || null,
+      }));
     const uniqueUnknowns = [...new Map(unknownSuppliers.map(u => [u.supplier.toLowerCase(), u])).values()];
 
     // --- Duplicate detection against existing DB invoices ---
@@ -878,6 +894,7 @@ router.post('/confirm-import', (req: Request, res: Response) => {
       filename,
       categoryOverrides,   // { supplier: { domain, category } }
       domainOverrides,     // { supplier: domain } — for unknowns
+      nameOverrides,       // { originalName: correctedName } — renamed suppliers
       rememberSuppliers,   // string[] of supplier names to persist
       skipInvoiceIds,
       replaceDemoMonth,
@@ -909,15 +926,17 @@ router.post('/confirm-import', (req: Request, res: Response) => {
         }
       }
 
-      // Save remembered supplier mappings
+      // Save remembered supplier mappings (with optional display_name for renamed suppliers)
       if (rememberSuppliers && categoryOverrides) {
         const upsert = db.prepare(
-          'INSERT OR REPLACE INTO demo_supplier_mappings (supplier_pattern, domain, category) VALUES (?, ?, ?)'
+          'INSERT OR REPLACE INTO demo_supplier_mappings (supplier_pattern, domain, category, display_name) VALUES (?, ?, ?, ?)'
         );
         for (const supplier of rememberSuppliers) {
           const override = categoryOverrides[supplier];
           if (override) {
-            upsert.run(supplier.toLowerCase(), override.domain || 'demo', override.category);
+            // Store the original extracted name as pattern, corrected name as display_name
+            const correctedName = nameOverrides?.[supplier] || '';
+            upsert.run(supplier.toLowerCase(), override.domain || 'demo', override.category, correctedName);
           }
         }
       }
@@ -944,10 +963,11 @@ router.post('/confirm-import', (req: Request, res: Response) => {
         return { skippedAll: true, message: 'All invoices already exist in the system' };
       }
 
-      // Resolve final domain + category for each invoice
+      // Resolve final domain + category + supplier name for each invoice
       const resolved = nonDuplicate.map((inv: any) => {
         let domain = inv.domain || 'demo';
         let category = inv.category || 'Other';
+        let supplier = inv.supplier;
 
         if (inv.isAcerta) {
           domain = 'demo';
@@ -960,7 +980,12 @@ router.post('/confirm-import', (req: Request, res: Response) => {
           if (categoryOverrides[inv.supplier].domain) domain = categoryOverrides[inv.supplier].domain;
         }
 
-        return { ...inv, domain, category };
+        // Apply supplier name correction
+        if (nameOverrides && nameOverrides[inv.supplier]) {
+          supplier = nameOverrides[inv.supplier];
+        }
+
+        return { ...inv, domain, category, supplier };
       });
 
       // Group by domain
