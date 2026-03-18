@@ -236,13 +236,32 @@ function DonutChart({ slices }: { slices: { label: string; value: number }[] }) 
   );
 }
 
-type View = 'customers' | 'suppliers' | 'tonnage';
+type View = 'customers' | 'suppliers' | 'demo_expenses' | 'tonnage';
 
 const VIEW_OPTIONS: { value: View; label: string; active: string }[] = [
-  { value: 'customers', label: 'Revenue',      active: 'bg-green-600 text-white' },
-  { value: 'suppliers', label: 'Expenses',     active: 'bg-red-500 text-white' },
-  { value: 'tonnage',   label: 'Tonnage Sold', active: 'bg-indigo-600 text-white' },
+  { value: 'customers',     label: 'Revenue',         active: 'bg-green-600 text-white' },
+  { value: 'suppliers',     label: 'Expenses',        active: 'bg-red-500 text-white' },
+  { value: 'demo_expenses', label: 'Demo & Sales',    active: 'bg-orange-500 text-white' },
+  { value: 'tonnage',       label: 'Tonnage Sold',    active: 'bg-indigo-600 text-white' },
 ];
+
+const DEMO_CAT_COLORS: Record<string, string> = {
+  'Salaries': '#6366f1', 'Cars': '#8b5cf6', 'Overhead': '#3b82f6',
+  'Consumables': '#f59e0b', 'Materials': '#10b981', 'Utilities and Maintenance': '#ef4444',
+  'Feedstock': '#14b8a6', 'Subcontractors and Consultants': '#ec4899',
+  'Regulatory': '#f97316', 'Equipment': '#0ea5e9', 'Couriers': '#84cc16', 'Other': '#6b7280',
+  'Raw Materials': '#059669', 'Logistics': '#7c3aed', 'Blenders': '#db2777', 'Shipping': '#0284c7',
+};
+
+interface DemoExpensesData {
+  monthly: { month: string; demo: number; sales: number; demo_vat: number; sales_vat: number }[];
+  by_category: { category: string; domain: string; total: number; vat_total: number; count: number }[];
+  by_supplier: { supplier: string; domain: string; category: string; total: number; vat_total: number; count: number }[];
+  domain_totals: { domain: string; total: number; vat_total: number; count: number }[];
+  totals: { total_amount: number; total_vat: number; invoice_count: number };
+  years: string[];
+  categories: string[];
+}
 
 export default function AnalyticsPage() {
   const currentYear = new Date().getFullYear().toString();
@@ -261,6 +280,9 @@ export default function AnalyticsPage() {
 
   const [data, setData] = useState<Summary | null>(null);
   const [quantityData, setQuantityData] = useState<QuantityData | null>(null);
+  const [demoData, setDemoData] = useState<DemoExpensesData | null>(null);
+  const [demoDomain, setDemoDomain] = useState('');
+  const [demoCategory, setDemoCategory] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -294,14 +316,24 @@ export default function AnalyticsPage() {
           customer_id: customerId || undefined,
         },
       }),
+      api.get('/analytics/demo-expenses', {
+        params: {
+          year,
+          month_from: monthFrom,
+          month_to: monthTo,
+          domain: demoDomain || undefined,
+          category: demoCategory || undefined,
+        },
+      }),
     ])
-      .then(([summaryRes, quantityRes]) => {
+      .then(([summaryRes, quantityRes, demoRes]) => {
         setData(summaryRes.data);
         setQuantityData(quantityRes.data);
+        setDemoData(demoRes.data);
       })
-      .catch(() => { setData(null); setQuantityData(null); })
+      .catch(() => { setData(null); setQuantityData(null); setDemoData(null); })
       .finally(() => setLoading(false));
-  }, [year, monthFrom, monthTo, customerId, supplierId, supplierCategory]);
+  }, [year, monthFrom, monthTo, customerId, supplierId, supplierCategory, demoDomain, demoCategory]);
 
   const handleMonthFromChange = (val: string) => {
     setMonthFrom(val);
@@ -329,10 +361,12 @@ export default function AnalyticsPage() {
     setCustomerId('');
     setSupplierId('');
     setSupplierCategory('');
+    setDemoDomain('');
+    setDemoCategory('');
   };
 
   const isFiltered = view !== 'customers' || year !== currentYear || monthFrom !== '1' || monthTo !== '12'
-    || customerId !== '' || supplierId !== '' || supplierCategory !== '';
+    || customerId !== '' || supplierId !== '' || supplierCategory !== '' || demoDomain !== '' || demoCategory !== '';
 
   const filteredSuppliers = supplierCategory
     ? suppliers.filter(s => s.category === supplierCategory)
@@ -369,6 +403,17 @@ export default function AnalyticsPage() {
               onClick={() => {
                 const rows = data.by_supplier.map(s => [s.supplier_name, s.category, s.total, s.invoice_count]);
                 downloadExcel(`expenses-by-supplier-${period}`, ['Supplier', 'Category', 'Total (EUR)', 'Invoices'], rows);
+              }}
+              className="flex items-center gap-1 text-sm text-gray-600 border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50"
+            >
+              <FileSpreadsheet size={14} /> Export Excel
+            </button>
+          )}
+          {demoData && view === 'demo_expenses' && (
+            <button
+              onClick={() => {
+                const rows = demoData.by_supplier.map(s => [s.supplier, s.domain, s.category, s.total, s.vat_total, s.count]);
+                downloadExcel(`demo-sales-expenses-${period}`, ['Supplier', 'Domain', 'Category', 'Amount (excl. BTW)', 'VAT', 'Invoices'], rows);
               }}
               className="flex items-center gap-1 text-sm text-gray-600 border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50"
             >
@@ -471,6 +516,39 @@ export default function AnalyticsPage() {
                 {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
+          )}
+
+          {/* Demo Expenses filters */}
+          {view === 'demo_expenses' && (
+            <>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1">
+                  <Truck size={11} /> Domain
+                </label>
+                <select
+                  value={demoDomain}
+                  onChange={e => { setDemoDomain(e.target.value); setDemoCategory(''); }}
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                >
+                  <option value="">All Domains</option>
+                  <option value="demo">Demo Expenses</option>
+                  <option value="sales">Sales Activities</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1">
+                  <Truck size={11} /> Category
+                </label>
+                <select
+                  value={demoCategory}
+                  onChange={e => setDemoCategory(e.target.value)}
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                >
+                  <option value="">All Categories</option>
+                  {(demoData?.categories || []).map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            </>
           )}
 
           {/* Supplier filters — Expenses view only */}
@@ -790,6 +868,190 @@ export default function AnalyticsPage() {
                           </div>
                           <div className="w-full bg-gray-100 rounded-full h-1.5">
                             <div className="bg-red-400 h-1.5 rounded-full" style={{ width: `${(s.total / maxS) * 100}%` }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </Card>
+            </>
+          )}
+
+          {/* ── DEMO & SALES EXPENSES VIEW ────────────────────────────────────── */}
+          {view === 'demo_expenses' && demoData && (
+            <>
+              {/* KPI cards */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <Card className="p-5">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-orange-100 flex items-center justify-center shrink-0">
+                      <TrendingDown size={20} className="text-orange-500" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs text-gray-500">Total (excl. BTW)</p>
+                      <p className="text-xl font-bold text-gray-900 truncate">{fmt(demoData.totals.total_amount)}</p>
+                    </div>
+                  </div>
+                </Card>
+                <Card className="p-5">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
+                      <Clock size={20} className="text-amber-600" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs text-gray-500">VAT Outstanding</p>
+                      <p className="text-xl font-bold text-amber-600 truncate">{fmt(demoData.totals.total_vat)}</p>
+                    </div>
+                  </div>
+                </Card>
+                {demoData.domain_totals.map(dt => (
+                  <Card key={dt.domain} className="p-5">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${dt.domain === 'demo' ? 'bg-indigo-100' : 'bg-emerald-100'}`}>
+                        <Truck size={20} className={dt.domain === 'demo' ? 'text-indigo-600' : 'text-emerald-600'} />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs text-gray-500">{dt.domain === 'demo' ? 'Demo Expenses' : 'Sales Activities'}</p>
+                        <p className="text-xl font-bold text-gray-900 truncate">{fmt(dt.total)}</p>
+                        <p className="text-xs text-gray-400">{dt.count} invoices</p>
+                      </div>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+
+              {/* Monthly chart — Demo vs Sales side by side */}
+              <Card>
+                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                  <h2 className="font-semibold text-gray-900">Demo vs Sales Expenses — {period}</h2>
+                  <div className="flex items-center gap-4 text-xs text-gray-500">
+                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-indigo-500 inline-block" /> Demo</span>
+                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-emerald-500 inline-block" /> Sales</span>
+                  </div>
+                </div>
+                <div className="p-5">
+                  {(() => {
+                    const maxBar = Math.max(...demoData.monthly.map(m => Math.max(m.demo + m.sales, 1)), 1);
+                    return (
+                      <div>
+                        <div className="flex gap-2">
+                          <div className="flex flex-col justify-between items-end shrink-0 w-14" style={{ height: 165 }}>
+                            {[maxBar, maxBar * 0.75, maxBar * 0.5, maxBar * 0.25, 0].map((v, i) => (
+                              <span key={i} className="text-[10px] text-gray-400 leading-none tabular-nums">{fmtAxis(v)}</span>
+                            ))}
+                          </div>
+                          <div className="flex-1 min-w-0 flex flex-col">
+                            <div className="relative" style={{ height: 165 }}>
+                              {[0, 25, 50, 75, 100].map(pct => (
+                                <div key={pct} className={`absolute left-0 right-0 pointer-events-none ${pct === 0 ? 'border-t border-gray-300' : 'border-t border-gray-100'}`}
+                                  style={{ bottom: `${(pct / 100) * 165}px` }} />
+                              ))}
+                              <div className="flex items-end gap-1 h-full">
+                                {demoData.monthly.map(m => {
+                                  const demoH = m.demo > 0 ? Math.max((m.demo / maxBar) * 149, 2) : 0;
+                                  const salesH = m.sales > 0 ? Math.max((m.sales / maxBar) * 149, 2) : 0;
+                                  return (
+                                    <div key={m.month} className="flex-1 h-full flex items-end justify-center gap-px group relative">
+                                      <div className="flex-1 h-full flex flex-col items-center justify-end">
+                                        {m.demo > 0 && <span className="text-[9px] tabular-nums leading-none mb-0.5 font-medium text-indigo-600">{fmtAxis(m.demo)}</span>}
+                                        <div className={`w-full rounded-t ${m.demo > 0 ? 'bg-indigo-500' : 'bg-gray-100'}`}
+                                          style={{ height: `${demoH || 2}px` }} title={`Demo: ${fmt(m.demo)}`} />
+                                      </div>
+                                      <div className="flex-1 h-full flex flex-col items-center justify-end">
+                                        {m.sales > 0 && <span className="text-[9px] tabular-nums leading-none mb-0.5 font-medium text-emerald-600">{fmtAxis(m.sales)}</span>}
+                                        <div className={`w-full rounded-t ${m.sales > 0 ? 'bg-emerald-500' : 'bg-gray-100'}`}
+                                          style={{ height: `${salesH || 2}px` }} title={`Sales: ${fmt(m.sales)}`} />
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                            <div className="flex gap-1 mt-1.5">
+                              {demoData.monthly.map(m => (
+                                <div key={m.month} className="flex-1 text-center">
+                                  <span className="text-[10px] text-gray-400">{monthLabel(m.month)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </Card>
+
+              {/* Expenses by Category */}
+              {demoData.by_category.length > 0 && (() => {
+                const maxCat = demoData.by_category[0]?.total || 1;
+                return (
+                  <Card>
+                    <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                      <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                        <Truck size={16} className="text-orange-500" /> Expenses by Category
+                      </h2>
+                      <span className="text-xs text-gray-400">{period}</span>
+                    </div>
+                    <div className="divide-y divide-gray-100">
+                      {demoData.by_category.map(cat => (
+                        <div key={`${cat.domain}-${cat.category}`} className="px-5 py-3">
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
+                              <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: DEMO_CAT_COLORS[cat.category] || '#6b7280' }} />
+                              {cat.category}
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded font-normal ${cat.domain === 'demo' ? 'bg-indigo-50 text-indigo-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                                {cat.domain === 'demo' ? 'Demo' : 'Sales'}
+                              </span>
+                            </span>
+                            <div className="text-right shrink-0 ml-2">
+                              <span className="text-sm font-bold text-gray-900">{fmt(cat.total)}</span>
+                              <span className="text-xs text-gray-400 ml-1">{cat.count} inv</span>
+                            </div>
+                          </div>
+                          <div className="w-full bg-gray-100 rounded-full h-1.5">
+                            <div className="h-1.5 rounded-full" style={{ width: `${(cat.total / maxCat) * 100}%`, background: DEMO_CAT_COLORS[cat.category] || '#6b7280' }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                );
+              })()}
+
+              {/* Expenses by Supplier */}
+              <Card>
+                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                  <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                    <Truck size={16} className="text-red-500" /> Expenses by Supplier
+                  </h2>
+                  <span className="text-xs text-gray-400">{period}</span>
+                </div>
+                {demoData.by_supplier.length === 0 ? (
+                  <p className="px-5 py-8 text-center text-sm text-gray-500">No data for this period</p>
+                ) : (
+                  <div className="divide-y divide-gray-100">
+                    {demoData.by_supplier.map((s, i) => {
+                      const maxS = demoData.by_supplier[0]?.total || 1;
+                      return (
+                        <div key={s.supplier} className="px-5 py-3">
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
+                              <span className="text-xs text-gray-400 font-normal w-5">{i + 1}.</span>
+                              {s.supplier}
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded font-normal ${s.domain === 'demo' ? 'bg-indigo-50 text-indigo-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                                {s.domain === 'demo' ? 'Demo' : 'Sales'}
+                              </span>
+                              <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded font-normal">{s.category}</span>
+                            </span>
+                            <div className="text-right shrink-0 ml-2">
+                              <span className="text-sm font-bold text-gray-900">{fmt(s.total)}</span>
+                              <span className="text-xs text-gray-400 ml-1">{s.count} inv</span>
+                            </div>
+                          </div>
+                          <div className="w-full bg-gray-100 rounded-full h-1.5">
+                            <div className="bg-orange-400 h-1.5 rounded-full" style={{ width: `${(s.total / maxS) * 100}%` }} />
                           </div>
                         </div>
                       );

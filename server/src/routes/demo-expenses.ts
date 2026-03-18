@@ -1020,10 +1020,15 @@ router.post('/confirm-import', (req: Request, res: Response) => {
 
 router.get('/invoices', (req: Request, res: Response) => {
   try {
-    const { domain, categories, suppliers, month, date_from, date_to, sort_by, sort_dir } = req.query;
+    const { domain, categories, suppliers, month, date_from, date_to, sort_by, sort_dir, search } = req.query;
     let sql = 'SELECT id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, xml_filename, duplicate_warning, created_at FROM demo_invoices WHERE 1=1';
     const params: any[] = [];
 
+    if (search) {
+      sql += ' AND (invoice_id LIKE ? OR supplier LIKE ? OR category LIKE ?)';
+      const term = `%${search}%`;
+      params.push(term, term, term);
+    }
     if (domain) { sql += ' AND domain = ?'; params.push(domain); }
     if (categories) {
       const cats = (categories as string).split(',');

@@ -328,4 +328,101 @@ router.get('/debug-expenses', (_req: Request, res: Response) => {
   res.json({ month, wireTransfers, invoicePayments, payments, legacyPaid });
 });
 
+// GET /analytics/demo-expenses — analytics for demo_invoices (demo expenses + sales activities)
+router.get('/demo-expenses', (req: Request, res: Response) => {
+  const yearNum = parseInt((req.query.year as string) || new Date().getFullYear().toString());
+  if (isNaN(yearNum) || yearNum < 2000 || yearNum > 2100) {
+    res.status(400).json({ error: 'Invalid year' }); return;
+  }
+  const year = String(yearNum);
+
+  const rawFrom = parseInt(req.query.month_from as string || '1');
+  const rawTo = parseInt(req.query.month_to as string || '12');
+  const monthStart = Math.min(Math.max(isNaN(rawFrom) ? 1 : rawFrom, 1), 12);
+  const monthEnd = Math.max(Math.min(isNaN(rawTo) ? 12 : rawTo, 12), monthStart);
+
+  const domain = req.query.domain as string || '';
+  const category = req.query.category as string || '';
+
+  let where = `month >= ? AND month <= ?`;
+  const params: any[] = [
+    `${year}-${String(monthStart).padStart(2, '0')}`,
+    `${year}-${String(monthEnd).padStart(2, '0')}`,
+  ];
+  if (domain) { where += ' AND domain = ?'; params.push(domain); }
+  if (category) { where += ' AND category = ?'; params.push(category); }
+
+  // Monthly totals by domain
+  const monthly = db.prepare(
+    `SELECT month, domain, SUM(amount) as total, SUM(vat_amount) as vat_total, COUNT(*) as count
+     FROM demo_invoices WHERE ${where} GROUP BY month, domain ORDER BY month ASC`
+  ).all(...params) as any[];
+
+  // By category
+  const byCategory = db.prepare(
+    `SELECT category, domain, SUM(amount) as total, SUM(vat_amount) as vat_total, COUNT(*) as count
+     FROM demo_invoices WHERE ${where} GROUP BY category, domain ORDER BY total DESC`
+  ).all(...params) as any[];
+
+  // By supplier
+  const bySupplier = db.prepare(
+    `SELECT supplier, domain, category, SUM(amount) as total, SUM(vat_amount) as vat_total, COUNT(*) as count
+     FROM demo_invoices WHERE ${where} GROUP BY supplier ORDER BY total DESC LIMIT 30`
+  ).all(...params) as any[];
+
+  // Grand totals
+  const totals = db.prepare(
+    `SELECT SUM(amount) as total_amount, SUM(vat_amount) as total_vat, COUNT(*) as invoice_count
+     FROM demo_invoices WHERE ${where}`
+  ).get(...params) as any;
+
+  // Domain totals
+  const domainTotals = db.prepare(
+    `SELECT domain, SUM(amount) as total, SUM(vat_amount) as vat_total, COUNT(*) as count
+     FROM demo_invoices WHERE ${where} GROUP BY domain`
+  ).all(...params) as any[];
+
+  // Build full month grid
+  const monthGrid: Record<string, { month: string; demo: number; sales: number; demo_vat: number; sales_vat: number }> = {};
+  for (let m = monthStart; m <= monthEnd; m++) {
+    const key = `${year}-${String(m).padStart(2, '0')}`;
+    monthGrid[key] = { month: key, demo: 0, sales: 0, demo_vat: 0, sales_vat: 0 };
+  }
+  for (const r of monthly) {
+    if (monthGrid[r.month]) {
+      if (r.domain === 'demo') {
+        monthGrid[r.month].demo = Number(r.total) || 0;
+        monthGrid[r.month].demo_vat = Number(r.vat_total) || 0;
+      } else {
+        monthGrid[r.month].sales = Number(r.total) || 0;
+        monthGrid[r.month].sales_vat = Number(r.vat_total) || 0;
+      }
+    }
+  }
+
+  // Available years
+  const years = db.prepare(
+    `SELECT DISTINCT SUBSTR(month, 1, 4) as year FROM demo_invoices ORDER BY year DESC`
+  ).all() as any[];
+
+  // Available categories
+  const categories = db.prepare(
+    `SELECT DISTINCT category FROM demo_invoices ORDER BY category`
+  ).all() as any[];
+
+  res.json({
+    monthly: Object.values(monthGrid),
+    by_category: byCategory,
+    by_supplier: bySupplier,
+    domain_totals: domainTotals,
+    totals: {
+      total_amount: totals?.total_amount || 0,
+      total_vat: totals?.total_vat || 0,
+      invoice_count: totals?.invoice_count || 0,
+    },
+    years: years.map((y: any) => y.year),
+    categories: categories.map((c: any) => c.category),
+  });
+});
+
 export default router;

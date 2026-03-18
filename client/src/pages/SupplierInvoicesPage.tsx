@@ -8,6 +8,7 @@ import {
   Eye, AlertTriangle, Clock, ChevronLeft, Upload, Loader2,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
+import SearchBar from '../components/ui/SearchBar';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -381,7 +382,8 @@ export default function SupplierInvoicesPage() {
   const [singleUploading, setSingleUploading] = useState(false);
   const [singlePreview, setSinglePreview] = useState<SingleUploadPreview | null>(null);
 
-  // Filters
+  // Search & Filters
+  const [search, setSearch] = useState('');
   const [filterCategories, setFilterCategories] = useState<string[]>([]);
   const [filterSuppliers, setFilterSuppliers] = useState<string[]>([]);
   const [filterMonth, setFilterMonth] = useState('');
@@ -413,6 +415,7 @@ export default function SupplierInvoicesPage() {
   // Reset filters when switching tabs
   const handleTabChange = (tab: SubTab) => {
     setActiveTab(tab);
+    setSearch('');
     setFilterCategories([]);
     setFilterSuppliers([]);
     setFilterMonth('');
@@ -425,13 +428,14 @@ export default function SupplierInvoicesPage() {
 
   const buildFilterParams = useCallback(() => {
     const params: Record<string, string> = { domain: activeTab };
+    if (search) params.search = search;
     if (filterCategories.length > 0) params.categories = filterCategories.join(',');
     if (filterSuppliers.length > 0) params.suppliers = filterSuppliers.join(',');
     if (filterMonth) params.month = filterMonth;
     if (filterDateFrom) params.date_from = filterDateFrom;
     if (filterDateTo) params.date_to = filterDateTo;
     return params;
-  }, [activeTab, filterCategories, filterSuppliers, filterMonth, filterDateFrom, filterDateTo]);
+  }, [activeTab, search, filterCategories, filterSuppliers, filterMonth, filterDateFrom, filterDateTo]);
 
   const fetchMonthlySummary = useCallback(async () => {
     try {
@@ -673,9 +677,10 @@ export default function SupplierInvoicesPage() {
   }, [summary]);
 
   const grandTotal = summary?.by_category.reduce((s, c) => s + c.total, 0) || 0;
-  const hasFilters = filterCategories.length > 0 || filterSuppliers.length > 0 || filterMonth || filterDateFrom || filterDateTo;
+  const hasFilters = search !== '' || filterCategories.length > 0 || filterSuppliers.length > 0 || filterMonth || filterDateFrom || filterDateTo;
 
   const clearFilters = () => {
+    setSearch('');
     setFilterCategories([]);
     setFilterSuppliers([]);
     setFilterMonth('');
@@ -696,6 +701,11 @@ export default function SupplierInvoicesPage() {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            {activeTab !== 'summary' && (
+              <div className="w-56">
+                <SearchBar value={search} onChange={setSearch} placeholder="Search invoices..." />
+              </div>
+            )}
             {activeTab !== 'summary' && (
               <button
                 onClick={() => setShowFilters(f => !f)}
