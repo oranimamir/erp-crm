@@ -995,6 +995,8 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE demo_supplier_mappings ADD COLUMN domain TEXT NOT NULL DEFAULT 'demo'`); } catch (_) {}
   try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN vat_amount REAL NOT NULL DEFAULT 0`); } catch (_) {}
   try { db.exec(`ALTER TABLE demo_supplier_mappings ADD COLUMN display_name TEXT NOT NULL DEFAULT ''`); } catch (_) {}
+  try { db.exec(`ALTER TABLE demo_upload_batches ADD COLUMN note TEXT NOT NULL DEFAULT ''`); } catch (_) {}
+  try { db.exec(`ALTER TABLE demo_upload_batches ADD COLUMN uploaded_by_name TEXT NOT NULL DEFAULT ''`); } catch (_) {}
 
   // Keep old demo_expenses table for backward compat (won't be used by new code)
 

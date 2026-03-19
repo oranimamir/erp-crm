@@ -6,7 +6,9 @@ import { useToast } from '../contexts/ToastContext';
 import {
   Trash2, FileSpreadsheet, Filter, X, ChevronUp, ChevronDown,
   Eye, AlertTriangle, Clock, ChevronLeft, Upload, Loader2,
+  Pencil, Check, Plus, UserPlus,
 } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 import { formatDate } from '../lib/dates';
 import SearchBar from '../components/ui/SearchBar';
 
@@ -49,6 +51,7 @@ interface Invoice {
 interface Batch {
   id: number; filename: string; month: string; domain: string;
   invoice_count: number; total_amount: number; uploaded_at: string;
+  uploaded_by_name?: string; note?: string;
 }
 
 interface Summary {
@@ -366,6 +369,7 @@ type SubTab = 'demo' | 'sales' | 'summary';
 
 export default function SupplierInvoicesPage() {
   const { addToast } = useToast();
+  const { user } = useAuth();
 
   // Sub-tab
   const [activeTab, setActiveTab] = useState<SubTab>('demo');
@@ -411,6 +415,24 @@ export default function SupplierInvoicesPage() {
   const [nameOverrides, setNameOverrides] = useState<Record<string, string>>({});
   const [previewingUnknown, setPreviewingUnknown] = useState<string | null>(null);
   const [skipIds, setSkipIds] = useState<string[]>([]);
+
+  // ZIP upload note
+  const [zipNote, setZipNote] = useState('');
+  const [showZipNoteModal, setShowZipNoteModal] = useState(false);
+  const [pendingZipFile, setPendingZipFile] = useState<File | null>(null);
+
+  // Inline editing
+  const [editingRow, setEditingRow] = useState<number | null>(null);
+  const [editSupplier, setEditSupplier] = useState('');
+  const [editCategory, setEditCategory] = useState('');
+
+  // Add supplier modal
+  const [showAddSupplier, setShowAddSupplier] = useState(false);
+  const [newSupplierName, setNewSupplierName] = useState('');
+  const [newSupplierCategory, setNewSupplierCategory] = useState('');
+
+  // Summary search
+  const [summarySearch, setSummarySearch] = useState('');
 
   const domainCategories = activeTab === 'demo' ? DEMO_CATEGORIES : SALES_CATEGORIES;
 
@@ -509,6 +531,47 @@ export default function SupplierInvoicesPage() {
     }
   };
 
+  // ─── INLINE EDIT (supplier + category) ─────────────────────────────────────
+
+  const handleSaveEdit = async (id: number, originalSupplier: string) => {
+    try {
+      const promises: Promise<any>[] = [];
+      if (editSupplier !== originalSupplier) {
+        promises.push(api.patch(`/demo-expenses/invoices/${id}/supplier`, { supplier: editSupplier }));
+      }
+      if (editCategory !== invoices.find(i => i.id === id)?.category) {
+        promises.push(api.patch(`/demo-expenses/invoices/${id}/category`, { category: editCategory }));
+      }
+      if (promises.length > 0) {
+        await Promise.all(promises);
+        addToast('Invoice updated', 'success');
+        fetchAll();
+      }
+      setEditingRow(null);
+    } catch (err: any) {
+      addToast(err?.response?.data?.error || 'Failed to update', 'error');
+    }
+  };
+
+  // ─── ADD SUPPLIER ────────────────────────────────────────────────────────
+
+  const handleAddSupplier = async () => {
+    if (!newSupplierName.trim() || !newSupplierCategory) return;
+    try {
+      await api.post('/demo-expenses/supplier-mappings', {
+        supplierName: newSupplierName.trim(),
+        category: newSupplierCategory,
+        domain: activeTab,
+      });
+      addToast(`Supplier "${newSupplierName.trim()}" added to ${activeTab === 'demo' ? 'Demo Expenses' : 'Sales Activities'}`, 'success');
+      setShowAddSupplier(false);
+      setNewSupplierName('');
+      setNewSupplierCategory('');
+    } catch (err: any) {
+      addToast(err?.response?.data?.error || 'Failed to add supplier', 'error');
+    }
+  };
+
   // ─── DELETE BATCH ──────────────────────────────────────────────────────────
 
   const handleDeleteBatch = async (batch: Batch) => {
@@ -524,16 +587,24 @@ export default function SupplierInvoicesPage() {
 
   // ─── ZIP UPLOAD HANDLERS ────────────────────────────────────────────────
 
-  const handleZipUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleZipFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
     if (!file.name.toLowerCase().endsWith('.zip')) { addToast('Please upload a .zip file', 'error'); return; }
+    setPendingZipFile(file);
+    setZipNote('');
+    setShowZipNoteModal(true);
+  };
+
+  const handleZipUpload = async () => {
+    if (!pendingZipFile) return;
+    setShowZipNoteModal(false);
 
     setZipUploading(true);
     try {
       const formData = new FormData();
-      formData.append('file', file);
+      formData.append('file', pendingZipFile);
       const res = await api.post('/demo-expenses/upload-zip', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
       setPendingUpload(res.data);
 
@@ -596,6 +667,7 @@ export default function SupplierInvoicesPage() {
         replaceDemoMonth: replaceDemo,
         replaceSalesMonth: replaceSales,
         duplicateInvoiceIds: upload.duplicates.map((d: any) => d.new.invoiceId),
+        note: zipNote,
       });
 
       if (res.data.message) {
@@ -611,10 +683,12 @@ export default function SupplierInvoicesPage() {
       }
 
       setPendingUpload(null);
+      setPendingZipFile(null);
       setShowUnknownModal(false);
       setShowMonthConflict(false);
       setUnknownAssignments({});
       setSkipIds([]);
+      setZipNote('');
       fetchAll();
     } catch (err: any) {
       addToast(err?.response?.data?.error || 'Import failed', 'error');
@@ -623,12 +697,14 @@ export default function SupplierInvoicesPage() {
 
   const cancelZipUpload = () => {
     setPendingUpload(null);
+    setPendingZipFile(null);
     setShowUnknownModal(false);
     setShowMonthConflict(false);
     setUnknownAssignments({});
     setNameOverrides({});
     setPreviewingUnknown(null);
     setSkipIds([]);
+    setZipNote('');
   };
 
   // ─── SINGLE UPLOAD HANDLERS ────────────────────────────────────────────────
@@ -701,6 +777,31 @@ export default function SupplierInvoicesPage() {
     setFilterDateTo('');
   };
 
+  // Filtered summary data for search on Summary tab
+  const filteredMonthlySummary = useMemo(() => {
+    if (!monthlySummary || !summarySearch.trim()) return monthlySummary;
+    const q = summarySearch.toLowerCase();
+    return {
+      ...monthlySummary,
+      by_month: monthlySummary.by_month.filter(r =>
+        r.month.includes(q) || r.domain.includes(q) || String(r.total).includes(q)
+      ),
+      by_month_category: monthlySummary.by_month_category.filter(r =>
+        r.month.includes(q) || r.domain.includes(q) || r.category.toLowerCase().includes(q) || String(r.total).includes(q)
+      ),
+    };
+  }, [monthlySummary, summarySearch]);
+
+  const filteredBatches = useMemo(() => {
+    if (!summarySearch.trim() || activeTab !== 'summary') return batches;
+    const q = summarySearch.toLowerCase();
+    return batches.filter(b =>
+      b.filename.toLowerCase().includes(q) || b.domain.includes(q) || b.month.includes(q) ||
+      (b.note && b.note.toLowerCase().includes(q)) ||
+      (b.uploaded_by_name && b.uploaded_by_name.toLowerCase().includes(q))
+    );
+  }, [batches, summarySearch, activeTab]);
+
   // ─── RENDER ─────────────────────────────────────────────────────────────────
 
   return (
@@ -714,22 +815,33 @@ export default function SupplierInvoicesPage() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            {activeTab !== 'summary' && (
-              <div className="w-56">
+            <div className="w-56">
+              {activeTab === 'summary' ? (
+                <SearchBar value={summarySearch} onChange={setSummarySearch} placeholder="Search summary..." />
+              ) : (
                 <SearchBar value={search} onChange={setSearch} placeholder="Search invoices..." />
-              </div>
-            )}
+              )}
+            </div>
             {activeTab !== 'summary' && (
-              <button
-                onClick={() => setShowFilters(f => !f)}
-                className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg border transition-colors ${
-                  hasFilters ? 'bg-primary-50 border-primary-300 text-primary-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'
-                }`}
-              >
-                <Filter size={16} />
-                Filters
-                {hasFilters && <span className="w-2 h-2 rounded-full bg-primary-500" />}
-              </button>
+              <>
+                <button
+                  onClick={() => setShowFilters(f => !f)}
+                  className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg border transition-colors ${
+                    hasFilters ? 'bg-primary-50 border-primary-300 text-primary-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  <Filter size={16} />
+                  Filters
+                  {hasFilters && <span className="w-2 h-2 rounded-full bg-primary-500" />}
+                </button>
+                <button
+                  onClick={() => { setShowAddSupplier(true); setNewSupplierCategory(domainCategories[0]); }}
+                  className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  <UserPlus size={16} />
+                  Add Supplier
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -809,7 +921,7 @@ export default function SupplierInvoicesPage() {
           <div className="space-y-6">
             {/* Upload buttons */}
             <div className="flex flex-wrap items-center gap-3">
-              <input ref={zipInputRef} type="file" accept=".zip" onChange={handleZipUpload} className="hidden" />
+              <input ref={zipInputRef} type="file" accept=".zip" onChange={handleZipFileSelected} className="hidden" />
               <Button variant="secondary" onClick={() => zipInputRef.current?.click()} disabled={zipUploading}>
                 {zipUploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
                 {zipUploading ? 'Processing...' : 'Upload ZIP'}
@@ -869,7 +981,7 @@ export default function SupplierInvoicesPage() {
                 )}
 
                 {/* Monthly breakdown table */}
-                {monthlySummary.by_month.length > 0 && (
+                {(filteredMonthlySummary?.by_month || []).length > 0 && (
                   <Card className="overflow-hidden">
                     <div className="p-4 border-b">
                       <h3 className="text-sm font-semibold text-gray-900">Monthly Breakdown</h3>
@@ -887,7 +999,7 @@ export default function SupplierInvoicesPage() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                          {monthlySummary.by_month.map((row, i) => (
+                          {(filteredMonthlySummary?.by_month || []).map((row, i) => (
                             <tr key={i} className="hover:bg-gray-50">
                               <td className="px-4 py-3 font-medium text-gray-900">{monthLabel(row.month)}</td>
                               <td className="px-4 py-3">
@@ -917,7 +1029,7 @@ export default function SupplierInvoicesPage() {
                 )}
 
                 {/* Category breakdown per month */}
-                {monthlySummary.by_month_category.length > 0 && (
+                {(filteredMonthlySummary?.by_month_category || []).length > 0 && (
                   <Card className="overflow-hidden">
                     <div className="p-4 border-b">
                       <h3 className="text-sm font-semibold text-gray-900">Category Detail by Month</h3>
@@ -935,7 +1047,7 @@ export default function SupplierInvoicesPage() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                          {monthlySummary.by_month_category.map((row, i) => (
+                          {(filteredMonthlySummary?.by_month_category || []).map((row, i) => (
                             <tr key={i} className="hover:bg-gray-50">
                               <td className="px-4 py-2 text-gray-700">{monthLabel(row.month)}</td>
                               <td className="px-4 py-2">
@@ -963,28 +1075,38 @@ export default function SupplierInvoicesPage() {
             )}
 
             {/* Upload History */}
-            {batches.length > 0 && (
+            {filteredBatches.length > 0 && (
               <Card className="p-5">
                 <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
                   <Clock size={16} className="text-gray-400" />
                   Upload History
                 </h3>
                 <div className="space-y-2">
-                  {batches.map(b => (
-                    <div key={b.id} className="flex items-center gap-4 bg-gray-50 border border-gray-200 rounded-lg px-4 py-3">
-                      <FileSpreadsheet size={16} className="text-gray-400 shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate">{b.filename}</p>
-                        <p className="text-xs text-gray-500">
-                          {b.domain === 'demo' ? 'Demo' : 'Sales'} &middot; {monthLabel(b.month)} &middot; {b.invoice_count} invoices &middot; {fmt(b.total_amount)}
-                        </p>
+                  {filteredBatches.map(b => (
+                    <div key={b.id} className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3">
+                      <div className="flex items-center gap-4">
+                        <FileSpreadsheet size={16} className="text-gray-400 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-900 truncate">{b.filename}</p>
+                          <p className="text-xs text-gray-500">
+                            {b.domain === 'demo' ? 'Demo' : 'Sales'} &middot; {monthLabel(b.month)} &middot; {b.invoice_count} invoices &middot; {fmt(b.total_amount)}
+                          </p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="text-xs text-gray-400">
+                            {new Date(b.uploaded_at).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          </p>
+                          {b.uploaded_by_name && (
+                            <p className="text-xs text-gray-500">by {b.uploaded_by_name}</p>
+                          )}
+                        </div>
+                        <button onClick={() => handleDeleteBatch(b)} className="text-gray-400 hover:text-red-500 transition-colors shrink-0" title="Delete this upload">
+                          <Trash2 size={16} />
+                        </button>
                       </div>
-                      <span className="text-xs text-gray-400 shrink-0">
-                        {new Date(b.uploaded_at).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                      <button onClick={() => handleDeleteBatch(b)} className="text-gray-400 hover:text-red-500 transition-colors shrink-0" title="Delete this upload">
-                        <Trash2 size={16} />
-                      </button>
+                      {b.note && (
+                        <p className="text-xs text-gray-600 mt-2 ml-8 italic bg-white rounded px-2 py-1 border border-gray-100">{b.note}</p>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1067,8 +1189,9 @@ export default function SupplierInvoicesPage() {
                     <tbody className="divide-y divide-gray-100">
                       {invoices.map(inv => {
                         const acerta = inv.supplier.toLowerCase().includes('acerta');
+                        const isEditing = editingRow === inv.id;
                         return (
-                          <tr key={inv.id} className="hover:bg-gray-50 transition-colors">
+                          <tr key={inv.id} className={`hover:bg-gray-50 transition-colors ${isEditing ? 'bg-primary-50/30' : ''}`}>
                             <td className="px-4 py-3">
                               <button onClick={() => setViewingInvoice(inv.id)} className="text-primary-600 hover:text-primary-800 font-medium flex items-center gap-1">
                                 {inv.duplicate_warning ? <AlertTriangle size={14} className="text-amber-500" /> : null}
@@ -1079,26 +1202,56 @@ export default function SupplierInvoicesPage() {
                               {new Date(inv.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                             </td>
                             <td className="px-4 py-3 text-gray-700">{formatDate(inv.issue_date)}</td>
-                            <td className="px-4 py-3 text-gray-700">{inv.supplier}</td>
+                            <td className="px-4 py-3 text-gray-700">
+                              {isEditing ? (
+                                <input type="text" value={editSupplier} onChange={e => setEditSupplier(e.target.value)}
+                                  className="border border-gray-300 rounded px-2 py-0.5 text-sm w-full focus:ring-2 focus:ring-primary-500 focus:border-primary-500" />
+                              ) : inv.supplier}
+                            </td>
                             <td className="px-4 py-3">
                               {acerta ? (
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded text-xs font-medium">
                                   {inv.category}
                                   <span className="text-[10px] text-indigo-400" title="Locked — Acerta is always Salaries">🔒</span>
                                 </span>
-                              ) : (
-                                <select value={inv.category} onChange={e => handleCategoryChange(inv.id, inv.supplier, e.target.value)}
-                                  className="border border-gray-200 rounded px-2 py-0.5 text-xs bg-white hover:border-gray-400 transition-colors">
+                              ) : isEditing ? (
+                                <select value={editCategory} onChange={e => setEditCategory(e.target.value)}
+                                  className="border border-gray-300 rounded px-2 py-0.5 text-xs bg-white focus:ring-2 focus:ring-primary-500">
                                   {allCategories.map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium" style={{ background: (CAT_COLORS[inv.category] || '#6b7280') + '18', color: CAT_COLORS[inv.category] || '#6b7280' }}>
+                                  {inv.category}
+                                </span>
                               )}
                             </td>
                             <td className="px-4 py-3 text-gray-900 tabular-nums font-medium">{fmt(inv.amount)}</td>
                             <td className="px-4 py-3 text-gray-500">{monthLabel(inv.month)}</td>
                             <td className="px-4 py-3">
-                              <button onClick={() => setViewingInvoice(inv.id)} className="text-gray-400 hover:text-primary-600 transition-colors" title="View invoice">
-                                <Eye size={16} />
-                              </button>
+                              <div className="flex items-center gap-1">
+                                {isEditing ? (
+                                  <>
+                                    <button onClick={() => handleSaveEdit(inv.id, inv.supplier)} className="text-green-600 hover:text-green-700 transition-colors" title="Save">
+                                      <Check size={16} />
+                                    </button>
+                                    <button onClick={() => setEditingRow(null)} className="text-gray-400 hover:text-gray-600 transition-colors" title="Cancel">
+                                      <X size={16} />
+                                    </button>
+                                  </>
+                                ) : (
+                                  <>
+                                    {!acerta && (
+                                      <button onClick={() => { setEditingRow(inv.id); setEditSupplier(inv.supplier); setEditCategory(inv.category); }}
+                                        className="text-gray-400 hover:text-primary-600 transition-colors" title="Edit supplier & category">
+                                        <Pencil size={14} />
+                                      </button>
+                                    )}
+                                    <button onClick={() => setViewingInvoice(inv.id)} className="text-gray-400 hover:text-primary-600 transition-colors" title="View invoice">
+                                      <Eye size={16} />
+                                    </button>
+                                  </>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         );
@@ -1304,39 +1457,137 @@ export default function SupplierInvoicesPage() {
       {/* Single Upload Preview Modal */}
       {singlePreview && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full mx-4 p-6">
-            <h2 className="text-lg font-bold text-gray-900 mb-4">Review Invoice Before Import</h2>
-            <div className="grid grid-cols-2 gap-4 text-sm mb-4">
-              <div><p className="text-xs text-gray-400 mb-0.5">Invoice ID</p><p className="font-medium text-gray-900">{singlePreview.invoiceId || '—'}</p></div>
-              <div><p className="text-xs text-gray-400 mb-0.5">Issue Date</p><p className="font-medium text-gray-900">{singlePreview.date ? formatDate(singlePreview.date) : '—'}</p></div>
-              <div><p className="text-xs text-gray-400 mb-0.5">Supplier</p><p className="font-medium text-gray-900">{singlePreview.supplier}</p></div>
-              <div><p className="text-xs text-gray-400 mb-0.5">Amount (excl. BTW)</p><p className="font-medium text-gray-900">{fmt(singlePreview.amount)}</p></div>
-              <div><p className="text-xs text-gray-400 mb-0.5">VAT Amount</p><p className="font-medium text-amber-600">{fmt(singlePreview.vatAmount)}</p></div>
-              <div><p className="text-xs text-gray-400 mb-0.5">Currency</p><p className="font-medium text-gray-900">{singlePreview.currency}</p></div>
-              <div><p className="text-xs text-gray-400 mb-0.5">Month</p><p className="font-medium text-gray-900">{singlePreview.month ? monthLabel(singlePreview.month) : '—'}</p></div>
+          <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full mx-4 max-h-[90vh] flex flex-col">
+            <div className="p-6 border-b">
+              <h2 className="text-lg font-bold text-gray-900">Review Invoice Before Import</h2>
+              <p className="text-sm text-gray-500 mt-1">Preview the invoice and edit fields as needed before importing.</p>
             </div>
-            <div className="grid grid-cols-2 gap-4 text-sm mb-6">
+            <div className="flex-1 overflow-y-auto p-6">
+              <div className="flex gap-6">
+                {/* PDF Preview */}
+                {singlePreview.embeddedPdf && (
+                  <div className="flex-1 min-w-0">
+                    <iframe src={`data:application/pdf;base64,${singlePreview.embeddedPdf}`} className="w-full h-[500px] rounded-lg border border-gray-200" title="Invoice Preview" />
+                  </div>
+                )}
+                {/* Editable fields */}
+                <div className={`${singlePreview.embeddedPdf ? 'w-80 shrink-0' : 'w-full'} space-y-4`}>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Invoice ID</label>
+                    <p className="font-medium text-gray-900 text-sm">{singlePreview.invoiceId || '—'}</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Issue Date</label>
+                    <p className="font-medium text-gray-900 text-sm">{singlePreview.date ? formatDate(singlePreview.date) : '—'}</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Supplier Name</label>
+                    <input type="text" value={singlePreview.supplier}
+                      onChange={e => setSinglePreview(prev => prev ? { ...prev, supplier: e.target.value } : null)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Amount (excl. BTW)</label>
+                    <input type="number" step="0.01" value={singlePreview.amount}
+                      onChange={e => setSinglePreview(prev => prev ? { ...prev, amount: parseFloat(e.target.value) || 0 } : null)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">VAT Amount</label>
+                      <p className="font-medium text-amber-600 text-sm">{fmt(singlePreview.vatAmount)}</p>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Currency</label>
+                      <p className="font-medium text-gray-900 text-sm">{singlePreview.currency}</p>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Month</label>
+                    <p className="font-medium text-gray-900 text-sm">{singlePreview.month ? monthLabel(singlePreview.month) : '—'}</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Domain</label>
+                    <select value={singlePreview.domain}
+                      onChange={e => setSinglePreview(prev => prev ? { ...prev, domain: e.target.value, category: e.target.value === 'sales' ? 'Raw Materials' : 'Other' } : null)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
+                      <option value="demo">Demo Expenses</option>
+                      <option value="sales">Sales Activities</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Category</label>
+                    <select value={singlePreview.category}
+                      onChange={e => setSinglePreview(prev => prev ? { ...prev, category: e.target.value } : null)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
+                      {(singlePreview.domain === 'sales' ? SALES_CATEGORIES : DEMO_CATEGORIES).map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="p-6 border-t flex gap-3 justify-end">
+              <button onClick={() => setSinglePreview(null)} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+              <button onClick={confirmSingleUpload} className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium">Import Invoice</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ZIP Note Modal */}
+      {showZipNoteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 p-6">
+            <h2 className="text-lg font-bold text-gray-900 mb-2">Upload ZIP File</h2>
+            <p className="text-sm text-gray-500 mb-4">
+              Uploading <strong>{pendingZipFile?.name}</strong>{user ? <> as <strong>{user.username}</strong></> : null}
+            </p>
+            <div className="mb-4">
+              <label className="block text-xs font-medium text-gray-600 mb-1">Note (optional)</label>
+              <input type="text" value={zipNote} onChange={e => setZipNote(e.target.value)}
+                placeholder="e.g. Invoices Jan 2026"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                onKeyDown={e => { if (e.key === 'Enter') handleZipUpload(); }}
+                autoFocus />
+            </div>
+            <div className="flex gap-3 justify-end">
+              <button onClick={() => { setShowZipNoteModal(false); setPendingZipFile(null); }} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+              <button onClick={handleZipUpload} className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium">Upload</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Supplier Modal */}
+      {showAddSupplier && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 p-6">
+            <h2 className="text-lg font-bold text-gray-900 mb-2">Add Supplier</h2>
+            <p className="text-sm text-gray-500 mb-4">
+              Add a new supplier to <strong>{activeTab === 'demo' ? 'Demo Expenses' : 'Sales Activities'}</strong>. Future invoice uploads will automatically classify invoices from this supplier.
+            </p>
+            <div className="space-y-3 mb-6">
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Domain</label>
-                <select value={singlePreview.domain}
-                  onChange={e => setSinglePreview(prev => prev ? { ...prev, domain: e.target.value, category: e.target.value === 'sales' ? 'Raw Materials' : 'Other' } : null)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
-                  <option value="demo">Demo Expenses</option>
-                  <option value="sales">Sales Activities</option>
-                </select>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Supplier Name</label>
+                <input type="text" value={newSupplierName} onChange={e => setNewSupplierName(e.target.value)}
+                  placeholder="e.g. Acme Corp"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                  autoFocus />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Category</label>
-                <select value={singlePreview.category}
-                  onChange={e => setSinglePreview(prev => prev ? { ...prev, category: e.target.value } : null)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
-                  {(singlePreview.domain === 'sales' ? SALES_CATEGORIES : DEMO_CATEGORIES).map(c => <option key={c} value={c}>{c}</option>)}
+                <label className="block text-xs font-medium text-gray-600 mb-1">Category</label>
+                <select value={newSupplierCategory} onChange={e => setNewSupplierCategory(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                  <option value="">Select category...</option>
+                  {domainCategories.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
             </div>
             <div className="flex gap-3 justify-end">
-              <button onClick={() => setSinglePreview(null)} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
-              <button onClick={confirmSingleUpload} className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium">Import Invoice</button>
+              <button onClick={() => { setShowAddSupplier(false); setNewSupplierName(''); setNewSupplierCategory(''); }}
+                className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+              <button onClick={handleAddSupplier} disabled={!newSupplierName.trim() || !newSupplierCategory}
+                className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed">Add Supplier</button>
             </div>
           </div>
         </div>

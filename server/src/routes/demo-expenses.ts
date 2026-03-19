@@ -899,6 +899,7 @@ router.post('/confirm-import', (req: Request, res: Response) => {
       skipInvoiceIds,
       replaceDemoMonth,
       replaceSalesMonth,
+      note,
     } = req.body;
 
     if (!invoices || !month || !filename) {
@@ -907,6 +908,8 @@ router.post('/confirm-import', (req: Request, res: Response) => {
     }
 
     const userId = (req as any).user?.userId;
+    const userRow = userId ? db.prepare('SELECT name FROM users WHERE id = ?').get(userId) as any : null;
+    const uploadedByName = userRow?.name || 'Unknown';
     const skipSet = new Set(skipInvoiceIds || []);
 
     const doImport = db.transaction(() => {
@@ -1005,8 +1008,8 @@ router.post('/confirm-import', (req: Request, res: Response) => {
         const totalAmount = domainInvoices.reduce((s: number, inv: any) => s + (inv.amount || 0), 0);
 
         const batchResult = db.prepare(
-          'INSERT INTO demo_upload_batches (filename, month, domain, invoice_count, total_amount, uploaded_by) VALUES (?, ?, ?, ?, ?, ?)'
-        ).run(filename, month, domain, domainInvoices.length, totalAmount, userId);
+          'INSERT INTO demo_upload_batches (filename, month, domain, invoice_count, total_amount, uploaded_by, note, uploaded_by_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(filename, month, domain, domainInvoices.length, totalAmount, userId, note || '', uploadedByName);
         const batchId = batchResult.lastInsertRowid;
 
         for (const inv of domainInvoices) {
@@ -1353,6 +1356,10 @@ router.post('/confirm-single', (req: Request, res: Response) => {
     const { invoice } = req.body;
     if (!invoice) { res.status(400).json({ error: 'No invoice data' }); return; }
 
+    const userId = (req as any).user?.userId;
+    const userRow = userId ? db.prepare('SELECT name FROM users WHERE id = ?').get(userId) as any : null;
+    const uploadedByName = userRow?.name || 'Unknown';
+
     // Check for duplicate
     if (invoice.invoiceId) {
       const existing = db.prepare('SELECT id FROM demo_invoices WHERE invoice_id = ?').get(invoice.invoiceId) as any;
@@ -1364,8 +1371,8 @@ router.post('/confirm-single', (req: Request, res: Response) => {
 
     // Create a single-invoice batch
     const batchResult = db.prepare(
-      'INSERT INTO demo_upload_batches (filename, invoice_count, domain, uploaded_at) VALUES (?, 1, ?, ?)'
-    ).run(invoice.pdfFilename || invoice.xmlFilename || 'manual-upload', invoice.domain, new Date().toISOString());
+      'INSERT INTO demo_upload_batches (filename, month, domain, invoice_count, total_amount, uploaded_by, uploaded_by_name, uploaded_at) VALUES (?, ?, ?, 1, ?, ?, ?, ?)'
+    ).run(invoice.pdfFilename || invoice.xmlFilename || 'manual-upload', invoice.month || '', invoice.domain, invoice.amount || 0, userId, uploadedByName, new Date().toISOString());
     const batchId = batchResult.lastInsertRowid;
 
     db.prepare(
@@ -1393,6 +1400,79 @@ router.post('/confirm-single', (req: Request, res: Response) => {
   } catch (err: any) {
     console.error('[demo-expenses] confirm-single error:', err);
     res.status(500).json({ error: 'Failed to save invoice' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SUPPLIER NAME UPDATE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.patch('/invoices/:id/supplier', (req: Request, res: Response) => {
+  try {
+    const { supplier } = req.body;
+    if (!supplier) { res.status(400).json({ error: 'Supplier name required' }); return; }
+
+    const inv = db.prepare('SELECT id FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
+    if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
+
+    db.prepare('UPDATE demo_invoices SET supplier = ? WHERE id = ?').run(supplier, req.params.id);
+    db.saveToDisk();
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to update supplier' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SUPPLIER MANAGEMENT — add/list/delete user-defined supplier mappings
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.get('/supplier-mappings', (req: Request, res: Response) => {
+  try {
+    const { domain } = req.query;
+    let sql = 'SELECT id, supplier_pattern, domain, category, display_name, created_at FROM demo_supplier_mappings WHERE is_user_defined = 1';
+    const params: any[] = [];
+    if (domain) { sql += ' AND domain = ?'; params.push(domain); }
+    sql += ' ORDER BY supplier_pattern ASC';
+    res.json(db.prepare(sql).all(...params));
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch supplier mappings' });
+  }
+});
+
+router.post('/supplier-mappings', (req: Request, res: Response) => {
+  try {
+    const { supplierName, category, domain } = req.body;
+    if (!supplierName || !category || !domain) {
+      res.status(400).json({ error: 'supplierName, category, and domain are required' });
+      return;
+    }
+
+    const existing = db.prepare('SELECT id FROM demo_supplier_mappings WHERE LOWER(supplier_pattern) = LOWER(?)').get(supplierName) as any;
+    if (existing) {
+      res.status(409).json({ error: `Supplier "${supplierName}" already exists` });
+      return;
+    }
+
+    const result = db.prepare(
+      'INSERT INTO demo_supplier_mappings (supplier_pattern, domain, category, display_name, is_user_defined) VALUES (?, ?, ?, ?, 1)'
+    ).run(supplierName.toLowerCase(), domain, category, supplierName);
+
+    db.saveToDisk();
+    res.json({ success: true, id: result.lastInsertRowid });
+  } catch (err: any) {
+    console.error('[demo-expenses] add supplier mapping error:', err);
+    res.status(500).json({ error: 'Failed to add supplier' });
+  }
+});
+
+router.delete('/supplier-mappings/:id', (req: Request, res: Response) => {
+  try {
+    db.prepare('DELETE FROM demo_supplier_mappings WHERE id = ? AND is_user_defined = 1').run(req.params.id);
+    db.saveToDisk();
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to delete supplier mapping' });
   }
 });
 
