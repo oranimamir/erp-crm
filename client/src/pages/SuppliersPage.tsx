@@ -46,28 +46,114 @@ const DEMO_CAT_COLORS: Record<string, string> = {
   'Couriers': '#84cc16', 'Other': '#6b7280',
 };
 
-function DemoSuppliersTab() {
-  const [data, setData] = useState<{ hardcoded: any[]; userDefined: any[] }>({ hardcoded: [], userDefined: [] });
-  const [loading, setLoading] = useState(true);
+const DEMO_CATEGORIES_LIST = [
+  'Salaries', 'Cars', 'Overhead', 'Consumables', 'Materials',
+  'Utilities and Maintenance', 'Feedstock', 'Subcontractors and Consultants',
+  'Regulatory', 'Equipment', 'Couriers', 'Other',
+];
 
-  useEffect(() => {
-    api.get('/demo-expenses/demo-suppliers').then(r => setData(r.data)).catch(() => {}).finally(() => setLoading(false));
-  }, []);
+function DemoSuppliersTab() {
+  const { addToast } = useToast();
+  const [data, setData] = useState<{ hardcoded: any[]; userDefined: any[] }>({ hardcoded: [], userDefined: [] });
+  const [userMappings, setUserMappings] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newCategory, setNewCategory] = useState('Other');
+  const [deleteId, setDeleteId] = useState<number | null>(null);
+
+  const fetchData = () => {
+    Promise.all([
+      api.get('/demo-expenses/demo-suppliers'),
+      api.get('/demo-expenses/supplier-mappings', { params: { domain: 'demo' } }),
+    ]).then(([d, m]) => {
+      setData(d.data);
+      setUserMappings(m.data);
+    }).catch(() => {}).finally(() => setLoading(false));
+  };
+
+  useEffect(() => { fetchData(); }, []);
+
+  const handleAdd = async () => {
+    if (!newName.trim()) return;
+    try {
+      await api.post('/demo-expenses/supplier-mappings', { supplierName: newName.trim(), category: newCategory, domain: 'demo' });
+      addToast(`Supplier "${newName.trim()}" added`, 'success');
+      setShowAdd(false);
+      setNewName('');
+      setNewCategory('Other');
+      fetchData();
+    } catch (err: any) {
+      addToast(err?.response?.data?.error || 'Failed to add supplier', 'error');
+    }
+  };
+
+  const handleDelete = async (id: number) => {
+    try {
+      await api.delete(`/demo-expenses/supplier-mappings/${id}`);
+      addToast('Supplier removed', 'success');
+      setDeleteId(null);
+      fetchData();
+    } catch {
+      addToast('Failed to delete', 'error');
+    }
+  };
 
   if (loading) return <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" /></div>;
 
   // Group by category
-  const byCategory: Record<string, string[]> = {};
+  const byCategory: Record<string, { name: string; source: string }[]> = {};
   for (const s of [...data.hardcoded, ...data.userDefined]) {
     if (!byCategory[s.category]) byCategory[s.category] = [];
-    byCategory[s.category].push(s.pattern);
+    byCategory[s.category].push({ name: s.pattern, source: s.source });
   }
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-gray-500">
-        Demo suppliers are used to automatically classify invoices uploaded via the Invoices tab into the Demo Expenses domain.
-      </p>
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-gray-500">
+          Demo suppliers are used to automatically classify invoices into the Demo Expenses domain.
+        </p>
+        <Button onClick={() => setShowAdd(true)}><Plus size={16} /> Add Supplier</Button>
+      </div>
+
+      {/* User-defined suppliers table */}
+      {userMappings.length > 0 && (
+        <Card className="overflow-hidden">
+          <div className="px-5 py-3 border-b border-gray-100">
+            <h3 className="text-sm font-semibold text-gray-900">User-Defined Suppliers ({userMappings.length})</h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100 bg-gray-50">
+                  <th className="text-left px-4 py-2.5 font-medium text-gray-600">Supplier Name</th>
+                  <th className="text-left px-4 py-2.5 font-medium text-gray-600">Category</th>
+                  <th className="text-right px-4 py-2.5 font-medium text-gray-600 w-20">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {userMappings.map((m: any) => (
+                  <tr key={m.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-2.5 text-gray-900 capitalize">{m.display_name || m.supplier_pattern}</td>
+                    <td className="px-4 py-2.5">
+                      <span className="inline-flex items-center gap-1.5 text-xs font-medium">
+                        <span className="w-2 h-2 rounded-sm" style={{ background: DEMO_CAT_COLORS[m.category] || '#6b7280' }} />
+                        {m.category}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      <button onClick={() => setDeleteId(m.id)} className="p-1 text-gray-400 hover:text-red-600 rounded"><Trash2 size={14} /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      {/* Hardcoded + user-defined grouped by category */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {Object.entries(byCategory).sort((a, b) => a[0].localeCompare(b[0])).map(([cat, suppliers]) => (
           <Card key={cat} className="p-4">
@@ -78,17 +164,46 @@ function DemoSuppliersTab() {
             </div>
             <div className="flex flex-wrap gap-1.5">
               {suppliers.map(s => (
-                <span key={s} className="inline-block px-2 py-0.5 bg-gray-100 text-gray-700 rounded text-xs capitalize">{s}</span>
+                <span key={s.name} className={`inline-block px-2 py-0.5 rounded text-xs capitalize ${s.source === 'user' ? 'bg-primary-50 text-primary-700 border border-primary-200' : 'bg-gray-100 text-gray-700'}`}>
+                  {s.name}
+                </span>
               ))}
             </div>
           </Card>
         ))}
       </div>
-      {data.userDefined.length > 0 && (
-        <p className="text-xs text-gray-400 mt-2">
-          {data.userDefined.length} user-defined mapping(s) learned from previous uploads.
-        </p>
+
+      {/* Add Supplier Modal */}
+      {showAdd && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 p-6">
+            <h2 className="text-lg font-bold text-gray-900 mb-4">Add Demo Supplier</h2>
+            <div className="space-y-3 mb-6">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Supplier Name</label>
+                <input type="text" value={newName} onChange={e => setNewName(e.target.value)}
+                  placeholder="e.g. Acme Corp"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                  autoFocus onKeyDown={e => { if (e.key === 'Enter' && newName.trim() && newCategory) handleAdd(); }} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+                <select value={newCategory} onChange={e => setNewCategory(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                  {DEMO_CATEGORIES_LIST.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => { setShowAdd(false); setNewName(''); }}>Cancel</Button>
+              <Button onClick={handleAdd} disabled={!newName.trim()}>Add Supplier</Button>
+            </div>
+          </div>
+        </div>
       )}
+
+      {/* Delete Confirm */}
+      <ConfirmDialog open={deleteId !== null} onClose={() => setDeleteId(null)} onConfirm={() => deleteId && handleDelete(deleteId)} title="Remove Supplier" message="Remove this user-defined supplier mapping? Hardcoded suppliers cannot be removed." confirmLabel="Remove" />
     </div>
   );
 }

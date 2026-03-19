@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import api from '../lib/api';
 import Card from '../components/ui/Card';
 import StatusBadge from '../components/ui/StatusBadge';
-import { TrendingUp, BarChart3, Scale, AlertTriangle, Users } from 'lucide-react';
+import { TrendingUp, BarChart3, Scale, AlertTriangle, Users, Receipt } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 
 interface Stats {
@@ -38,6 +38,7 @@ export default function DashboardPage() {
   const [forecastExpected, setForecastExpected] = useState(0);
   const [tonsYTD, setTonsYTD] = useState(0);
   const [priorYearOverdue, setPriorYearOverdue] = useState<{ invoices: any[]; total: number }>({ invoices: [], total: 0 });
+  const [demoExpensesMonthly, setDemoExpensesMonthly] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -50,7 +51,8 @@ export default function DashboardPage() {
       api.get('/dashboard/tons-ytd'),
       api.get('/dashboard/prior-year-overdue'),
       api.get('/dashboard/customer-forecast'),
-    ]).then(([s, o, i, mp, fc, ty, pyo, cf]) => {
+      api.get('/dashboard/demo-expenses-monthly'),
+    ]).then(([s, o, i, mp, fc, ty, pyo, cf, dem]) => {
       setStats(s.data);
       setOpenOperations(o.data);
       setPendingInvoices(i.data);
@@ -62,6 +64,7 @@ export default function DashboardPage() {
       setTonsYTD(ty.data.total_tons ?? 0);
       setPriorYearOverdue(pyo.data);
       setCustomerForecast(cf.data);
+      setDemoExpensesMonthly(dem.data);
     }).finally(() => setLoading(false));
   }, []);
 
@@ -513,6 +516,75 @@ export default function DashboardPage() {
               emptyText="No invoices without a due date"
             />
           </div>
+        );
+      })()}
+
+      {/* Demo Expenses Monthly Chart */}
+      {demoExpensesMonthly.length > 0 && (() => {
+        const maxVal = Math.max(...demoExpensesMonthly.map((m: any) => m.total), 1);
+        const totalExpenses = demoExpensesMonthly.reduce((s: number, m: any) => s + m.total, 0);
+        const totalVat = demoExpensesMonthly.reduce((s: number, m: any) => s + (m.vat_total || 0), 0);
+        const totalInvoices = demoExpensesMonthly.reduce((s: number, m: any) => s + m.count, 0);
+        const chartH = 180;
+        return (
+          <Card>
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Receipt size={16} className="text-gray-400" />
+                <h2 className="font-semibold text-gray-900">Demo Expenses — Monthly Total ({year})</h2>
+              </div>
+              <div className="flex items-center gap-4 text-xs text-gray-500">
+                <span>Total: <strong className="text-gray-900">{fmt(totalExpenses)}</strong></span>
+                <span>VAT: <strong className="text-amber-600">{fmt(totalVat)}</strong></span>
+                <span>{totalInvoices} invoices</span>
+              </div>
+            </div>
+            <div className="p-5">
+              <div className="flex gap-2">
+                {/* Y-axis */}
+                <div className="flex flex-col justify-between items-end shrink-0 w-14" style={{ height: chartH }}>
+                  {[maxVal, maxVal * 0.75, maxVal * 0.5, maxVal * 0.25, 0].map((v, i) => (
+                    <span key={i} className="text-[10px] text-gray-400 leading-none tabular-nums">{fmtAxis(v)}</span>
+                  ))}
+                </div>
+                {/* Chart */}
+                <div className="flex-1 min-w-0 flex flex-col">
+                  <div className="relative" style={{ height: chartH }}>
+                    {[0, 25, 50, 75, 100].map(pct => (
+                      <div key={pct} className={`absolute left-0 right-0 pointer-events-none ${pct === 0 ? 'border-t border-gray-300' : 'border-t border-gray-100'}`}
+                        style={{ bottom: `${(pct / 100) * chartH}px` }} />
+                    ))}
+                    <div className="flex items-end gap-1.5 h-full">
+                      {demoExpensesMonthly.map((m: any) => {
+                        const barH = m.total > 0 ? Math.max((m.total / maxVal) * (chartH - 20), 3) : 0;
+                        return (
+                          <div key={m.month} className="flex-1 h-full flex flex-col items-center justify-end group relative">
+                            <div className="w-full max-w-[32px] bg-indigo-500 rounded-t transition-all hover:bg-indigo-600 cursor-pointer"
+                              style={{ height: `${barH}px` }}
+                              title={`${m.month}: ${fmt(m.total)} (${m.count} invoices)`} />
+                            {/* Tooltip on hover */}
+                            <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap z-10 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity shadow-lg">
+                              <div className="font-semibold">{new Date(m.month + '-01').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}</div>
+                              <div>Amount: {fmt(m.total)}</div>
+                              <div>VAT: {fmt(m.vat_total || 0)}</div>
+                              <div>{m.count} invoice{m.count !== 1 ? 's' : ''}</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div className="flex gap-1.5 mt-1">
+                    {demoExpensesMonthly.map((m: any) => (
+                      <div key={m.month} className="flex-1 text-center text-[10px] text-gray-400 truncate">
+                        {new Date(m.month + '-01').toLocaleDateString(undefined, { month: 'short' })}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </Card>
         );
       })()}
     </div>

@@ -409,4 +409,20 @@ router.get('/tons-ytd', (_req: Request, res: Response) => {
   res.json({ total_tons: Number(result.total_tons), year: parseInt(year) });
 });
 
+router.get('/demo-expenses-monthly', (_req: Request, res: Response) => {
+  try {
+    const year = new Date().getFullYear().toString();
+    const data = db.prepare(`
+      SELECT month, SUM(amount) as total, SUM(vat_amount) as vat_total, COUNT(*) as count
+      FROM demo_invoices
+      WHERE month LIKE ? || '%'
+      GROUP BY month
+      ORDER BY month ASC
+    `).all(year);
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch demo expenses' });
+  }
+});
+
 export default router;
