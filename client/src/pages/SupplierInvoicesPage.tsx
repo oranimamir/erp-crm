@@ -1028,49 +1028,133 @@ export default function SupplierInvoicesPage() {
                   </Card>
                 )}
 
-                {/* Category breakdown per month */}
-                {(filteredMonthlySummary?.by_month_category || []).length > 0 && (
-                  <Card className="overflow-hidden">
-                    <div className="p-4 border-b">
-                      <h3 className="text-sm font-semibold text-gray-900">Category Detail by Month</h3>
-                    </div>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="bg-gray-50 border-b border-gray-200">
-                            <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Month</th>
-                            <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Domain</th>
-                            <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Category</th>
-                            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">Amount</th>
-                            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">VAT</th>
-                            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">Invoices</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100">
-                          {(filteredMonthlySummary?.by_month_category || []).map((row, i) => (
-                            <tr key={i} className="hover:bg-gray-50">
-                              <td className="px-4 py-2 text-gray-700">{monthLabel(row.month)}</td>
-                              <td className="px-4 py-2">
-                                <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${row.domain === 'demo' ? 'bg-indigo-50 text-indigo-700' : 'bg-emerald-50 text-emerald-700'}`}>
-                                  {row.domain === 'demo' ? 'Demo' : 'Sales'}
-                                </span>
-                              </td>
-                              <td className="px-4 py-2 text-gray-700">
-                                <span className="inline-flex items-center gap-1.5">
-                                  <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: CAT_COLORS[row.category] || '#6b7280' }} />
-                                  {row.category}
-                                </span>
-                              </td>
-                              <td className="px-4 py-2 text-right tabular-nums text-gray-900">{fmt(row.total)}</td>
-                              <td className="px-4 py-2 text-right tabular-nums text-amber-600">{fmt(row.vat_total)}</td>
-                              <td className="px-4 py-2 text-right tabular-nums text-gray-500">{row.count}</td>
-                            </tr>
+                {/* Demo vs Sales side-by-side monthly chart */}
+                {(() => {
+                  const byMonth = monthlySummary.by_month;
+                  if (byMonth.length === 0) return null;
+                  // Build month → { demo, sales } map
+                  const monthMap: Record<string, { demo: number; sales: number }> = {};
+                  for (const r of byMonth) {
+                    if (!monthMap[r.month]) monthMap[r.month] = { demo: 0, sales: 0 };
+                    if (r.domain === 'demo') monthMap[r.month].demo = r.total;
+                    else monthMap[r.month].sales = r.total;
+                  }
+                  const months = Object.keys(monthMap).sort();
+                  const maxVal = Math.max(...months.map(m => Math.max(monthMap[m].demo, monthMap[m].sales)), 1);
+                  const chartH = 220;
+
+                  function fmtAxis(n: number): string {
+                    if (n === 0) return '0';
+                    if (n >= 1_000_000) return `€${(n / 1_000_000).toFixed(1)}M`;
+                    if (n >= 1_000) return `€${Math.round(n / 1_000)}k`;
+                    return `€${Math.round(n)}`;
+                  }
+
+                  return (
+                    <Card className="p-5">
+                      <h3 className="text-sm font-semibold text-gray-900 mb-1">Demo Expenses vs Sales Activities — Monthly</h3>
+                      <div className="flex items-center gap-5 text-xs text-gray-500 mb-4">
+                        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-indigo-500 inline-block" /> Demo Expenses</span>
+                        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-emerald-500 inline-block" /> Sales Activities</span>
+                      </div>
+                      <div className="flex gap-2">
+                        <div className="flex flex-col justify-between items-end shrink-0 w-14" style={{ height: chartH }}>
+                          {[maxVal, maxVal * 0.75, maxVal * 0.5, maxVal * 0.25, 0].map((v, i) => (
+                            <span key={i} className="text-[10px] text-gray-400 leading-none tabular-nums">{fmtAxis(v)}</span>
                           ))}
-                        </tbody>
-                      </table>
+                        </div>
+                        <div className="flex-1 min-w-0 flex flex-col">
+                          <div className="relative" style={{ height: chartH }}>
+                            {[0, 25, 50, 75, 100].map(pct => (
+                              <div key={pct} className={`absolute left-0 right-0 pointer-events-none ${pct === 0 ? 'border-t border-gray-300' : 'border-t border-gray-100'}`}
+                                style={{ bottom: `${(pct / 100) * chartH}px` }} />
+                            ))}
+                            <div className="flex items-end gap-1.5 h-full">
+                              {months.map(m => {
+                                const d = monthMap[m];
+                                const demoH = d.demo > 0 ? Math.max((d.demo / maxVal) * (chartH - 16), 2) : 0;
+                                const salesH = d.sales > 0 ? Math.max((d.sales / maxVal) * (chartH - 16), 2) : 0;
+                                return (
+                                  <div key={m} className="flex-1 h-full flex items-end justify-center gap-0.5 group relative">
+                                    <div className="flex-1 max-w-[18px] bg-indigo-500 rounded-t transition-all hover:bg-indigo-600"
+                                      style={{ height: `${demoH}px` }} title={`Demo: ${fmt(d.demo)}`} />
+                                    <div className="flex-1 max-w-[18px] bg-emerald-500 rounded-t transition-all hover:bg-emerald-600"
+                                      style={{ height: `${salesH}px` }} title={`Sales: ${fmt(d.sales)}`} />
+                                    <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap z-10 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity shadow-lg">
+                                      <div className="font-semibold mb-1">{monthLabel(m)}</div>
+                                      <div className="text-indigo-300">Demo: {fmt(d.demo)}</div>
+                                      <div className="text-emerald-300">Sales: {fmt(d.sales)}</div>
+                                      <div className="border-t border-gray-700 mt-1 pt-1">Total: {fmt(d.demo + d.sales)}</div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                          <div className="flex gap-1.5 mt-1">
+                            {months.map(m => (
+                              <div key={m} className="flex-1 text-center text-[10px] text-gray-500 truncate">{monthLabel(m)}</div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                })()}
+
+                {/* Per-domain category breakdown — side by side */}
+                {(() => {
+                  const catData = monthlySummary.by_month_category;
+                  if (catData.length === 0) return null;
+
+                  // Aggregate by domain + category
+                  const domainCats: Record<string, Record<string, number>> = { demo: {}, sales: {} };
+                  for (const r of catData) {
+                    const dom = r.domain === 'demo' ? 'demo' : 'sales';
+                    domainCats[dom][r.category] = (domainCats[dom][r.category] || 0) + r.total;
+                  }
+
+                  const demoEntries = Object.entries(domainCats.demo).sort((a, b) => b[1] - a[1]);
+                  const salesEntries = Object.entries(domainCats.sales).sort((a, b) => b[1] - a[1]);
+                  const demoTotal = demoEntries.reduce((s, [, v]) => s + v, 0);
+                  const salesTotal = salesEntries.reduce((s, [, v]) => s + v, 0);
+
+                  function DomainBreakdown({ title, entries, total, accent }: { title: string; entries: [string, number][]; total: number; accent: string }) {
+                    if (entries.length === 0) return null;
+                    const max = entries[0]?.[1] || 1;
+                    return (
+                      <Card className="p-5">
+                        <div className="flex items-center justify-between mb-4">
+                          <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
+                          <span className={`text-sm font-bold ${accent}`}>{fmt(total)}</span>
+                        </div>
+                        <div className="space-y-2.5">
+                          {entries.map(([cat, val]) => (
+                            <div key={cat}>
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-xs text-gray-700 flex items-center gap-1.5">
+                                  <span className="w-2 h-2 rounded-sm" style={{ background: CAT_COLORS[cat] || '#6b7280' }} />
+                                  {cat}
+                                </span>
+                                <span className="text-xs tabular-nums text-gray-500">{fmt(val)} ({total > 0 ? ((val / total) * 100).toFixed(1) : 0}%)</span>
+                              </div>
+                              <div className="w-full bg-gray-100 rounded-full h-2">
+                                <div className="h-2 rounded-full transition-all" style={{ width: `${(val / max) * 100}%`, background: CAT_COLORS[cat] || '#6b7280' }} />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </Card>
+                    );
+                  }
+
+                  return (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      <DomainBreakdown title="Demo Expenses — by Category" entries={demoEntries} total={demoTotal} accent="text-indigo-600" />
+                      <DomainBreakdown title="Sales Activities — by Category" entries={salesEntries} total={salesTotal} accent="text-emerald-600" />
                     </div>
-                  </Card>
-                )}
+                  );
+                })()}
               </>
             )}
 
@@ -1160,6 +1244,30 @@ export default function SupplierInvoicesPage() {
                 <StackedBarChart title="Expenses per Category per Month" data={stackedData} categories={allCategories} />
                 {summary.avg_by_category.length > 0 && <AvgBarChart data={summary.avg_by_category} />}
               </>
+            )}
+
+            {/* Quick Category Filter */}
+            {(summary?.categories || []).length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-medium text-gray-500">Category:</span>
+                <button
+                  onClick={() => setFilterCategories([])}
+                  className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${filterCategories.length === 0 ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                >All</button>
+                {allCategories.filter(c => (summary?.categories || []).includes(c)).map(cat => {
+                  const isActive = filterCategories.includes(cat);
+                  return (
+                    <button key={cat}
+                      onClick={() => setFilterCategories(isActive ? filterCategories.filter(c => c !== cat) : [...filterCategories, cat])}
+                      className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors flex items-center gap-1.5 ${isActive ? 'text-white' : 'text-gray-600 hover:bg-gray-200'}`}
+                      style={isActive ? { background: CAT_COLORS[cat] || '#6b7280' } : { background: (CAT_COLORS[cat] || '#6b7280') + '18' }}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: isActive ? 'white' : CAT_COLORS[cat] || '#6b7280' }} />
+                      {cat}
+                    </button>
+                  );
+                })}
+              </div>
             )}
 
             {/* Invoice Table */}
