@@ -39,7 +39,7 @@ router.get('/download/:filename', (req: Request, res: Response) => {
     res.status(403).json({ error: 'Admin access required' });
     return;
   }
-  const { filename } = req.params;
+  const filename = req.params.filename as string;
   // Only allow our own backup filenames to prevent path traversal
   if (!/^erp-backup-[\dT-]+\.zip$/.test(filename)) {
     res.status(400).json({ error: 'Invalid filename' });
