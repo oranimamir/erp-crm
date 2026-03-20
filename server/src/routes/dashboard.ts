@@ -113,44 +113,63 @@ router.get('/shipping-overview', (_req: Request, res: Response) => {
 });
 
 router.get('/monthly-payments', (_req: Request, res: Response) => {
-  const months = db.prepare(`
-    WITH RECURSIVE months(m) AS (
-      SELECT strftime('%Y-01', 'now')
-      UNION ALL
-      SELECT strftime('%Y-%m', m || '-01', '+1 month') FROM months
-      WHERE m < strftime('%Y-%m', 'now')
-    )
-    SELECT
-      months.m as month,
-      COALESCE((
-        SELECT SUM(eur_val) FROM (
-          SELECT COALESCE(wt.eur_amount, wt.amount) as eur_val FROM wire_transfers wt
-          JOIN invoices i ON wt.invoice_id = i.id
-          WHERE i.type = 'customer'
-            AND strftime('%Y-%m', wt.transfer_date) = months.m
-          UNION ALL
-          SELECT p.amount FROM payments p
-          JOIN invoices i ON p.invoice_id = i.id
-          WHERE i.type = 'customer'
-            AND strftime('%Y-%m', p.payment_date) = months.m
-          UNION ALL
-          SELECT COALESCE(i.eur_amount, i.amount) FROM invoices i
-          WHERE i.type = 'customer' AND i.status = 'paid'
-            AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
-            AND NOT EXISTS (SELECT 1 FROM wire_transfers wt WHERE wt.invoice_id = i.id)
-            AND i.payment_date IS NOT NULL
-            AND strftime('%Y-%m', i.payment_date) = months.m
-        )
-      ), 0) as received,
-      COALESCE((
-        SELECT SUM(amount)
+  try {
+    // Build month list for current year
+    const monthRows = db.prepare(`
+      WITH RECURSIVE months(m) AS (
+        SELECT strftime('%Y-01', 'now')
+        UNION ALL
+        SELECT strftime('%Y-%m', m || '-01', '+1 month') FROM months
+        WHERE m < strftime('%Y-%m', 'now')
+      )
+      SELECT
+        months.m as month,
+        COALESCE((
+          SELECT SUM(eur_val) FROM (
+            SELECT COALESCE(wt.eur_amount, wt.amount) as eur_val FROM wire_transfers wt
+            JOIN invoices i ON wt.invoice_id = i.id
+            WHERE i.type = 'customer'
+              AND strftime('%Y-%m', wt.transfer_date) = months.m
+            UNION ALL
+            SELECT p.amount FROM payments p
+            JOIN invoices i ON p.invoice_id = i.id
+            WHERE i.type = 'customer'
+              AND strftime('%Y-%m', p.payment_date) = months.m
+            UNION ALL
+            SELECT COALESCE(i.eur_amount, i.amount) FROM invoices i
+            WHERE i.type = 'customer' AND i.status = 'paid'
+              AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
+              AND NOT EXISTS (SELECT 1 FROM wire_transfers wt WHERE wt.invoice_id = i.id)
+              AND i.payment_date IS NOT NULL
+              AND strftime('%Y-%m', i.payment_date) = months.m
+          )
+        ), 0) as received
+      FROM months ORDER BY months.m
+    `).all() as any[];
+
+    // Fetch sales activities totals separately (demo_invoices table)
+    let salesByMonth: Record<string, number> = {};
+    try {
+      const salesRows = db.prepare(`
+        SELECT month, SUM(amount) as total
         FROM demo_invoices
         WHERE domain = 'sales'
-          AND month = months.m
-      ), 0) as paid_out
-    FROM months ORDER BY months.m
-  `).all();
-  res.json(months);
+        GROUP BY month
+      `).all() as any[];
+      for (const r of salesRows) salesByMonth[r.month] = r.total;
+    } catch (_) { /* table may not exist yet */ }
+
+    const result = monthRows.map((m: any) => ({
+      month: m.month,
+      received: m.received,
+      paid_out: salesByMonth[m.month] || 0,
+    }));
+
+    res.json(result);
+  } catch (err: any) {
+    console.error('[monthly-payments]', err?.message || err);
+    res.status(500).json({ error: 'Failed to fetch monthly payments' });
+  }
 });
 
 router.get('/in-transit', (_req: Request, res: Response) => {
