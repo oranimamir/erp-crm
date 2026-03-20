@@ -91,6 +91,7 @@ export default function InvoiceDetailPage() {
         setInvoice({ ...invoiceRes.data, wire_transfers: wireRes.data });
         setNewStatus(invoiceRes.data.status);
       })
+      .catch((err) => console.error('[InvoiceDetail] load failed:', err))
       .finally(() => setLoading(false));
   };
 

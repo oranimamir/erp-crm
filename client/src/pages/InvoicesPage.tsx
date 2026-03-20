@@ -200,6 +200,7 @@ export default function InvoicesPage() {
         setTotal(res.data.total);
         setTotalPages(res.data.totalPages);
       })
+      .catch((err) => console.error('[Invoices] load failed:', err))
       .finally(() => setLoading(false));
   };
 

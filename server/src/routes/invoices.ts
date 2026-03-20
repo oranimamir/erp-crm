@@ -173,8 +173,12 @@ router.put('/:id', uploadInvoice.single('file'), (req: Request, res: Response) =
   let file_name = existing.file_name;
   if (req.file) {
     if (existing.file_path) {
-      const oldPath = path.join(uploadsBase, 'invoices', existing.file_path);
-      if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+      try {
+        const oldPath = path.join(uploadsBase, 'invoices', existing.file_path);
+        if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+      } catch (err) {
+        console.warn('[invoices] Failed to delete old invoice file:', err);
+      }
     }
     file_path = req.file.filename;
     file_name = req.file.originalname;
@@ -227,8 +231,12 @@ router.delete('/:id', (req: Request, res: Response) => {
   if (!existing) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
   if (existing.file_path) {
-    const filePath = path.join(uploadsBase, 'invoices', existing.file_path);
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    try {
+      const filePath = path.join(uploadsBase, 'invoices', existing.file_path);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch (err) {
+      console.warn('[invoices] Failed to delete invoice file:', err);
+    }
   }
 
   db.prepare('DELETE FROM invoices WHERE id = ?').run(req.params.id);
@@ -264,35 +272,37 @@ router.post('/:id/payments', async (req: Request, res: Response) => {
       console.warn(`[invoice-payments] FX lookup failed for ${invoice.currency}/${payment_date}, proceeding without conversion:`, fxErr);
     }
 
-    db.prepare(`
-      INSERT INTO invoice_payments (invoice_id, amount, currency, fx_rate, eur_amount, payment_date, notes, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(req.params.id, payAmt, invoice.currency || 'EUR', fx_rate, eur_amount, payment_date, notes || null, req.user!.userId);
+    const addPayment = db.transaction(() => {
+      db.prepare(`
+        INSERT INTO invoice_payments (invoice_id, amount, currency, fx_rate, eur_amount, payment_date, notes, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(req.params.id, payAmt, invoice.currency || 'EUR', fx_rate, eur_amount, payment_date, notes || null, req.user!.userId);
 
-    db.saveToDisk();
+      // Recalculate total paid in invoice currency
+      const { total: totalPaid } = db.prepare('SELECT COALESCE(SUM(amount), 0) as total FROM invoice_payments WHERE invoice_id = ?').get(req.params.id) as any;
 
-    // Recalculate total paid in invoice currency
-    const { total: totalPaid } = db.prepare('SELECT COALESCE(SUM(amount), 0) as total FROM invoice_payments WHERE invoice_id = ?').get(req.params.id) as any;
+      const prevStatus = invoice.status;
+      let newStatus: string;
+      let newPaymentDate: string | null = null;
+      if (totalPaid >= invoice.amount) {
+        newStatus = 'paid';
+        newPaymentDate = payment_date;
+      } else {
+        newStatus = 'partially_paid';
+      }
 
-    const prevStatus = invoice.status;
-    let newStatus: string;
-    let newPaymentDate: string | null = null;
-    if (totalPaid >= invoice.amount) {
-      newStatus = 'paid';
-      newPaymentDate = payment_date;
-    } else {
-      newStatus = 'partially_paid';
-    }
+      db.prepare(`UPDATE invoices SET status=?, payment_date=?, updated_at=datetime('now') WHERE id=?`)
+        .run(newStatus, newPaymentDate, req.params.id);
 
-    db.prepare(`UPDATE invoices SET status=?, payment_date=?, updated_at=datetime('now') WHERE id=?`)
-      .run(newStatus, newPaymentDate, req.params.id);
+      if (prevStatus !== newStatus) {
+        db.prepare(`INSERT INTO status_history (entity_type, entity_id, old_status, new_status, changed_by, notes) VALUES ('invoice', ?, ?, ?, ?, ?)`)
+          .run(req.params.id, prevStatus, newStatus, req.user!.userId, 'Payment installment added');
+        notifyAdmin({ action: 'status changed', entity: 'Invoice', label: invoice.invoice_number,
+          performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId, detail: newStatus });
+      }
+    });
 
-    if (prevStatus !== newStatus) {
-      db.prepare(`INSERT INTO status_history (entity_type, entity_id, old_status, new_status, changed_by, notes) VALUES ('invoice', ?, ?, ?, ?, ?)`)
-        .run(req.params.id, prevStatus, newStatus, req.user!.userId, 'Payment installment added');
-      notifyAdmin({ action: 'status changed', entity: 'Invoice', label: invoice.invoice_number,
-        performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId, detail: newStatus });
-    }
+    addPayment();
 
     const updatedInvoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id);
     const allPayments = db.prepare('SELECT * FROM invoice_payments WHERE invoice_id = ? ORDER BY payment_date ASC').all(req.params.id);
@@ -346,8 +356,8 @@ router.get('/:id/wire-transfers', (req: Request, res: Response) => {
   const transfers = db.prepare(`
     SELECT wt.*, u.display_name as approved_by_name
     FROM wire_transfers wt LEFT JOIN users u ON wt.approved_by = u.id
-    WHERE wt.invoice_id = ${invoiceId} ORDER BY wt.created_at DESC
-  `).all();
+    WHERE wt.invoice_id = ? ORDER BY wt.created_at DESC
+  `).all(invoiceId);
   res.json(transfers);
 });
 

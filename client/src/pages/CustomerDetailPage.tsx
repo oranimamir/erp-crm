@@ -24,7 +24,8 @@ export default function CustomerDetailPage() {
       setInvoices(i.data);
       setOrders(o.data);
       setShipments(s.data);
-    }).finally(() => setLoading(false));
+    }).catch((err) => console.error('[CustomerDetail] load failed:', err))
+      .finally(() => setLoading(false));
   }, [id]);
 
   if (loading) return <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" /></div>;

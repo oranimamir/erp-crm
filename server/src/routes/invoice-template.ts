@@ -2,12 +2,14 @@ import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import { fileURLToPath } from 'url';
 // @ts-ignore — import lib directly to avoid pdf-parse's debug-mode crash in ESM
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const router = Router();
 
-const uploadsBase = process.env.UPLOADS_PATH || path.join(process.cwd(), 'uploads');
+const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
 const templateCfgPath = path.join(uploadsBase, 'invoice-template-config.json');
 
 // Supported template extensions

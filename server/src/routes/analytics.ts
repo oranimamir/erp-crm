@@ -76,15 +76,18 @@ router.get('/summary', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Invalid supplier_category' }); return;
   }
 
-  // Safe WHERE clauses (integer IDs only — no string injection; category validated against whitelist)
-  const custWhere = customerId ? `AND i.customer_id = ${customerId}` : '';
-  const suppWhere = supplierId ? `AND i.supplier_id = ${supplierId}` : '';
-  const custWhereOnly = customerId ? `AND customer_id = ${customerId}` : '';
-  const suppWhereOnly = supplierId ? `AND supplier_id = ${supplierId}` : '';
+  // Parameterized WHERE clauses
+  const custWhere = customerId ? `AND i.customer_id = ?` : '';
+  const custParams = customerId ? [customerId] : [];
+  const suppWhere = supplierId ? `AND i.supplier_id = ?` : '';
+  const suppParams = supplierId ? [supplierId] : [];
+  const custWhereOnly = customerId ? `AND customer_id = ?` : '';
+  const suppWhereOnly = supplierId ? `AND supplier_id = ?` : '';
 
   // Supplier category: JOIN + condition added to each supplier branch
   const catJoin = supplierCategory ? `JOIN suppliers s ON i.supplier_id = s.id` : '';
-  const catCond = supplierCategory ? `AND s.category = '${supplierCategory}'` : '';
+  const catCond = supplierCategory ? `AND s.category = ?` : '';
+  const catParams = supplierCategory ? [supplierCategory] : [];
 
   // ── Monthly received (customer invoices paid) ──────────────────────────────
   const receivedRows = db.prepare(`
@@ -107,7 +110,7 @@ router.get('/summary', async (req: Request, res: Response) => {
         AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
         ${custWhere}
     ) GROUP BY month
-  `).all(dateStart, dateEnd, dateStart, dateEnd, dateStart, dateEnd) as any[];
+  `).all(dateStart, dateEnd, ...custParams, dateStart, dateEnd, ...custParams, dateStart, dateEnd, ...custParams) as any[];
 
   // ── Monthly paid out (supplier invoices by invoice_date) ─────────────────
   const paidRows = db.prepare(`
@@ -121,7 +124,7 @@ router.get('/summary', async (req: Request, res: Response) => {
       AND i.invoice_date BETWEEN ? AND ?
       ${suppWhere} ${catCond}
     GROUP BY month
-  `).all(dateStart, dateEnd) as any[];
+  `).all(dateStart, dateEnd, ...suppParams, ...catParams) as any[];
 
   // ── Build full month grid ──────────────────────────────────────────────────
   const months: Record<string, { month: string; received: number; paid_out: number }> = {};
@@ -150,7 +153,7 @@ router.get('/summary', async (req: Request, res: Response) => {
       ) BETWEEN ? AND ?
       ${custWhere}
     GROUP BY i.customer_id ORDER BY total DESC LIMIT 20
-  `).all(dateStart, dateEnd) as any[];
+  `).all(dateStart, dateEnd, ...custParams) as any[];
 
   // ── By supplier ──────────────────────────────────────────────────────────
   const bySupplier = db.prepare(`
@@ -163,7 +166,7 @@ router.get('/summary', async (req: Request, res: Response) => {
       AND i.invoice_date BETWEEN ? AND ?
       ${suppWhere} ${catCond}
     GROUP BY i.supplier_id ORDER BY total DESC LIMIT 20
-  `).all(dateStart, dateEnd) as any[];
+  `).all(dateStart, dateEnd, ...suppParams, ...catParams) as any[];
 
   // ── Totals ────────────────────────────────────────────────────────────────
   const totalReceived = monthly.reduce((s, m) => s + m.received, 0);
@@ -175,7 +178,7 @@ router.get('/summary', async (req: Request, res: Response) => {
     FROM invoices
     WHERE type = 'customer' AND status IN ('sent', 'overdue', 'partially_paid') AND due_date IS NOT NULL
       AND strftime('%Y', due_date) = ? ${custWhereOnly}
-  `).all(year) as any[];
+  `).all(year, ...custParams) as any[];
   const outstanding = await sumLiveEur(outstandingRows);
 
   // Expected: sent invoices with NO due_date (unscheduled) — live FX
@@ -183,7 +186,7 @@ router.get('/summary', async (req: Request, res: Response) => {
     SELECT amount, UPPER(COALESCE(currency, 'USD')) as currency
     FROM invoices
     WHERE type = 'customer' AND status = 'sent' AND due_date IS NULL ${custWhereOnly}
-  `).all() as any[];
+  `).all(...custParams) as any[];
   const expectedReceivable = await sumLiveEur(expectedRows);
 
   // Outstanding supplier payable — invoices with no invoice_date OR unpaid status
@@ -194,7 +197,7 @@ router.get('/summary', async (req: Request, res: Response) => {
     WHERE i.type = 'supplier' AND i.status NOT IN ('paid', 'cancelled', 'paid_with_other')
       AND i.invoice_date IS NULL
     ${suppWhereOnly} ${catCond}
-  `).all() as any[];
+  `).all(...suppParams, ...catParams) as any[];
   const outstandingPayable = await sumLiveEur(payableRows);
 
   res.json({
@@ -245,7 +248,8 @@ router.get('/quantity', (req: Request, res: Response) => {
   if (req.query.customer_id && (isNaN(customerId!) || customerId! <= 0)) {
     res.status(400).json({ error: 'Invalid customer_id' }); return;
   }
-  const custWhere = customerId ? `AND o.customer_id = ${customerId}` : '';
+  const custWhere = customerId ? `AND o.customer_id = ?` : '';
+  const custParams = customerId ? [customerId] : [];
 
   const tonsRows = db.prepare(`
     SELECT strftime('%Y-%m', COALESCE(o.order_date, date(o.created_at))) as month,
@@ -256,7 +260,7 @@ router.get('/quantity', (req: Request, res: Response) => {
       AND COALESCE(o.order_date, date(o.created_at)) BETWEEN ? AND ?
       ${custWhere}
     GROUP BY month
-  `).all(dateStart, dateEnd) as any[];
+  `).all(dateStart, dateEnd, ...custParams) as any[];
 
   const months: Record<string, { month: string; tons: number }> = {};
   for (let m = monthStart; m <= monthEnd; m++) {
@@ -282,7 +286,7 @@ router.get('/quantity', (req: Request, res: Response) => {
     GROUP BY o.customer_id
     ORDER BY tons DESC
     LIMIT 30
-  `).all(dateStart, dateEnd) as any[];
+  `).all(dateStart, dateEnd, ...custParams) as any[];
 
   res.json({ monthly, total_tons: totalTons, by_customer: byCustomer });
 });

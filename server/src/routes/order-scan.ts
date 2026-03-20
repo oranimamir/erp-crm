@@ -6,8 +6,10 @@ import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import db from '../database.js';
 import path from 'path';
 import fs from 'fs';
+import { fileURLToPath } from 'url';
 
-const uploadsBase = process.env.UPLOADS_PATH || path.join(process.cwd(), 'uploads');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
 
 const router = Router();
 
