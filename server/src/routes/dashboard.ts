@@ -143,12 +143,10 @@ router.get('/monthly-payments', (_req: Request, res: Response) => {
         )
       ), 0) as received,
       COALESCE((
-        SELECT SUM(COALESCE(i.eur_amount, i.amount))
-        FROM invoices i
-        WHERE i.type = 'supplier'
-          AND i.status NOT IN ('cancelled')
-          AND i.invoice_date IS NOT NULL
-          AND strftime('%Y-%m', i.invoice_date) = months.m
+        SELECT SUM(amount)
+        FROM demo_invoices
+        WHERE domain = 'sales'
+          AND month = months.m
       ), 0) as paid_out
     FROM months ORDER BY months.m
   `).all();

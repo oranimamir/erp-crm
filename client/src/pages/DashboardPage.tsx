@@ -322,16 +322,22 @@ export default function DashboardPage() {
                       <div className="flex items-end gap-1.5 h-full">
                         {monthlyPayments.map((m: any) => (
                           <div key={m.month} className="flex-1 flex items-end justify-center gap-0.5 h-full">
-                            <div
-                              className="flex-1 max-w-[14px] bg-green-500 rounded-t transition-all"
-                              style={{ height: `${m.received > 0 ? Math.max((m.received / maxVal) * 165, 2) : 0}px` }}
-                              title={`Received: €${m.received.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
-                            />
-                            <div
-                              className="flex-1 max-w-[14px] bg-red-400 rounded-t transition-all"
-                              style={{ height: `${m.paid_out > 0 ? Math.max((m.paid_out / maxVal) * 165, 2) : 0}px` }}
-                              title={`Paid Out: €${m.paid_out.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
-                            />
+                            <div className="flex-1 max-w-[14px] flex flex-col items-center">
+                              {m.received > 0 && <span className="text-[8px] text-green-700 font-medium tabular-nums whitespace-nowrap mb-0.5">{fmtAxis(m.received)}</span>}
+                              <div
+                                className="w-full bg-green-500 rounded-t transition-all"
+                                style={{ height: `${m.received > 0 ? Math.max((m.received / maxVal) * 140, 2) : 0}px` }}
+                                title={`Received: €${m.received.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                              />
+                            </div>
+                            <div className="flex-1 max-w-[14px] flex flex-col items-center">
+                              {m.paid_out > 0 && <span className="text-[8px] text-red-600 font-medium tabular-nums whitespace-nowrap mb-0.5">{fmtAxis(m.paid_out)}</span>}
+                              <div
+                                className="w-full bg-red-400 rounded-t transition-all"
+                                style={{ height: `${m.paid_out > 0 ? Math.max((m.paid_out / maxVal) * 140, 2) : 0}px` }}
+                                title={`Paid Out: €${m.paid_out.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                              />
+                            </div>
                             {m.received === 0 && m.paid_out === 0 && (
                               <div className="w-full max-w-[28px] bg-gray-100 rounded-t" style={{ height: '2px' }} />
                             )}
@@ -559,6 +565,7 @@ export default function DashboardPage() {
                         const barH = m.total > 0 ? Math.max((m.total / maxVal) * (chartH - 20), 3) : 0;
                         return (
                           <div key={m.month} className="flex-1 h-full flex flex-col items-center justify-end group relative">
+                            {m.total > 0 && <span className="text-[8px] text-indigo-700 font-medium tabular-nums whitespace-nowrap mb-0.5">{fmtAxis(m.total)}</span>}
                             <div className="w-full max-w-[32px] bg-indigo-500 rounded-t transition-all hover:bg-indigo-600 cursor-pointer"
                               style={{ height: `${barH}px` }}
                               title={`${m.month}: ${fmt(m.total)} (${m.count} invoices)`} />
