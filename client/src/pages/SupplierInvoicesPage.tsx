@@ -189,7 +189,7 @@ function StackedBarChart({ data, categories, title }: {
                 const monthTotal = Object.values(d.values).reduce((a, b) => a + b, 0);
                 return (
                   <div key={d.month} className="flex-1 h-full flex flex-col items-center justify-end group relative">
-                    {monthTotal > 0 && <span className="text-[8px] text-gray-600 font-medium tabular-nums whitespace-nowrap mb-0.5">{fmtAxis(monthTotal)}</span>}
+                    {monthTotal > 0 && <span className="text-[10px] text-gray-600 font-semibold tabular-nums whitespace-nowrap mb-0.5">{fmtAxis(monthTotal)}</span>}
                     <div className="w-full max-w-14 flex flex-col-reverse">
                       {categories.filter(c => (d.values[c] || 0) > 0).map(cat => (
                         <div key={cat} className="w-full transition-opacity cursor-pointer"
@@ -1078,12 +1078,12 @@ export default function SupplierInvoicesPage() {
                                 return (
                                   <div key={m} className="flex-1 h-full flex items-end justify-center gap-0.5 group relative">
                                     <div className="flex-1 max-w-[18px] flex flex-col items-center justify-end">
-                                      {d.demo > 0 && <span className="text-[8px] text-indigo-700 font-medium tabular-nums whitespace-nowrap mb-0.5">{fmtAxis(d.demo)}</span>}
+                                      {d.demo > 0 && <span className="text-[10px] text-indigo-700 font-semibold tabular-nums whitespace-nowrap mb-0.5">{fmtAxis(d.demo)}</span>}
                                       <div className="w-full bg-indigo-500 rounded-t transition-all hover:bg-indigo-600"
                                         style={{ height: `${demoH}px` }} title={`Demo: ${fmt(d.demo)}`} />
                                     </div>
                                     <div className="flex-1 max-w-[18px] flex flex-col items-center justify-end">
-                                      {d.sales > 0 && <span className="text-[8px] text-emerald-700 font-medium tabular-nums whitespace-nowrap mb-0.5">{fmtAxis(d.sales)}</span>}
+                                      {d.sales > 0 && <span className="text-[10px] text-emerald-700 font-semibold tabular-nums whitespace-nowrap mb-0.5">{fmtAxis(d.sales)}</span>}
                                       <div className="w-full bg-emerald-500 rounded-t transition-all hover:bg-emerald-600"
                                         style={{ height: `${salesH}px` }} title={`Sales: ${fmt(d.sales)}`} />
                                     </div>
