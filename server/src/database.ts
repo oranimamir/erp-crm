@@ -34,17 +34,36 @@ class DatabaseWrapper {
   }
 
   saveToDisk() {
-    const data = this.sqlDb.export();
-    const buffer = Buffer.from(data);
-    fs.writeFileSync(dbPath, buffer);
+    try {
+      const data = this.sqlDb.export();
+      const buffer = Buffer.from(data);
+      fs.writeFileSync(dbPath, buffer);
+    } catch (err: any) {
+      console.error(`[db] Save to disk failed (${err.code || err.message})`);
+    }
   }
 
   /** Create a timestamped backup of the database file before risky operations */
   backupToDisk() {
-    if (fs.existsSync(dbPath)) {
-      const backupPath = dbPath.replace(/\.db$/, '') + '_backup_' + Date.now() + '.db';
-      fs.copyFileSync(dbPath, backupPath);
-      console.log(`[db] Backup created: ${backupPath}`);
+    try {
+      if (fs.existsSync(dbPath)) {
+        // Clean up old backup files first — keep only the 2 most recent
+        const dir = path.dirname(dbPath);
+        const base = path.basename(dbPath, '.db');
+        const backups = fs.readdirSync(dir)
+          .filter((f: string) => f.startsWith(base + '_backup_') && f.endsWith('.db'))
+          .sort()
+          .reverse();
+        for (const old of backups.slice(2)) {
+          try { fs.unlinkSync(path.join(dir, old)); } catch (_) {}
+        }
+
+        const backupPath = dbPath.replace(/\.db$/, '') + '_backup_' + Date.now() + '.db';
+        fs.copyFileSync(dbPath, backupPath);
+        console.log(`[db] Backup created: ${backupPath}`);
+      }
+    } catch (err: any) {
+      console.error(`[db] Backup failed (${err.code || err.message}) — continuing without backup`);
     }
   }
 
