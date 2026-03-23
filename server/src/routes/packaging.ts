@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import db from '../database.js';
+import { notifyAdmin } from '../lib/notify.js';
 
 const router = Router();
 
@@ -39,6 +40,7 @@ router.post('/', (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(type.trim(), code.trim(), product_mass ?? null, product ?? null, units_per_pallet ?? null, pallet_label_code ?? null, weight_per_pallet ?? null, weight_packaging ?? null, weight_pallet ?? null, gross_weight ?? null, compatible, notes);
     const row = db.prepare('SELECT * FROM packaging WHERE id = ?').get(result.lastInsertRowid);
+    notifyAdmin({ entity: 'Packaging', action: 'created', label: `${type.trim()} — ${code.trim()}`, performedBy: (req as any).user?.display_name || 'Unknown', performedById: (req as any).user?.userId });
     res.status(201).json(row);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -58,7 +60,9 @@ router.put('/:id', (req, res) => {
     db.prepare(`
       UPDATE packaging SET type=?, code=?, product_mass=?, product=?, units_per_pallet=?, pallet_label_code=?, weight_per_pallet=?, weight_packaging=?, weight_pallet=?, gross_weight=?, compatible=?, notes=?, updated_at=datetime('now') WHERE id=?
     `).run(type.trim(), code.trim(), product_mass ?? null, product ?? null, units_per_pallet ?? null, pallet_label_code ?? null, weight_per_pallet ?? null, weight_packaging ?? null, weight_pallet ?? null, gross_weight ?? null, compatible ?? 'Food', notes ?? null, req.params.id);
-    res.json(db.prepare('SELECT * FROM packaging WHERE id = ?').get(req.params.id));
+    const updated = db.prepare('SELECT * FROM packaging WHERE id = ?').get(req.params.id) as any;
+    notifyAdmin({ entity: 'Packaging', action: 'updated', label: `${updated?.type} — ${updated?.code}`, performedBy: (req as any).user?.display_name || 'Unknown', performedById: (req as any).user?.userId });
+    res.json(updated);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -66,9 +70,10 @@ router.put('/:id', (req, res) => {
 
 // DELETE /:id
 router.delete('/:id', (req, res) => {
-  const existing = db.prepare('SELECT id FROM packaging WHERE id = ?').get(req.params.id);
+  const existing = db.prepare('SELECT * FROM packaging WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Packaging not found' }); return; }
   db.prepare('DELETE FROM packaging WHERE id = ?').run(req.params.id);
+  notifyAdmin({ entity: 'Packaging', action: 'deleted', label: `${existing?.type} — ${existing?.code}`, performedBy: (req as any).user?.display_name || 'Unknown', performedById: (req as any).user?.userId });
   res.json({ success: true });
 });
 

@@ -5,6 +5,7 @@ import { XMLParser } from 'fast-xml-parser';
 import multer from 'multer';
 // @ts-ignore — import lib directly to avoid pdf-parse's debug-mode crash in ESM
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
+import { notifyAdmin } from '../lib/notify.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
@@ -1034,6 +1035,14 @@ router.post('/confirm-import', (req: Request, res: Response) => {
       return;
     }
     db.saveToDisk();
+    const totalImported = (results as any[]).reduce((s: number, r: any) => s + r.count, 0);
+    notifyAdmin({
+      entity: 'Invoice Batch',
+      action: 'created',
+      label: `${totalImported} invoices (${filename})`,
+      performedBy: (req as any).user?.display_name || 'Unknown',
+      performedById: (req as any).user?.userId,
+    });
     res.json({ success: true, results });
   } catch (err: any) {
     console.error('[expense-upload] confirm-import error:', err);
@@ -1161,9 +1170,17 @@ router.get('/batches', (req: Request, res: Response) => {
 
 router.delete('/batches/:id', (req: Request, res: Response) => {
   try {
+    const batch = db.prepare('SELECT filename, month FROM demo_upload_batches WHERE id = ?').get(req.params.id) as any;
     db.prepare('DELETE FROM demo_invoices WHERE batch_id = ?').run(req.params.id);
     db.prepare('DELETE FROM demo_upload_batches WHERE id = ?').run(req.params.id);
     db.saveToDisk();
+    notifyAdmin({
+      entity: 'Invoice Batch',
+      action: 'deleted',
+      label: batch ? `${batch.filename} (${batch.month})` : `Batch #${req.params.id}`,
+      performedBy: (req as any).user?.display_name || 'Unknown',
+      performedById: (req as any).user?.userId,
+    });
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to delete batch' });
@@ -1194,6 +1211,13 @@ router.patch('/invoices/:id/category', (req: Request, res: Response) => {
     }
 
     db.saveToDisk();
+    notifyAdmin({
+      entity: 'Supplier Invoice',
+      action: 'updated',
+      label: `${inv.supplier} — category → ${category}`,
+      performedBy: (req as any).user?.display_name || 'Unknown',
+      performedById: (req as any).user?.userId,
+    });
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to update category' });
@@ -1328,6 +1352,14 @@ router.post('/upload-single', upload.single('file'), async (req: Request, res: R
       }
     }
 
+    notifyAdmin({
+      entity: 'Supplier Invoice',
+      action: 'created',
+      label: `${parsed.supplier || 'Unknown'} — ${file.originalname}`,
+      performedBy: (req as any).user?.display_name || 'Unknown',
+      performedById: (req as any).user?.userId,
+    });
+
     res.json({
       invoice: {
         invoiceId: parsed.invoiceId || '',
@@ -1396,6 +1428,13 @@ router.post('/confirm-single', (req: Request, res: Response) => {
     );
 
     db.saveToDisk();
+    notifyAdmin({
+      entity: 'Supplier Invoice',
+      action: 'created',
+      label: `${invoice.supplier || 'Unknown'} — ${invoice.invoiceId || 'no ID'}`,
+      performedBy: (req as any).user?.display_name || 'Unknown',
+      performedById: (req as any).user?.userId,
+    });
     res.json({ success: true, batchId });
   } catch (err: any) {
     console.error('[demo-expenses] confirm-single error:', err);
@@ -1417,6 +1456,13 @@ router.patch('/invoices/:id/supplier', (req: Request, res: Response) => {
 
     db.prepare('UPDATE demo_invoices SET supplier = ? WHERE id = ?').run(supplier, req.params.id);
     db.saveToDisk();
+    notifyAdmin({
+      entity: 'Supplier Invoice',
+      action: 'updated',
+      label: `Supplier renamed to "${supplier}"`,
+      performedBy: (req as any).user?.display_name || 'Unknown',
+      performedById: (req as any).user?.userId,
+    });
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to update supplier' });
@@ -1459,6 +1505,13 @@ router.post('/supplier-mappings', (req: Request, res: Response) => {
     ).run(supplierName.toLowerCase(), domain, category, supplierName);
 
     db.saveToDisk();
+    notifyAdmin({
+      entity: 'Supplier Mapping',
+      action: 'created',
+      label: `${supplierName} → ${category} (${domain})`,
+      performedBy: (req as any).user?.display_name || 'Unknown',
+      performedById: (req as any).user?.userId,
+    });
     res.json({ success: true, id: result.lastInsertRowid });
   } catch (err: any) {
     console.error('[demo-expenses] add supplier mapping error:', err);
@@ -1468,8 +1521,16 @@ router.post('/supplier-mappings', (req: Request, res: Response) => {
 
 router.delete('/supplier-mappings/:id', (req: Request, res: Response) => {
   try {
+    const mapping = db.prepare('SELECT supplier_pattern, category FROM demo_supplier_mappings WHERE id = ? AND is_user_defined = 1').get(req.params.id) as any;
     db.prepare('DELETE FROM demo_supplier_mappings WHERE id = ? AND is_user_defined = 1').run(req.params.id);
     db.saveToDisk();
+    notifyAdmin({
+      entity: 'Supplier Mapping',
+      action: 'deleted',
+      label: mapping ? `${mapping.supplier_pattern} (${mapping.category})` : `Mapping #${req.params.id}`,
+      performedBy: (req as any).user?.display_name || 'Unknown',
+      performedById: (req as any).user?.userId,
+    });
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to delete supplier mapping' });

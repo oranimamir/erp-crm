@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
+import { notifyAdmin } from '../lib/notify.js';
 
 const router = Router();
 
@@ -78,6 +79,7 @@ router.post('/', (req: Request, res: Response) => {
       .run(result.lastInsertRowid, req.user!.userId);
 
     const batch = db.prepare('SELECT * FROM production_batches WHERE id = ?').get(result.lastInsertRowid);
+    notifyAdmin({ action: 'created', entity: 'Production Batch', label: lot_number, performedBy: (req as any).user?.display_name || 'Unknown', performedById: (req as any).user?.userId });
     res.status(201).json(batch);
   } catch (err: any) {
     if (err.message?.includes('UNIQUE')) {
@@ -110,6 +112,7 @@ router.put('/:id', (req: Request, res: Response) => {
     );
 
     const batch = db.prepare('SELECT * FROM production_batches WHERE id = ?').get(req.params.id);
+    notifyAdmin({ action: 'updated', entity: 'Production Batch', label: (batch as any)?.lot_number || existing.lot_number, performedBy: (req as any).user?.display_name || 'Unknown', performedById: (req as any).user?.userId });
     res.json(batch);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -128,6 +131,7 @@ router.patch('/:id/status', (req: Request, res: Response) => {
     .run(req.params.id, existing.status, status, req.user!.userId, notes || null);
 
   const batch = db.prepare('SELECT * FROM production_batches WHERE id = ?').get(req.params.id);
+  notifyAdmin({ action: 'status changed', entity: 'Production Batch', label: existing.lot_number, performedBy: (req as any).user?.display_name || 'Unknown', performedById: (req as any).user?.userId, detail: status });
   res.json(batch);
 });
 
@@ -136,6 +140,7 @@ router.delete('/:id', (req: Request, res: Response) => {
   if (!existing) { res.status(404).json({ error: 'Batch not found' }); return; }
 
   db.prepare('DELETE FROM production_batches WHERE id = ?').run(req.params.id);
+  notifyAdmin({ action: 'deleted', entity: 'Production Batch', label: existing.lot_number, performedBy: (req as any).user?.display_name || 'Unknown', performedById: (req as any).user?.userId });
   res.json({ message: 'Batch deleted' });
 });
 

@@ -5,6 +5,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 // @ts-ignore — import lib directly to avoid pdf-parse's debug-mode crash in ESM
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
+import { notifyAdmin } from '../lib/notify.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const router = Router();
@@ -131,6 +132,7 @@ router.post('/', upload.single('template'), async (req: Request, res: Response) 
 
   fs.writeFileSync(templateCfgPath, JSON.stringify(config, null, 2));
   const ext = path.extname(req.file.originalname).toLowerCase();
+  notifyAdmin({ action: 'updated', entity: 'Invoice Template', label: req.file.originalname, performedBy: (req as any).user?.display_name || 'Unknown', performedById: (req as any).user?.userId });
   res.json({ exists: true, fileType: ext === '.docx' ? 'docx' : 'pdf', config });
 });
 
@@ -141,6 +143,7 @@ router.delete('/', (_req: Request, res: Response) => {
     if (fs.existsSync(p)) fs.unlinkSync(p);
   }
   if (fs.existsSync(templateCfgPath)) fs.unlinkSync(templateCfgPath);
+  notifyAdmin({ action: 'deleted', entity: 'Invoice Template', label: 'Template removed', performedBy: (_req as any).user?.display_name || 'Unknown', performedById: (_req as any).user?.userId });
   res.json({ exists: false });
 });
 

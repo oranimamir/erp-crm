@@ -3,6 +3,7 @@ import multer from 'multer';
 import db from '../database.js';
 import { parseAndInsertStockCsv } from '../lib/parse-stock-csv.js';
 import { checkEmailForStockUpdates, isEmailStockConfigured } from '../lib/email-stock.js';
+import { notifyAdmin } from '../lib/notify.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -62,6 +63,7 @@ router.post('/upload', upload.single('file'), (req: Request, res: Response) => {
       uploadedBy,
       source: 'manual',
     });
+    notifyAdmin({ action: 'created', entity: 'Warehouse Stock', label: `${inserted} rows from ${req.file.originalname}`, performedBy: uploadedBy, performedById: (req as any).user?.userId });
     res.json({ message: `Imported ${inserted} rows`, inserted, missingBatches });
   } catch (err: any) {
     res.status(400).json({ error: err.message });

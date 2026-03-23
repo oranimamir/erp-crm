@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
 import { getEurRate } from '../lib/fx.js';
+import { notifyAdmin } from '../lib/notify.js';
 import { uploadOperationDoc } from '../middleware/upload.js';
 import fs from 'fs';
 import path from 'path';
@@ -26,6 +27,7 @@ router.post('/categories', (req: Request, res: Response) => {
   try {
     const result = db.prepare('INSERT INTO document_categories (name) VALUES (?)').run(name.trim());
     const cat = db.prepare('SELECT * FROM document_categories WHERE id = ?').get(result.lastInsertRowid);
+    notifyAdmin({ action: 'created', entity: 'Operation', label: `Category: ${name.trim()}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
     res.status(201).json(cat);
   } catch (err: any) {
     if (err.message?.includes('UNIQUE')) {
@@ -233,6 +235,7 @@ router.post('/', (req: Request, res: Response) => {
       VALUES (?, ?, ?, ?, ?)
     `).run(operation_number, order_id || null, customer_id || null, supplier_id || null, notes || null);
     const op = db.prepare('SELECT * FROM operations WHERE id = ?').get(result.lastInsertRowid);
+    notifyAdmin({ action: 'created', entity: 'Operation', label: operation_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
     res.status(201).json(op);
   } catch (err: any) {
     if (err.message?.includes('UNIQUE')) {
@@ -266,6 +269,7 @@ router.patch('/:id/status', (req: Request, res: Response) => {
   }
 
   db.prepare(`UPDATE operations SET status=?, updated_at=datetime('now') WHERE id=?`).run(status, req.params.id);
+  notifyAdmin({ action: 'status changed', entity: 'Operation', label: existing.operation_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId, detail: status });
   res.json({ id: existing.id, status });
 });
 
@@ -310,6 +314,7 @@ router.post('/:id/ship', (req: Request, res: Response) => {
     }
   }
 
+  notifyAdmin({ action: 'status changed', entity: 'Operation', label: existing.operation_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId, detail: 'shipped' });
   res.json({ ok: true, invoices_updated: invoices.length });
 });
 
@@ -333,6 +338,7 @@ router.put('/:id', (req: Request, res: Response) => {
       req.params.id
     );
     const op = db.prepare('SELECT * FROM operations WHERE id = ?').get(req.params.id);
+    notifyAdmin({ action: 'updated', entity: 'Operation', label: operation_number || existing.operation_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
     res.json(op);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -353,6 +359,7 @@ router.delete('/:id', (req: Request, res: Response) => {
   }
 
   db.prepare('DELETE FROM operations WHERE id = ?').run(req.params.id);
+  notifyAdmin({ action: 'deleted', entity: 'Operation', label: `Operation #${req.params.id}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.json({ message: 'Operation deleted' });
 });
 
@@ -387,6 +394,7 @@ router.post('/:id/documents', uploadOperationDoc.single('file'), (req: Request, 
     WHERE od.id = ?
   `).get(result.lastInsertRowid);
 
+  notifyAdmin({ action: 'created', entity: 'Operation Document', label: req.file.originalname, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.status(201).json(doc);
 });
 
@@ -403,6 +411,7 @@ router.delete('/:id/documents/:docId', (req: Request, res: Response) => {
   if (fs.existsSync(fp)) fs.unlinkSync(fp);
 
   db.prepare('DELETE FROM operation_documents WHERE id = ?').run(doc.id);
+  notifyAdmin({ action: 'deleted', entity: 'Operation Document', label: doc.file_name || `Document #${doc.id}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.json({ message: 'Document deleted' });
 });
 
