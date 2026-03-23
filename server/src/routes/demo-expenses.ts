@@ -908,8 +908,8 @@ router.post('/confirm-import', (req: Request, res: Response) => {
     }
 
     const userId = (req as any).user?.userId;
-    const userRow = userId ? db.prepare('SELECT name FROM users WHERE id = ?').get(userId) as any : null;
-    const uploadedByName = userRow?.name || 'Unknown';
+    const userRow = userId ? db.prepare('SELECT display_name FROM users WHERE id = ?').get(userId) as any : null;
+    const uploadedByName = userRow?.display_name || 'Unknown';
     const skipSet = new Set(skipInvoiceIds || []);
 
     const doImport = db.transaction(() => {
@@ -1037,7 +1037,7 @@ router.post('/confirm-import', (req: Request, res: Response) => {
     res.json({ success: true, results });
   } catch (err: any) {
     console.error('[expense-upload] confirm-import error:', err);
-    res.status(500).json({ error: 'Failed to import invoices' });
+    res.status(500).json({ error: 'Failed to import invoices: ' + (err.message || String(err)) });
   }
 });
 
@@ -1357,8 +1357,8 @@ router.post('/confirm-single', (req: Request, res: Response) => {
     if (!invoice) { res.status(400).json({ error: 'No invoice data' }); return; }
 
     const userId = (req as any).user?.userId;
-    const userRow = userId ? db.prepare('SELECT name FROM users WHERE id = ?').get(userId) as any : null;
-    const uploadedByName = userRow?.name || 'Unknown';
+    const userRow = userId ? db.prepare('SELECT display_name FROM users WHERE id = ?').get(userId) as any : null;
+    const uploadedByName = userRow?.display_name || 'Unknown';
 
     // Check for duplicate
     if (invoice.invoiceId) {

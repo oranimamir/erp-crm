@@ -631,6 +631,7 @@ export default function SupplierInvoicesPage() {
         await finalizeZipImport(res.data, {}, [], false, false);
       }
     } catch (err: any) {
+      console.error('[ZIP upload] Error:', err?.response?.data || err);
       addToast(err?.response?.data?.error || 'ZIP upload failed', 'error');
     } finally {
       setZipUploading(false);
@@ -692,6 +693,7 @@ export default function SupplierInvoicesPage() {
       setZipNote('');
       fetchAll();
     } catch (err: any) {
+      console.error('[ZIP import] Error:', err?.response?.data || err);
       addToast(err?.response?.data?.error || 'Import failed', 'error');
     }
   };
