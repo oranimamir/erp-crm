@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import api from '../lib/api';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -298,15 +298,37 @@ function MultiSelect({ label, options, selected, onChange }: { label: string; op
 function InvoiceViewer({ invoiceId, onClose }: { invoiceId: number; onClose: () => void }) {
   const [inv, setInv] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const modalRef = React.useRef<HTMLDivElement>(null);
+  const dragging = React.useRef<{ startX: number; startY: number; startW: number; startH: number } | null>(null);
+
   useEffect(() => {
     setLoading(true);
     api.get(`/demo-expenses/invoices/${invoiceId}`).then(res => setInv(res.data)).catch(() => {}).finally(() => setLoading(false));
   }, [invoiceId]);
 
+  const hasPdf = inv?.embedded_pdf;
+
+  const onResizeMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const el = modalRef.current;
+    if (!el) return;
+    dragging.current = { startX: e.clientX, startY: e.clientY, startW: el.offsetWidth, startH: el.offsetHeight };
+    const onMove = (ev: MouseEvent) => {
+      if (!dragging.current || !modalRef.current) return;
+      const w = Math.max(400, Math.min(window.innerWidth * 0.95, dragging.current.startW + (ev.clientX - dragging.current.startX)));
+      const h = Math.max(300, Math.min(window.innerHeight * 0.95, dragging.current.startH + (ev.clientY - dragging.current.startY)));
+      modalRef.current.style.width = w + 'px';
+      modalRef.current.style.height = h + 'px';
+    };
+    const onUp = () => { dragging.current = null; window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl flex flex-col overflow-hidden"
-        style={{ resize: 'both', overflow: 'auto', minWidth: 400, minHeight: 300, width: 700, height: '80vh', maxWidth: '95vw', maxHeight: '95vh' }}
+      <div ref={modalRef} className="bg-white rounded-xl shadow-2xl flex flex-col overflow-hidden relative"
+        style={{ minWidth: 400, minHeight: 300, width: hasPdf ? '90vw' : 700, height: '90vh', maxWidth: '95vw', maxHeight: '95vh' }}
         onClick={e => e.stopPropagation()}>
         {loading ? (
           <div className="flex items-center justify-center py-20"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" /></div>
@@ -314,16 +336,16 @@ function InvoiceViewer({ invoiceId, onClose }: { invoiceId: number; onClose: () 
           <div className="p-6"><p className="text-gray-500">Invoice not found</p><button onClick={onClose} className="mt-4 text-sm text-primary-600 hover:text-primary-700">Close</button></div>
         ) : (
           <>
-            <div className="p-5 border-b flex items-center justify-between">
+            <div className="px-5 py-3 border-b flex items-center justify-between shrink-0">
               <div className="min-w-0">
                 <h3 className="text-lg font-semibold text-gray-900 truncate">{inv.invoice_id}</h3>
                 <p className="text-sm text-gray-500">{inv.supplier}</p>
               </div>
               <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><X size={20} /></button>
             </div>
-            <div className="flex-1 overflow-y-auto">
+            <div className="flex-1 overflow-hidden">
               {inv.embedded_pdf ? (
-                <iframe src={`data:application/pdf;base64,${inv.embedded_pdf}`} className="w-full h-full min-h-[600px]" title="Invoice PDF" />
+                <iframe src={`data:application/pdf;base64,${inv.embedded_pdf}`} className="w-full h-full border-0" title="Invoice PDF" />
               ) : (
                 <div className="p-6 space-y-4">
                   <div className="grid grid-cols-2 gap-4 text-sm">
@@ -357,6 +379,11 @@ function InvoiceViewer({ invoiceId, onClose }: { invoiceId: number; onClose: () 
             </div>
           </>
         )}
+        {/* Drag-to-resize handle */}
+        <div onMouseDown={onResizeMouseDown}
+          className="absolute bottom-0 right-0 w-5 h-5 cursor-se-resize z-10"
+          style={{ background: 'linear-gradient(135deg, transparent 50%, #9ca3af 50%, transparent 52%, transparent 62%, #9ca3af 62%, transparent 64%, transparent 74%, #9ca3af 74%)' }}
+        />
       </div>
     </div>
   );
