@@ -553,18 +553,29 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
   const eurNum = '([\\d]+(?:[.,]\\d{3})*[.,]\\d{2})';
 
   let amount = 0;
+  // Search from bottom of document — invoice totals are always near the end.
+  // Reverse lines so the first regex match corresponds to the last occurrence in the original text.
+  const reversedText = lines.slice().reverse().join('\n');
+
   const amountPatterns = [
+    // "Te betalen" / "Te betalen bedrag" (Dutch: amount to pay — usually the final total)
+    new RegExp(`(?:te\\s*betalen(?:\\s*bedrag)?|verschuldigd\\s*bedrag)\\s*[:.€]*\\s*(?:EUR)?\\s*${eurNum}`, 'i'),
+    // "Totaalbedrag" (Dutch: grand total)
+    new RegExp(`(?:totaalbedrag)\\s*[:.€]*\\s*(?:EUR)?\\s*${eurNum}`, 'i'),
     // "Totaal van de items" (Belgian/Dutch — excl. BTW)
     new RegExp(`(?:totaal\\s*van\\s*de\\s*items|totaal\\s*van\\s*de\\s*artikelen)\\s*[:.]*\\s*(?:€|EUR)?\\s*${eurNum}`, 'i'),
-    // Tax exclusive totals
+    // Tax exclusive totals — "bedrag excl. btw" (with optional period after excl)
     new RegExp(`(?:total\\s*(?:excl|hors|zonder|ex)\\.?\\s*(?:btw|tva|vat)?|subtotal|sous[\\s-]*total|netto\\s*bedrag|netto|taxable\\s*amount|maatstaf\\s*van\\s*heffing)\\s*[:.€]*\\s*(?:EUR)?\\s*${eurNum}`, 'i'),
-    new RegExp(`(?:totaal\\s*(?:excl|exclusief|zonder)\\.?\\s*(?:btw|tva)?|bedrag\\s*excl)\\s*[:.€]*\\s*(?:EUR)?\\s*${eurNum}`, 'i'),
+    new RegExp(`(?:totaal\\s*(?:excl|exclusief|zonder)\\.?\\s*(?:btw|tva)?|bedrag\\s*excl\\.?\\s*(?:btw|tva)?)\\s*[:.€]*\\s*(?:EUR)?\\s*${eurNum}`, 'i'),
     new RegExp(`(?:total\\s*h\\.?t\\.?)\\s*[:.€]*\\s*(?:EUR)?\\s*${eurNum}`, 'i'),
+    // Totaal incl. BTW patterns
+    new RegExp(`(?:totaal\\s*incl\\.?\\s*(?:btw|tva)?|total\\s*incl\\.?\\s*(?:btw|tva|vat)?)\\s*[:.€]*\\s*(?:EUR)?\\s*${eurNum}`, 'i'),
     // Generic total (but NOT "totaal van factuur" which is incl. VAT)
     new RegExp(`(?:totaal|total|totale|montant)\\s*[:.]*\\s*(?:€|EUR)?\\s*${eurNum}`, 'i'),
   ];
   for (const pat of amountPatterns) {
-    const m = text.match(pat);
+    // Search reversed text so we find the LAST occurrence (closest to bottom of document)
+    const m = reversedText.match(pat);
     if (m) {
       const parsed = parseEuropeanNumber(m[1]);
       if (parsed > 0 && !looksLikeDateNumber(m[1], parsed)) {
@@ -574,35 +585,36 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
     }
   }
 
-  // Fallback: find €-prefixed or EUR-prefixed amounts, take the largest reasonable one
+  // Fallback: find €-prefixed or EUR-prefixed amounts, take the LAST reasonable one
+  // (not the largest — the last one in the document is most likely the total)
   if (amount === 0) {
-    const euroAmounts: number[] = [];
+    let lastEuroAmount = 0;
     const euroPattern = new RegExp(`(?:€|EUR)\\s*${eurNum}`, 'gi');
     let em;
     while ((em = euroPattern.exec(text)) !== null) {
       const n = parseEuropeanNumber(em[1]);
-      if (n > 1 && !looksLikeDateNumber(em[1], n)) {
-        euroAmounts.push(n);
+      if (n > 1 && n <= 500000 && !looksLikeDateNumber(em[1], n)) {
+        lastEuroAmount = n;
       }
     }
-    if (euroAmounts.length > 0) {
-      amount = Math.max(...euroAmounts);
+    if (lastEuroAmount > 0) {
+      amount = lastEuroAmount;
     }
   }
 
-  // Second fallback: look for the largest European-format number with decimals
+  // Second fallback: look for the LAST reasonable European-format number with decimals
   if (amount === 0) {
-    const allAmounts: number[] = [];
+    let lastAmount = 0;
     const numPattern = /([\d]+(?:[.,]\d{3})*[.,]\d{2})\b/g;
     let nm;
     while ((nm = numPattern.exec(text)) !== null) {
       const n = parseEuropeanNumber(nm[1]);
-      if (n > 1 && !looksLikeDateNumber(nm[1], n)) {
-        allAmounts.push(n);
+      if (n > 1 && n <= 500000 && !looksLikeDateNumber(nm[1], n)) {
+        lastAmount = n;
       }
     }
-    if (allAmounts.length > 0) {
-      amount = Math.max(...allAmounts);
+    if (lastAmount > 0) {
+      amount = lastAmount;
     }
   }
 
@@ -615,7 +627,8 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
     new RegExp(`(?:vat|tax|mwst)\\s*(?:amount|bedrag)?\\s*[:.]*\\s*(?:€|EUR)?\\s*${eurNum}`, 'i'),
   ];
   for (const pat of vatPatterns) {
-    const m = text.match(pat);
+    // Search reversed text to prefer the last (bottom-of-document) match
+    const m = reversedText.match(pat);
     if (m) {
       const parsed = parseEuropeanNumber(m[1]);
       if (parsed > 0 && !looksLikeDateNumber(m[1], parsed)) {
@@ -1184,6 +1197,40 @@ router.delete('/batches/:id', (req: Request, res: Response) => {
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to delete batch' });
+  }
+});
+
+router.delete('/invoices/:id', (req: Request, res: Response) => {
+  try {
+    const inv = db.prepare('SELECT id, batch_id, invoice_id, supplier, amount FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
+    if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
+
+    db.prepare('DELETE FROM demo_invoices WHERE id = ?').run(req.params.id);
+
+    // Check if the parent batch has remaining invoices
+    const remaining = db.prepare('SELECT COUNT(*) as cnt, COALESCE(SUM(amount), 0) as total FROM demo_invoices WHERE batch_id = ?').get(inv.batch_id) as any;
+    let batchDeleted = false;
+
+    if (remaining.cnt === 0) {
+      db.prepare('DELETE FROM demo_upload_batches WHERE id = ?').run(inv.batch_id);
+      batchDeleted = true;
+    } else {
+      db.prepare('UPDATE demo_upload_batches SET invoice_count = ?, total_amount = ? WHERE id = ?')
+        .run(remaining.cnt, remaining.total, inv.batch_id);
+    }
+
+    db.saveToDisk();
+    notifyAdmin({
+      entity: 'Supplier Invoice',
+      action: 'deleted',
+      label: `${inv.invoice_id} — ${inv.supplier}`,
+      performedBy: (req as any).user?.display_name || 'Unknown',
+      performedById: (req as any).user?.userId,
+    });
+    res.json({ success: true, batchDeleted });
+  } catch (err: any) {
+    console.error('[demo-expenses] delete invoice error:', err);
+    res.status(500).json({ error: 'Failed to delete invoice' });
   }
 });
 

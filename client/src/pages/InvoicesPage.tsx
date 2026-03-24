@@ -104,6 +104,7 @@ export default function InvoicesPage() {
   const [yearFilter,  setYearFilter]  = useState(saved.yearFilter || '');
   const [monthFilter, setMonthFilter] = useState<string[]>(saved.monthFilter || []);
   const [wireFilter,  setWireFilter]  = useState(saved.wireFilter || '');
+  const [customerFilter, setCustomerFilter] = useState(saved.customerFilter || '');
   const [dateFrom,    setDateFrom]    = useState(saved.dateFrom || '');
   const [dateTo,      setDateTo]      = useState(saved.dateTo || '');
   const [sortBy, setSortBy] = useState('date');
@@ -113,8 +114,8 @@ export default function InvoicesPage() {
 
   // Persist filters to sessionStorage
   useEffect(() => {
-    saveFilters({ search, statusFilter, yearFilter, monthFilter, wireFilter, dateFrom, dateTo });
-  }, [search, statusFilter, yearFilter, monthFilter, wireFilter, dateFrom, dateTo]);
+    saveFilters({ search, statusFilter, yearFilter, monthFilter, wireFilter, customerFilter, dateFrom, dateTo });
+  }, [search, statusFilter, yearFilter, monthFilter, wireFilter, customerFilter, dateFrom, dateTo]);
 
   // Preview modal
   const [previewItem, setPreviewItem] = useState<{ fileName: string; filePath: string; subfolder: string } | null>(null);
@@ -189,6 +190,7 @@ export default function InvoicesPage() {
         year:  yearFilter  || undefined,
         month: monthFilter.length ? monthFilter.join(',') : undefined,
         wire:  wireFilter  || undefined,
+        customer: customerFilter || undefined,
         date_from: dateFrom || undefined,
         date_to:   dateTo   || undefined,
         sort_by: sortBy,
@@ -204,7 +206,7 @@ export default function InvoicesPage() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchInvoices(); }, [page, search, statusFilter, yearFilter, monthFilter, wireFilter, dateFrom, dateTo, sortBy, sortDir]);
+  useEffect(() => { fetchInvoices(); }, [page, search, statusFilter, yearFilter, monthFilter, wireFilter, customerFilter, dateFrom, dateTo, sortBy, sortDir]);
 
   const handleDelete = async () => {
     if (!deleteId) return;
@@ -231,7 +233,7 @@ export default function InvoicesPage() {
   const formatDateOrDash = (dateStr: string) => formatDate(dateStr) || '-';
 
   const handleExport = async () => {
-    const res = await api.get('/invoices', { params: { page: 1, limit: 9999, search, status: statusFilter.length ? statusFilter.join(',') : undefined, type: 'customer', year: yearFilter || undefined, month: monthFilter.length ? monthFilter.join(',') : undefined, date_from: dateFrom || undefined, date_to: dateTo || undefined } });
+    const res = await api.get('/invoices', { params: { page: 1, limit: 9999, search, status: statusFilter.length ? statusFilter.join(',') : undefined, type: 'customer', year: yearFilter || undefined, month: monthFilter.length ? monthFilter.join(',') : undefined, wire: wireFilter || undefined, customer: customerFilter || undefined, date_from: dateFrom || undefined, date_to: dateTo || undefined } });
     const rows = res.data.data.map((inv: any) => [
       inv.invoice_number,
       inv.customer_name || inv.supplier_name || '',
@@ -293,6 +295,13 @@ export default function InvoicesPage() {
               onChange={v => { setMonthFilter(v); setPage(1); }}
               placeholder="All Months"
             />
+            <input
+              type="text"
+              value={customerFilter}
+              onChange={e => { setCustomerFilter(e.target.value); setPage(1); }}
+              placeholder="Filter by customer"
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm min-w-[160px]"
+            />
             <select
               value={wireFilter}
               onChange={e => { setWireFilter(e.target.value); setPage(1); }}
@@ -314,9 +323,9 @@ export default function InvoicesPage() {
               <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setPage(1); }}
                 className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm" />
             </div>
-            {(statusFilter.length > 0 || yearFilter || monthFilter.length > 0 || wireFilter || dateFrom || dateTo || search) && (
+            {(statusFilter.length > 0 || yearFilter || monthFilter.length > 0 || wireFilter || customerFilter || dateFrom || dateTo || search) && (
               <button
-                onClick={() => { setSearch(''); setStatusFilter([]); setYearFilter(''); setMonthFilter([]); setWireFilter(''); setDateFrom(''); setDateTo(''); setPage(1); }}
+                onClick={() => { setSearch(''); setStatusFilter([]); setYearFilter(''); setMonthFilter([]); setWireFilter(''); setCustomerFilter(''); setDateFrom(''); setDateTo(''); setPage(1); }}
                 className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100"
               >
                 <X size={12} /> Clear all filters

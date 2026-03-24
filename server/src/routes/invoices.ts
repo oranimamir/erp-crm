@@ -20,6 +20,7 @@ router.get('/', (req: Request, res: Response) => {
   const year  = (req.query.year  as string) || '';
   const month = (req.query.month as string) || '';
   const wire  = (req.query.wire  as string) || '';
+  const customer = (req.query.customer as string) || '';
   const offset = (page - 1) * limit;
 
   const sortFieldMap: Record<string, string> = {
@@ -57,6 +58,7 @@ router.get('/', (req: Request, res: Response) => {
   if (dateTo)   { conditions.push("COALESCE(i.invoice_date, date(i.created_at)) <= ?"); params.push(dateTo); }
   if (wire === 'yes') { conditions.push('COALESCE(wt.wire_transfer_count, 0) > 0'); }
   if (wire === 'no')  { conditions.push('(wt.wire_transfer_count IS NULL OR wt.wire_transfer_count = 0)'); }
+  if (customer) { conditions.push('c.name LIKE ?'); params.push(`%${customer}%`); }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const wtJoin = `LEFT JOIN (SELECT invoice_id, COUNT(*) as wire_transfer_count FROM wire_transfers GROUP BY invoice_id) wt ON wt.invoice_id = i.id`;

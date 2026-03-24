@@ -7,6 +7,7 @@ import {
   Eye, AlertTriangle, Clock, ChevronLeft,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
 
 const SALES_CATEGORIES = ['Raw Materials', 'Logistics', 'Blenders', 'Shipping'];
 
@@ -360,6 +361,7 @@ export default function SalesActivitiesPage() {
 
   const [viewingInvoice, setViewingInvoice] = useState<number | null>(null);
   const [overrideTarget, setOverrideTarget] = useState<{ id: number; supplier: string; category: string } | null>(null);
+  const [deletingInvoice, setDeletingInvoice] = useState<{ id: number; invoice_id: string; supplier: string } | null>(null);
 
   const buildFilterParams = useCallback(() => {
     const params: Record<string, string> = { domain: 'sales' };
@@ -416,6 +418,19 @@ export default function SalesActivitiesPage() {
     if (!confirm(`Delete upload "${batch.filename}" (${monthLabel(batch.month)}, ${batch.invoice_count} invoices)?`)) return;
     try { await api.delete(`/demo-expenses/batches/${batch.id}`); addToast(`Deleted ${batch.filename}`, 'success'); fetchAll(); }
     catch { addToast('Delete failed', 'error'); }
+  };
+
+  const handleDeleteInvoice = async () => {
+    if (!deletingInvoice) return;
+    try {
+      await api.delete(`/demo-expenses/invoices/${deletingInvoice.id}`);
+      addToast(`Deleted invoice ${deletingInvoice.invoice_id}`, 'success');
+      fetchAll();
+    } catch {
+      addToast('Failed to delete invoice', 'error');
+    } finally {
+      setDeletingInvoice(null);
+    }
   };
 
   const stackedData = useMemo(() => {
@@ -548,7 +563,11 @@ export default function SalesActivitiesPage() {
                       <td className="px-4 py-3 text-gray-900 tabular-nums font-medium">{fmt(inv.amount)}</td>
                       <td className="px-4 py-3 text-gray-500">{monthLabel(inv.month)}</td>
                       <td className="px-4 py-3">
-                        <button onClick={() => setViewingInvoice(inv.id)} className="text-gray-400 hover:text-primary-600 transition-colors" title="View invoice"><Eye size={16} /></button>
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => setViewingInvoice(inv.id)} className="text-gray-400 hover:text-primary-600 transition-colors" title="View invoice"><Eye size={16} /></button>
+                          <button onClick={() => setDeletingInvoice({ id: inv.id, invoice_id: inv.invoice_id, supplier: inv.supplier })}
+                            className="text-gray-400 hover:text-red-500 transition-colors" title="Delete invoice"><Trash2 size={14} /></button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -594,6 +613,17 @@ export default function SalesActivitiesPage() {
       </div>
 
       {viewingInvoice && <InvoiceViewer invoiceId={viewingInvoice} onClose={() => setViewingInvoice(null)} />}
+
+      {/* Delete Invoice Confirm */}
+      <ConfirmDialog
+        open={!!deletingInvoice}
+        onClose={() => setDeletingInvoice(null)}
+        onConfirm={handleDeleteInvoice}
+        title="Delete Invoice"
+        message={deletingInvoice ? `Delete invoice ${deletingInvoice.invoice_id} from ${deletingInvoice.supplier}?` : ''}
+        confirmLabel="Delete"
+        variant="danger"
+      />
 
       {overrideTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">

@@ -11,6 +11,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { formatDate } from '../lib/dates';
 import SearchBar from '../components/ui/SearchBar';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -449,6 +450,9 @@ export default function SupplierInvoicesPage() {
   const [showZipNoteModal, setShowZipNoteModal] = useState(false);
   const [pendingZipFile, setPendingZipFile] = useState<File | null>(null);
 
+  // Delete invoice
+  const [deletingInvoice, setDeletingInvoice] = useState<{ id: number; invoice_id: string; supplier: string } | null>(null);
+
   // Inline editing
   const [editingRow, setEditingRow] = useState<number | null>(null);
   const [editSupplier, setEditSupplier] = useState('');
@@ -610,6 +614,21 @@ export default function SupplierInvoicesPage() {
       fetchAll();
     } catch {
       addToast('Delete failed', 'error');
+    }
+  };
+
+  // ─── DELETE SINGLE INVOICE ─────────────────────────────────────────────
+
+  const handleDeleteInvoice = async () => {
+    if (!deletingInvoice) return;
+    try {
+      await api.delete(`/demo-expenses/invoices/${deletingInvoice.id}`);
+      addToast(`Deleted invoice ${deletingInvoice.invoice_id}`, 'success');
+      fetchAll();
+    } catch {
+      addToast('Failed to delete invoice', 'error');
+    } finally {
+      setDeletingInvoice(null);
     }
   };
 
@@ -1393,6 +1412,10 @@ export default function SupplierInvoicesPage() {
                                     <button onClick={() => setViewingInvoice(inv.id)} className="text-gray-400 hover:text-primary-600 transition-colors" title="View invoice">
                                       <Eye size={16} />
                                     </button>
+                                    <button onClick={() => setDeletingInvoice({ id: inv.id, invoice_id: inv.invoice_id, supplier: inv.supplier })}
+                                      className="text-gray-400 hover:text-red-500 transition-colors" title="Delete invoice">
+                                      <Trash2 size={14} />
+                                    </button>
                                   </>
                                 )}
                               </div>
@@ -1434,6 +1457,17 @@ export default function SupplierInvoicesPage() {
 
       {/* Invoice Viewer Modal */}
       {viewingInvoice && <InvoiceViewer invoiceId={viewingInvoice} onClose={() => setViewingInvoice(null)} />}
+
+      {/* Delete Invoice Confirm */}
+      <ConfirmDialog
+        open={!!deletingInvoice}
+        onClose={() => setDeletingInvoice(null)}
+        onConfirm={handleDeleteInvoice}
+        title="Delete Invoice"
+        message={deletingInvoice ? `Delete invoice ${deletingInvoice.invoice_id} from ${deletingInvoice.supplier}?` : ''}
+        confirmLabel="Delete"
+        variant="danger"
+      />
 
       {/* Category Override Confirm */}
       {overrideTarget && (
