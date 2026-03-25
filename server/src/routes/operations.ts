@@ -46,15 +46,24 @@ router.get('/', async (req: Request, res: Response) => {
   const search = (req.query.search as string) || '';
   const sortDir = (req.query.sort_dir as string) === 'asc' ? 'ASC' : 'DESC';
   const sortByMap: Record<string, string> = {
-    order_date: 'COALESCE(o.order_date, op.created_at)',
-    created_at: 'op.created_at',
-    status:     'op.status',
-    name:       'COALESCE(c.name, s.name)',
+    order_date:         'COALESCE(o.order_date, op.created_at)',
+    created_at:         'op.created_at',
+    status:             'op.status',
+    name:               'COALESCE(c.name, s.name)',
+    invoice_date:       'inv_dates.latest_invoice_date',
+    wire_transfer_date: 'wt_dates.latest_wt_date',
   };
   const sortBy = sortByMap[(req.query.sort_by as string)] || sortByMap.order_date;
   const offset = (page - 1) * limit;
 
   const tab = (req.query.tab as string) || 'active';
+
+  // Filters
+  const filterCustomer = (req.query.customer as string) || '';
+  const filterStatus   = (req.query.status as string) || '';
+  const dateField      = (req.query.date_field as string) || '';
+  const dateFrom       = (req.query.date_from as string) || '';
+  const dateTo         = (req.query.date_to as string) || '';
 
   const conditions: string[] = [];
   const params: any[] = [];
@@ -67,12 +76,33 @@ router.get('/', async (req: Request, res: Response) => {
     conditions.push('(op.operation_number LIKE ? OR c.name LIKE ? OR s.name LIKE ?)');
     params.push(`%${search}%`, `%${search}%`, `%${search}%`);
   }
+  if (filterCustomer) {
+    conditions.push('(c.name LIKE ? OR s.name LIKE ?)');
+    params.push(`%${filterCustomer}%`, `%${filterCustomer}%`);
+  }
+  if (filterStatus) {
+    conditions.push('op.status = ?');
+    params.push(filterStatus);
+  }
+  if (dateFrom || dateTo) {
+    const dateExprMap: Record<string, string> = {
+      order_date:         'COALESCE(o.order_date, date(op.created_at))',
+      invoice_date:       'inv_dates.latest_invoice_date',
+      wire_transfer_date: 'wt_dates.latest_wt_date',
+    };
+    const dateExpr = dateExprMap[dateField] || dateExprMap.order_date;
+    if (dateFrom) { conditions.push(`${dateExpr} >= ?`); params.push(dateFrom); }
+    if (dateTo)   { conditions.push(`${dateExpr} <= ?`); params.push(dateTo); }
+  }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const total = (db.prepare(`
     SELECT COUNT(*) as count FROM operations op
     LEFT JOIN customers c ON op.customer_id = c.id
     LEFT JOIN suppliers s ON op.supplier_id = s.id
+    LEFT JOIN orders o ON op.order_id = o.id
+    LEFT JOIN (SELECT i.operation_id, MAX(i.invoice_date) as latest_invoice_date FROM invoices i GROUP BY i.operation_id) inv_dates ON inv_dates.operation_id = op.id
+    LEFT JOIN (SELECT i.operation_id, MAX(wt.transfer_date) as latest_wt_date FROM wire_transfers wt JOIN invoices i ON wt.invoice_id = i.id WHERE i.operation_id IS NOT NULL GROUP BY i.operation_id) wt_dates ON wt_dates.operation_id = op.id
     ${where}
   `).get(...params) as any).count;
 
@@ -104,7 +134,9 @@ router.get('/', async (req: Request, res: Response) => {
       (SELECT oi.unit FROM order_items oi WHERE oi.order_id = op.order_id ORDER BY oi.id LIMIT 1) as quantity_unit,
       (SELECT COALESCE(SUM(i.amount), 0) FROM invoices i WHERE i.operation_id = op.id) as invoice_amount_raw,
       (SELECT i.currency FROM invoices i WHERE i.operation_id = op.id ORDER BY i.id LIMIT 1) as invoice_currency,
-      (SELECT UPPER(COALESCE(oi.currency, 'USD')) FROM order_items oi WHERE oi.order_id = op.order_id ORDER BY oi.id LIMIT 1) as order_currency
+      (SELECT UPPER(COALESCE(oi.currency, 'USD')) FROM order_items oi WHERE oi.order_id = op.order_id ORDER BY oi.id LIMIT 1) as order_currency,
+      inv_dates.latest_invoice_date as invoice_date,
+      wt_dates.latest_wt_date as wire_transfer_date
     FROM operations op
     LEFT JOIN customers c ON op.customer_id = c.id
     LEFT JOIN suppliers s ON op.supplier_id = s.id
@@ -116,6 +148,8 @@ router.get('/', async (req: Request, res: Response) => {
       WHERE i.operation_id IS NOT NULL
       GROUP BY i.operation_id
     ) wt_agg ON wt_agg.operation_id = op.id
+    LEFT JOIN (SELECT i.operation_id, MAX(i.invoice_date) as latest_invoice_date FROM invoices i GROUP BY i.operation_id) inv_dates ON inv_dates.operation_id = op.id
+    LEFT JOIN (SELECT i.operation_id, MAX(wt.transfer_date) as latest_wt_date FROM wire_transfers wt JOIN invoices i ON wt.invoice_id = i.id WHERE i.operation_id IS NOT NULL GROUP BY i.operation_id) wt_dates ON wt_dates.operation_id = op.id
     ${where} ORDER BY ${sortBy} ${sortDir} LIMIT ? OFFSET ?
   `).all(...params, limit, offset);
 
@@ -139,6 +173,8 @@ router.get('/', async (req: Request, res: Response) => {
     LEFT JOIN customers c ON op.customer_id = c.id
     LEFT JOIN suppliers s ON op.supplier_id = s.id
     LEFT JOIN orders o ON op.order_id = o.id
+    LEFT JOIN (SELECT i.operation_id, MAX(i.invoice_date) as latest_invoice_date FROM invoices i GROUP BY i.operation_id) inv_dates ON inv_dates.operation_id = op.id
+    LEFT JOIN (SELECT i.operation_id, MAX(wt.transfer_date) as latest_wt_date FROM wire_transfers wt JOIN invoices i ON wt.invoice_id = i.id WHERE i.operation_id IS NOT NULL GROUP BY i.operation_id) wt_dates ON wt_dates.operation_id = op.id
     ${where}
   `).all(...params) as any[];
 

@@ -4,7 +4,7 @@ import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import {
   Briefcase, Search, Plus, ChevronLeft, ChevronRight, FileText, Receipt,
-  FileSpreadsheet, ChevronUp, ChevronDown, Eye, Download, X, Truck, Loader2, ArrowLeftRight, Landmark,
+  FileSpreadsheet, ChevronUp, ChevronDown, Download, X, Truck, Loader2, ArrowLeftRight, Landmark, Filter, XCircle,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
@@ -32,6 +32,8 @@ interface Operation {
   invoice_currency?: string;
   wire_transfer_count: number;
   order_total_eur: number;
+  invoice_date?: string;
+  wire_transfer_date?: string;
   created_at: string;
 }
 
@@ -60,7 +62,8 @@ const STATUS_COLORS: Record<string, string> = {
   completed:       'bg-emerald-100 text-emerald-800',
 };
 
-type SortField = 'order_date' | 'status' | 'name';
+type SortField = 'order_date' | 'invoice_date' | 'wire_transfer_date' | 'status' | 'name';
+type DateFilterField = 'order_date' | 'invoice_date' | 'wire_transfer_date';
 type Tab = 'active' | 'completed';
 
 export default function OperationsPage() {
@@ -78,6 +81,24 @@ export default function OperationsPage() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [loading, setLoading] = useState(true);
 
+  // Filters
+  const [showFilters, setShowFilters] = useState(false);
+  const [filterCustomer, setFilterCustomer] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
+  const [filterDateField, setFilterDateField] = useState<DateFilterField>('order_date');
+  const [filterDateFrom, setFilterDateFrom] = useState('');
+  const [filterDateTo, setFilterDateTo] = useState('');
+
+  const hasActiveFilters = !!(filterCustomer || filterStatus || filterDateFrom || filterDateTo);
+
+  const clearFilters = () => {
+    setFilterCustomer('');
+    setFilterStatus('');
+    setFilterDateFrom('');
+    setFilterDateTo('');
+    setPage(1);
+  };
+
   // Preview modal
   const [previewItem, setPreviewItem] = useState<PreviewItem | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -86,9 +107,17 @@ export default function OperationsPage() {
   // View toggle: false = MT + EUR (default), true = raw original values
   const [showRaw, setShowRaw] = useState(false);
 
+  // Order preview loading
+  const [loadingOrders, setLoadingOrders] = useState<Set<number>>(new Set());
   // Invoice preview loading
   const [loadingInvoices, setLoadingInvoices] = useState<Set<number>>(new Set());
   const [loadingWireTransfers, setLoadingWireTransfers] = useState<Set<number>>(new Set());
+
+  const previewOrder = (op: Operation) => {
+    if (!op.order_file_path) return;
+    if (loadingOrders.has(op.id)) return;
+    openPreview({ fileName: op.order_file_name!, filePath: op.order_file_path!, subfolder: 'orders' });
+  };
 
   const previewInvoice = async (opId: number) => {
     if (loadingInvoices.has(opId)) return;
@@ -198,6 +227,13 @@ export default function OperationsPage() {
     try {
       const params: any = { page, limit: 20, sort_by: sortBy, sort_dir: sortDir, tab: activeTab };
       if (search) params.search = search;
+      if (filterCustomer) params.customer = filterCustomer;
+      if (filterStatus) params.status = filterStatus;
+      if (filterDateFrom || filterDateTo) {
+        params.date_field = filterDateField;
+        if (filterDateFrom) params.date_from = filterDateFrom;
+        if (filterDateTo) params.date_to = filterDateTo;
+      }
       const { data } = await api.get('/operations', { params });
       setOperations(data.data);
       setTotal(data.total);
@@ -208,7 +244,7 @@ export default function OperationsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, sortBy, sortDir, activeTab]);
+  }, [page, search, sortBy, sortDir, activeTab, filterCustomer, filterStatus, filterDateField, filterDateFrom, filterDateTo]);
 
   useEffect(() => { setPage(1); }, [activeTab]);
   useEffect(() => { fetchOperations(); }, [fetchOperations]);
@@ -252,8 +288,7 @@ export default function OperationsPage() {
     return /\.(jpg|jpeg|png|webp)$/i.test(filename);
   }
 
-  const thClass = (field: SortField) =>
-    'text-left px-4 py-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900 select-none';
+  const thSortable = 'text-left px-4 py-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900 select-none';
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -276,6 +311,15 @@ export default function OperationsPage() {
             />
           </div>
           <button
+            onClick={() => setShowFilters(f => !f)}
+            className={`flex items-center gap-2 px-4 py-2 border rounded-lg text-sm font-medium transition-colors ${showFilters || hasActiveFilters ? 'border-primary-400 bg-primary-50 text-primary-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
+            title="Toggle filters"
+          >
+            <Filter size={15} />
+            Filters
+            {hasActiveFilters && <span className="w-2 h-2 rounded-full bg-primary-500" />}
+          </button>
+          <button
             onClick={() => setShowRaw(r => !r)}
             className={`flex items-center gap-2 px-4 py-2 border rounded-lg text-sm font-medium transition-colors ${showRaw ? 'border-indigo-400 bg-indigo-50 text-indigo-700 hover:bg-indigo-100' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
             title={showRaw ? 'Switch to MT / EUR view' : 'Switch to original units / currency'}
@@ -287,7 +331,7 @@ export default function OperationsPage() {
             onClick={async () => {
               const { data } = await api.get('/operations', { params: { page: 1, limit: 9999, search } });
               downloadExcel('operations',
-                ['Operation #', 'Order #', 'Customer / Supplier', 'Status', 'Docs', 'Invoices', 'Quantity (MT)', 'Invoice Total (EUR)', 'Order Date'],
+                ['Operation #', 'Order #', 'Customer / Supplier', 'Status', 'Docs', 'Invoices', 'Quantity (MT)', 'Invoice Total (EUR)', 'Order Date', 'Invoice Date', 'Wire Transfer Date'],
                 data.data.map((op: any) => [
                   op.operation_number, op.order_number || '',
                   op.customer_name || op.supplier_name || '',
@@ -295,6 +339,8 @@ export default function OperationsPage() {
                   op.quantity_mt > 0 ? Number(op.quantity_mt).toFixed(2) : '',
                   op.invoice_total > 0 ? Number(op.invoice_total).toFixed(2) : '',
                   formatDate(op.order_date || op.created_at) || '',
+                  formatDate(op.invoice_date) || '',
+                  formatDate(op.wire_transfer_date) || '',
                 ]));
             }}
             className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50"
@@ -322,6 +368,73 @@ export default function OperationsPage() {
           )}
         </div>
       </div>
+
+      {/* Filter bar */}
+      {showFilters && (
+        <div className="flex flex-wrap items-end gap-3 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-gray-500">Client Name</label>
+            <input
+              className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 w-44"
+              placeholder="Search client..."
+              value={filterCustomer}
+              onChange={e => { setFilterCustomer(e.target.value); setPage(1); }}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-gray-500">Status</label>
+            <select
+              className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 w-40"
+              value={filterStatus}
+              onChange={e => { setFilterStatus(e.target.value); setPage(1); }}
+            >
+              <option value="">All statuses</option>
+              {STATUS_OPTIONS.map(s => (
+                <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-gray-500">Date Field</label>
+            <select
+              className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 w-40"
+              value={filterDateField}
+              onChange={e => setFilterDateField(e.target.value as DateFilterField)}
+            >
+              <option value="order_date">Order Date</option>
+              <option value="invoice_date">Invoice Date</option>
+              <option value="wire_transfer_date">Wire Transfer Date</option>
+            </select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-gray-500">From</label>
+            <input
+              type="date"
+              className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+              value={filterDateFrom}
+              onChange={e => { setFilterDateFrom(e.target.value); setPage(1); }}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-gray-500">To</label>
+            <input
+              type="date"
+              className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+              value={filterDateTo}
+              onChange={e => { setFilterDateTo(e.target.value); setPage(1); }}
+            />
+          </div>
+          {hasActiveFilters && (
+            <button
+              onClick={clearFilters}
+              className="flex items-center gap-1 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+            >
+              <XCircle size={14} />
+              Clear all
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex border-b border-gray-200">
@@ -357,9 +470,9 @@ export default function OperationsPage() {
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Operation #</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-600">Order / Doc</th>
+                <th className="text-left px-4 py-3 font-medium text-gray-600">Preview</th>
                 <th
-                  className={thClass('name')}
+                  className={thSortable}
                   onClick={() => handleSort('name')}
                 >
                   <span className="flex items-center gap-1">
@@ -367,7 +480,7 @@ export default function OperationsPage() {
                   </span>
                 </th>
                 <th
-                  className={thClass('status')}
+                  className={thSortable}
                   onClick={() => handleSort('status')}
                 >
                   <span className="flex items-center gap-1">
@@ -375,16 +488,14 @@ export default function OperationsPage() {
                   </span>
                 </th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Docs</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-600">Invoices</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-600">Wire</th>
                 <th className="text-right px-4 py-3 font-medium text-gray-600">{showRaw ? 'Quantity' : 'Quantity (MT)'}</th>
                 <th className="text-right px-4 py-3 font-medium text-gray-600">{showRaw ? 'Invoice Total' : 'Invoice Total (EUR)'}</th>
                 <th
-                  className={thClass('order_date')}
+                  className={thSortable}
                   onClick={() => handleSort('order_date')}
                 >
                   <span className="flex items-center gap-1">
-                    Order Date <SortIcon field="order_date" />
+                    Dates <SortIcon field="order_date" />
                   </span>
                 </th>
               </tr>
@@ -399,38 +510,54 @@ export default function OperationsPage() {
                   <td className="px-4 py-3">
                     <span className="font-semibold text-primary-700">{op.operation_number}</span>
                   </td>
-                  <td className="px-4 py-3 text-gray-700" onClick={e => e.stopPropagation()}>
-                    <div className="flex items-center gap-2">
-                      {op.order_number && op.order_id ? (
+                  <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                    <div className="flex items-center gap-1">
+                      {/* Order preview */}
+                      {op.order_file_path ? (
+                        <button
+                          onClick={() => previewOrder(op)}
+                          className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-blue-600"
+                          title={`Preview order${op.order_number ? ` ${op.order_number}` : ''}`}
+                        >
+                          {loadingOrders.has(op.id)
+                            ? <Loader2 size={14} className="animate-spin" />
+                            : <FileSpreadsheet size={14} />}
+                        </button>
+                      ) : op.order_id ? (
                         <button
                           onClick={() => navigate(`/orders/${op.order_id}/edit`)}
-                          className="font-medium text-primary-700 hover:underline"
-                          title="Edit order"
+                          className="p-1 rounded hover:bg-gray-200 text-gray-300 hover:text-blue-600"
+                          title={`Edit order${op.order_number ? ` ${op.order_number}` : ''}`}
                         >
-                          {op.order_number}
+                          <FileSpreadsheet size={14} />
                         </button>
-                      ) : op.order_number ? (
-                        <span className="font-medium">{op.order_number}</span>
-                      ) : (
-                        <span className="text-gray-400">—</span>
+                      ) : null}
+                      {/* Invoice preview */}
+                      {op.invoice_count > 0 && (
+                        <button
+                          onClick={() => previewInvoice(op.id)}
+                          className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-green-600"
+                          title="Preview invoice"
+                        >
+                          {loadingInvoices.has(op.id)
+                            ? <Loader2 size={14} className="animate-spin" />
+                            : <Receipt size={14} />}
+                        </button>
                       )}
-                      {op.order_file_path && (
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => openPreview({ fileName: op.order_file_name!, filePath: op.order_file_path!, subfolder: 'orders' })}
-                            className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-gray-600"
-                            title="Preview order document"
-                          >
-                            <Eye size={13} />
-                          </button>
-                          <button
-                            onClick={() => downloadFile(op.order_file_path!, op.order_file_name!, 'orders')}
-                            className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-gray-600"
-                            title="Download order document"
-                          >
-                            <Download size={13} />
-                          </button>
-                        </div>
+                      {/* Wire transfer preview */}
+                      {op.wire_transfer_count > 0 && (
+                        <button
+                          onClick={() => previewWireTransfer(op.id)}
+                          className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-indigo-600"
+                          title="Preview wire transfer"
+                        >
+                          {loadingWireTransfers.has(op.id)
+                            ? <Loader2 size={14} className="animate-spin" />
+                            : <Landmark size={14} />}
+                        </button>
+                      )}
+                      {!op.order_file_path && !op.order_id && op.invoice_count === 0 && op.wire_transfer_count === 0 && (
+                        <span className="text-gray-300">—</span>
                       )}
                     </div>
                   </td>
@@ -456,40 +583,6 @@ export default function OperationsPage() {
                       {op.doc_count}
                     </span>
                   </td>
-                  <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                    <div className="flex items-center gap-1 text-gray-600">
-                      <Receipt size={14} />
-                      {op.invoice_count}
-                      {op.invoice_count > 0 && (
-                        <button
-                          onClick={() => previewInvoice(op.id)}
-                          className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-gray-600"
-                          title="Preview invoice"
-                        >
-                          {loadingInvoices.has(op.id)
-                            ? <Loader2 size={13} className="animate-spin" />
-                            : <Eye size={13} />}
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                    <div className="flex items-center gap-1 text-gray-600">
-                      <Landmark size={14} />
-                      {op.wire_transfer_count || 0}
-                      {op.wire_transfer_count > 0 && (
-                        <button
-                          onClick={() => previewWireTransfer(op.id)}
-                          className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-indigo-600"
-                          title="Preview wire transfer"
-                        >
-                          {loadingWireTransfers.has(op.id)
-                            ? <Loader2 size={13} className="animate-spin" />
-                            : <Eye size={13} />}
-                        </button>
-                      )}
-                    </div>
-                  </td>
                   <td className="px-4 py-3 text-right">
                     {showRaw
                       ? (op.quantity_raw > 0 && op.quantity_unit
@@ -506,14 +599,22 @@ export default function OperationsPage() {
                           ? <span className="font-medium text-gray-900">{op.invoice_currency || ''} {Number(op.invoice_amount_raw).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                           : <span className="text-gray-400">—</span>)
                       : (op.invoice_count > 0 && op.invoice_total > 0
-                          ? <span className="font-medium text-gray-900">€{Number(op.invoice_total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          ? <span className="font-medium text-gray-900">{Number(op.invoice_total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                           : op.order_total_eur > 0
-                            ? <span className="font-medium text-amber-600 italic" title="Based on order (no invoice)">€{Number(op.order_total_eur).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            ? <span className="font-medium text-amber-600 italic" title="Based on order (no invoice)">{Number(op.order_total_eur).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                             : <span className="text-gray-400">—</span>)
                     }
                   </td>
-                  <td className="px-4 py-3 text-gray-500">
-                    {formatDate((op as any).order_date) || formatDate(op.created_at) || '—'}
+                  <td className="px-4 py-3">
+                    <div className="leading-tight">
+                      <div className="text-gray-700">{formatDate(op.order_date) || formatDate(op.created_at) || '—'}</div>
+                      {op.invoice_date && (
+                        <div className="text-[11px] text-gray-400 mt-0.5">Inv: {formatDate(op.invoice_date)}</div>
+                      )}
+                      {op.wire_transfer_date && (
+                        <div className="text-[11px] text-gray-400">WT: {formatDate(op.wire_transfer_date)}</div>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -543,7 +644,7 @@ export default function OperationsPage() {
             <div className="flex items-center gap-1.5">
               <span className="text-gray-500">Invoiced:</span>
               <span className="font-bold text-green-700">
-                €{tabTotals.invoice_eur.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {tabTotals.invoice_eur.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
             </div>
           )}
@@ -551,7 +652,7 @@ export default function OperationsPage() {
             <div className="flex items-center gap-1.5">
               <span className="text-gray-500">Expected (order):</span>
               <span className="font-bold text-amber-600">
-                €{tabTotals.order_eur.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {tabTotals.order_eur.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
             </div>
           )}
