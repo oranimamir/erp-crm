@@ -46,7 +46,19 @@ router.get('/stats', async (_req: Request, res: Response) => {
     SELECT amount, UPPER(COALESCE(currency, 'USD')) as currency FROM invoices
     WHERE type = 'customer' AND status = 'sent' AND due_date IS NULL
   `).all() as any[];
-  const expectedAmount = await sumLiveEur(expectedRows);
+  const expectedInvoiceAmount = await sumLiveEur(expectedRows);
+  // Expected from orders: operations with an order but no invoice yet (not completed/cancelled)
+  const expectedOrderRows = db.prepare(`
+    SELECT o.total_amount as amount, UPPER(COALESCE(oi_cur.currency, 'USD')) as currency
+    FROM operations op
+    JOIN orders o ON op.order_id = o.id
+    LEFT JOIN (SELECT UPPER(COALESCE(currency, 'USD')) as currency, order_id FROM order_items GROUP BY order_id) oi_cur ON oi_cur.order_id = o.id
+    WHERE op.status NOT IN ('completed')
+      AND o.total_amount > 0
+      AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.operation_id = op.id)
+  `).all() as any[];
+  const expectedOrderAmount = await sumLiveEur(expectedOrderRows);
+  const expectedAmount = expectedInvoiceAmount + expectedOrderAmount;
   const paidInvoiceAmount = (db.prepare("SELECT COALESCE(SUM(COALESCE(eur_amount, amount)), 0) as total FROM invoices WHERE type = 'customer' AND status = 'paid'").get() as any).total;
   // Paid YTD: actual payments received in the current calendar year
   const paidYTD = (db.prepare(`
@@ -254,7 +266,19 @@ router.get('/forecast', async (_req: Request, res: Response) => {
     SELECT amount, UPPER(COALESCE(currency, 'USD')) as currency
     FROM invoices WHERE type = 'customer' AND status = 'sent' AND due_date IS NULL
   `).all() as any[];
-  const expected = await sumLiveEur(expectedRows);
+  const expectedInvoice = await sumLiveEur(expectedRows);
+
+  // Expected: orders without invoices — live FX
+  const expectedOrderRows = db.prepare(`
+    SELECT o.total_amount as amount, UPPER(COALESCE(oi_cur.currency, 'USD')) as currency
+    FROM operations op
+    JOIN orders o ON op.order_id = o.id
+    LEFT JOIN (SELECT UPPER(COALESCE(currency, 'USD')) as currency, order_id FROM order_items GROUP BY order_id) oi_cur ON oi_cur.order_id = o.id
+    WHERE op.status NOT IN ('completed')
+      AND o.total_amount > 0
+      AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.operation_id = op.id)
+  `).all() as any[];
+  const expected = expectedInvoice + await sumLiveEur(expectedOrderRows);
 
   const data = [];
   for (let m = 1; m <= 12; m++) {
@@ -387,19 +411,35 @@ router.get('/customer-forecast', async (_req: Request, res: Response) => {
   await attachLiveEur(pendingRows);
 
   // 3. Expected (sent with no due date) — live FX
-  const expectedRows = db.prepare(`
+  const expectedInvRows = db.prepare(`
     SELECT i.id, i.amount, i.currency,
       c.id as customer_id, c.name as customer_name
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
     WHERE i.type = 'customer' AND i.status = 'sent' AND i.due_date IS NULL
   `).all() as any[];
-  await attachLiveEur(expectedRows);
+  await attachLiveEur(expectedInvRows);
+
+  // 3b. Expected from orders without invoices — live FX
+  const expectedOrdRows = db.prepare(`
+    SELECT o.total_amount as amount, UPPER(COALESCE(oi_cur.currency, 'USD')) as currency,
+      c.id as customer_id, c.name as customer_name
+    FROM operations op
+    JOIN orders o ON op.order_id = o.id
+    LEFT JOIN customers c ON o.customer_id = c.id
+    LEFT JOIN (SELECT UPPER(COALESCE(currency, 'USD')) as currency, order_id FROM order_items GROUP BY order_id) oi_cur ON oi_cur.order_id = o.id
+    WHERE op.status NOT IN ('completed')
+      AND o.total_amount > 0
+      AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.operation_id = op.id)
+  `).all() as any[];
+  await attachLiveEur(expectedOrdRows);
+
+  const allExpectedRows = [...expectedInvRows, ...expectedOrdRows];
 
   res.json({
     received: groupByCustomer(receivedRows),
     pending:  groupByCustomer(pendingRows),
-    expected: groupByCustomer(expectedRows),
+    expected: groupByCustomer(allExpectedRows),
   });
 });
 

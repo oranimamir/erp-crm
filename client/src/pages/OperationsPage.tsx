@@ -31,6 +31,7 @@ interface Operation {
   invoice_amount_raw: number;
   invoice_currency?: string;
   wire_transfer_count: number;
+  order_total_eur: number;
   created_at: string;
 }
 
@@ -69,7 +70,7 @@ export default function OperationsPage() {
   const [activeTab, setActiveTab] = useState<Tab>('active');
   const [operations, setOperations] = useState<Operation[]>([]);
   const [total, setTotal] = useState(0);
-  const [tabTotals, setTabTotals] = useState<{ quantity_mt: number; invoice_eur: number } | null>(null);
+  const [tabTotals, setTabTotals] = useState<{ quantity_mt: number; invoice_eur: number; order_eur: number } | null>(null);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [search, setSearch] = useState('');
@@ -506,7 +507,9 @@ export default function OperationsPage() {
                           : <span className="text-gray-400">—</span>)
                       : (op.invoice_count > 0 && op.invoice_total > 0
                           ? <span className="font-medium text-gray-900">€{Number(op.invoice_total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                          : <span className="text-gray-400">—</span>)
+                          : op.order_total_eur > 0
+                            ? <span className="font-medium text-amber-600 italic" title="Based on order (no invoice)">€{Number(op.order_total_eur).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            : <span className="text-gray-400">—</span>)
                     }
                   </td>
                   <td className="px-4 py-3 text-gray-500">
@@ -521,7 +524,7 @@ export default function OperationsPage() {
       </div>
 
       {/* Totals summary */}
-      {tabTotals && (tabTotals.quantity_mt > 0 || tabTotals.invoice_eur > 0) && (
+      {tabTotals && (tabTotals.quantity_mt > 0 || tabTotals.invoice_eur > 0 || tabTotals.order_eur > 0) && (
         <div className="flex items-center justify-end gap-6 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm">
           <span className="text-gray-500 font-medium mr-auto">
             {activeTab === 'active' ? 'Active operations total' : 'Completed operations total'} ({total})
@@ -541,6 +544,14 @@ export default function OperationsPage() {
               <span className="text-gray-500">Invoiced:</span>
               <span className="font-bold text-green-700">
                 €{tabTotals.invoice_eur.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            </div>
+          )}
+          {tabTotals.order_eur > 0 && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-gray-500">Expected (order):</span>
+              <span className="font-bold text-amber-600">
+                €{tabTotals.order_eur.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
             </div>
           )}

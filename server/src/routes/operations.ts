@@ -103,7 +103,8 @@ router.get('/', async (req: Request, res: Response) => {
       (SELECT COALESCE(SUM(oi.quantity), 0) FROM order_items oi WHERE oi.order_id = op.order_id) as quantity_raw,
       (SELECT oi.unit FROM order_items oi WHERE oi.order_id = op.order_id ORDER BY oi.id LIMIT 1) as quantity_unit,
       (SELECT COALESCE(SUM(i.amount), 0) FROM invoices i WHERE i.operation_id = op.id) as invoice_amount_raw,
-      (SELECT i.currency FROM invoices i WHERE i.operation_id = op.id ORDER BY i.id LIMIT 1) as invoice_currency
+      (SELECT i.currency FROM invoices i WHERE i.operation_id = op.id ORDER BY i.id LIMIT 1) as invoice_currency,
+      (SELECT UPPER(COALESCE(oi.currency, 'USD')) FROM order_items oi WHERE oi.order_id = op.order_id ORDER BY oi.id LIMIT 1) as order_currency
     FROM operations op
     LEFT JOIN customers c ON op.customer_id = c.id
     LEFT JOIN suppliers s ON op.supplier_id = s.id
@@ -130,7 +131,10 @@ router.get('/', async (req: Request, res: Response) => {
       ), 0) FROM order_items oi WHERE oi.order_id = op.order_id), 0) as quantity_mt,
       COALESCE((SELECT COALESCE(SUM(CASE WHEN i.eur_amount IS NOT NULL THEN i.eur_amount WHEN UPPER(COALESCE(i.currency,'USD'))='EUR' THEN i.amount ELSE 0 END), 0) FROM invoices i WHERE i.operation_id = op.id), 0) as invoice_eur_base,
       COALESCE((SELECT COALESCE(SUM(CASE WHEN i.eur_amount IS NULL AND UPPER(COALESCE(i.currency,'USD'))!='EUR' THEN i.amount ELSE 0 END), 0) FROM invoices i WHERE i.operation_id = op.id), 0) as invoice_fx_amount,
-      (SELECT i.currency FROM invoices i WHERE i.eur_amount IS NULL AND UPPER(COALESCE(i.currency,'USD'))!='EUR' AND i.operation_id = op.id ORDER BY i.id LIMIT 1) as invoice_fx_currency
+      (SELECT i.currency FROM invoices i WHERE i.eur_amount IS NULL AND UPPER(COALESCE(i.currency,'USD'))!='EUR' AND i.operation_id = op.id ORDER BY i.id LIMIT 1) as invoice_fx_currency,
+      (SELECT COUNT(*) FROM invoices i WHERE i.operation_id = op.id) as invoice_count,
+      o.total_amount as order_total,
+      (SELECT UPPER(COALESCE(oi.currency, 'USD')) FROM order_items oi WHERE oi.order_id = op.order_id ORDER BY oi.id LIMIT 1) as order_currency
     FROM operations op
     LEFT JOIN customers c ON op.customer_id = c.id
     LEFT JOIN suppliers s ON op.supplier_id = s.id
@@ -141,7 +145,9 @@ router.get('/', async (req: Request, res: Response) => {
   // Collect all FX currencies from both paginated rows and full totals
   const fxCurrencies = new Set<string>([
     ...(operations as any[]).filter((op: any) => op.invoice_fx_amount > 0 && op.invoice_fx_currency).map((op: any) => (op.invoice_fx_currency as string).toUpperCase()),
+    ...(operations as any[]).filter((op: any) => op.order_currency && op.order_currency !== 'EUR').map((op: any) => (op.order_currency as string).toUpperCase()),
     ...allForTotals.filter(r => r.invoice_fx_amount > 0 && r.invoice_fx_currency).map(r => (r.invoice_fx_currency as string).toUpperCase()),
+    ...allForTotals.filter(r => r.order_currency && r.order_currency !== 'EUR').map(r => (r.order_currency as string).toUpperCase()),
   ]);
   const rates: Record<string, number> = {};
   await Promise.all([...fxCurrencies].map(async (c) => {
@@ -150,18 +156,28 @@ router.get('/', async (req: Request, res: Response) => {
 
   const data = (operations as any[]).map((op: any) => {
     const fxRate = op.invoice_fx_currency ? (rates[(op.invoice_fx_currency as string).toUpperCase()] ?? 1) : 1;
+    const invoiceTotal = (op.invoice_eur_base || 0) + (op.invoice_fx_amount || 0) * fxRate;
+    // Order-based EUR amount: convert order_total to EUR using live rates
+    const orderCur = (op.order_currency || 'USD').toUpperCase();
+    const orderEur = orderCur === 'EUR' ? (op.order_total || 0) : (op.order_total || 0) * (rates[orderCur] ?? 1);
     return {
       ...op,
-      invoice_total: (op.invoice_eur_base || 0) + (op.invoice_fx_amount || 0) * fxRate,
+      invoice_total: invoiceTotal,
+      order_total_eur: orderEur,
     };
   });
 
   const totals = allForTotals.reduce((acc, r) => {
     const fxRate = r.invoice_fx_currency ? (rates[(r.invoice_fx_currency as string).toUpperCase()] ?? 1) : 1;
+    const invoiceEur = (r.invoice_eur_base || 0) + (r.invoice_fx_amount || 0) * fxRate;
+    const orderCur = (r.order_currency || 'USD').toUpperCase();
+    const orderEur = orderCur === 'EUR' ? (r.order_total || 0) : (r.order_total || 0) * (rates[orderCur] ?? 1);
     acc.quantity_mt += r.quantity_mt || 0;
-    acc.invoice_eur += (r.invoice_eur_base || 0) + (r.invoice_fx_amount || 0) * fxRate;
+    // Use invoice amount when available, otherwise fall back to order amount
+    acc.invoice_eur += invoiceEur > 0 ? invoiceEur : 0;
+    acc.order_eur += (r.invoice_count || 0) === 0 && orderEur > 0 ? orderEur : 0;
     return acc;
-  }, { quantity_mt: 0, invoice_eur: 0 });
+  }, { quantity_mt: 0, invoice_eur: 0, order_eur: 0 });
 
   res.json({ data, total, page, limit, totalPages: Math.ceil(total / limit), totals });
 });

@@ -187,7 +187,19 @@ router.get('/summary', async (req: Request, res: Response) => {
     FROM invoices
     WHERE type = 'customer' AND status = 'sent' AND due_date IS NULL ${custWhereOnly}
   `).all(...custParams) as any[];
-  const expectedReceivable = await sumLiveEur(expectedRows);
+  const expectedInvoiceReceivable = await sumLiveEur(expectedRows);
+  // Expected from orders: operations with an order but no invoice yet
+  const expectedOrderRows = db.prepare(`
+    SELECT o.total_amount as amount, UPPER(COALESCE(oi_cur.currency, 'USD')) as currency
+    FROM operations op
+    JOIN orders o ON op.order_id = o.id
+    LEFT JOIN (SELECT UPPER(COALESCE(currency, 'USD')) as currency, order_id FROM order_items GROUP BY order_id) oi_cur ON oi_cur.order_id = o.id
+    WHERE op.status NOT IN ('completed')
+      AND o.total_amount > 0
+      AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.operation_id = op.id)
+      ${customerId ? 'AND o.customer_id = ?' : ''}
+  `).all(...(customerId ? [customerId] : [])) as any[];
+  const expectedReceivable = expectedInvoiceReceivable + await sumLiveEur(expectedOrderRows);
 
   // Outstanding supplier payable — invoices with no invoice_date OR unpaid status
   const payableRows = db.prepare(`
