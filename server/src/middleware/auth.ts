@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'erp-crm-secret-key-change-in-production';
+const SERVICE_API_KEY = process.env.SERVICE_API_KEY || '';
 
 export interface AuthPayload {
   userId: number;
@@ -19,6 +20,14 @@ declare global {
 }
 
 export function authenticateToken(req: Request, res: Response, next: NextFunction) {
+  // Allow service-to-service calls via API key (for budget dashboard integration)
+  const apiKey = req.headers['x-api-key'] as string;
+  if (SERVICE_API_KEY && apiKey === SERVICE_API_KEY) {
+    req.user = { userId: 0, username: 'service', display_name: 'Budget Dashboard', role: 'admin' };
+    next();
+    return;
+  }
+
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
