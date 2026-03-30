@@ -34,11 +34,11 @@ router.get('/stats', async (_req: Request, res: Response) => {
   const totalOrders = (db.prepare('SELECT COUNT(*) as count FROM orders').get() as any).count;
   const activeOrders = (db.prepare("SELECT COUNT(*) as count FROM orders WHERE status NOT IN ('completed', 'cancelled')").get() as any).count;
   const totalInvoices = (db.prepare('SELECT COUNT(*) as count FROM invoices').get() as any).count;
-  // Pending: sent/overdue invoices with due date in current year — live FX conversion
+  // Pending: sent/overdue invoices with due date (including late payments from prior periods)
   const pendingRows = db.prepare(`
     SELECT amount, UPPER(COALESCE(currency, 'USD')) as currency FROM invoices
     WHERE type = 'customer' AND status IN ('sent', 'overdue', 'partially_paid')
-      AND due_date IS NOT NULL AND strftime('%Y', due_date) = strftime('%Y', 'now')
+      AND due_date IS NOT NULL
   `).all() as any[];
   const pendingAmount = await sumLiveEur(pendingRows);
   // Expected: sent invoices with NO due date — live FX conversion
@@ -247,18 +247,25 @@ router.get('/open-operations', (_req: Request, res: Response) => {
 
 router.get('/forecast', async (_req: Request, res: Response) => {
   const year = new Date().getFullYear();
+  const now = new Date();
+  const currentMonth = `${year}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
-  // Fetch all pending invoices for this year upfront so we can apply live FX once
+  // Fetch all pending invoices (including overdue from prior years) so we can apply live FX once
   const pendingInvoices = db.prepare(`
     SELECT amount, UPPER(COALESCE(currency, 'USD')) as currency,
-      strftime('%Y-%m', due_date) as month
+      strftime('%Y-%m', due_date) as month, due_date
     FROM invoices WHERE type = 'customer' AND status IN ('sent', 'overdue', 'partially_paid')
-      AND due_date IS NOT NULL AND strftime('%Y', due_date) = ?
-  `).all(String(year)) as any[];
+      AND due_date IS NOT NULL
+  `).all() as any[];
   await attachLiveEur(pendingInvoices);
   const pendingByMonth = new Map<string, number>();
   for (const inv of pendingInvoices) {
-    pendingByMonth.set(inv.month, (pendingByMonth.get(inv.month) ?? 0) + inv.live_eur_amount);
+    // Late payments: if due_date is in the past, roll forward to current month
+    const effectiveMonth = inv.month < currentMonth ? currentMonth : inv.month;
+    // Only include if the effective month falls within the current year
+    if (effectiveMonth.startsWith(String(year))) {
+      pendingByMonth.set(effectiveMonth, (pendingByMonth.get(effectiveMonth) ?? 0) + inv.live_eur_amount);
+    }
   }
 
   // Expected: sent invoices with no due_date — live FX
@@ -399,7 +406,7 @@ router.get('/customer-forecast', async (_req: Request, res: Response) => {
   // Treat all as pre-converted so set live_eur_amount = amount directly
   for (const r of receivedRows) r.live_eur_amount = r.amount;
 
-  // 2. Pending (sent/overdue with due date) — live FX
+  // 2. Pending (sent/overdue with due date, including late payments from prior periods) — live FX
   const pendingRows = db.prepare(`
     SELECT i.id, i.amount, i.currency, i.status, i.due_date,
       c.id as customer_id, c.name as customer_name

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import api from '../lib/api';
 import Card from '../components/ui/Card';
 import StatusBadge from '../components/ui/StatusBadge';
-import { TrendingUp, BarChart3, Scale, AlertTriangle, Users, Receipt } from 'lucide-react';
+import { TrendingUp, BarChart3, Scale, AlertTriangle, Users, Receipt, Info, X } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 
 interface Stats {
@@ -40,6 +40,7 @@ export default function DashboardPage() {
   const [priorYearOverdue, setPriorYearOverdue] = useState<{ invoices: any[]; total: number }>({ invoices: [], total: 0 });
   const [demoExpensesMonthly, setDemoExpensesMonthly] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activeInfo, setActiveInfo] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -78,6 +79,28 @@ export default function DashboardPage() {
     if (n >= 1_000) return `€${Math.round(n / 1_000)}k`;
     return `€${Math.round(n)}`;
   };
+  const InfoBadge = ({ id, text }: { id: string; text: string }) => (
+    <span className="relative inline-flex">
+      <button
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setActiveInfo(activeInfo === id ? null : id); }}
+        className="ml-1 inline-flex items-center justify-center w-4 h-4 rounded-full bg-gray-200 hover:bg-gray-300 text-gray-500 hover:text-gray-700 transition-colors"
+        title="More info"
+      >
+        <Info size={10} />
+      </button>
+      {activeInfo === id && (
+        <div className="absolute z-50 top-6 left-1/2 -translate-x-1/2 w-64 bg-gray-900 text-white text-xs rounded-lg px-3 py-2.5 shadow-xl leading-relaxed"
+          onClick={(e) => e.stopPropagation()}>
+          <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); setActiveInfo(null); }}
+            className="absolute top-1.5 right-1.5 text-gray-400 hover:text-white">
+            <X size={12} />
+          </button>
+          {text}
+        </div>
+      )}
+    </span>
+  );
+
   const year = new Date().getFullYear();
   const paidYTD = stats?.paidYTD ?? 0;
   const pending = stats?.pendingAmount ?? 0;
@@ -128,28 +151,40 @@ export default function DashboardPage() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <Link to="/invoices">
           <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
-            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Paid YTD {year}</p>
+            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
+              Paid YTD {year}
+              <InfoBadge id="paid-ytd" text="Sum of all payments received from customers this calendar year, including wire transfers and direct payments. Converted to EUR at current exchange rates." />
+            </p>
             <p className="text-lg sm:text-2xl font-bold text-green-600 truncate">{fmt(paidYTD)}</p>
             <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Payments received this year</p>
           </Card>
         </Link>
         <Link to="/invoices">
           <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
-            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Pending</p>
+            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
+              Pending
+              <InfoBadge id="pending" text="Total amount from customer invoices that are sent, overdue, or partially paid and have a due date set. Late payments from past months are included here and rolled forward to the current month in the forecast." />
+            </p>
             <p className="text-lg sm:text-2xl font-bold text-amber-500 truncate">{fmt(pending)}</p>
             <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Sent invoices with due date</p>
           </Card>
         </Link>
         <Link to="/invoices">
           <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
-            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Expected</p>
+            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
+              Expected
+              <InfoBadge id="expected" text="Total amount from sent customer invoices without a due date, plus revenue from active operations that don't have invoices yet. Converted to EUR at current exchange rates." />
+            </p>
             <p className="text-lg sm:text-2xl font-bold text-blue-500 truncate">{fmt(expected)}</p>
             <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Sent invoices without due date</p>
           </Card>
         </Link>
         <Link to="/invoices">
           <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full border-2 border-gray-200">
-            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Total {year}</p>
+            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
+              Total {year}
+              <InfoBadge id="total" text="Sum of Paid YTD + Pending + Expected. Represents the total revenue picture for this calendar year: what's been received, what's owed with a due date, and what's expected without a due date." />
+            </p>
             <p className="text-lg sm:text-2xl font-bold text-gray-900 truncate">{fmt(totalYear)}</p>
             <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Paid + pending + expected</p>
           </Card>
@@ -160,14 +195,20 @@ export default function DashboardPage() {
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
         <Link to="/invoices?type=supplier">
           <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
-            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Expenses YTD {year}</p>
+            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
+              Expenses YTD {year}
+              <InfoBadge id="expenses-ytd" text="Total amount paid to suppliers this calendar year, sourced from the monthly cash flow data (paid_out column from demo invoices / sales activities)." />
+            </p>
             <p className="text-lg sm:text-2xl font-bold text-red-600 truncate">{fmt(expensesYTD)}</p>
             <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Total paid to suppliers this year</p>
           </Card>
         </Link>
         <Link to="/invoices?type=supplier">
           <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
-            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Avg / Month</p>
+            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
+              Avg / Month
+              <InfoBadge id="avg-month" text={`Expenses YTD divided by the number of months elapsed so far this year (${monthsElapsed} months). Gives an average monthly spend rate for supplier payments.`} />
+            </p>
             <p className="text-lg sm:text-2xl font-bold text-orange-500 truncate">{fmt(expensesAvgPerMonth)}</p>
             <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Average monthly expenses ({monthsElapsed} mo)</p>
           </Card>
@@ -176,7 +217,10 @@ export default function DashboardPage() {
           <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
             <div className="flex items-center gap-2 mb-1">
               <Scale size={14} className="text-indigo-500" />
-              <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide">Tons Sold {year}</p>
+              <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide">
+                Tons Sold {year}
+                <InfoBadge id="tons-sold" text="Total quantity from customer order items this year, converted to metric tons. Conversion: 1 MT = 1,000 kg = 2,204.62 lbs." />
+              </p>
             </div>
             <p className="text-lg sm:text-2xl font-bold text-indigo-600">
               {tonsYTD >= 1000
