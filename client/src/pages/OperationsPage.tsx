@@ -34,6 +34,8 @@ interface Operation {
   order_total_eur: number;
   invoice_date?: string;
   wire_transfer_date?: string;
+  etd?: string;
+  eta?: string;
   created_at: string;
 }
 
@@ -331,11 +333,14 @@ export default function OperationsPage() {
             onClick={async () => {
               const { data } = await api.get('/operations', { params: { page: 1, limit: 9999, search } });
               downloadExcel('operations',
-                ['Operation #', 'Order #', 'Customer / Supplier', 'Status', 'Docs', 'Invoices', 'Quantity (MT)', 'Invoice Total (EUR)', 'Order Date', 'Invoice Date', 'Wire Transfer Date'],
+                ['Operation #', 'Order #', 'Customer / Supplier', 'Status', 'ETD', 'ETA', 'Docs', 'Invoices', 'Quantity (MT)', 'Invoice Total (EUR)', 'Order Date', 'Invoice Date', 'Wire Transfer Date'],
                 data.data.map((op: any) => [
                   op.operation_number, op.order_number || '',
                   op.customer_name || op.supplier_name || '',
-                  op.status, op.doc_count, op.invoice_count,
+                  op.status,
+                  formatDate(op.etd) || '',
+                  formatDate(op.eta) || '',
+                  op.doc_count, op.invoice_count,
                   op.quantity_mt > 0 ? Number(op.quantity_mt).toFixed(2) : '',
                   op.invoice_total > 0 ? Number(op.invoice_total).toFixed(2) : '',
                   formatDate(op.order_date || op.created_at) || '',
@@ -487,6 +492,8 @@ export default function OperationsPage() {
                     Status <SortIcon field="status" />
                   </span>
                 </th>
+                <th className="text-left px-4 py-3 font-medium text-gray-600">ETD</th>
+                <th className="text-left px-4 py-3 font-medium text-gray-600">ETA</th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Docs</th>
                 <th className="text-right px-4 py-3 font-medium text-gray-600">{showRaw ? 'Quantity' : 'Quantity (MT)'}</th>
                 <th className="text-right px-4 py-3 font-medium text-gray-600">{showRaw ? 'Invoice Total' : 'Invoice Total (EUR)'}</th>
@@ -576,6 +583,32 @@ export default function OperationsPage() {
                         </option>
                       ))}
                     </select>
+                  </td>
+                  <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                    <input
+                      type="date"
+                      value={op.etd || ''}
+                      onChange={async e => {
+                        const val = e.target.value;
+                        setOperations(prev => prev.map(o => o.id === op.id ? { ...o, etd: val } : o));
+                        try { await api.patch(`/operations/${op.id}/dates`, { etd: val }); }
+                        catch { addToast('Failed to update ETD', 'error'); }
+                      }}
+                      className="w-[130px] border border-gray-200 rounded px-2 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
+                  </td>
+                  <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                    <input
+                      type="date"
+                      value={op.eta || ''}
+                      onChange={async e => {
+                        const val = e.target.value;
+                        setOperations(prev => prev.map(o => o.id === op.id ? { ...o, eta: val } : o));
+                        try { await api.patch(`/operations/${op.id}/dates`, { eta: val }); }
+                        catch { addToast('Failed to update ETA', 'error'); }
+                      }}
+                      className="w-[130px] border border-gray-200 rounded px-2 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
                   </td>
                   <td className="px-4 py-3">
                     <span className="flex items-center gap-1 text-gray-600">

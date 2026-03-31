@@ -607,6 +607,10 @@ export async function initializeDatabase() {
   // Add ship_date to operations
   try { db.exec(`ALTER TABLE operations ADD COLUMN ship_date TEXT`); } catch (_) { /* already exists */ }
 
+  // Add ETD / ETA to operations
+  try { db.exec(`ALTER TABLE operations ADD COLUMN etd TEXT`); } catch (_) { /* already exists */ }
+  try { db.exec(`ALTER TABLE operations ADD COLUMN eta TEXT`); } catch (_) { /* already exists */ }
+
   // Warehouse stock (from weekly CSV upload)
   db.exec(`
     CREATE TABLE IF NOT EXISTS warehouse_stock (

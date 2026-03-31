@@ -370,6 +370,20 @@ router.post('/:id/ship', (req: Request, res: Response) => {
   res.json({ ok: true, invoices_updated: invoices.length });
 });
 
+// ── Update ETD / ETA ─────────────────────────────────────────────────────────
+
+router.patch('/:id/dates', (req: Request, res: Response) => {
+  const existing = db.prepare('SELECT * FROM operations WHERE id = ?').get(req.params.id) as any;
+  if (!existing) { res.status(404).json({ error: 'Operation not found' }); return; }
+  const { etd, eta } = req.body;
+  db.prepare(`UPDATE operations SET etd=?, eta=?, updated_at=datetime('now') WHERE id=?`).run(
+    etd !== undefined ? (etd || null) : existing.etd,
+    eta !== undefined ? (eta || null) : existing.eta,
+    req.params.id
+  );
+  res.json({ id: existing.id, etd: etd !== undefined ? (etd || null) : existing.etd, eta: eta !== undefined ? (eta || null) : existing.eta });
+});
+
 // ── Update operation ──────────────────────────────────────────────────────────
 
 router.put('/:id', (req: Request, res: Response) => {
