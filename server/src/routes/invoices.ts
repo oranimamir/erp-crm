@@ -114,16 +114,26 @@ router.post('/', uploadInvoice.single('file'), async (req: Request, res: Respons
   const file_name = req.file ? req.file.originalname : null;
 
   try {
+    // Compute EUR conversion at creation time for non-EUR invoices
+    const invCurrency = currency || 'USD';
+    let fx_rate: number | null = null;
+    let eur_amount: number | null = null;
+    if (invCurrency.toUpperCase() !== 'EUR') {
+      const dateForRate = invoice_date || new Date().toISOString().split('T')[0];
+      fx_rate = await getEurRate(invCurrency, dateForRate);
+      eur_amount = parseFloat(amount) * fx_rate;
+    }
+
     const result = db.prepare(`
-      INSERT INTO invoices (invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, invoice_date, payment_date, notes, file_path, file_name, our_ref, po_number, operation_id, remainder_due_date)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO invoices (invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, invoice_date, payment_date, notes, file_path, file_name, our_ref, po_number, operation_id, remainder_due_date, fx_rate, eur_amount)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       invoice_number,
       type === 'customer' ? (customer_id || null) : null,
       type === 'supplier' ? (supplier_id || null) : null,
-      type, parseFloat(amount), currency || 'USD', status || 'draft', due_date || null, invoice_date || null, payment_date || null, notes || null,
+      type, parseFloat(amount), invCurrency, status || 'draft', due_date || null, invoice_date || null, payment_date || null, notes || null,
       file_path, file_name, our_ref || null, po_number || null, operation_id ? Number(operation_id) : null,
-      remainder_due_date || null
+      remainder_due_date || null, fx_rate, eur_amount
     );
     const invoiceId = result.lastInsertRowid;
 
@@ -164,7 +174,7 @@ router.post('/', uploadInvoice.single('file'), async (req: Request, res: Respons
   }
 });
 
-router.put('/:id', uploadInvoice.single('file'), (req: Request, res: Response) => {
+router.put('/:id', uploadInvoice.single('file'), async (req: Request, res: Response) => {
   const existing = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
@@ -186,21 +196,36 @@ router.put('/:id', uploadInvoice.single('file'), (req: Request, res: Response) =
     file_name = req.file.originalname;
   }
 
+  // Recompute EUR conversion when amount or currency changes
+  const finalAmount = parseFloat(amount) || existing.amount;
+  const finalCurrency = (currency || existing.currency || 'USD').toUpperCase();
+  let fx_rate = existing.fx_rate;
+  let eur_amount = existing.eur_amount;
+  if (finalCurrency !== 'EUR') {
+    const dateForRate = invoice_date ?? existing.invoice_date ?? new Date().toISOString().split('T')[0];
+    fx_rate = await getEurRate(finalCurrency, dateForRate);
+    eur_amount = finalAmount * fx_rate;
+  } else {
+    fx_rate = null;
+    eur_amount = null;
+  }
+
   try {
     db.prepare(`
-      UPDATE invoices SET invoice_number=?, customer_id=?, supplier_id=?, type=?, amount=?, currency=?, status=?, due_date=?, invoice_date=?, payment_date=?, notes=?, file_path=?, file_name=?, our_ref=?, po_number=?, operation_id=?, updated_at=datetime('now')
+      UPDATE invoices SET invoice_number=?, customer_id=?, supplier_id=?, type=?, amount=?, currency=?, status=?, due_date=?, invoice_date=?, payment_date=?, notes=?, file_path=?, file_name=?, our_ref=?, po_number=?, operation_id=?, fx_rate=?, eur_amount=?, updated_at=datetime('now')
       WHERE id=?
     `).run(
       invoice_number || existing.invoice_number,
       type === 'customer' ? (customer_id || null) : null,
       type === 'supplier' ? (supplier_id || null) : null,
-      type || existing.type, parseFloat(amount) || existing.amount, currency || existing.currency,
+      type || existing.type, finalAmount, currency || existing.currency,
       status || existing.status, due_date || existing.due_date, invoice_date ?? existing.invoice_date,
       // Auto-set payment_date to today when marking as paid and no date provided
       payment_date ?? ((status === 'paid' && !existing.payment_date) ? new Date().toISOString().split('T')[0] : existing.payment_date),
       notes ?? existing.notes,
       file_path, file_name, our_ref ?? existing.our_ref, po_number ?? existing.po_number,
       operation_id !== undefined ? (operation_id ? Number(operation_id) : null) : existing.operation_id,
+      fx_rate, eur_amount,
       req.params.id
     );
 

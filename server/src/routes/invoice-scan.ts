@@ -159,9 +159,17 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
 
     const entityMatch = fuzzyMatchEntity(extracted.vendor_or_customer_name);
 
+    // Strip commas/spaces from amount strings like "2,117.72" or "38 200"
+    let parsedAmount: number | null = null;
+    if (extracted.amount != null) {
+      const raw = String(extracted.amount).replace(/[,\s]/g, '');
+      const num = Number(raw);
+      parsedAmount = isNaN(num) ? null : num;
+    }
+
     const result = {
       invoice_number: extracted.invoice_number || null,
-      amount: extracted.amount != null ? Number(extracted.amount) : null,
+      amount: parsedAmount,
       currency: extracted.currency || null,
       invoice_date: extracted.invoice_date || null,
       due_date: extracted.due_date || null,
