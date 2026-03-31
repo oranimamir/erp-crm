@@ -381,7 +381,7 @@ router.get('/customer-forecast', async (_req: Request, res: Response) => {
   // 1. Received YTD — payments actually received this calendar year, by customer
   const receivedRows = db.prepare(`
     SELECT c.id as customer_id, c.name as customer_name,
-      COALESCE(wt.eur_amount, wt.amount) as amount, 'USD' as currency
+      COALESCE(wt.eur_amount, wt.amount) as amount, 'EUR' as currency
     FROM wire_transfers wt
     JOIN invoices i ON wt.invoice_id = i.id
     LEFT JOIN customers c ON i.customer_id = c.id
@@ -394,7 +394,8 @@ router.get('/customer-forecast', async (_req: Request, res: Response) => {
     WHERE i.type = 'customer' AND strftime('%Y', p.payment_date) = ?
     UNION ALL
     SELECT c.id as customer_id, c.name as customer_name,
-      COALESCE(i.eur_amount, i.amount) as amount, COALESCE(i.currency, 'USD') as currency
+      COALESCE(i.eur_amount, i.amount) as amount,
+      CASE WHEN i.eur_amount IS NOT NULL THEN 'EUR' ELSE COALESCE(i.currency, 'USD') END as currency
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
     WHERE i.type = 'customer' AND i.status = 'paid'
@@ -402,9 +403,9 @@ router.get('/customer-forecast', async (_req: Request, res: Response) => {
       AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
       AND i.payment_date IS NOT NULL AND strftime('%Y', i.payment_date) = ?
   `).all(year, year, year) as any[];
-  // Wire transfers already store EUR amounts; payments are EUR; direct paid invoices use eur_amount
-  // Treat all as pre-converted so set live_eur_amount = amount directly
-  for (const r of receivedRows) r.live_eur_amount = r.amount;
+  // Wire transfers and payments already store EUR amounts; direct paid invoices use eur_amount when available
+  // Convert any remaining non-EUR amounts via live FX
+  await attachLiveEur(receivedRows);
 
   // 2. Pending (sent/overdue with due date, including late payments from prior periods) — live FX
   const pendingRows = db.prepare(`

@@ -104,22 +104,20 @@ const apiLimiter = rateLimit({
 await initializeDatabase();
 
 // Backfill eur_amount for non-EUR invoices that are missing it
-(async () => {
-  try {
-    const rows = db.prepare(
-      `SELECT id, amount, currency, invoice_date, created_at FROM invoices WHERE eur_amount IS NULL AND UPPER(COALESCE(currency, 'USD')) != 'EUR'`
-    ).all() as any[];
-    for (const row of rows) {
-      const cur = (row.currency || 'USD').toUpperCase();
-      const dateForRate = row.invoice_date || row.created_at?.split('T')[0] || 'latest';
-      const rate = await getEurRate(cur, dateForRate);
-      db.prepare('UPDATE invoices SET fx_rate=?, eur_amount=? WHERE id=?').run(rate, row.amount * rate, row.id);
-    }
-    if (rows.length) console.log(`[backfill] Updated eur_amount for ${rows.length} invoices`);
-  } catch (err) {
-    console.warn('[backfill] EUR amount backfill failed:', err);
+try {
+  const rows = db.prepare(
+    `SELECT id, amount, currency, invoice_date, created_at FROM invoices WHERE eur_amount IS NULL AND UPPER(COALESCE(currency, 'USD')) != 'EUR'`
+  ).all() as any[];
+  for (const row of rows) {
+    const cur = (row.currency || 'USD').toUpperCase();
+    const dateForRate = row.invoice_date || row.created_at?.split('T')[0] || 'latest';
+    const rate = await getEurRate(cur, dateForRate);
+    db.prepare('UPDATE invoices SET fx_rate=?, eur_amount=? WHERE id=?').run(rate, row.amount * rate, row.id);
   }
-})();
+  if (rows.length) console.log(`[backfill] Updated eur_amount for ${rows.length} invoices`);
+} catch (err) {
+  console.warn('[backfill] EUR amount backfill failed:', err);
+}
 
 // Schedule backup based on DB-stored schedule (default: weekly Sunday 02:00 UTC)
 {
