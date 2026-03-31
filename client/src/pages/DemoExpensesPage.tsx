@@ -95,8 +95,9 @@ interface Summary {
 // UTILITY
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function fmt(n: number) {
-  return `€${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+function fmt(n: number, currency?: string) {
+  const symbol = currency === 'GBP' ? '£' : currency === 'USD' ? '$' : '€';
+  return `${symbol}${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function monthLabel(m: string) {
@@ -381,7 +382,7 @@ function InvoiceViewer({ invoiceId, onClose }: { invoiceId: number; onClose: () 
                     </div>
                     <div>
                       <p className="text-xs text-gray-400 mb-0.5">Amount (excl. BTW)</p>
-                      <p className="font-medium text-gray-900">{fmt(inv.amount)}</p>
+                      <p className="font-medium text-gray-900">{fmt(inv.amount, inv.currency)}</p>
                     </div>
                     <div>
                       <p className="text-xs text-gray-400 mb-0.5">Category</p>
@@ -913,7 +914,7 @@ export default function DemoExpensesPage() {
                             </select>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-gray-900 tabular-nums font-medium">{fmt(inv.amount)}</td>
+                        <td className="px-4 py-3 text-gray-900 tabular-nums font-medium">{fmt(inv.amount, inv.currency)}</td>
                         <td className="px-4 py-3 text-gray-500">{monthLabel(inv.month)}</td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1">
