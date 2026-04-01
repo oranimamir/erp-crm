@@ -662,6 +662,22 @@ export default function SupplierInvoicesPage() {
       if (res.data.inZipDuplicatesRemoved > 0) {
         addToast(`${res.data.inZipDuplicatesRemoved} duplicate(s) within the ZIP removed`, 'info');
       }
+      if (res.data.ownCompanyExcluded?.length > 0) {
+        const names = res.data.ownCompanyExcluded.map((i: any) => i.invoiceId || i.supplier).join(', ');
+        addToast(`${res.data.ownCompanyExcluded.length} own-company invoice(s) excluded: ${names}`, 'info');
+      }
+      if (res.data.warnings?.length > 0) {
+        const zeroAmt = res.data.warnings.filter((w: any) => w.issues.includes('amount_zero')).length;
+        const badDate = res.data.warnings.filter((w: any) => w.issues.includes('date_uncertain')).length;
+        const badSupplier = res.data.warnings.filter((w: any) => w.issues.includes('supplier_uncertain')).length;
+        const parts: string[] = [];
+        if (zeroAmt > 0) parts.push(`${zeroAmt} with amount €0`);
+        if (badDate > 0) parts.push(`${badDate} with uncertain date`);
+        if (badSupplier > 0) parts.push(`${badSupplier} with unrecognised supplier`);
+        if (parts.length > 0) {
+          addToast(`Needs review: ${parts.join(', ')}. Check the unknown suppliers list below.`, 'error');
+        }
+      }
 
       if (res.data.parsed.length === 0) {
         addToast('All invoices in this ZIP already exist in the system. Nothing to import.', 'error');
@@ -669,8 +685,38 @@ export default function SupplierInvoicesPage() {
         return;
       }
 
-      if (res.data.unknownSuppliers.length > 0) {
-        setUnknownAssignments(Object.fromEntries(res.data.unknownSuppliers.map((u: any) => [u.supplier, { domain: 'demo', category: 'Other', remember: false }])));
+      // Merge warning invoices (amount=0, bad date, unknown supplier) into unknownSuppliers
+      // so user MUST review them before import
+      const warningInvoiceIds = new Set((res.data.warnings || []).map((w: any) => w.invoiceId));
+      const extraUnknowns: any[] = [];
+      for (const inv of res.data.parsed) {
+        if (warningInvoiceIds.has(inv.invoiceId) && !res.data.unknownSuppliers.some((u: any) => u.invoiceId === inv.invoiceId)) {
+          extraUnknowns.push({
+            supplier: inv.supplier,
+            amount: inv.amount,
+            vatAmount: inv.vatAmount || 0,
+            date: inv.issueDate,
+            invoiceId: inv.invoiceId,
+            currency: inv.currency,
+            lineItems: inv.lineItems,
+            embeddedPdf: null,
+          });
+        }
+      }
+      const allUnknowns = [...res.data.unknownSuppliers, ...extraUnknowns];
+
+      if (allUnknowns.length > 0) {
+        // Update pendingUpload with merged unknowns
+        setPendingUpload({ ...res.data, unknownSuppliers: allUnknowns });
+        setUnknownAssignments(Object.fromEntries(allUnknowns.map((u: any) => {
+          // For warning invoices that already have domain/category, pre-fill them
+          const existing = res.data.parsed.find((p: any) => p.invoiceId === u.invoiceId);
+          return [u.supplier, {
+            domain: existing?.domain || 'demo',
+            category: existing?.category || 'Other',
+            remember: false,
+          }];
+        })));
         setShowUnknownModal(true);
       } else if (res.data.existingDemoBatch || res.data.existingSalesBatch) {
         setShowMonthConflict(true);
@@ -1492,9 +1538,10 @@ export default function SupplierInvoicesPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full mx-4 max-h-[90vh] flex flex-col">
             <div className="p-6 border-b">
-              <h2 className="text-lg font-bold text-gray-900">Classify Unknown Suppliers</h2>
+              <h2 className="text-lg font-bold text-gray-900">Review & Classify Invoices</h2>
               <p className="text-sm text-gray-500 mt-1">
                 Review each invoice, correct the supplier name if needed, and classify into <strong>Demo Expenses</strong> or <strong>Sales Activities</strong>.
+                {(pendingUpload.warnings?.length > 0) && <span className="text-amber-600 font-medium"> Some invoices need attention — check the warning badges below.</span>}
               </p>
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
@@ -1505,6 +1552,18 @@ export default function SupplierInvoicesPage() {
                 return (
                   <div key={u.supplier} className="border border-gray-200 rounded-lg overflow-hidden">
                     <div className="p-4">
+                      {/* Warning badges for flagged invoices */}
+                      {(() => {
+                        const w = (pendingUpload.warnings || []).find((w: any) => w.invoiceId === u.invoiceId);
+                        if (!w) return null;
+                        return (
+                          <div className="flex flex-wrap gap-1.5 mb-2">
+                            {w.issues.includes('amount_zero') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Amount is €0 — please verify</span>}
+                            {w.issues.includes('date_uncertain') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Date could not be read — please verify</span>}
+                            {w.issues.includes('supplier_uncertain') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Supplier not recognised — please verify</span>}
+                          </div>
+                        );
+                      })()}
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex-1 min-w-0">
                           <p className="text-xs text-gray-400 mb-0.5">Detected supplier name</p>

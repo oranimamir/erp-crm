@@ -197,7 +197,13 @@ function parseUBLInvoice(xmlString: string) {
     removeNSPrefix: true,
     isArray: (name) => ['InvoiceLine', 'CreditNoteLine', 'AdditionalDocumentReference'].includes(name),
   });
-  const doc = parser.parse(xmlString);
+  let doc: any;
+  try {
+    doc = parser.parse(xmlString);
+  } catch (err) {
+    console.error('[ubl-parse] Failed to parse XML:', err);
+    return null;
+  }
   const root = doc.Invoice || doc.CreditNote;
   if (!root) return null;
 
@@ -786,27 +792,46 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       return;
     }
 
-    // --- Deduplicate within the ZIP itself (by invoiceId, or by supplier+amount+date) ---
-    // Only dedup by combo when amount > 0 (don't lump together unparsed invoices)
-    const seenKeys = new Set<string>();
+    // --- Deduplicate within the ZIP itself ---
+    // ONLY exact invoice ID matches are auto-deduped (XML+PDF pair for same invoice).
+    // Combo matches (same supplier+amount+date but different IDs) are kept but flagged —
+    // they could be legitimate separate invoices from the same supplier on the same day.
+    const seenIds = new Set<string>();
+    const seenCombos = new Map<string, string>(); // combo-key → first invoiceId
     const deduped: typeof parsed = [];
     let inZipDuplicateCount = 0;
+    const comboDuplicateWarnings: { invoiceId: string; supplier: string; matchedId: string }[] = [];
     for (const inv of parsed) {
-      const key1 = inv.invoiceId ? `id:${inv.invoiceId}` : null;
-      const key2 = inv.amount > 0
-        ? `combo:${inv.supplierName.toLowerCase()}|${inv.amount}|${inv.issueDate}`
-        : null;
-      if ((key1 && seenKeys.has(key1)) || (key2 && seenKeys.has(key2))) {
-        console.log(`[upload-zip] Dedup skipping: "${inv.supplierName}" ${inv.invoiceId} €${inv.amount} (key1=${key1}, key2=${key2})`);
+      // Exact invoice ID dedup — safe to auto-remove (e.g. XML and standalone PDF for same invoice)
+      if (inv.invoiceId && seenIds.has(inv.invoiceId)) {
+        console.log(`[upload-zip] Dedup skipping (exact ID): "${inv.supplierName}" ${inv.invoiceId}`);
         inZipDuplicateCount++;
         continue;
       }
-      if (key1) seenKeys.add(key1);
-      if (key2) seenKeys.add(key2);
+      if (inv.invoiceId) seenIds.add(inv.invoiceId);
+
+      // Combo match — keep the invoice but flag it as potential duplicate
+      if (inv.amount > 0) {
+        const comboKey = `${inv.supplierName.toLowerCase()}|${inv.amount}|${inv.issueDate}`;
+        if (seenCombos.has(comboKey)) {
+          comboDuplicateWarnings.push({
+            invoiceId: inv.invoiceId,
+            supplier: inv.supplierName,
+            matchedId: seenCombos.get(comboKey)!,
+          });
+          inv.duplicateWarning = true;
+        } else {
+          seenCombos.set(comboKey, inv.invoiceId);
+        }
+      }
+
       deduped.push(inv);
     }
     if (inZipDuplicateCount > 0) {
-      console.log(`[upload-zip] Removed ${inZipDuplicateCount} duplicate(s) within the ZIP`);
+      console.log(`[upload-zip] Removed ${inZipDuplicateCount} exact ID duplicate(s) within the ZIP`);
+    }
+    if (comboDuplicateWarnings.length > 0) {
+      console.log(`[upload-zip] ${comboDuplicateWarnings.length} potential combo duplicate(s) kept but flagged`);
     }
 
     // Infer month
@@ -879,13 +904,30 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     const existingDemoBatch = db.prepare("SELECT id, filename FROM demo_upload_batches WHERE month = ? AND domain = 'demo'").get(inferredMonth) as any;
     const existingSalesBatch = db.prepare("SELECT id, filename FROM demo_upload_batches WHERE month = ? AND domain = 'sales'").get(inferredMonth) as any;
 
-    // Auto-exclude duplicates: only return non-duplicate invoices for import
-    // Also exclude invoices where supplier is still own company (outgoing invoices with no counterparty found)
+    // Separate own-company invoices so we can report them to the user
+    const ownCompanyInvoices = classified.filter(inv => isOwnCompany(inv.supplierName));
+
+    // Auto-exclude duplicates and own-company invoices from import
     const newInvoices = classified.filter(inv =>
       !duplicateInvoiceIds.has(inv.invoiceId) && !isOwnCompany(inv.supplierName)
     );
 
-    console.log(`[upload-zip] Summary: ${allFileNames.length} files → ${xmlFiles.length} XML + ${pdfFiles.size} PDF → ${parsed.length} parsed → ${deduped.length} deduped → ${classified.length} classified → ${newInvoices.length} new (${duplicates.length} DB duplicates, ${inZipDuplicateCount} in-ZIP duplicates)`);
+    // Flag invoices that need user attention (amount=0, fallback date, unknown supplier)
+    const today = new Date().toISOString().substring(0, 10);
+    const warnings: { invoiceId: string; supplier: string; issues: string[] }[] = [];
+    for (const inv of newInvoices) {
+      const issues: string[] = [];
+      if (inv.amount === 0) issues.push('amount_zero');
+      if (!inv.issueDate || inv.issueDate === today) issues.push('date_uncertain');
+      if (inv.supplierName === 'Unknown' || inv.supplierName === inv.pdfFilename?.replace(/\.pdf$/i, '').split('/').pop()) {
+        issues.push('supplier_uncertain');
+      }
+      if (issues.length > 0) {
+        warnings.push({ invoiceId: inv.invoiceId, supplier: inv.supplierName, issues });
+      }
+    }
+
+    console.log(`[upload-zip] Summary: ${allFileNames.length} files → ${xmlFiles.length} XML + ${pdfFiles.size} PDF → ${parsed.length} parsed → ${deduped.length} deduped → ${classified.length} classified → ${newInvoices.length} new (${duplicates.length} DB duplicates, ${inZipDuplicateCount} in-ZIP duplicates, ${ownCompanyInvoices.length} own-company excluded, ${warnings.length} with warnings)`);
 
     res.json({
       parsed: newInvoices.map(inv => ({
@@ -911,6 +953,13 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       existingDemoBatch: existingDemoBatch ? { id: existingDemoBatch.id, filename: existingDemoBatch.filename } : null,
       existingSalesBatch: existingSalesBatch ? { id: existingSalesBatch.id, filename: existingSalesBatch.filename } : null,
       filename,
+      ownCompanyExcluded: ownCompanyInvoices.map(inv => ({
+        invoiceId: inv.invoiceId,
+        supplier: inv.supplierName,
+        amount: inv.amount,
+        date: inv.issueDate,
+      })),
+      warnings,
       _fullData: newInvoices.map(inv => ({
         invoiceId: inv.invoiceId,
         issueDate: inv.issueDate,
