@@ -876,22 +876,49 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
 
     // --- Duplicate detection against existing DB invoices ---
     // An invoice is a duplicate if: same invoice_id, OR same supplier+amount+date
+    // Supplier matching must account for renamed suppliers (display_name ↔ original pattern)
     const existingInvoices = db.prepare('SELECT invoice_id, supplier, amount, issue_date, domain FROM demo_invoices').all() as any[];
     const existingIdSet = new Set(existingInvoices.map((e: any) => e.invoice_id));
-    const existingComboSet = new Set(existingInvoices.map((e: any) =>
-      `${e.supplier.toLowerCase()}|${e.amount}|${e.issue_date}`
-    ));
+
+    // Build combo set with BOTH stored name AND any known original patterns from supplier mappings
+    const supplierMappings = db.prepare('SELECT supplier_pattern, display_name FROM demo_supplier_mappings').all() as any[];
+    const nameToAliases = new Map<string, string[]>(); // lowercase name → [aliases]
+    for (const m of supplierMappings) {
+      const names: string[] = [m.supplier_pattern.toLowerCase()];
+      if (m.display_name) names.push(m.display_name.toLowerCase());
+      for (const n of names) {
+        const existing = nameToAliases.get(n) || [];
+        for (const other of names) { if (!existing.includes(other)) existing.push(other); }
+        nameToAliases.set(n, existing);
+      }
+    }
+
+    const existingComboSet = new Set<string>();
+    for (const e of existingInvoices) {
+      if (e.amount === 0) continue; // skip zero-amount from combo dedup — too many false matches
+      const baseName = e.supplier.toLowerCase();
+      const combo = `${baseName}|${e.amount}|${e.issue_date}`;
+      existingComboSet.add(combo);
+      // Also add combos for known aliases of this supplier
+      const aliases = nameToAliases.get(baseName) || [];
+      for (const alias of aliases) {
+        existingComboSet.add(`${alias}|${e.amount}|${e.issue_date}`);
+      }
+    }
 
     const duplicates: any[] = [];
     const duplicateInvoiceIds = new Set<string>();
     for (const inv of classified) {
       const idMatch = inv.invoiceId && existingIdSet.has(inv.invoiceId);
-      const comboMatch = existingComboSet.has(`${inv.supplierName.toLowerCase()}|${inv.amount}|${inv.issueDate}`);
+      // Skip combo match for zero-amount invoices to avoid false positives
+      const comboMatch = inv.amount > 0 && existingComboSet.has(`${inv.supplierName.toLowerCase()}|${inv.amount}|${inv.issueDate}`);
       if (idMatch || comboMatch) {
         duplicateInvoiceIds.add(inv.invoiceId);
+        const invNameLower = inv.supplierName.toLowerCase();
+        const invAliases = new Set([invNameLower, ...(nameToAliases.get(invNameLower) || [])]);
         const existing = existingInvoices.find((e: any) =>
           e.invoice_id === inv.invoiceId ||
-          (e.supplier.toLowerCase() === inv.supplierName.toLowerCase() && Math.abs(e.amount - inv.amount) < 0.01 && e.issue_date === inv.issueDate)
+          (invAliases.has(e.supplier.toLowerCase()) && Math.abs(e.amount - inv.amount) < 0.01 && e.issue_date === inv.issueDate)
         );
         duplicates.push({
           new: { invoiceId: inv.invoiceId, supplier: inv.supplierName, date: inv.issueDate, amount: inv.amount },
@@ -1048,17 +1075,40 @@ router.post('/confirm-import', (req: Request, res: Response) => {
       const filtered = invoices.filter((inv: any) => !skipSet.has(inv.invoiceId));
 
       // Server-side duplicate guard: remove any invoice already in the DB
+      // Must check with BOTH original parsed name AND corrected name (nameOverrides)
       const existingIds = new Set(
         (db.prepare('SELECT invoice_id FROM demo_invoices').all() as any[]).map((r: any) => r.invoice_id)
       );
-      const existingCombos = new Set(
-        (db.prepare('SELECT supplier, amount, issue_date FROM demo_invoices').all() as any[]).map(
-          (r: any) => `${r.supplier.toLowerCase()}|${r.amount}|${r.issue_date}`
-        )
-      );
+      const existingDbInvoices = db.prepare('SELECT supplier, amount, issue_date FROM demo_invoices').all() as any[];
+      const existingCombos = new Set<string>();
+      // Build alias map from supplier mappings for cross-name matching
+      const mappings = db.prepare('SELECT supplier_pattern, display_name FROM demo_supplier_mappings').all() as any[];
+      const aliasMap = new Map<string, string[]>();
+      for (const m of mappings) {
+        const names: string[] = [m.supplier_pattern.toLowerCase()];
+        if (m.display_name) names.push(m.display_name.toLowerCase());
+        for (const n of names) {
+          const ex = aliasMap.get(n) || [];
+          for (const o of names) { if (!ex.includes(o)) ex.push(o); }
+          aliasMap.set(n, ex);
+        }
+      }
+      for (const r of existingDbInvoices) {
+        if (r.amount === 0) continue; // skip zero-amount from combo dedup
+        const baseName = r.supplier.toLowerCase();
+        existingCombos.add(`${baseName}|${r.amount}|${r.issue_date}`);
+        for (const alias of (aliasMap.get(baseName) || [])) {
+          existingCombos.add(`${alias}|${r.amount}|${r.issue_date}`);
+        }
+      }
       const nonDuplicate = filtered.filter((inv: any) => {
         if (inv.invoiceId && existingIds.has(inv.invoiceId)) return false;
-        if (existingCombos.has(`${(inv.supplier || '').toLowerCase()}|${inv.amount}|${inv.issueDate}`)) return false;
+        if (inv.amount === 0) return true; // don't combo-dedup zero-amount invoices
+        // Check with both original name and corrected name
+        const originalName = (inv.supplier || '').toLowerCase();
+        const correctedName = (nameOverrides?.[inv.supplier] || '').toLowerCase();
+        if (existingCombos.has(`${originalName}|${inv.amount}|${inv.issueDate}`)) return false;
+        if (correctedName && existingCombos.has(`${correctedName}|${inv.amount}|${inv.issueDate}`)) return false;
         return true;
       });
 
