@@ -315,7 +315,7 @@ function parseUBLInvoice(xmlString: string) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function parseEuropeanNumber(raw: string): number {
-  let numStr = raw.replace(/[€EUR\s]/g, '').trim();
+  let numStr = raw.replace(/[€£$\s]/g, '').replace(/\b(?:EUR|USD|GBP)\b/g, '').trim();
   if (!numStr) return 0;
   if (numStr.includes(',') && numStr.includes('.')) {
     if (numStr.lastIndexOf(',') > numStr.lastIndexOf('.')) {
@@ -548,57 +548,89 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
     }
   }
 
+  // ─── CURRENCY DETECTION ──────────────────────────────────────────────
+  // Detect currency from explicit codes and symbols in the text
+  let currency = 'EUR'; // default
+  // Count occurrences of currency indicators near amount-related keywords
+  const currencyContext = textLower;
+  const usdCodeCount = (currencyContext.match(/\busd\b/g) || []).length;
+  const gbpCodeCount = (currencyContext.match(/\bgbp\b/g) || []).length;
+  const eurCodeCount = (currencyContext.match(/\beur\b/g) || []).length;
+  // Symbol-based detection (less reliable, used as tiebreaker)
+  const dollarCount = (text.match(/\$/g) || []).length;
+  const poundCount = (text.match(/£/g) || []).length;
+  const euroCount = (text.match(/€/g) || []).length;
+
+  // Explicit currency codes take priority
+  if (usdCodeCount > eurCodeCount && usdCodeCount > gbpCodeCount) {
+    currency = 'USD';
+  } else if (gbpCodeCount > eurCodeCount && gbpCodeCount > usdCodeCount) {
+    currency = 'GBP';
+  } else if (eurCodeCount === 0 && usdCodeCount === 0 && gbpCodeCount === 0) {
+    // No explicit codes — fall back to symbols
+    if (dollarCount > euroCount && dollarCount > poundCount) {
+      currency = 'USD';
+    } else if (poundCount > euroCount && poundCount > dollarCount) {
+      currency = 'GBP';
+    }
+  }
+
   // ─── AMOUNT (excl. BTW/VAT) ─────────────────────────────────────────
   // European number regex fragment: handles "1.431,25" or "1,431.25" or "431,25"
   const eurNum = '([\\d]+(?:[.,]\\d{3})*[.,]\\d{2})';
 
   let amount = 0;
+  let matchedInclVat = false;
   // Search from bottom of document — invoice totals are always near the end.
   // Reverse lines so the first regex match corresponds to the last occurrence in the original text.
   const reversedText = lines.slice().reverse().join('\n');
 
-  const amountPatterns = [
+  // Currency-aware symbol group for amount patterns
+  const curSym = '(?:€|\\$|£|EUR|USD|GBP)';
+
+  const amountPatterns: { pattern: RegExp; inclVat?: boolean }[] = [
     // "Te betalen" / "Te betalen bedrag" (Dutch: amount to pay — usually the final total)
-    new RegExp(`(?:te\\s*betalen(?:\\s*bedrag)?|verschuldigd\\s*bedrag)\\s*[:.€]*\\s*(?:EUR)?\\s*${eurNum}`, 'i'),
+    { pattern: new RegExp(`(?:te\\s*betalen(?:\\s*bedrag)?|verschuldigd\\s*bedrag)\\s*[:. ]*\\s*${curSym}?\\s*${eurNum}`, 'i') },
     // "Totaalbedrag" (Dutch: grand total)
-    new RegExp(`(?:totaalbedrag)\\s*[:.€]*\\s*(?:EUR)?\\s*${eurNum}`, 'i'),
+    { pattern: new RegExp(`(?:totaalbedrag)\\s*[:. ]*\\s*${curSym}?\\s*${eurNum}`, 'i') },
     // "Totaal van de items" (Belgian/Dutch — excl. BTW)
-    new RegExp(`(?:totaal\\s*van\\s*de\\s*items|totaal\\s*van\\s*de\\s*artikelen)\\s*[:.]*\\s*(?:€|EUR)?\\s*${eurNum}`, 'i'),
+    { pattern: new RegExp(`(?:totaal\\s*van\\s*de\\s*items|totaal\\s*van\\s*de\\s*artikelen)\\s*[:.]*\\s*${curSym}?\\s*${eurNum}`, 'i') },
     // Tax exclusive totals — "bedrag excl. btw" (with optional period after excl)
-    new RegExp(`(?:total\\s*(?:excl|hors|zonder|ex)\\.?\\s*(?:btw|tva|vat)?|subtotal|sous[\\s-]*total|netto\\s*bedrag|netto|taxable\\s*amount|maatstaf\\s*van\\s*heffing)\\s*[:.€]*\\s*(?:EUR)?\\s*${eurNum}`, 'i'),
-    new RegExp(`(?:totaal\\s*(?:excl|exclusief|zonder)\\.?\\s*(?:btw|tva)?|bedrag\\s*excl\\.?\\s*(?:btw|tva)?)\\s*[:.€]*\\s*(?:EUR)?\\s*${eurNum}`, 'i'),
-    new RegExp(`(?:total\\s*h\\.?t\\.?)\\s*[:.€]*\\s*(?:EUR)?\\s*${eurNum}`, 'i'),
-    // Totaal incl. BTW patterns
-    new RegExp(`(?:totaal\\s*incl\\.?\\s*(?:btw|tva)?|total\\s*incl\\.?\\s*(?:btw|tva|vat)?)\\s*[:.€]*\\s*(?:EUR)?\\s*${eurNum}`, 'i'),
+    { pattern: new RegExp(`(?:total\\s*(?:excl|hors|zonder|ex)\\.?\\s*(?:btw|tva|vat)?|subtotal|sous[\\s-]*total|netto\\s*bedrag|netto|taxable\\s*amount|maatstaf\\s*van\\s*heffing)\\s*[:. ]*\\s*${curSym}?\\s*${eurNum}`, 'i') },
+    { pattern: new RegExp(`(?:totaal\\s*(?:excl|exclusief|zonder)\\.?\\s*(?:btw|tva)?|bedrag\\s*excl\\.?\\s*(?:btw|tva)?)\\s*[:. ]*\\s*${curSym}?\\s*${eurNum}`, 'i') },
+    { pattern: new RegExp(`(?:total\\s*h\\.?t\\.?)\\s*[:. ]*\\s*${curSym}?\\s*${eurNum}`, 'i') },
+    // Totaal incl. BTW patterns — flagged so we can subtract VAT if available
+    { pattern: new RegExp(`(?:totaal\\s*incl\\.?\\s*(?:btw|tva)?|total\\s*incl\\.?\\s*(?:btw|tva|vat)?)\\s*[:. ]*\\s*${curSym}?\\s*${eurNum}`, 'i'), inclVat: true },
     // Generic total (but NOT "totaal van factuur" which is incl. VAT)
-    new RegExp(`(?:totaal|total|totale|montant)\\s*[:.]*\\s*(?:€|EUR)?\\s*${eurNum}`, 'i'),
+    { pattern: new RegExp(`(?:totaal|total|totale|montant)\\s*[:.]*\\s*${curSym}?\\s*${eurNum}`, 'i') },
   ];
-  for (const pat of amountPatterns) {
+  for (const { pattern: pat, inclVat } of amountPatterns) {
     // Search reversed text so we find the LAST occurrence (closest to bottom of document)
     const m = reversedText.match(pat);
     if (m) {
       const parsed = parseEuropeanNumber(m[1]);
       if (parsed > 0 && !looksLikeDateNumber(m[1], parsed)) {
         amount = parsed;
+        if (inclVat) matchedInclVat = true;
         break;
       }
     }
   }
 
-  // Fallback: find €-prefixed or EUR-prefixed amounts, take the LAST reasonable one
+  // Fallback: find currency-prefixed amounts, take the LAST reasonable one
   // (not the largest — the last one in the document is most likely the total)
   if (amount === 0) {
-    let lastEuroAmount = 0;
-    const euroPattern = new RegExp(`(?:€|EUR)\\s*${eurNum}`, 'gi');
+    let lastCurrencyAmount = 0;
+    const currencyPattern = new RegExp(`${curSym}\\s*${eurNum}`, 'gi');
     let em;
-    while ((em = euroPattern.exec(text)) !== null) {
+    while ((em = currencyPattern.exec(text)) !== null) {
       const n = parseEuropeanNumber(em[1]);
       if (n > 1 && n <= 500000 && !looksLikeDateNumber(em[1], n)) {
-        lastEuroAmount = n;
+        lastCurrencyAmount = n;
       }
     }
-    if (lastEuroAmount > 0) {
-      amount = lastEuroAmount;
+    if (lastCurrencyAmount > 0) {
+      amount = lastCurrencyAmount;
     }
   }
 
@@ -638,7 +670,12 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
     }
   }
 
-  console.log(`[pdf-parse] ${pdfFilename}: id="${invoiceId}" supplier="${supplierName}" date=${issueDate} amount=${amount} vat=${vatAmount}`);
+  // Safety net: if we matched an "incl. VAT" pattern and have a VAT amount, subtract it
+  if (matchedInclVat && vatAmount > 0 && vatAmount < amount) {
+    amount = Math.round((amount - vatAmount) * 100) / 100;
+  }
+
+  console.log(`[pdf-parse] ${pdfFilename}: id="${invoiceId}" supplier="${supplierName}" date=${issueDate} amount=${amount} vat=${vatAmount} currency=${currency}`);
 
   return {
     invoiceId,
@@ -646,7 +683,7 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
     supplierName: supplierName || fileBaseName,
     amount,
     vatAmount,
-    currency: 'EUR',
+    currency,
     lineItems: [] as { description: string; amount: number }[],
     embeddedPdf: null as string | null,
     pdfFilename,

@@ -1510,7 +1510,7 @@ export default function SupplierInvoicesPage() {
                           <p className="text-xs text-gray-400 mb-0.5">Detected supplier name</p>
                           <p className="font-medium text-gray-900">{u.supplier}</p>
                           <p className="text-xs text-gray-500 mt-0.5">
-                            {fmt(u.amount)} · {u.date} · {u.invoiceId || 'no ID'}
+                            {fmt(u.amount, u.currency)} · {u.date ? formatDate(u.date) : '—'} · {u.invoiceId || 'no ID'}
                           </p>
                         </div>
                         <button
