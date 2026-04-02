@@ -297,7 +297,8 @@ function parseUBLInvoice(xmlString: string) {
       const base64 = typeof binary === 'object' ? binary['#text'] : binary;
       if (base64 && typeof base64 === 'string' && base64.length > 100) {
         embeddedPdf = base64;
-        pdfFilename = typeof docRef['ID'] === 'object' ? docRef['ID']['#text'] : docRef['ID'];
+        const rawId = docRef['ID'];
+        pdfFilename = rawId == null ? null : typeof rawId === 'object' ? String(rawId['#text'] || '') : String(rawId);
         break;
       }
     }
@@ -946,7 +947,8 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       const issues: string[] = [];
       if (inv.amount === 0) issues.push('amount_zero');
       if (!inv.issueDate || inv.issueDate === today) issues.push('date_uncertain');
-      if (inv.supplierName === 'Unknown' || inv.supplierName === inv.pdfFilename?.replace(/\.pdf$/i, '').split('/').pop()) {
+      const pdfBase = typeof inv.pdfFilename === 'string' ? inv.pdfFilename.replace(/\.pdf$/i, '').split('/').pop() : null;
+      if (inv.supplierName === 'Unknown' || inv.supplierName === pdfBase) {
         issues.push('supplier_uncertain');
       }
       if (issues.length > 0) {
