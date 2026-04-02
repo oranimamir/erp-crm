@@ -460,6 +460,8 @@ export default function SupplierInvoicesPage() {
   const [editingRow, setEditingRow] = useState<number | null>(null);
   const [editSupplier, setEditSupplier] = useState('');
   const [editCategory, setEditCategory] = useState('');
+  const [editAmount, setEditAmount] = useState<number>(0);
+  const [editCurrency, setEditCurrency] = useState('EUR');
 
   // Add supplier modal
   const [showAddSupplier, setShowAddSupplier] = useState(false);
@@ -570,12 +572,16 @@ export default function SupplierInvoicesPage() {
 
   const handleSaveEdit = async (id: number, originalSupplier: string) => {
     try {
+      const inv = invoices.find(i => i.id === id);
       const promises: Promise<any>[] = [];
       if (editSupplier !== originalSupplier) {
         promises.push(api.patch(`/demo-expenses/invoices/${id}/supplier`, { supplier: editSupplier }));
       }
-      if (editCategory !== invoices.find(i => i.id === id)?.category) {
+      if (editCategory !== inv?.category) {
         promises.push(api.patch(`/demo-expenses/invoices/${id}/category`, { category: editCategory }));
+      }
+      if (editAmount !== inv?.amount || editCurrency !== inv?.currency) {
+        promises.push(api.patch(`/demo-expenses/invoices/${id}/amount`, { amount: editAmount, currency: editCurrency }));
       }
       if (promises.length > 0) {
         await Promise.all(promises);
@@ -1451,7 +1457,21 @@ export default function SupplierInvoicesPage() {
                                 </span>
                               )}
                             </td>
-                            <td className="px-4 py-3 text-gray-900 tabular-nums font-medium">{fmt(inv.amount, inv.currency)}</td>
+                            <td className="px-4 py-3 text-gray-900 tabular-nums font-medium">
+                              {isEditing ? (
+                                <div className="flex items-center gap-1">
+                                  <select value={editCurrency} onChange={e => setEditCurrency(e.target.value)}
+                                    className="border border-gray-300 rounded px-1 py-0.5 text-xs bg-white focus:ring-2 focus:ring-primary-500 w-16">
+                                    <option value="EUR">EUR</option>
+                                    <option value="GBP">GBP</option>
+                                    <option value="USD">USD</option>
+                                  </select>
+                                  <input type="number" step="0.01" value={editAmount}
+                                    onChange={e => setEditAmount(parseFloat(e.target.value) || 0)}
+                                    className="border border-gray-300 rounded px-2 py-0.5 text-sm w-28 focus:ring-2 focus:ring-primary-500 focus:border-primary-500" />
+                                </div>
+                              ) : fmt(inv.amount, inv.currency)}
+                            </td>
                             <td className="px-4 py-3 text-gray-500">{monthLabel(inv.month)}</td>
                             <td className="px-4 py-3">
                               <div className="flex items-center gap-1">
@@ -1467,8 +1487,8 @@ export default function SupplierInvoicesPage() {
                                 ) : (
                                   <>
                                     {!acerta && (
-                                      <button onClick={() => { setEditingRow(inv.id); setEditSupplier(inv.supplier); setEditCategory(inv.category); }}
-                                        className="text-gray-400 hover:text-primary-600 transition-colors" title="Edit supplier & category">
+                                      <button onClick={() => { setEditingRow(inv.id); setEditSupplier(inv.supplier); setEditCategory(inv.category); setEditAmount(inv.amount); setEditCurrency(inv.currency || 'EUR'); }}
+                                        className="text-gray-400 hover:text-primary-600 transition-colors" title="Edit invoice">
                                         <Pencil size={14} />
                                       </button>
                                     )}

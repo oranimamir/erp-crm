@@ -1655,6 +1655,42 @@ router.patch('/invoices/:id/supplier', (req: Request, res: Response) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// AMOUNT / CURRENCY UPDATE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.patch('/invoices/:id/amount', (req: Request, res: Response) => {
+  try {
+    const { amount, currency } = req.body;
+    if (amount == null && !currency) { res.status(400).json({ error: 'amount or currency required' }); return; }
+
+    const inv = db.prepare('SELECT id, amount, currency, batch_id FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
+    if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
+
+    const newAmount = amount != null ? Number(amount) : inv.amount;
+    const newCurrency = currency || inv.currency;
+    db.prepare('UPDATE demo_invoices SET amount = ?, currency = ? WHERE id = ?').run(newAmount, newCurrency, req.params.id);
+
+    // Update batch total
+    if (inv.batch_id) {
+      const totals = db.prepare('SELECT COALESCE(SUM(amount), 0) as total FROM demo_invoices WHERE batch_id = ?').get(inv.batch_id) as any;
+      db.prepare('UPDATE demo_upload_batches SET total_amount = ? WHERE id = ?').run(totals.total, inv.batch_id);
+    }
+
+    db.saveToDisk();
+    notifyAdmin({
+      entity: 'Supplier Invoice',
+      action: 'updated',
+      label: `Amount updated to ${newCurrency} ${newAmount}`,
+      performedBy: (req as any).user?.display_name || 'Unknown',
+      performedById: (req as any).user?.userId,
+    });
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to update amount' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SUPPLIER MANAGEMENT — add/list/delete user-defined supplier mappings
 // ═══════════════════════════════════════════════════════════════════════════════
 
