@@ -443,6 +443,8 @@ export default function SupplierInvoicesPage() {
   const [showMonthConflict, setShowMonthConflict] = useState(false);
   const [unknownAssignments, setUnknownAssignments] = useState<Record<string, { domain: string; category: string; remember: boolean }>>({});
   const [nameOverrides, setNameOverrides] = useState<Record<string, string>>({});
+  const [amountOverrides, setAmountOverrides] = useState<Record<string, number>>({});
+  const [dateOverrides, setDateOverrides] = useState<Record<string, string>>({});
   const [previewingUnknown, setPreviewingUnknown] = useState<string | null>(null);
   const [skipIds, setSkipIds] = useState<string[]>([]);
 
@@ -691,6 +693,8 @@ export default function SupplierInvoicesPage() {
       const extraUnknowns: any[] = [];
       for (const inv of res.data.parsed) {
         if (warningInvoiceIds.has(inv.invoiceId) && !res.data.unknownSuppliers.some((u: any) => u.invoiceId === inv.invoiceId)) {
+          // Get embeddedPdf from _fullData since parsed only has hasPdf flag
+          const fullEntry = (res.data._fullData || []).find((f: any) => f.invoiceId === inv.invoiceId);
           extraUnknowns.push({
             supplier: inv.supplier,
             amount: inv.amount,
@@ -699,7 +703,7 @@ export default function SupplierInvoicesPage() {
             invoiceId: inv.invoiceId,
             currency: inv.currency,
             lineItems: inv.lineItems,
-            embeddedPdf: null,
+            embeddedPdf: fullEntry?.embeddedPdf || null,
           });
         }
       }
@@ -750,8 +754,16 @@ export default function SupplierInvoicesPage() {
         }
       }
 
+      // Apply amount/date overrides to _fullData before sending
+      const patchedData = upload._fullData.map((inv: any) => {
+        const patched = { ...inv };
+        if (amountOverrides[inv.invoiceId] !== undefined) patched.amount = amountOverrides[inv.invoiceId];
+        if (dateOverrides[inv.invoiceId]) patched.issueDate = dateOverrides[inv.invoiceId];
+        return patched;
+      });
+
       const res = await api.post('/demo-expenses/confirm-import', {
-        invoices: upload._fullData,
+        invoices: patchedData,
         month: upload.inferredMonth,
         filename: upload.filename,
         categoryOverrides,
@@ -782,6 +794,8 @@ export default function SupplierInvoicesPage() {
       setShowUnknownModal(false);
       setShowMonthConflict(false);
       setUnknownAssignments({});
+      setAmountOverrides({});
+      setDateOverrides({});
       setSkipIds([]);
       setZipNote('');
       fetchAll();
@@ -798,6 +812,8 @@ export default function SupplierInvoicesPage() {
     setShowMonthConflict(false);
     setUnknownAssignments({});
     setNameOverrides({});
+    setAmountOverrides({});
+    setDateOverrides({});
     setPreviewingUnknown(null);
     setSkipIds([]);
     setZipNote('');
@@ -1569,7 +1585,7 @@ export default function SupplierInvoicesPage() {
                           <p className="text-xs text-gray-400 mb-0.5">Detected supplier name</p>
                           <p className="font-medium text-gray-900">{u.supplier}</p>
                           <p className="text-xs text-gray-500 mt-0.5">
-                            {fmt(u.amount, u.currency)} · {u.date ? formatDate(u.date) : '—'} · {u.invoiceId || 'no ID'}
+                            {fmt(amountOverrides[u.invoiceId] ?? u.amount, u.currency)} · {(dateOverrides[u.invoiceId] || u.date) ? formatDate(dateOverrides[u.invoiceId] || u.date) : '—'} · {u.invoiceId || 'no ID'}
                           </p>
                         </div>
                         <button
@@ -1580,6 +1596,43 @@ export default function SupplierInvoicesPage() {
                           {isPreviewing ? 'Hide' : 'Preview'}
                         </button>
                       </div>
+
+                      {/* Editable amount & date for flagged invoices */}
+                      {(() => {
+                        const w = (pendingUpload.warnings || []).find((w: any) => w.invoiceId === u.invoiceId);
+                        if (!w) return null;
+                        const hasAmountIssue = w.issues.includes('amount_zero');
+                        const hasDateIssue = w.issues.includes('date_uncertain');
+                        if (!hasAmountIssue && !hasDateIssue) return null;
+                        return (
+                          <div className="flex flex-wrap gap-3 mt-3">
+                            {hasAmountIssue && (
+                              <div>
+                                <label className="block text-xs font-medium text-red-600 mb-1">Correct amount</label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={amountOverrides[u.invoiceId] ?? u.amount}
+                                  onChange={e => setAmountOverrides(prev => ({ ...prev, [u.invoiceId]: parseFloat(e.target.value) || 0 }))}
+                                  className="w-36 border border-red-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                                  placeholder="0.00"
+                                />
+                              </div>
+                            )}
+                            {hasDateIssue && (
+                              <div>
+                                <label className="block text-xs font-medium text-amber-600 mb-1">Correct date</label>
+                                <input
+                                  type="date"
+                                  value={dateOverrides[u.invoiceId] || u.date || ''}
+                                  onChange={e => setDateOverrides(prev => ({ ...prev, [u.invoiceId]: e.target.value }))}
+                                  className="w-44 border border-amber-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
 
                       {/* Editable supplier name */}
                       <div className="mt-3">
