@@ -4,7 +4,7 @@ import Card from '../components/ui/Card';
 import { useToast } from '../contexts/ToastContext';
 import {
   Trash2, FileSpreadsheet, Filter, X, ChevronUp, ChevronDown,
-  Eye, AlertTriangle, Clock, ChevronLeft,
+  Eye, AlertTriangle, Clock, ChevronLeft, Pencil, Check,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
@@ -548,6 +548,13 @@ export default function DemoExpensesPage() {
   // Delete invoice
   const [deletingInvoice, setDeletingInvoice] = useState<{ id: number; invoice_id: string; supplier: string } | null>(null);
 
+  // Inline editing
+  const [editingRow, setEditingRow] = useState<number | null>(null);
+  const [editSupplier, setEditSupplier] = useState('');
+  const [editAmount, setEditAmount] = useState(0);
+  const [editCurrency, setEditCurrency] = useState('EUR');
+  const [editDate, setEditDate] = useState('');
+
   // ─── FETCH HELPERS ──────────────────────────────────────────────────────────
 
   const buildFilterParams = useCallback(() => {
@@ -645,6 +652,44 @@ export default function DemoExpensesPage() {
       addToast('Failed to delete invoice', 'error');
     } finally {
       setDeletingInvoice(null);
+    }
+  };
+
+  // ─── INLINE EDIT ────────────────────────────────────────────────────────────
+
+  const startEdit = (inv: Invoice) => {
+    setEditingRow(inv.id);
+    setEditSupplier(inv.supplier);
+    setEditAmount(inv.amount);
+    setEditCurrency(inv.currency || 'EUR');
+    setEditDate(inv.issue_date || '');
+  };
+
+  const cancelEdit = () => setEditingRow(null);
+
+  const handleSaveEdit = async () => {
+    if (!editingRow) return;
+    const inv = invoices.find(i => i.id === editingRow);
+    if (!inv) return;
+    try {
+      const promises: Promise<any>[] = [];
+      if (editSupplier !== inv.supplier) {
+        promises.push(api.patch(`/demo-expenses/invoices/${editingRow}/supplier`, { supplier: editSupplier }));
+      }
+      if (editAmount !== inv.amount || editCurrency !== (inv.currency || 'EUR')) {
+        promises.push(api.patch(`/demo-expenses/invoices/${editingRow}/amount`, { amount: editAmount, currency: editCurrency }));
+      }
+      if (editDate !== (inv.issue_date || '')) {
+        promises.push(api.patch(`/demo-expenses/invoices/${editingRow}/date`, { issue_date: editDate }));
+      }
+      if (promises.length > 0) {
+        await Promise.all(promises);
+        addToast('Invoice updated', 'success');
+        fetchAll();
+      }
+      setEditingRow(null);
+    } catch (err: any) {
+      addToast(err?.response?.data?.error || 'Failed to update invoice', 'error');
     }
   };
 
@@ -877,6 +922,7 @@ export default function DemoExpensesPage() {
                 <tbody className="divide-y divide-gray-100">
                   {invoices.map(inv => {
                     const acerta = inv.supplier.toLowerCase().includes('acerta');
+                    const isEditing = editingRow === inv.id;
                     return (
                       <tr key={inv.id} className="hover:bg-gray-50 transition-colors">
                         <td className="px-4 py-3">
@@ -891,8 +937,18 @@ export default function DemoExpensesPage() {
                         <td className="px-4 py-3 text-gray-500 text-xs">
                           {new Date(inv.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                         </td>
-                        <td className="px-4 py-3 text-gray-700">{formatDate(inv.issue_date)}</td>
-                        <td className="px-4 py-3 text-gray-700">{inv.supplier}</td>
+                        <td className="px-4 py-3 text-gray-700">
+                          {isEditing ? (
+                            <input type="date" value={editDate} onChange={e => setEditDate(e.target.value)}
+                              className="border border-gray-300 rounded px-2 py-1 text-xs w-32" />
+                          ) : formatDate(inv.issue_date)}
+                        </td>
+                        <td className="px-4 py-3 text-gray-700">
+                          {isEditing ? (
+                            <input type="text" value={editSupplier} onChange={e => setEditSupplier(e.target.value)}
+                              className="border border-gray-300 rounded px-2 py-1 text-xs w-full" />
+                          ) : inv.supplier}
+                        </td>
                         <td className="px-4 py-3">
                           <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${DOMAIN_COLORS[inv.domain] || 'bg-gray-100 text-gray-700'}`}>
                             {inv.domain === 'demo' ? 'Demo' : inv.domain === 'sales' ? 'Sales' : inv.domain}
@@ -914,24 +970,50 @@ export default function DemoExpensesPage() {
                             </select>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-gray-900 tabular-nums font-medium">{fmt(inv.amount, inv.currency)}</td>
+                        <td className="px-4 py-3 text-gray-900 tabular-nums font-medium">
+                          {isEditing ? (
+                            <div className="flex items-center gap-1">
+                              <select value={editCurrency} onChange={e => setEditCurrency(e.target.value)}
+                                className="border border-gray-300 rounded px-1 py-1 text-xs w-16">
+                                <option value="EUR">EUR</option>
+                                <option value="USD">USD</option>
+                                <option value="GBP">GBP</option>
+                              </select>
+                              <input type="number" value={editAmount} onChange={e => setEditAmount(+e.target.value)}
+                                step="0.01" className="border border-gray-300 rounded px-2 py-1 text-xs w-24 text-right" />
+                            </div>
+                          ) : fmt(inv.amount, inv.currency)}
+                        </td>
                         <td className="px-4 py-3 text-gray-500">{monthLabel(inv.month)}</td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1">
-                            <button
-                              onClick={() => setViewingInvoice(inv.id)}
-                              className="text-gray-400 hover:text-primary-600 transition-colors"
-                              title="View invoice"
-                            >
-                              <Eye size={16} />
-                            </button>
-                            <button
-                              onClick={() => setDeletingInvoice({ id: inv.id, invoice_id: inv.invoice_id, supplier: inv.supplier })}
-                              className="text-gray-400 hover:text-red-500 transition-colors"
-                              title="Delete invoice"
-                            >
-                              <Trash2 size={14} />
-                            </button>
+                            {isEditing ? (
+                              <>
+                                <button onClick={handleSaveEdit}
+                                  className="text-green-600 hover:text-green-800 transition-colors" title="Save">
+                                  <Check size={16} />
+                                </button>
+                                <button onClick={cancelEdit}
+                                  className="text-gray-400 hover:text-gray-600 transition-colors" title="Cancel">
+                                  <X size={14} />
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button onClick={() => startEdit(inv)}
+                                  className="text-gray-400 hover:text-primary-600 transition-colors" title="Edit invoice">
+                                  <Pencil size={14} />
+                                </button>
+                                <button onClick={() => setViewingInvoice(inv.id)}
+                                  className="text-gray-400 hover:text-primary-600 transition-colors" title="View invoice">
+                                  <Eye size={16} />
+                                </button>
+                                <button onClick={() => setDeletingInvoice({ id: inv.id, invoice_id: inv.invoice_id, supplier: inv.supplier })}
+                                  className="text-gray-400 hover:text-red-500 transition-colors" title="Delete invoice">
+                                  <Trash2 size={14} />
+                                </button>
+                              </>
+                            )}
                           </div>
                         </td>
                       </tr>

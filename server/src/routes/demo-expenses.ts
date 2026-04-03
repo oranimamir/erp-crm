@@ -1691,6 +1691,33 @@ router.patch('/invoices/:id/amount', (req: Request, res: Response) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// DATE UPDATE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.patch('/invoices/:id/date', (req: Request, res: Response) => {
+  try {
+    const { issue_date } = req.body;
+    if (!issue_date) { res.status(400).json({ error: 'issue_date required' }); return; }
+
+    const inv = db.prepare('SELECT id FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
+    if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
+
+    db.prepare('UPDATE demo_invoices SET issue_date = ? WHERE id = ?').run(issue_date, req.params.id);
+    db.saveToDisk();
+    notifyAdmin({
+      entity: 'Supplier Invoice',
+      action: 'updated',
+      label: `Date updated to ${issue_date}`,
+      performedBy: (req as any).user?.display_name || 'Unknown',
+      performedById: (req as any).user?.userId,
+    });
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to update date' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SUPPLIER MANAGEMENT — add/list/delete user-defined supplier mappings
 // ═══════════════════════════════════════════════════════════════════════════════
 

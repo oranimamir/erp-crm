@@ -167,6 +167,14 @@ export default function OperationDetailPage() {
   const [addingCat, setAddingCat] = useState(false);
   const [showAddCat, setShowAddCat] = useState(false);
 
+  // Wire transfer upload (inline in invoices section)
+  const [wireUploadInvoiceId, setWireUploadInvoiceId] = useState<number | null>(null);
+  const [wirePaymentDate, setWirePaymentDate] = useState(new Date().toISOString().split('T')[0]);
+  const [wireBankRef, setWireBankRef] = useState('');
+  const [wireUploading, setWireUploading] = useState(false);
+  const [wireUploadStatus, setWireUploadStatus] = useState('');
+  const wireFileRef = useRef<HTMLInputElement>(null);
+
   // Generic preview
   const [previewItem, setPreviewItem] = useState<PreviewItem | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -209,6 +217,46 @@ export default function OperationDetailPage() {
       setCategories(data);
     } catch { /* ignore */ }
   }
+
+  const handleWireUpload = async (invoiceId: number, file: File) => {
+    setWireUploading(true);
+    let paymentDate = wirePaymentDate;
+
+    // Auto-detect date from document
+    setWireUploadStatus('Reading date from document...');
+    try {
+      const scanForm = new FormData();
+      scanForm.append('file', file);
+      const scanRes = await api.post('/wire-transfers/scan', scanForm, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      if (scanRes.data.transfer_date) {
+        paymentDate = scanRes.data.transfer_date;
+        setWirePaymentDate(paymentDate);
+      }
+    } catch { /* scan failed — use current date */ }
+
+    setWireUploadStatus('Uploading & converting to EUR...');
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('payment_date', paymentDate);
+      if (wireBankRef) formData.append('bank_reference', wireBankRef);
+      await api.post(`/invoices/${invoiceId}/wire-transfers`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      addToast('Wire transfer uploaded — invoice marked as Paid', 'success');
+      setWireUploadInvoiceId(null);
+      setWireBankRef('');
+      setWirePaymentDate(new Date().toISOString().split('T')[0]);
+      fetchOperation();
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Upload failed', 'error');
+    } finally {
+      setWireUploading(false);
+      setWireUploadStatus('');
+    }
+  };
 
   useEffect(() => {
     fetchOperation();
@@ -697,7 +745,10 @@ export default function OperationDetailPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {operation.invoices.map(inv => (
+              {operation.invoices.map(inv => {
+                const canUploadWire = inv.status === 'sent' || inv.status === 'partially_paid' || inv.status === 'overdue';
+                const isWireOpen = wireUploadInvoiceId === inv.id;
+                return [
                 <tr key={inv.id} className="hover:bg-gray-50">
                   <td className="px-5 py-2.5 font-medium text-primary-700">{inv.invoice_number}</td>
                   <td className="px-4 py-2.5 text-gray-700">{inv.customer_name || inv.supplier_name || '—'}</td>
@@ -709,6 +760,14 @@ export default function OperationDetailPage() {
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="flex items-center justify-end gap-2">
+                      {canUploadWire && (
+                        <button
+                          onClick={() => { setWireUploadInvoiceId(isWireOpen ? null : inv.id); setWireBankRef(''); setWirePaymentDate(new Date().toISOString().split('T')[0]); }}
+                          className={`flex items-center gap-1 text-xs font-medium rounded-lg px-2 py-1 transition-colors ${isWireOpen ? 'bg-primary-100 text-primary-700' : 'text-green-600 hover:bg-green-50 border border-green-200'}`}
+                        >
+                          <Landmark size={12} /> {isWireOpen ? 'Cancel' : 'Payment'}
+                        </button>
+                      )}
                       {inv.file_path && (
                         <>
                           <button
@@ -742,8 +801,43 @@ export default function OperationDetailPage() {
                       </Link>
                     </div>
                   </td>
-                </tr>
-              ))}
+                </tr>,
+                isWireOpen && (
+                  <tr key={`wire-${inv.id}`}>
+                    <td colSpan={5} className="bg-green-50/50 border-t border-green-100 px-5 py-3">
+                      <div className="flex flex-wrap items-end gap-3">
+                        <div>
+                          <label className="block text-[11px] font-medium text-gray-500 mb-0.5">Payment Date</label>
+                          <input type="date" value={wirePaymentDate}
+                            onChange={e => setWirePaymentDate(e.target.value)}
+                            className="border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm" />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-medium text-gray-500 mb-0.5">Bank Reference</label>
+                          <input type="text" value={wireBankRef}
+                            onChange={e => setWireBankRef(e.target.value)}
+                            placeholder="Optional"
+                            className="border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm w-40" />
+                        </div>
+                        <div>
+                          <input ref={wireFileRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp"
+                            className="hidden"
+                            onChange={e => { const f = e.target.files?.[0]; if (f) handleWireUpload(inv.id, f); e.target.value = ''; }} />
+                          <button
+                            onClick={() => wireFileRef.current?.click()}
+                            disabled={wireUploading}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+                          >
+                            {wireUploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                            {wireUploading ? (wireUploadStatus || 'Processing...') : 'Upload Wire Transfer'}
+                          </button>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                ),
+                ];
+              })}
             </tbody>
           </table>
         )}
