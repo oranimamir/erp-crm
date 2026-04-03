@@ -664,6 +664,14 @@ export default function SupplierInvoicesPage() {
       const res = await api.post('/demo-expenses/upload-zip', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
       setPendingUpload(res.data);
 
+      // Show reconciliation summary
+      const recon = res.data.reconciliation;
+      if (recon) {
+        addToast(
+          `ZIP scan: ${recon.totalFilesInZip} files (${recon.xmlFiles} XML + ${recon.pdfFiles} PDF) → ${recon.totalParsed} invoices parsed (${recon.pairedXmlPdf} paired, ${recon.xmlOnly} XML-only, ${recon.pdfOnly} PDF-only) → ${recon.readyToImport} ready to import. DB has ${recon.existingDbTotal} existing invoices.`,
+          'info'
+        );
+      }
       if (res.data.duplicatesSkipped > 0) {
         addToast(`${res.data.duplicatesSkipped} duplicate invoice(s) already in the system — skipped automatically`, 'info');
       }
@@ -671,8 +679,9 @@ export default function SupplierInvoicesPage() {
         addToast(`${res.data.inZipDuplicatesRemoved} duplicate(s) within the ZIP removed`, 'info');
       }
       if (res.data.ownCompanyExcluded?.length > 0) {
-        const names = res.data.ownCompanyExcluded.map((i: any) => i.invoiceId || i.supplier).join(', ');
-        addToast(`${res.data.ownCompanyExcluded.length} own-company invoice(s) excluded: ${names}`, 'info');
+        const names = res.data.ownCompanyExcluded.map((i: any) => i.invoiceId || i.supplier).slice(0, 5).join(', ');
+        const extra = res.data.ownCompanyExcluded.length > 5 ? ` +${res.data.ownCompanyExcluded.length - 5} more` : '';
+        addToast(`${res.data.ownCompanyExcluded.length} own-company invoice(s) excluded: ${names}${extra}`, 'info');
       }
       if (res.data.warnings?.length > 0) {
         const zeroAmt = res.data.warnings.filter((w: any) => w.issues.includes('amount_zero')).length;
@@ -793,6 +802,16 @@ export default function SupplierInvoicesPage() {
         if (demoCount > 0) parts.push(`${demoCount} to Demo Expenses`);
         if (salesCount > 0) parts.push(`${salesCount} to Sales Activities`);
         addToast(`Imported ${parts.join(', ') || 'invoices'}`, 'success');
+      }
+
+      // Show post-import reconciliation
+      const recon = res.data.reconciliation;
+      if (recon) {
+        const skipParts: string[] = [];
+        if (recon.skippedByUser > 0) skipParts.push(`${recon.skippedByUser} skipped by you`);
+        if (recon.skippedAsDuplicate > 0) skipParts.push(`${recon.skippedAsDuplicate} duplicate(s) caught`);
+        const skipMsg = skipParts.length > 0 ? ` (${skipParts.join(', ')})` : '';
+        addToast(`DB total: ${recon.dbTotalAfterImport} invoices (${recon.dbDemoCount} demo, ${recon.dbSalesCount} sales)${skipMsg}`, 'info');
       }
 
       setPendingUpload(null);

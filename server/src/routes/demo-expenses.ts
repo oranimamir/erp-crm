@@ -378,7 +378,11 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
   }
 
   // Even if text extraction fails, still create an entry from filename
-  const fileBaseName = pdfFilename.replace(/\.pdf$/i, '').split('/').pop() || pdfFilename;
+  let fileBaseName = (pdfFilename.replace(/\.pdf$/i, '').split('/').pop() || '').trim();
+  // Guard against empty/blank/generic basenames from files like ".pdf", "  .pdf", "(2).pdf"
+  if (!fileBaseName || fileBaseName.length <= 1) {
+    fileBaseName = `PDF-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
   if (!text.trim()) {
     return {
       invoiceId: fileBaseName,
@@ -719,7 +723,9 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
         const content = await entry.async('string');
         xmlFiles.push({ name, content });
       } else if (lower.endsWith('.pdf')) {
-        pdfFiles.set((name.replace(/\.pdf$/i, '').split('/').pop() || '').toLowerCase(), await entry.async('nodebuffer'));
+        const pdfKey = (name.replace(/\.pdf$/i, '').split('/').pop() || '').trim().toLowerCase();
+        if (pdfKey) pdfFiles.set(pdfKey, await entry.async('nodebuffer'));
+        else pdfFiles.set(`__blank_pdf_${pdfFiles.size}`, await entry.async('nodebuffer'));
       }
     }
 
@@ -749,7 +755,7 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     for (const xml of xmlFiles) {
       const inv = parseUBLInvoice(xml.content);
       if (!inv) continue;
-      const xmlBaseName = xml.name.replace(/\.xml$/i, '').split('/').pop() || '';
+      const xmlBaseName = (xml.name.replace(/\.xml$/i, '').split('/').pop() || '').trim();
       const pairedPdf = pdfFiles.get(xmlBaseName.toLowerCase());
       parsed.push({
         ...inv,
@@ -762,7 +768,7 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     // Process PDF files that weren't paired with XML files
     const pairedPdfNames = new Set<string>();
     for (const xml of xmlFiles) {
-      const xmlBaseName = (xml.name.replace(/\.xml$/i, '').split('/').pop() || '').toLowerCase();
+      const xmlBaseName = (xml.name.replace(/\.xml$/i, '').split('/').pop() || '').trim().toLowerCase();
       if (pdfFiles.has(xmlBaseName)) pairedPdfNames.add(xmlBaseName);
     }
 
@@ -770,7 +776,7 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     for (const [name, entry] of Object.entries(zip.files)) {
       if (entry.dir) continue;
       if (!name.toLowerCase().endsWith('.pdf')) continue;
-      const pdfBaseName = (name.replace(/\.pdf$/i, '').split('/').pop() || '').toLowerCase();
+      const pdfBaseName = (name.replace(/\.pdf$/i, '').split('/').pop() || '').trim().toLowerCase();
       if (pairedPdfNames.has(pdfBaseName)) continue; // already paired with XML
       try {
         const pdfBuffer = await entry.async('nodebuffer');
@@ -956,7 +962,13 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       }
     }
 
-    console.log(`[upload-zip] Summary: ${allFileNames.length} files → ${xmlFiles.length} XML + ${pdfFiles.size} PDF → ${parsed.length} parsed → ${deduped.length} deduped → ${classified.length} classified → ${newInvoices.length} new (${duplicates.length} DB duplicates, ${inZipDuplicateCount} in-ZIP duplicates, ${ownCompanyInvoices.length} own-company excluded, ${warnings.length} with warnings)`);
+    // Reconciliation counts
+    const xmlOnlyCount = parsed.filter(inv => inv.xmlFilename && !inv.embeddedPdf).length;
+    const pdfOnlyCount = parsed.filter(inv => !inv.xmlFilename && inv.embeddedPdf).length;
+    const pairedCount = parsed.filter(inv => inv.xmlFilename && inv.embeddedPdf).length;
+    const existingDbCount = (db.prepare('SELECT COUNT(*) as cnt FROM demo_invoices').get() as any).cnt;
+
+    console.log(`[upload-zip] Summary: ${allFileNames.length} files (${xmlFiles.length} XML + ${pdfFiles.size} PDF) → ${parsed.length} parsed (${pairedCount} paired, ${xmlOnlyCount} XML-only, ${pdfOnlyCount} PDF-only) → ${deduped.length} after in-ZIP dedup → ${newInvoices.length} new (${duplicates.length} DB duplicates, ${inZipDuplicateCount} in-ZIP duplicates, ${ownCompanyInvoices.length} own-company excluded, ${warnings.length} with warnings). DB has ${existingDbCount} invoices.`);
 
     res.json({
       parsed: newInvoices.map(inv => ({
@@ -989,6 +1001,22 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
         date: inv.issueDate,
       })),
       warnings,
+      // Reconciliation data
+      reconciliation: {
+        totalFilesInZip: allFileNames.length,
+        xmlFiles: xmlFiles.length,
+        pdfFiles: pdfFiles.size,
+        totalParsed: parsed.length,
+        pairedXmlPdf: pairedCount,
+        xmlOnly: xmlOnlyCount,
+        pdfOnly: pdfOnlyCount,
+        inZipDuplicatesRemoved: inZipDuplicateCount,
+        dbDuplicatesSkipped: duplicates.length,
+        ownCompanyExcluded: ownCompanyInvoices.length,
+        warningsCount: warnings.length,
+        readyToImport: newInvoices.length,
+        existingDbTotal: existingDbCount,
+      },
       _fullData: newInvoices.map(inv => ({
         invoiceId: inv.invoiceId,
         issueDate: inv.issueDate,
@@ -1177,16 +1205,17 @@ router.post('/confirm-import', (req: Request, res: Response) => {
         results.push({ domain, count: domainInvoices.length, totalAmount });
       }
 
-      return results;
+      return { results, submitted: invoices.length, skippedByUser: skipSet.size, skippedAsDuplicate: filtered.length - nonDuplicate.length };
     });
 
-    const results = doImport();
-    if (results && (results as any).skippedAll) {
-      res.json({ success: true, results: [], message: (results as any).message });
+    const txResult = doImport();
+    if (txResult && (txResult as any).skippedAll) {
+      res.json({ success: true, results: [], message: (txResult as any).message });
       return;
     }
     db.saveToDisk();
-    const totalImported = (results as any[]).reduce((s: number, r: any) => s + r.count, 0);
+    const { results: importResults, submitted, skippedByUser, skippedAsDuplicate } = txResult as any;
+    const totalImported = (importResults as any[]).reduce((s: number, r: any) => s + r.count, 0);
     notifyAdmin({
       entity: 'Invoice Batch',
       action: 'created',
@@ -1194,7 +1223,23 @@ router.post('/confirm-import', (req: Request, res: Response) => {
       performedBy: (req as any).user?.display_name || 'Unknown',
       performedById: (req as any).user?.userId,
     });
-    res.json({ success: true, results });
+    // Return reconciliation with current DB totals
+    const dbTotal = (db.prepare('SELECT COUNT(*) as cnt FROM demo_invoices').get() as any).cnt;
+    const demoTotal = (db.prepare("SELECT COUNT(*) as cnt FROM demo_invoices WHERE domain = 'demo'").get() as any).cnt;
+    const salesTotal = (db.prepare("SELECT COUNT(*) as cnt FROM demo_invoices WHERE domain = 'sales'").get() as any).cnt;
+    res.json({
+      success: true,
+      results: importResults,
+      reconciliation: {
+        submitted,
+        skippedByUser,
+        skippedAsDuplicate,
+        imported: totalImported,
+        dbTotalAfterImport: dbTotal,
+        dbDemoCount: demoTotal,
+        dbSalesCount: salesTotal,
+      },
+    });
   } catch (err: any) {
     console.error('[expense-upload] confirm-import error:', err);
     res.status(500).json({ error: 'Failed to import invoices: ' + (err.message || String(err)) });
@@ -1205,6 +1250,29 @@ router.post('/confirm-import', (req: Request, res: Response) => {
 // DOMAIN-FILTERED QUERY ENDPOINTS
 // All accept ?domain=demo|sales to filter
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// Reconciliation endpoint — verify total invoice counts after bulk uploads
+router.get('/reconciliation', (_req: Request, res: Response) => {
+  try {
+    const total = (db.prepare('SELECT COUNT(*) as cnt FROM demo_invoices').get() as any).cnt;
+    const demoCount = (db.prepare("SELECT COUNT(*) as cnt FROM demo_invoices WHERE domain = 'demo'").get() as any).cnt;
+    const salesCount = (db.prepare("SELECT COUNT(*) as cnt FROM demo_invoices WHERE domain = 'sales'").get() as any).cnt;
+    const batchCount = (db.prepare('SELECT COUNT(*) as cnt FROM demo_upload_batches').get() as any).cnt;
+    const bySupplier = db.prepare('SELECT supplier, COUNT(*) as cnt, SUM(amount) as total FROM demo_invoices GROUP BY supplier ORDER BY cnt DESC').all();
+    const byMonth = db.prepare('SELECT month, domain, COUNT(*) as cnt, SUM(amount) as total FROM demo_invoices GROUP BY month, domain ORDER BY month').all();
+    const duplicateWarnings = (db.prepare('SELECT COUNT(*) as cnt FROM demo_invoices WHERE duplicate_warning = 1').get() as any).cnt;
+    const zeroAmount = (db.prepare('SELECT COUNT(*) as cnt FROM demo_invoices WHERE amount = 0').get() as any).cnt;
+    const noDate = (db.prepare("SELECT COUNT(*) as cnt FROM demo_invoices WHERE issue_date IS NULL OR issue_date = ''").get() as any).cnt;
+    const uniqueSuppliers = (db.prepare('SELECT COUNT(DISTINCT supplier) as cnt FROM demo_invoices').get() as any).cnt;
+    res.json({
+      total, demoCount, salesCount, batchCount,
+      uniqueSuppliers, duplicateWarnings, zeroAmount, noDate,
+      bySupplier, byMonth,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 router.get('/invoices', (req: Request, res: Response) => {
   try {
