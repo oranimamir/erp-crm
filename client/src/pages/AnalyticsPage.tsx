@@ -7,6 +7,8 @@ import {
   ChevronDown, ChevronRight, Eye, EyeOff,
 } from 'lucide-react';
 import { downloadExcel } from '../lib/exportExcel';
+import { useToast } from '../contexts/ToastContext';
+import ExportReportModal from '../components/ExportReportModal';
 
 // ── Interfaces ────────────────────────────────────────────────────────────────
 
@@ -227,6 +229,8 @@ const VIEW_OPTIONS: { value: View; label: string; active: string }[] = [
 
 export default function AnalyticsPage() {
   const currentYear = new Date().getFullYear().toString();
+  const { addToast } = useToast();
+  const [showExportModal, setShowExportModal] = useState(false);
 
   // ── Global filters ────────────────────────────────────────────────────────
   const [view, setView] = useState<View>('expenses');
@@ -371,9 +375,13 @@ export default function AnalyticsPage() {
           Analytics
         </h1>
         <div className="flex items-center gap-3">
+          <button onClick={() => setShowExportModal(true)}
+            className="flex items-center gap-1 text-sm text-white bg-primary-600 rounded-lg px-3 py-1.5 hover:bg-primary-700 font-medium">
+            <FileSpreadsheet size={14} /> Full Report
+          </button>
           <button onClick={handleExport}
             className="flex items-center gap-1 text-sm text-gray-600 border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50">
-            <FileSpreadsheet size={14} /> Export Excel
+            <FileSpreadsheet size={14} /> Quick Export
           </button>
           {isFiltered && (
             <button onClick={resetFilters} className="flex items-center gap-1 text-sm text-primary-600 hover:underline">
@@ -1214,6 +1222,14 @@ export default function AnalyticsPage() {
       )}
       </>
       )}
+
+      {/* Export Report Modal */}
+      <ExportReportModal
+        open={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        years={years}
+        addToast={addToast}
+      />
     </div>
   );
 }

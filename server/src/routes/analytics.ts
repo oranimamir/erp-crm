@@ -441,4 +441,95 @@ router.get('/demo-expenses', (req: Request, res: Response) => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// GET /analytics/export-data — row-level data for Excel report generation
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.get('/export-data', (req: Request, res: Response) => {
+  try {
+    const type = (req.query.type as string) || 'revenue'; // revenue | expenses | combined
+    const yearFrom = parseInt((req.query.year_from as string) || new Date().getFullYear().toString());
+    const yearTo = parseInt((req.query.year_to as string) || String(yearFrom));
+    const monthFrom = parseInt((req.query.month_from as string) || '1');
+    const monthTo = parseInt((req.query.month_to as string) || '12');
+
+    if (isNaN(yearFrom) || isNaN(yearTo) || yearFrom > yearTo) {
+      res.status(400).json({ error: 'Invalid year range' }); return;
+    }
+
+    const dateStart = `${yearFrom}-${String(Math.max(1, monthFrom)).padStart(2, '0')}-01`;
+    const dateEnd = `${yearTo}-${String(Math.min(12, monthTo)).padStart(2, '0')}-31`;
+
+    const customerId = req.query.customer_id ? parseInt(req.query.customer_id as string) : null;
+    const custWhere = customerId ? `AND i.customer_id = ?` : '';
+    const custParams = customerId ? [customerId] : [];
+
+    const result: any = {};
+
+    // ── Revenue data: customer invoices + confirmed orders ────────────────
+    if (type === 'revenue' || type === 'combined') {
+      result.customer_invoices = db.prepare(`
+        SELECT i.invoice_number, c.name as customer_name,
+          COALESCE(oi_tons.quantity_mt, 0) as quantity_mt,
+          i.amount, UPPER(COALESCE(i.currency, 'USD')) as currency,
+          COALESCE(i.eur_amount, i.amount) as eur_amount,
+          i.invoice_date
+        FROM invoices i
+        LEFT JOIN customers c ON i.customer_id = c.id
+        LEFT JOIN (
+          SELECT op.id as op_id, SUM(${MT_EXPR}) as quantity_mt
+          FROM operations op
+          JOIN orders o ON op.order_id = o.id
+          JOIN order_items oi ON oi.order_id = o.id
+          GROUP BY op.id
+        ) oi_tons ON oi_tons.op_id = i.operation_id
+        WHERE i.type = 'customer' AND i.status NOT IN ('cancelled', 'draft')
+          AND i.invoice_date BETWEEN ? AND ?
+          ${custWhere}
+        ORDER BY i.invoice_date
+      `).all(dateStart, dateEnd, ...custParams) as any[];
+
+      result.confirmed_orders = db.prepare(`
+        SELECT o.order_number, COALESCE(c.name, s.name) as party_name,
+          o.status,
+          COALESCE(oi_tons.quantity_mt, 0) as quantity_mt,
+          o.total_amount as total_eur, o.order_date
+        FROM orders o
+        LEFT JOIN customers c ON o.customer_id = c.id
+        LEFT JOIN suppliers s ON o.supplier_id = s.id
+        LEFT JOIN (
+          SELECT oi.order_id, SUM(${MT_EXPR}) as quantity_mt
+          FROM order_items oi
+          GROUP BY oi.order_id
+        ) oi_tons ON oi_tons.order_id = o.id
+        WHERE o.type = 'customer'
+          AND o.status NOT IN ('cancelled', 'delivered', 'completed')
+          AND o.order_date BETWEEN ? AND ?
+        ORDER BY o.order_date
+      `).all(dateStart, dateEnd) as any[];
+    }
+
+    // ── Expense data: demo_invoices ──────────────────────────────────────
+    if (type === 'expenses' || type === 'combined') {
+      const domain = req.query.domain as string || '';
+      const domainWhere = domain ? `AND domain = ?` : '';
+      const domainParams = domain ? [domain] : [];
+
+      result.supplier_expenses = db.prepare(`
+        SELECT invoice_id, supplier, category, domain, amount, vat_amount,
+          currency, issue_date
+        FROM demo_invoices
+        WHERE issue_date BETWEEN ? AND ?
+          ${domainWhere}
+        ORDER BY issue_date
+      `).all(dateStart, dateEnd, ...domainParams) as any[];
+    }
+
+    res.json(result);
+  } catch (err: any) {
+    console.error('[analytics] export-data error:', err);
+    res.status(500).json({ error: 'Failed to fetch export data' });
+  }
+});
+
 export default router;
