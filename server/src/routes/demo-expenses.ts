@@ -1278,7 +1278,7 @@ router.get('/summary', (req: Request, res: Response) => {
     const byCategory = db.prepare(`SELECT category, SUM(amount) as total, SUM(vat_amount) as vat_total FROM demo_invoices WHERE ${where} GROUP BY category ORDER BY total DESC`).all(...params);
     const bySupplier = db.prepare(`SELECT supplier, SUM(amount) as total, SUM(vat_amount) as vat_total FROM demo_invoices WHERE ${where} GROUP BY supplier ORDER BY total DESC`).all(...params);
     const monthlyByCategory = db.prepare(`SELECT month, category, SUM(amount) as total, SUM(vat_amount) as vat_total FROM demo_invoices WHERE ${where} GROUP BY month, category ORDER BY month ASC`).all(...params);
-    const months = db.prepare(`SELECT DISTINCT month FROM demo_invoices WHERE ${where.replace('1=1', '1=1')} ORDER BY month ASC`).all(...(domain ? [domain] : []));
+    const months = db.prepare(`SELECT DISTINCT month FROM demo_invoices WHERE ${domain ? 'domain = ?' : '1=1'} ORDER BY month ASC`).all(...(domain ? [domain] : []));
     const allSuppliers = db.prepare(`SELECT DISTINCT supplier FROM demo_invoices WHERE ${domain ? 'domain = ?' : '1=1'} ORDER BY supplier ASC`).all(...(domain ? [domain] : []));
     const allCategories = db.prepare(`SELECT DISTINCT category FROM demo_invoices WHERE ${domain ? 'domain = ?' : '1=1'} ORDER BY category ASC`).all(...(domain ? [domain] : []));
     const avgByCategory = db.prepare(
@@ -1520,7 +1520,7 @@ router.post('/upload-single', upload.single('file'), async (req: Request, res: R
     }
 
     // Auto-classify
-    const classification = classifySupplier(parsed.supplier || '');
+    const classification = classifySupplier(parsed.supplierName || '');
     if (classification) {
       parsed.domain = classification.domain;
       parsed.category = classification.category;
@@ -1530,8 +1530,8 @@ router.post('/upload-single', upload.single('file'), async (req: Request, res: R
     }
 
     // Derive month
-    if (parsed.date) {
-      const d = new Date(parsed.date);
+    if (parsed.issueDate) {
+      const d = new Date(parsed.issueDate);
       if (!isNaN(d.getTime())) {
         parsed.month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
       }
@@ -1540,7 +1540,7 @@ router.post('/upload-single', upload.single('file'), async (req: Request, res: R
     notifyAdmin({
       entity: 'Supplier Invoice',
       action: 'created',
-      label: `${parsed.supplier || 'Unknown'} — ${file.originalname}`,
+      label: `${parsed.supplierName || 'Unknown'} — ${file.originalname}`,
       performedBy: (req as any).user?.display_name || 'Unknown',
       performedById: (req as any).user?.userId,
     });
@@ -1548,15 +1548,15 @@ router.post('/upload-single', upload.single('file'), async (req: Request, res: R
     res.json({
       invoice: {
         invoiceId: parsed.invoiceId || '',
-        date: parsed.date || '',
-        supplier: parsed.supplier || 'Unknown',
+        date: parsed.issueDate || '',
+        supplier: parsed.supplierName || 'Unknown',
         amount: parsed.amount || 0,
         vatAmount: parsed.vatAmount || 0,
         currency: parsed.currency || 'EUR',
         domain: parsed.domain,
         category: parsed.category,
         month: parsed.month || '',
-        lineItems: parsed.lineItems || '',
+        lineItems: parsed.lineItems || [],
         pdfFilename: parsed.pdfFilename || null,
         xmlFilename: parsed.xmlFilename || null,
         embeddedPdf: parsed.embeddedPdf || null,
@@ -1606,7 +1606,7 @@ router.post('/confirm-single', (req: Request, res: Response) => {
       invoice.vatAmount || 0,
       invoice.currency || 'EUR',
       invoice.month || '',
-      invoice.lineItems || '',
+      typeof invoice.lineItems === 'string' ? invoice.lineItems : JSON.stringify(invoice.lineItems || []),
       invoice.embeddedPdf || null,
       invoice.pdfFilename || null,
       invoice.xmlFilename || null,
