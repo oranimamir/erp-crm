@@ -671,6 +671,10 @@ export default function SupplierInvoicesPage() {
           `ZIP scan: ${recon.totalFilesInZip} files (${recon.xmlFiles} XML + ${recon.pdfFiles} PDF) → ${recon.totalParsed} invoices parsed (${recon.pairedXmlPdf} paired, ${recon.xmlOnly} XML-only, ${recon.pdfOnly} PDF-only) → ${recon.readyToImport} ready to import. DB has ${recon.existingDbTotal} existing invoices.`,
           'info'
         );
+        if (recon.failedToParse > 0) {
+          const failedNames = (recon.failedFiles || []).map((f: any) => f.name).join(', ');
+          addToast(`⚠ ${recon.failedToParse} file(s) FAILED to parse and will be SKIPPED: ${failedNames}`, 'error');
+        }
       }
       if (res.data.duplicatesSkipped > 0) {
         addToast(`${res.data.duplicatesSkipped} duplicate invoice(s) already in the system — skipped automatically`, 'info');
@@ -678,21 +682,18 @@ export default function SupplierInvoicesPage() {
       if (res.data.inZipDuplicatesRemoved > 0) {
         addToast(`${res.data.inZipDuplicatesRemoved} duplicate(s) within the ZIP removed`, 'info');
       }
-      if (res.data.ownCompanyExcluded?.length > 0) {
-        const names = res.data.ownCompanyExcluded.map((i: any) => i.invoiceId || i.supplier).slice(0, 5).join(', ');
-        const extra = res.data.ownCompanyExcluded.length > 5 ? ` +${res.data.ownCompanyExcluded.length - 5} more` : '';
-        addToast(`${res.data.ownCompanyExcluded.length} own-company invoice(s) excluded: ${names}${extra}`, 'info');
-      }
       if (res.data.warnings?.length > 0) {
         const zeroAmt = res.data.warnings.filter((w: any) => w.issues.includes('amount_zero')).length;
         const badDate = res.data.warnings.filter((w: any) => w.issues.includes('date_uncertain')).length;
         const badSupplier = res.data.warnings.filter((w: any) => w.issues.includes('supplier_uncertain')).length;
+        const ownCompany = res.data.warnings.filter((w: any) => w.issues.includes('own_company')).length;
         const parts: string[] = [];
         if (zeroAmt > 0) parts.push(`${zeroAmt} with amount €0`);
         if (badDate > 0) parts.push(`${badDate} with uncertain date`);
         if (badSupplier > 0) parts.push(`${badSupplier} with unrecognised supplier`);
+        if (ownCompany > 0) parts.push(`${ownCompany} flagged as own-company (review to keep or skip)`);
         if (parts.length > 0) {
-          addToast(`Needs review: ${parts.join(', ')}. Check the unknown suppliers list below.`, 'error');
+          addToast(`Needs review: ${parts.join(', ')}. Check the review list below.`, 'error');
         }
       }
 
@@ -736,6 +737,11 @@ export default function SupplierInvoicesPage() {
             remember: false,
           }];
         })));
+        // Auto-skip own-company invoices by default (user can un-skip by correcting supplier name)
+        const ownCompanyIds = (res.data.warnings || [])
+          .filter((w: any) => w.issues.includes('own_company'))
+          .map((w: any) => w.invoiceId);
+        if (ownCompanyIds.length > 0) setSkipIds(ownCompanyIds);
         setShowUnknownModal(true);
       } else if (res.data.existingDemoBatch || res.data.existingSalesBatch) {
         setShowMonthConflict(true);
@@ -1606,13 +1612,23 @@ export default function SupplierInvoicesPage() {
                 const isPreviewing = previewingUnknown === u.supplier;
                 return (
                   <div key={u.supplier} className="border border-gray-200 rounded-lg overflow-hidden">
-                    <div className="p-4">
+                    <div className={`p-4 ${skipIds.includes(u.invoiceId) ? 'opacity-50' : ''}`}>
                       {/* Warning badges for flagged invoices */}
                       {(() => {
                         const w = (pendingUpload.warnings || []).find((w: any) => w.invoiceId === u.invoiceId);
                         if (!w) return null;
+                        const isSkipped = skipIds.includes(u.invoiceId);
                         return (
-                          <div className="flex flex-wrap gap-1.5 mb-2">
+                          <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                            {w.issues.includes('own_company') && (
+                              <>
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700">Own-company name detected</span>
+                                <button onClick={() => setSkipIds(prev => isSkipped ? prev.filter(id => id !== u.invoiceId) : [...prev, u.invoiceId])}
+                                  className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${isSkipped ? 'bg-red-50 text-red-600 border-red-200' : 'bg-green-50 text-green-600 border-green-200'}`}>
+                                  {isSkipped ? 'Will skip — click to include' : 'Will include — click to skip'}
+                                </button>
+                              </>
+                            )}
                             {w.issues.includes('amount_zero') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Amount is €0 — please verify</span>}
                             {w.issues.includes('date_uncertain') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Date could not be read — please verify</span>}
                             {w.issues.includes('supplier_uncertain') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Supplier not recognised — please verify</span>}
@@ -1754,7 +1770,7 @@ export default function SupplierInvoicesPage() {
               <button onClick={() => {
                 setShowUnknownModal(false);
                 if (pendingUpload.existingDemoBatch || pendingUpload.existingSalesBatch) setShowMonthConflict(true);
-                else finalizeZipImport(pendingUpload, unknownAssignments, [], false, false);
+                else finalizeZipImport(pendingUpload, unknownAssignments, skipIds, false, false);
               }} className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium">Continue</button>
             </div>
           </div>

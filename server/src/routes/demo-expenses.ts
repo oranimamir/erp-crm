@@ -748,13 +748,18 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       }
     }
 
-    // Parse all invoices
+    // Parse all invoices — track every file's fate
     const parsed: any[] = [];
+    const failedFiles: { name: string; type: string; reason: string }[] = [];
 
     // Process XML files (UBL/PEPPOL)
     for (const xml of xmlFiles) {
       const inv = parseUBLInvoice(xml.content);
-      if (!inv) continue;
+      if (!inv) {
+        failedFiles.push({ name: xml.name, type: 'xml', reason: 'Failed to parse XML structure (not valid UBL/PEPPOL)' });
+        console.warn(`[upload-zip] XML parse failed — skipped: ${xml.name}`);
+        continue;
+      }
       const xmlBaseName = (xml.name.replace(/\.xml$/i, '').split('/').pop() || '').trim();
       const pairedPdf = pdfFiles.get(xmlBaseName.toLowerCase());
       parsed.push({
@@ -781,16 +786,24 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       try {
         const pdfBuffer = await entry.async('nodebuffer');
         const inv = await parsePDFInvoice(pdfBuffer, name);
-        if (!inv) continue;
+        if (!inv) {
+          failedFiles.push({ name, type: 'pdf', reason: 'PDF parser returned no data' });
+          continue;
+        }
         parsed.push({
           ...inv,
           xmlFilename: null,
           embeddedPdf: pdfBuffer.toString('base64'),
           pdfFilename: name,
         });
-      } catch (err) {
+      } catch (err: any) {
+        failedFiles.push({ name, type: 'pdf', reason: err?.message || 'Exception during PDF parsing' });
         console.error(`[upload-zip] Failed to parse PDF ${name}:`, err);
       }
+    }
+
+    if (failedFiles.length > 0) {
+      console.warn(`[upload-zip] ${failedFiles.length} file(s) failed to parse:`, failedFiles.map(f => f.name));
     }
 
     if (parsed.length === 0) {
@@ -941,16 +954,17 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     // Separate own-company invoices so we can report them to the user
     const ownCompanyInvoices = classified.filter(inv => isOwnCompany(inv.supplierName));
 
-    // Auto-exclude duplicates and own-company invoices from import
+    // Auto-exclude duplicates but KEEP own-company invoices (flagged for user review)
     const newInvoices = classified.filter(inv =>
-      !duplicateInvoiceIds.has(inv.invoiceId) && !isOwnCompany(inv.supplierName)
+      !duplicateInvoiceIds.has(inv.invoiceId)
     );
 
-    // Flag invoices that need user attention (amount=0, fallback date, unknown supplier)
+    // Flag invoices that need user attention (amount=0, fallback date, unknown supplier, own-company)
     const today = new Date().toISOString().substring(0, 10);
     const warnings: { invoiceId: string; supplier: string; issues: string[] }[] = [];
     for (const inv of newInvoices) {
       const issues: string[] = [];
+      if (isOwnCompany(inv.supplierName)) issues.push('own_company');
       if (inv.amount === 0) issues.push('amount_zero');
       if (!inv.issueDate || inv.issueDate === today) issues.push('date_uncertain');
       const pdfBase = typeof inv.pdfFilename === 'string' ? inv.pdfFilename.replace(/\.pdf$/i, '').split('/').pop() : null;
@@ -968,7 +982,7 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     const pairedCount = parsed.filter(inv => inv.xmlFilename && inv.embeddedPdf).length;
     const existingDbCount = (db.prepare('SELECT COUNT(*) as cnt FROM demo_invoices').get() as any).cnt;
 
-    console.log(`[upload-zip] Summary: ${allFileNames.length} files (${xmlFiles.length} XML + ${pdfFiles.size} PDF) → ${parsed.length} parsed (${pairedCount} paired, ${xmlOnlyCount} XML-only, ${pdfOnlyCount} PDF-only) → ${deduped.length} after in-ZIP dedup → ${newInvoices.length} new (${duplicates.length} DB duplicates, ${inZipDuplicateCount} in-ZIP duplicates, ${ownCompanyInvoices.length} own-company excluded, ${warnings.length} with warnings). DB has ${existingDbCount} invoices.`);
+    console.log(`[upload-zip] Summary: ${allFileNames.length} files (${xmlFiles.length} XML + ${pdfFiles.size} PDF, ${failedFiles.length} failed) → ${parsed.length} parsed (${pairedCount} paired, ${xmlOnlyCount} XML-only, ${pdfOnlyCount} PDF-only) → ${deduped.length} after in-ZIP dedup → ${newInvoices.length} new (${duplicates.length} DB duplicates, ${inZipDuplicateCount} in-ZIP duplicates, ${ownCompanyInvoices.length} own-company excluded, ${warnings.length} with warnings). DB has ${existingDbCount} invoices.`);
 
     res.json({
       parsed: newInvoices.map(inv => ({
@@ -1014,6 +1028,8 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
         dbDuplicatesSkipped: duplicates.length,
         ownCompanyExcluded: ownCompanyInvoices.length,
         warningsCount: warnings.length,
+        failedToParse: failedFiles.length,
+        failedFiles: failedFiles,
         readyToImport: newInvoices.length,
         existingDbTotal: existingDbCount,
       },
