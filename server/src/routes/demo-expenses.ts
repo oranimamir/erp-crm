@@ -1505,11 +1505,16 @@ router.get('/summary', (req: Request, res: Response) => {
       ) GROUP BY category ORDER BY avg_total DESC`
     ).all(...params);
     const totals = db.prepare(`SELECT SUM(amount) as total_amount, SUM(vat_amount) as total_vat, COUNT(*) as invoice_count FROM demo_invoices WHERE ${where}`).get(...params) as any;
+    // Monthly breakdown by domain (for amount and VAT tables)
+    const monthlyByDomain = db.prepare(
+      `SELECT month, domain, SUM(amount) as total, SUM(vat_amount) as vat_total, COUNT(*) as cnt FROM demo_invoices WHERE ${where} GROUP BY month, domain ORDER BY month ASC`
+    ).all(...params);
 
     res.json({
       by_category: byCategory,
       by_supplier: bySupplier,
       monthly_by_category: monthlyByCategory,
+      monthly_by_domain: monthlyByDomain,
       avg_by_category: avgByCategory,
       months: months.map((m: any) => m.month),
       suppliers: allSuppliers.map((s: any) => s.supplier),

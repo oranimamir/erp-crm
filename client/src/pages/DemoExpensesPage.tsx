@@ -73,6 +73,7 @@ interface Summary {
   by_category: { category: string; total: number }[];
   by_supplier: { supplier: string; total: number }[];
   monthly_by_category: { month: string; category: string; total: number }[];
+  monthly_by_domain: { month: string; domain: string; total: number; vat_total: number; cnt: number }[];
   avg_by_category: { category: string; avg_total: number }[];
   months: string[];
   suppliers: string[];
@@ -867,6 +868,115 @@ export default function DemoExpensesPage() {
             <Card className="p-4">
               <p className="text-xs text-gray-500">Months Uploaded</p>
               <p className="text-lg font-bold text-gray-900 mt-1">{summary?.months.length || 0}</p>
+            </Card>
+          </div>
+        )}
+
+        {/* Monthly Amount & VAT Tables */}
+        {summary && summary.monthly_by_domain?.length > 0 && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Amount table */}
+            <Card className="overflow-hidden">
+              <div className="p-4 border-b bg-gray-50">
+                <h3 className="text-sm font-semibold text-gray-900">Monthly Expenses (excl. BTW)</h3>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-50 border-b">
+                      <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase">Month</th>
+                      <th className="text-right px-4 py-2 text-xs font-medium text-emerald-600 uppercase">Demo</th>
+                      <th className="text-right px-4 py-2 text-xs font-medium text-blue-600 uppercase">Sales</th>
+                      <th className="text-right px-4 py-2 text-xs font-medium text-gray-700 uppercase">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {(() => {
+                      const byMonth: Record<string, { demo: number; sales: number }> = {};
+                      for (const row of summary.monthly_by_domain) {
+                        if (!byMonth[row.month]) byMonth[row.month] = { demo: 0, sales: 0 };
+                        if (row.domain === 'demo') byMonth[row.month].demo += row.total;
+                        else if (row.domain === 'sales') byMonth[row.month].sales += row.total;
+                      }
+                      const sorted = Object.entries(byMonth).sort((a, b) => a[0].localeCompare(b[0]));
+                      let totalDemo = 0, totalSales = 0;
+                      const rows = sorted.map(([m, v]) => {
+                        totalDemo += v.demo;
+                        totalSales += v.sales;
+                        return (
+                          <tr key={m} className="hover:bg-gray-50">
+                            <td className="px-4 py-2 text-gray-700 font-medium">{monthLabel(m)}</td>
+                            <td className="px-4 py-2 text-right tabular-nums text-emerald-700">{fmt(v.demo)}</td>
+                            <td className="px-4 py-2 text-right tabular-nums text-blue-700">{fmt(v.sales)}</td>
+                            <td className="px-4 py-2 text-right tabular-nums font-semibold text-gray-900">{fmt(v.demo + v.sales)}</td>
+                          </tr>
+                        );
+                      });
+                      rows.push(
+                        <tr key="total" className="bg-gray-50 border-t-2 border-gray-300 font-bold">
+                          <td className="px-4 py-2 text-gray-900">Total</td>
+                          <td className="px-4 py-2 text-right tabular-nums text-emerald-700">{fmt(totalDemo)}</td>
+                          <td className="px-4 py-2 text-right tabular-nums text-blue-700">{fmt(totalSales)}</td>
+                          <td className="px-4 py-2 text-right tabular-nums text-gray-900">{fmt(totalDemo + totalSales)}</td>
+                        </tr>
+                      );
+                      return rows;
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+
+            {/* VAT table */}
+            <Card className="overflow-hidden">
+              <div className="p-4 border-b bg-gray-50">
+                <h3 className="text-sm font-semibold text-gray-900">Monthly VAT (BTW)</h3>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-50 border-b">
+                      <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase">Month</th>
+                      <th className="text-right px-4 py-2 text-xs font-medium text-emerald-600 uppercase">Demo</th>
+                      <th className="text-right px-4 py-2 text-xs font-medium text-blue-600 uppercase">Sales</th>
+                      <th className="text-right px-4 py-2 text-xs font-medium text-gray-700 uppercase">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {(() => {
+                      const byMonth: Record<string, { demo: number; sales: number }> = {};
+                      for (const row of summary.monthly_by_domain) {
+                        if (!byMonth[row.month]) byMonth[row.month] = { demo: 0, sales: 0 };
+                        if (row.domain === 'demo') byMonth[row.month].demo += row.vat_total;
+                        else if (row.domain === 'sales') byMonth[row.month].sales += row.vat_total;
+                      }
+                      const sorted = Object.entries(byMonth).sort((a, b) => a[0].localeCompare(b[0]));
+                      let totalDemo = 0, totalSales = 0;
+                      const rows = sorted.map(([m, v]) => {
+                        totalDemo += v.demo;
+                        totalSales += v.sales;
+                        return (
+                          <tr key={m} className="hover:bg-gray-50">
+                            <td className="px-4 py-2 text-gray-700 font-medium">{monthLabel(m)}</td>
+                            <td className="px-4 py-2 text-right tabular-nums text-emerald-700">{fmt(v.demo)}</td>
+                            <td className="px-4 py-2 text-right tabular-nums text-blue-700">{fmt(v.sales)}</td>
+                            <td className="px-4 py-2 text-right tabular-nums font-semibold text-gray-900">{fmt(v.demo + v.sales)}</td>
+                          </tr>
+                        );
+                      });
+                      rows.push(
+                        <tr key="total" className="bg-gray-50 border-t-2 border-gray-300 font-bold">
+                          <td className="px-4 py-2 text-gray-900">Total</td>
+                          <td className="px-4 py-2 text-right tabular-nums text-emerald-700">{fmt(totalDemo)}</td>
+                          <td className="px-4 py-2 text-right tabular-nums text-blue-700">{fmt(totalSales)}</td>
+                          <td className="px-4 py-2 text-right tabular-nums text-gray-900">{fmt(totalDemo + totalSales)}</td>
+                        </tr>
+                      );
+                      return rows;
+                    })()}
+                  </tbody>
+                </table>
+              </div>
             </Card>
           </div>
         )}

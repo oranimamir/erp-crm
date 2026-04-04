@@ -452,6 +452,7 @@ export default function SupplierInvoicesPage() {
   const [editCategory, setEditCategory] = useState('');
   const [editAmount, setEditAmount] = useState<number>(0);
   const [editCurrency, setEditCurrency] = useState('EUR');
+  const [editDate, setEditDate] = useState('');
 
   // Add supplier modal
   const [showAddSupplier, setShowAddSupplier] = useState(false);
@@ -574,6 +575,9 @@ export default function SupplierInvoicesPage() {
       }
       if (editAmount !== inv?.amount || editCurrency !== inv?.currency) {
         promises.push(api.patch(`/demo-expenses/invoices/${id}/amount`, { amount: editAmount, currency: editCurrency }));
+      }
+      if (editDate !== (inv?.issue_date || '')) {
+        promises.push(api.patch(`/demo-expenses/invoices/${id}/date`, { issue_date: editDate }));
       }
       if (promises.length > 0) {
         await Promise.all(promises);
@@ -1140,53 +1144,106 @@ export default function SupplierInvoicesPage() {
                   </div>
                 )}
 
-                {/* Monthly breakdown table */}
-                {(filteredMonthlySummary?.by_month || []).length > 0 && (
-                  <Card className="overflow-hidden">
-                    <div className="p-4 border-b">
-                      <h3 className="text-sm font-semibold text-gray-900">Monthly Breakdown</h3>
+                {/* Monthly Expenses Table (Demo | Sales columns) */}
+                {(filteredMonthlySummary?.by_month || []).length > 0 && (() => {
+                  const rows = filteredMonthlySummary?.by_month || [];
+                  const byMonth: Record<string, { demo: number; sales: number; demoCnt: number; salesCnt: number }> = {};
+                  for (const r of rows) {
+                    if (!byMonth[r.month]) byMonth[r.month] = { demo: 0, sales: 0, demoCnt: 0, salesCnt: 0 };
+                    if (r.domain === 'demo') { byMonth[r.month].demo += r.total; byMonth[r.month].demoCnt += r.count; }
+                    else { byMonth[r.month].sales += r.total; byMonth[r.month].salesCnt += r.count; }
+                  }
+                  const sorted = Object.entries(byMonth).sort((a, b) => a[0].localeCompare(b[0]));
+                  let tDemo = 0, tSales = 0;
+                  for (const [, v] of sorted) { tDemo += v.demo; tSales += v.sales; }
+
+                  // VAT table data
+                  const vatByMonth: Record<string, { demo: number; sales: number }> = {};
+                  for (const r of rows) {
+                    if (!vatByMonth[r.month]) vatByMonth[r.month] = { demo: 0, sales: 0 };
+                    if (r.domain === 'demo') vatByMonth[r.month].demo += r.vat_total;
+                    else vatByMonth[r.month].sales += r.vat_total;
+                  }
+                  const vatSorted = Object.entries(vatByMonth).sort((a, b) => a[0].localeCompare(b[0]));
+                  let vtDemo = 0, vtSales = 0;
+                  for (const [, v] of vatSorted) { vtDemo += v.demo; vtSales += v.sales; }
+
+                  return (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      <Card className="overflow-hidden">
+                        <div className="p-4 border-b bg-gray-50">
+                          <h3 className="text-sm font-semibold text-gray-900">Monthly Expenses (excl. BTW)</h3>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="bg-gray-50 border-b">
+                                <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase">Month</th>
+                                <th className="text-right px-4 py-2 text-xs font-medium text-emerald-600 uppercase">Demo</th>
+                                <th className="text-right px-4 py-2 text-xs font-medium text-blue-600 uppercase">Sales</th>
+                                <th className="text-right px-4 py-2 text-xs font-medium text-gray-700 uppercase">Total</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                              {sorted.map(([m, v]) => (
+                                <tr key={m} className="hover:bg-gray-50">
+                                  <td className="px-4 py-2 text-gray-700 font-medium">{monthLabel(m)}</td>
+                                  <td className="px-4 py-2 text-right tabular-nums text-emerald-700">{fmt(v.demo)}</td>
+                                  <td className="px-4 py-2 text-right tabular-nums text-blue-700">{fmt(v.sales)}</td>
+                                  <td className="px-4 py-2 text-right tabular-nums font-semibold text-gray-900">{fmt(v.demo + v.sales)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                            <tfoot>
+                              <tr className="bg-gray-50 border-t-2 border-gray-300 font-bold">
+                                <td className="px-4 py-2 text-gray-900">Total</td>
+                                <td className="px-4 py-2 text-right tabular-nums text-emerald-700">{fmt(tDemo)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums text-blue-700">{fmt(tSales)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums text-gray-900">{fmt(tDemo + tSales)}</td>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      </Card>
+
+                      <Card className="overflow-hidden">
+                        <div className="p-4 border-b bg-gray-50">
+                          <h3 className="text-sm font-semibold text-gray-900">Monthly VAT (BTW)</h3>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="bg-gray-50 border-b">
+                                <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase">Month</th>
+                                <th className="text-right px-4 py-2 text-xs font-medium text-emerald-600 uppercase">Demo</th>
+                                <th className="text-right px-4 py-2 text-xs font-medium text-blue-600 uppercase">Sales</th>
+                                <th className="text-right px-4 py-2 text-xs font-medium text-gray-700 uppercase">Total</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                              {vatSorted.map(([m, v]) => (
+                                <tr key={m} className="hover:bg-gray-50">
+                                  <td className="px-4 py-2 text-gray-700 font-medium">{monthLabel(m)}</td>
+                                  <td className="px-4 py-2 text-right tabular-nums text-emerald-700">{fmt(v.demo)}</td>
+                                  <td className="px-4 py-2 text-right tabular-nums text-blue-700">{fmt(v.sales)}</td>
+                                  <td className="px-4 py-2 text-right tabular-nums font-semibold text-gray-900">{fmt(v.demo + v.sales)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                            <tfoot>
+                              <tr className="bg-gray-50 border-t-2 border-gray-300 font-bold">
+                                <td className="px-4 py-2 text-gray-900">Total</td>
+                                <td className="px-4 py-2 text-right tabular-nums text-emerald-700">{fmt(vtDemo)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums text-blue-700">{fmt(vtSales)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums text-gray-900">{fmt(vtDemo + vtSales)}</td>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      </Card>
                     </div>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="bg-gray-50 border-b border-gray-200">
-                            <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Month</th>
-                            <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Domain</th>
-                            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">Amount (excl. BTW)</th>
-                            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">VAT</th>
-                            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">Total (incl. BTW)</th>
-                            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">Invoices</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100">
-                          {(filteredMonthlySummary?.by_month || []).map((row, i) => (
-                            <tr key={i} className="hover:bg-gray-50">
-                              <td className="px-4 py-3 font-medium text-gray-900">{monthLabel(row.month)}</td>
-                              <td className="px-4 py-3">
-                                <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${row.domain === 'demo' ? 'bg-indigo-50 text-indigo-700' : 'bg-emerald-50 text-emerald-700'}`}>
-                                  {row.domain === 'demo' ? 'Demo' : 'Sales'}
-                                </span>
-                              </td>
-                              <td className="px-4 py-3 text-right tabular-nums text-gray-900">{fmt(row.total)}</td>
-                              <td className="px-4 py-3 text-right tabular-nums text-amber-600">{fmt(row.vat_total)}</td>
-                              <td className="px-4 py-3 text-right tabular-nums font-medium text-gray-900">{fmt(row.total + row.vat_total)}</td>
-                              <td className="px-4 py-3 text-right tabular-nums text-gray-500">{row.count}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                        <tfoot>
-                          <tr className="bg-gray-50 border-t border-gray-200 font-medium">
-                            <td colSpan={2} className="px-4 py-3 text-sm text-gray-700">Grand Total</td>
-                            <td className="px-4 py-3 text-right tabular-nums text-gray-900">{fmt(monthlySummary.grand_totals.total_amount)}</td>
-                            <td className="px-4 py-3 text-right tabular-nums text-amber-600">{fmt(monthlySummary.grand_totals.total_vat)}</td>
-                            <td className="px-4 py-3 text-right tabular-nums font-bold text-gray-900">{fmt(monthlySummary.grand_totals.total_amount + monthlySummary.grand_totals.total_vat)}</td>
-                            <td className="px-4 py-3 text-right tabular-nums text-gray-500">{monthlySummary.grand_totals.invoice_count}</td>
-                          </tr>
-                        </tfoot>
-                      </table>
-                    </div>
-                  </Card>
-                )}
+                  );
+                })()}
 
                 {/* Demo vs Sales side-by-side monthly chart */}
                 {(() => {
@@ -1475,7 +1532,12 @@ export default function SupplierInvoicesPage() {
                             <td className="px-4 py-3 text-gray-500 text-xs">
                               {new Date(inv.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                             </td>
-                            <td className="px-4 py-3 text-gray-700">{formatDate(inv.issue_date)}</td>
+                            <td className="px-4 py-3 text-gray-700">
+                              {isEditing ? (
+                                <input type="date" value={editDate} onChange={e => setEditDate(e.target.value)}
+                                  className="border border-gray-300 rounded px-2 py-0.5 text-xs w-32 focus:ring-2 focus:ring-primary-500 focus:border-primary-500" />
+                              ) : formatDate(inv.issue_date)}
+                            </td>
                             <td className="px-4 py-3 text-gray-700">
                               {isEditing ? (
                                 <input type="text" value={editSupplier} onChange={e => setEditSupplier(e.target.value)}
@@ -1529,7 +1591,7 @@ export default function SupplierInvoicesPage() {
                                 ) : (
                                   <>
                                     {!acerta && (
-                                      <button onClick={() => { setEditingRow(inv.id); setEditSupplier(inv.supplier); setEditCategory(inv.category); setEditAmount(inv.amount); setEditCurrency(inv.currency || 'EUR'); }}
+                                      <button onClick={() => { setEditingRow(inv.id); setEditSupplier(inv.supplier); setEditCategory(inv.category); setEditAmount(inv.amount); setEditCurrency(inv.currency || 'EUR'); setEditDate(inv.issue_date || ''); }}
                                         className="text-gray-400 hover:text-primary-600 transition-colors" title="Edit invoice">
                                         <Pencil size={14} />
                                       </button>
