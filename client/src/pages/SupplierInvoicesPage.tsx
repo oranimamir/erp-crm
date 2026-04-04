@@ -1742,11 +1742,8 @@ export default function SupplierInvoicesPage() {
                       })()}
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs text-gray-400 mb-0.5">Detected supplier name</p>
-                          <p className="font-medium text-gray-900">{u.supplier}</p>
-                          <p className="text-xs text-gray-500 mt-0.5">
-                            {fmt(amountOverrides[u.invoiceId] ?? u.amount, u.currency)} · {(dateOverrides[u.invoiceId] || u.date) ? formatDate(dateOverrides[u.invoiceId] || u.date) : '—'} · {u.invoiceId || 'no ID'}
-                          </p>
+                          <p className="text-xs text-gray-400 mb-0.5">Invoice ID</p>
+                          <p className="font-medium text-gray-900">{u.invoiceId || 'no ID'}</p>
                         </div>
                         <button
                           onClick={() => setPreviewingUnknown(isPreviewing ? null : u.supplier)}
@@ -1757,39 +1754,74 @@ export default function SupplierInvoicesPage() {
                         </button>
                       </div>
 
-                      {/* Editable amount & date for flagged invoices */}
+                      {/* Editable fields for all invoices */}
                       {(() => {
                         const w = (pendingUpload.warnings || []).find((w: any) => w.invoiceId === u.invoiceId);
-                        if (!w) return null;
-                        const hasAmountIssue = w.issues.includes('amount_zero');
-                        const hasDateIssue = w.issues.includes('date_uncertain');
-                        if (!hasAmountIssue && !hasDateIssue) return null;
+                        const hasAmountIssue = w?.issues.includes('amount_zero');
+                        const hasDateIssue = w?.issues.includes('date_uncertain');
+                        const currentAmount = amountOverrides[u.invoiceId] ?? u.amount;
+                        const amountModified = amountOverrides[u.invoiceId] !== undefined && amountOverrides[u.invoiceId] !== u.amount;
+                        const currentDate = dateOverrides[u.invoiceId] || u.date || '';
+                        const dateModified = dateOverrides[u.invoiceId] !== undefined && dateOverrides[u.invoiceId] !== (u.date || '');
+                        // Parse date into day/month/year
+                        const dateParts = currentDate ? currentDate.split('-') : ['', '', ''];
+                        const dateYear = dateParts[0] || '';
+                        const dateMonth = dateParts[1] || '';
+                        const dateDay = dateParts[2] || '';
+                        const setDatePart = (part: 'y' | 'm' | 'd', val: string) => {
+                          const y = part === 'y' ? val : dateYear;
+                          const m = part === 'm' ? val : dateMonth;
+                          const d = part === 'd' ? val : dateDay;
+                          if (y && m && d) {
+                            setDateOverrides(prev => ({ ...prev, [u.invoiceId]: `${y}-${m}-${d}` }));
+                          } else {
+                            setDateOverrides(prev => ({ ...prev, [u.invoiceId]: '' }));
+                          }
+                        };
                         return (
-                          <div className="flex flex-wrap gap-3 mt-3">
-                            {hasAmountIssue && (
-                              <div>
-                                <label className="block text-xs font-medium text-red-600 mb-1">Correct amount</label>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  value={amountOverrides[u.invoiceId] ?? u.amount}
-                                  onChange={e => setAmountOverrides(prev => ({ ...prev, [u.invoiceId]: parseFloat(e.target.value) || 0 }))}
-                                  className="w-36 border border-red-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-red-500 focus:border-red-500"
-                                  placeholder="0.00"
-                                />
+                          <div className="flex flex-wrap items-end gap-3 mt-3">
+                            <div>
+                              <label className={`block text-xs font-medium mb-1 ${hasAmountIssue ? 'text-red-600' : 'text-gray-500'}`}>
+                                Amount {amountModified && <Check size={12} className="inline text-green-500" />}
+                              </label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={currentAmount}
+                                onChange={e => setAmountOverrides(prev => ({ ...prev, [u.invoiceId]: parseFloat(e.target.value) || 0 }))}
+                                className={`w-36 border rounded-lg px-3 py-1.5 text-sm focus:ring-2 ${hasAmountIssue ? 'border-red-300 focus:ring-red-500' : 'border-gray-300 focus:ring-primary-500'}`}
+                              />
+                            </div>
+                            <div>
+                              <label className={`block text-xs font-medium mb-1 ${hasDateIssue ? 'text-amber-600' : 'text-gray-500'}`}>
+                                Date {dateModified && <Check size={12} className="inline text-green-500" />}
+                              </label>
+                              <div className="flex items-center gap-1">
+                                <select value={dateDay} onChange={e => setDatePart('d', e.target.value)}
+                                  className={`w-16 border rounded-lg px-1.5 py-1.5 text-sm ${hasDateIssue ? 'border-amber-300' : 'border-gray-300'}`}>
+                                  <option value="">DD</option>
+                                  {Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0')).map(d => (
+                                    <option key={d} value={d}>{d}</option>
+                                  ))}
+                                </select>
+                                <span className="text-gray-400">/</span>
+                                <select value={dateMonth} onChange={e => setDatePart('m', e.target.value)}
+                                  className={`w-16 border rounded-lg px-1.5 py-1.5 text-sm ${hasDateIssue ? 'border-amber-300' : 'border-gray-300'}`}>
+                                  <option value="">MM</option>
+                                  {Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0')).map(m => (
+                                    <option key={m} value={m}>{m}</option>
+                                  ))}
+                                </select>
+                                <span className="text-gray-400">/</span>
+                                <select value={dateYear} onChange={e => setDatePart('y', e.target.value)}
+                                  className={`w-20 border rounded-lg px-1.5 py-1.5 text-sm ${hasDateIssue ? 'border-amber-300' : 'border-gray-300'}`}>
+                                  <option value="">YYYY</option>
+                                  {[2024, 2025, 2026, 2027].map(y => (
+                                    <option key={y} value={String(y)}>{y}</option>
+                                  ))}
+                                </select>
                               </div>
-                            )}
-                            {hasDateIssue && (
-                              <div>
-                                <label className="block text-xs font-medium text-amber-600 mb-1">Correct date</label>
-                                <input
-                                  type="date"
-                                  value={dateOverrides[u.invoiceId] || u.date || ''}
-                                  onChange={e => setDateOverrides(prev => ({ ...prev, [u.invoiceId]: e.target.value }))}
-                                  className="w-44 border border-amber-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                                />
-                              </div>
-                            )}
+                            </div>
                           </div>
                         );
                       })()}
