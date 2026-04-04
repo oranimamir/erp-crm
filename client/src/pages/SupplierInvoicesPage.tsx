@@ -467,8 +467,9 @@ export default function SupplierInvoicesPage() {
   const [newCatName, setNewCatName] = useState('');
   const [newCatDomain, setNewCatDomain] = useState<'demo' | 'sales'>('demo');
 
-  // Summary search
+  // Summary search & filter
   const [summarySearch, setSummarySearch] = useState('');
+  const [summaryFromMonth, setSummaryFromMonth] = useState('2026-01');
 
   const domainCategories = activeTab === 'demo' ? demoCategories : salesCategories;
 
@@ -969,11 +970,20 @@ export default function SupplierInvoicesPage() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <div className="w-56">
-              {activeTab === 'summary' ? (
-                <SearchBar value={summarySearch} onChange={setSummarySearch} placeholder="Search summary..." />
-              ) : (
-                <SearchBar value={search} onChange={setSearch} placeholder="Search invoices..." />
+            <div className="flex items-center gap-2">
+              <div className="w-56">
+                {activeTab === 'summary' ? (
+                  <SearchBar value={summarySearch} onChange={setSummarySearch} placeholder="Search summary..." />
+                ) : (
+                  <SearchBar value={search} onChange={setSearch} placeholder="Search invoices..." />
+                )}
+              </div>
+              {activeTab === 'summary' && (
+                <div className="flex items-center gap-1.5">
+                  <label className="text-xs text-gray-500 whitespace-nowrap">From:</label>
+                  <input type="month" value={summaryFromMonth} onChange={e => setSummaryFromMonth(e.target.value)}
+                    className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500" />
+                </div>
               )}
             </div>
             {activeTab !== 'summary' && (
@@ -1160,7 +1170,9 @@ export default function SupplierInvoicesPage() {
                     if (r.domain === 'demo') { byMonth[r.month].demo += r.total; byMonth[r.month].demoCnt += r.count; }
                     else { byMonth[r.month].sales += r.total; byMonth[r.month].salesCnt += r.count; }
                   }
-                  const sorted = Object.entries(byMonth).sort((a, b) => a[0].localeCompare(b[0]));
+                  const allSorted = Object.entries(byMonth).sort((a, b) => a[0].localeCompare(b[0]));
+                  // Default start from 2026-01 but allow override via summaryFromMonth
+                  const sorted = allSorted.filter(([m]) => m >= summaryFromMonth);
                   let tDemo = 0, tSales = 0;
                   for (const [, v] of sorted) { tDemo += v.demo; tSales += v.sales; }
 
@@ -1171,7 +1183,7 @@ export default function SupplierInvoicesPage() {
                     if (r.domain === 'demo') vatByMonth[r.month].demo += r.vat_total;
                     else vatByMonth[r.month].sales += r.vat_total;
                   }
-                  const vatSorted = Object.entries(vatByMonth).sort((a, b) => a[0].localeCompare(b[0]));
+                  const vatSorted = Object.entries(vatByMonth).sort((a, b) => a[0].localeCompare(b[0])).filter(([m]) => m >= summaryFromMonth);
                   let vtDemo = 0, vtSales = 0;
                   for (const [, v] of vatSorted) { vtDemo += v.demo; vtSales += v.sales; }
 
@@ -1263,7 +1275,8 @@ export default function SupplierInvoicesPage() {
                     if (r.domain === 'demo') monthMap[r.month].demo = r.total;
                     else monthMap[r.month].sales = r.total;
                   }
-                  const months = Object.keys(monthMap).sort();
+                  const months = Object.keys(monthMap).sort().filter(m => m >= summaryFromMonth);
+                  if (months.length === 0) return null;
                   const maxVal = Math.max(...months.map(m => Math.max(monthMap[m].demo, monthMap[m].sales)), 1);
                   const chartH = 220;
 

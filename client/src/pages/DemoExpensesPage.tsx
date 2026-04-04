@@ -524,6 +524,7 @@ export default function DemoExpensesPage() {
   const [filterMonth, setFilterMonth] = useState('');
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
+  const [summaryFromMonth, setSummaryFromMonth] = useState('2026-01');
   const [showFilters, setShowFilters] = useState(false);
 
   // Sort
@@ -882,6 +883,12 @@ export default function DemoExpensesPage() {
 
         {/* Monthly Amount & VAT Tables */}
         {summary && summary.monthly_by_domain?.length > 0 && (
+          <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-gray-500">Show from:</label>
+            <input type="month" value={summaryFromMonth} onChange={e => setSummaryFromMonth(e.target.value)}
+              className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500" />
+          </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Amount table */}
             <Card className="overflow-hidden">
@@ -906,7 +913,7 @@ export default function DemoExpensesPage() {
                         if (row.domain === 'demo') byMonth[row.month].demo += row.total;
                         else if (row.domain === 'sales') byMonth[row.month].sales += row.total;
                       }
-                      const sorted = Object.entries(byMonth).sort((a, b) => a[0].localeCompare(b[0]));
+                      const sorted = Object.entries(byMonth).sort((a, b) => a[0].localeCompare(b[0])).filter(([m]) => m >= summaryFromMonth);
                       let totalDemo = 0, totalSales = 0;
                       const rows = sorted.map(([m, v]) => {
                         totalDemo += v.demo;
@@ -958,7 +965,7 @@ export default function DemoExpensesPage() {
                         if (row.domain === 'demo') byMonth[row.month].demo += row.vat_total;
                         else if (row.domain === 'sales') byMonth[row.month].sales += row.vat_total;
                       }
-                      const sorted = Object.entries(byMonth).sort((a, b) => a[0].localeCompare(b[0]));
+                      const sorted = Object.entries(byMonth).sort((a, b) => a[0].localeCompare(b[0])).filter(([m]) => m >= summaryFromMonth);
                       let totalDemo = 0, totalSales = 0;
                       const rows = sorted.map(([m, v]) => {
                         totalDemo += v.demo;
@@ -986,6 +993,7 @@ export default function DemoExpensesPage() {
                 </table>
               </div>
             </Card>
+          </div>
           </div>
         )}
 
