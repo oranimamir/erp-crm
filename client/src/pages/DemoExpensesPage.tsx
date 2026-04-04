@@ -681,10 +681,8 @@ export default function DemoExpensesPage() {
       if (editDate !== (inv.issue_date || '')) {
         promises.push(api.patch(`/demo-expenses/invoices/${editingRow}/date`, { issue_date: editDate }));
       }
-      if (editDomain !== inv.domain) {
-        promises.push(api.patch(`/demo-expenses/invoices/${editingRow}/domain`, { domain: editDomain }));
-      }
-      if (editCategory !== inv.category) {
+      if (editDomain !== inv.domain || editCategory !== inv.category) {
+        // Always send both domain and category together to avoid race conditions
         promises.push(api.patch(`/demo-expenses/invoices/${editingRow}/category`, { category: editCategory, domain: editDomain }));
       }
       if (promises.length > 0) {

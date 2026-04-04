@@ -12,7 +12,7 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
-import { Plus, Truck, Eye, Pencil, Trash2, BarChart3, FileSpreadsheet, Beaker } from 'lucide-react';
+import { Plus, Truck, Eye, Pencil, Trash2, BarChart3, FileSpreadsheet, Beaker, Check, X } from 'lucide-react';
 import { downloadExcel } from '../lib/exportExcel';
 
 const CHART_COLORS = [
@@ -61,6 +61,8 @@ function DemoSuppliersTab() {
   const [newName, setNewName] = useState('');
   const [newCategory, setNewCategory] = useState('Other');
   const [deleteId, setDeleteId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editCat, setEditCat] = useState('');
 
   const fetchData = () => {
     Promise.all([
@@ -99,6 +101,17 @@ function DemoSuppliersTab() {
     }
   };
 
+  const handleUpdateCategory = async (id: number) => {
+    try {
+      await api.patch(`/demo-expenses/supplier-mappings/${id}`, { category: editCat });
+      addToast('Category updated', 'success');
+      setEditingId(null);
+      fetchData();
+    } catch (err: any) {
+      addToast(err?.response?.data?.error || 'Failed to update', 'error');
+    }
+  };
+
   if (loading) return <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" /></div>;
 
   // Group by category
@@ -133,20 +146,43 @@ function DemoSuppliersTab() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {userMappings.map((m: any) => (
+                {userMappings.map((m: any) => {
+                  const isEditing = editingId === m.id;
+                  return (
                   <tr key={m.id} className="hover:bg-gray-50">
                     <td className="px-4 py-2.5 text-gray-900 capitalize">{m.display_name || m.supplier_pattern}</td>
                     <td className="px-4 py-2.5">
-                      <span className="inline-flex items-center gap-1.5 text-xs font-medium">
-                        <span className="w-2 h-2 rounded-sm" style={{ background: DEMO_CAT_COLORS[m.category] || '#6b7280' }} />
-                        {m.category}
-                      </span>
+                      {isEditing ? (
+                        <select value={editCat} onChange={e => setEditCat(e.target.value)}
+                          className="border border-gray-300 rounded px-2 py-0.5 text-xs bg-white focus:ring-2 focus:ring-primary-500"
+                          autoFocus>
+                          {DEMO_CATEGORIES_LIST.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-medium">
+                          <span className="w-2 h-2 rounded-sm" style={{ background: DEMO_CAT_COLORS[m.category] || '#6b7280' }} />
+                          {m.category}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5 text-right">
-                      <button onClick={() => setDeleteId(m.id)} className="p-1 text-gray-400 hover:text-red-600 rounded"><Trash2 size={14} /></button>
+                      <div className="flex items-center justify-end gap-1">
+                        {isEditing ? (
+                          <>
+                            <button onClick={() => handleUpdateCategory(m.id)} className="p-1 text-green-600 hover:text-green-700 rounded" title="Save"><Check size={14} /></button>
+                            <button onClick={() => setEditingId(null)} className="p-1 text-gray-400 hover:text-gray-600 rounded" title="Cancel"><X size={14} /></button>
+                          </>
+                        ) : (
+                          <>
+                            <button onClick={() => { setEditingId(m.id); setEditCat(m.category); }} className="p-1 text-gray-400 hover:text-primary-600 rounded" title="Edit category"><Pencil size={14} /></button>
+                            <button onClick={() => setDeleteId(m.id)} className="p-1 text-gray-400 hover:text-red-600 rounded" title="Delete"><Trash2 size={14} /></button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

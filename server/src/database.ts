@@ -1034,6 +1034,14 @@ export async function initializeDatabase() {
 
   // Keep old demo_expenses table for backward compat (won't be used by new code)
 
+  // Backfill: derive month from issue_date for invoices that have a date but no month
+  try {
+    db.prepare(`
+      UPDATE demo_invoices SET month = SUBSTR(issue_date, 1, 7)
+      WHERE (month IS NULL OR month = '') AND issue_date IS NOT NULL AND issue_date != '' AND LENGTH(issue_date) >= 7
+    `).run();
+  } catch { /* ignore */ }
+
   db.saveToDisk();
 }
 

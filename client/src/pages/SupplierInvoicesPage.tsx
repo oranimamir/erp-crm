@@ -576,10 +576,8 @@ export default function SupplierInvoicesPage() {
       if (editSupplier !== originalSupplier) {
         promises.push(api.patch(`/demo-expenses/invoices/${id}/supplier`, { supplier: editSupplier }));
       }
-      if (editDomain !== inv?.domain) {
-        promises.push(api.patch(`/demo-expenses/invoices/${id}/domain`, { domain: editDomain }));
-      }
-      if (editCategory !== inv?.category) {
+      if (editDomain !== inv?.domain || editCategory !== inv?.category) {
+        // Always send both domain and category together to avoid race conditions
         promises.push(api.patch(`/demo-expenses/invoices/${id}/category`, { category: editCategory, domain: editDomain }));
       }
       if (editAmount !== inv?.amount || editCurrency !== inv?.currency) {

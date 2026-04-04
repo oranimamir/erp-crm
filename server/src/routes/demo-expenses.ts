@@ -669,10 +669,10 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
   const curSym = '(?:€|\\$|£|EUR|USD|GBP)';
 
   const amountPatterns: { pattern: RegExp; inclVat?: boolean }[] = [
-    // "Te betalen" / "Te betalen bedrag" (Dutch: amount to pay — usually the final total)
-    { pattern: new RegExp(`(?:te\\s*betalen(?:\\s*bedrag)?|verschuldigd\\s*bedrag)\\s*[:. ]*\\s*${curSym}?\\s*${eurNum}`, 'i') },
-    // "Totaalbedrag" (Dutch: grand total)
-    { pattern: new RegExp(`(?:totaalbedrag)\\s*[:. ]*\\s*${curSym}?\\s*${eurNum}`, 'i') },
+    // "Te betalen" / "Te betalen bedrag" (Dutch: amount to pay — usually incl. BTW)
+    { pattern: new RegExp(`(?:te\\s*betalen(?:\\s*bedrag)?|verschuldigd\\s*bedrag)\\s*[:. ]*\\s*${curSym}?\\s*${eurNum}`, 'i'), inclVat: true },
+    // "Totaalbedrag" (Dutch: grand total — usually incl. BTW)
+    { pattern: new RegExp(`(?:totaalbedrag)\\s*[:. ]*\\s*${curSym}?\\s*${eurNum}`, 'i'), inclVat: true },
     // "Totaal van de items" (Belgian/Dutch — excl. BTW)
     { pattern: new RegExp(`(?:totaal\\s*van\\s*de\\s*items|totaal\\s*van\\s*de\\s*artikelen)\\s*[:.]*\\s*${curSym}?\\s*${eurNum}`, 'i') },
     // Tax exclusive totals — "bedrag excl. btw" (with optional period after excl)
@@ -1306,9 +1306,11 @@ router.post('/confirm-import', (req: Request, res: Response) => {
 
         for (const inv of domainInvoices) {
           const isDuplicateIncluded = skipInvoiceIds && !skipSet.has(inv.invoiceId) && (req.body.duplicateInvoiceIds || []).includes(inv.invoiceId);
+          // Derive month from the invoice's own issue_date, falling back to batch month
+          const invMonth = inv.issueDate ? inv.issueDate.substring(0, 7) : month;
           insertInv.run(
             batchId, inv.invoiceId, inv.issueDate, inv.supplier, inv.category, domain,
-            inv.amount, inv.vatAmount || 0, inv.currency || 'EUR', month,
+            inv.amount, inv.vatAmount || 0, inv.currency || 'EUR', invMonth,
             inv.lineItems || '[]', inv.embeddedPdf || null, inv.pdfFilename || null,
             inv.xmlFilename || null, isDuplicateIncluded ? 1 : 0,
           );
@@ -2015,6 +2017,34 @@ router.post('/supplier-mappings', (req: Request, res: Response) => {
   } catch (err: any) {
     console.error('[demo-expenses] add supplier mapping error:', err);
     res.status(500).json({ error: 'Failed to add supplier' });
+  }
+});
+
+router.patch('/supplier-mappings/:id', (req: Request, res: Response) => {
+  try {
+    const { category, domain } = req.body;
+    const mapping = db.prepare('SELECT id, supplier_pattern, domain, category FROM demo_supplier_mappings WHERE id = ? AND is_user_defined = 1').get(req.params.id) as any;
+    if (!mapping) { res.status(404).json({ error: 'Supplier mapping not found' }); return; }
+
+    const updates: string[] = [];
+    const params: any[] = [];
+    if (category) { updates.push('category = ?'); params.push(category); }
+    if (domain && ['demo', 'sales'].includes(domain)) { updates.push('domain = ?'); params.push(domain); }
+    if (updates.length === 0) { res.status(400).json({ error: 'Nothing to update' }); return; }
+
+    params.push(req.params.id);
+    db.prepare(`UPDATE demo_supplier_mappings SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+    db.saveToDisk();
+    notifyAdmin({
+      entity: 'Supplier Mapping',
+      action: 'updated',
+      label: `${mapping.supplier_pattern} — ${category ? `category → ${category}` : ''}${domain ? ` domain → ${domain}` : ''}`,
+      performedBy: (req as any).user?.display_name || 'Unknown',
+      performedById: (req as any).user?.userId,
+    });
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to update supplier mapping' });
   }
 });
 
