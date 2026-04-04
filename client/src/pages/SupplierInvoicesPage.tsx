@@ -22,6 +22,11 @@ const CAT_COLORS: Record<string, string> = {
   'Raw Materials': '#059669', 'Logistics': '#7c3aed', 'Blenders': '#db2777', 'Shipping': '#0284c7',
 };
 
+const DOMAIN_COLORS: Record<string, string> = {
+  demo: 'bg-emerald-100 text-emerald-700',
+  sales: 'bg-blue-100 text-blue-700',
+};
+
 const SUPPLIER_COLORS = [
   '#6366f1', '#f59e0b', '#10b981', '#ef4444', '#3b82f6', '#8b5cf6',
   '#ec4899', '#14b8a6', '#f97316', '#6b7280', '#0ea5e9', '#d946ef',
@@ -450,6 +455,7 @@ export default function SupplierInvoicesPage() {
   const [editingRow, setEditingRow] = useState<number | null>(null);
   const [editSupplier, setEditSupplier] = useState('');
   const [editCategory, setEditCategory] = useState('');
+  const [editDomain, setEditDomain] = useState<'demo' | 'sales'>('demo');
   const [editAmount, setEditAmount] = useState<number>(0);
   const [editCurrency, setEditCurrency] = useState('EUR');
   const [editDate, setEditDate] = useState('');
@@ -570,8 +576,11 @@ export default function SupplierInvoicesPage() {
       if (editSupplier !== originalSupplier) {
         promises.push(api.patch(`/demo-expenses/invoices/${id}/supplier`, { supplier: editSupplier }));
       }
+      if (editDomain !== inv?.domain) {
+        promises.push(api.patch(`/demo-expenses/invoices/${id}/domain`, { domain: editDomain }));
+      }
       if (editCategory !== inv?.category) {
-        promises.push(api.patch(`/demo-expenses/invoices/${id}/category`, { category: editCategory }));
+        promises.push(api.patch(`/demo-expenses/invoices/${id}/category`, { category: editCategory, domain: editDomain }));
       }
       if (editAmount !== inv?.amount || editCurrency !== inv?.currency) {
         promises.push(api.patch(`/demo-expenses/invoices/${id}/amount`, { amount: editAmount, currency: editCurrency }));
@@ -1505,6 +1514,7 @@ export default function SupplierInvoicesPage() {
                           { key: 'created_at', label: 'Upload Date' },
                           { key: 'issue_date', label: 'Invoice Date' },
                           { key: 'supplier', label: 'Supplier' },
+                          { key: 'domain', label: 'Domain' },
                           { key: 'category', label: 'Category' },
                           { key: 'amount', label: 'Amount (excl. BTW)' },
                           { key: 'month', label: 'Month' },
@@ -1545,6 +1555,24 @@ export default function SupplierInvoicesPage() {
                               ) : inv.supplier}
                             </td>
                             <td className="px-4 py-3">
+                              {isEditing ? (
+                                <select value={editDomain} onChange={e => {
+                                  const d = e.target.value as 'demo' | 'sales';
+                                  setEditDomain(d);
+                                  const cats = d === 'sales' ? salesCategories : demoCategories;
+                                  if (!cats.includes(editCategory)) setEditCategory(cats[0] || 'Other');
+                                }}
+                                  className="border border-gray-300 rounded px-2 py-0.5 text-xs bg-white focus:ring-2 focus:ring-primary-500">
+                                  <option value="demo">Demo</option>
+                                  <option value="sales">Sales</option>
+                                </select>
+                              ) : (
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${DOMAIN_COLORS[inv.domain] || 'bg-gray-100 text-gray-700'}`}>
+                                  {inv.domain === 'demo' ? 'Demo' : inv.domain === 'sales' ? 'Sales' : inv.domain}
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3">
                               {acerta ? (
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded text-xs font-medium">
                                   {inv.category}
@@ -1553,7 +1581,7 @@ export default function SupplierInvoicesPage() {
                               ) : isEditing ? (
                                 <select value={editCategory} onChange={e => setEditCategory(e.target.value)}
                                   className="border border-gray-300 rounded px-2 py-0.5 text-xs bg-white focus:ring-2 focus:ring-primary-500">
-                                  {allCategories.map(c => <option key={c} value={c}>{c}</option>)}
+                                  {(editDomain === 'sales' ? salesCategories : demoCategories).map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
                               ) : (
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium" style={{ background: (CAT_COLORS[inv.category] || '#6b7280') + '18', color: CAT_COLORS[inv.category] || '#6b7280' }}>
@@ -1591,7 +1619,7 @@ export default function SupplierInvoicesPage() {
                                 ) : (
                                   <>
                                     {!acerta && (
-                                      <button onClick={() => { setEditingRow(inv.id); setEditSupplier(inv.supplier); setEditCategory(inv.category); setEditAmount(inv.amount); setEditCurrency(inv.currency || 'EUR'); setEditDate(inv.issue_date || ''); }}
+                                      <button onClick={() => { setEditingRow(inv.id); setEditSupplier(inv.supplier); setEditCategory(inv.category); setEditDomain((inv.domain as 'demo' | 'sales') || 'demo'); setEditAmount(inv.amount); setEditCurrency(inv.currency || 'EUR'); setEditDate(inv.issue_date || ''); }}
                                         className="text-gray-400 hover:text-primary-600 transition-colors" title="Edit invoice">
                                         <Pencil size={14} />
                                       </button>

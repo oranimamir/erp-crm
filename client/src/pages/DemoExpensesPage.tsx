@@ -549,6 +549,8 @@ export default function DemoExpensesPage() {
   const [editAmount, setEditAmount] = useState(0);
   const [editCurrency, setEditCurrency] = useState('EUR');
   const [editDate, setEditDate] = useState('');
+  const [editDomain, setEditDomain] = useState<'demo' | 'sales'>('demo');
+  const [editCategory, setEditCategory] = useState('');
 
   // ─── FETCH HELPERS ──────────────────────────────────────────────────────────
 
@@ -658,6 +660,8 @@ export default function DemoExpensesPage() {
     setEditAmount(inv.amount);
     setEditCurrency(inv.currency || 'EUR');
     setEditDate(inv.issue_date || '');
+    setEditDomain((inv.domain as 'demo' | 'sales') || 'demo');
+    setEditCategory(inv.category || 'Other');
   };
 
   const cancelEdit = () => setEditingRow(null);
@@ -676,6 +680,12 @@ export default function DemoExpensesPage() {
       }
       if (editDate !== (inv.issue_date || '')) {
         promises.push(api.patch(`/demo-expenses/invoices/${editingRow}/date`, { issue_date: editDate }));
+      }
+      if (editDomain !== inv.domain) {
+        promises.push(api.patch(`/demo-expenses/invoices/${editingRow}/domain`, { domain: editDomain }));
+      }
+      if (editCategory !== inv.category) {
+        promises.push(api.patch(`/demo-expenses/invoices/${editingRow}/category`, { category: editCategory, domain: editDomain }));
       }
       if (promises.length > 0) {
         await Promise.all(promises);
@@ -1071,9 +1081,23 @@ export default function DemoExpensesPage() {
                           ) : inv.supplier}
                         </td>
                         <td className="px-4 py-3">
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${DOMAIN_COLORS[inv.domain] || 'bg-gray-100 text-gray-700'}`}>
-                            {inv.domain === 'demo' ? 'Demo' : inv.domain === 'sales' ? 'Sales' : inv.domain}
-                          </span>
+                          {isEditing ? (
+                            <select value={editDomain} onChange={e => {
+                              const d = e.target.value as 'demo' | 'sales';
+                              setEditDomain(d);
+                              // Reset category to first in the new domain's list
+                              const cats = d === 'sales' ? salesCategories : demoCategories;
+                              if (!cats.includes(editCategory)) setEditCategory(cats[0] || 'Other');
+                            }}
+                              className="border border-gray-300 rounded px-2 py-0.5 text-xs bg-white focus:ring-2 focus:ring-primary-500">
+                              <option value="demo">Demo</option>
+                              <option value="sales">Sales</option>
+                            </select>
+                          ) : (
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${DOMAIN_COLORS[inv.domain] || 'bg-gray-100 text-gray-700'}`}>
+                              {inv.domain === 'demo' ? 'Demo' : inv.domain === 'sales' ? 'Sales' : inv.domain}
+                            </span>
+                          )}
                         </td>
                         <td className="px-4 py-3">
                           {acerta ? (
@@ -1081,6 +1105,11 @@ export default function DemoExpensesPage() {
                               {inv.category}
                               <span className="text-[10px] text-indigo-400" title="Locked — Acerta is always Salaries">🔒</span>
                             </span>
+                          ) : isEditing ? (
+                            <select value={editCategory} onChange={e => setEditCategory(e.target.value)}
+                              className="border border-gray-300 rounded px-2 py-0.5 text-xs bg-white focus:ring-2 focus:ring-primary-500">
+                              {(editDomain === 'sales' ? salesCategories : demoCategories).map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
                           ) : (
                             <select
                               value={inv.category}

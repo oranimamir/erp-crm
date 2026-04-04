@@ -1925,7 +1925,9 @@ router.patch('/invoices/:id/date', (req: Request, res: Response) => {
     const inv = db.prepare('SELECT id FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
     if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
-    db.prepare('UPDATE demo_invoices SET issue_date = ? WHERE id = ?').run(issue_date, req.params.id);
+    // Derive month (YYYY-MM) from the new date
+    const month = issue_date.substring(0, 7); // e.g. "2026-03-15" → "2026-03"
+    db.prepare('UPDATE demo_invoices SET issue_date = ?, month = ? WHERE id = ?').run(issue_date, month, req.params.id);
     db.saveToDisk();
     notifyAdmin({
       entity: 'Supplier Invoice',
@@ -1937,6 +1939,32 @@ router.patch('/invoices/:id/date', (req: Request, res: Response) => {
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to update date' });
+  }
+});
+
+router.patch('/invoices/:id/domain', (req: Request, res: Response) => {
+  try {
+    const { domain } = req.body;
+    if (!domain || !['demo', 'sales'].includes(domain)) {
+      res.status(400).json({ error: 'domain must be "demo" or "sales"' });
+      return;
+    }
+
+    const inv = db.prepare('SELECT id, supplier FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
+    if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
+
+    db.prepare('UPDATE demo_invoices SET domain = ? WHERE id = ?').run(domain, req.params.id);
+    db.saveToDisk();
+    notifyAdmin({
+      entity: 'Supplier Invoice',
+      action: 'updated',
+      label: `${inv.supplier} — domain → ${domain}`,
+      performedBy: (req as any).user?.display_name || 'Unknown',
+      performedById: (req as any).user?.userId,
+    });
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to update domain' });
   }
 });
 
