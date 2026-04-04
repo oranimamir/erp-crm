@@ -1702,7 +1702,7 @@ export default function SupplierInvoicesPage() {
       {/* Unknown Supplier Modal */}
       {showUnknownModal && pendingUpload && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full mx-4 max-h-[90vh] flex flex-col">
+          <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full mx-4 max-h-[90vh] flex flex-col" style={{ resize: 'both', overflow: 'auto', minWidth: 400, minHeight: 300 }}>
             <div className="p-6 border-b">
               <h2 className="text-lg font-bold text-gray-900">Review & Classify Invoices</h2>
               <p className="text-sm text-gray-500 mt-1">
