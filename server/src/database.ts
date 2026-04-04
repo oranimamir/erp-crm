@@ -1021,6 +1021,17 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE demo_upload_batches ADD COLUMN note TEXT NOT NULL DEFAULT ''`); } catch (_) {}
   try { db.exec(`ALTER TABLE demo_upload_batches ADD COLUMN uploaded_by_name TEXT NOT NULL DEFAULT ''`); } catch (_) {}
 
+  // Custom categories table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS demo_custom_categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      domain TEXT NOT NULL DEFAULT 'demo',
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(name, domain)
+    )
+  `);
+
   // Keep old demo_expenses table for backward compat (won't be used by new code)
 
   db.saveToDisk();

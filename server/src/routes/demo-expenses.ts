@@ -356,6 +356,29 @@ function looksLikeDateNumber(raw: string, parsed: number): boolean {
   return false;
 }
 
+// Month name → number mapping (Dutch, French, English — short & full)
+const MONTH_NAMES: Record<string, number> = {
+  // Dutch
+  jan: 1, januari: 1, feb: 2, februari: 2, mrt: 3, maart: 3, apr: 4, april: 4,
+  mei: 5, jun: 6, juni: 6, jul: 7, juli: 7, aug: 8, augustus: 8,
+  sep: 9, sept: 9, september: 9, okt: 10, oktober: 10, nov: 11, november: 11, dec: 12, december: 12,
+  // French
+  janv: 1, janvier: 1, fév: 2, fevr: 2, février: 2, fevrier: 2, mars: 3, avr: 4, avril: 4,
+  mai_fr: 5, juin: 6, juil: 7, juillet: 7, août: 8, aout: 8,
+  // sept already covered
+  oct: 10, octobre: 10,
+  // nov, dec already covered
+  // English
+  january: 1, february: 2, mar: 3, march: 3, may: 5, june: 6,
+  july: 7, august: 8, october: 10,
+};
+// Special case: "mai" maps to 5 in both Dutch and French
+MONTH_NAMES['mai'] = 5;
+
+function monthNameToNumber(name: string): number | null {
+  return MONTH_NAMES[name.toLowerCase().replace(/[.]/g, '')] || null;
+}
+
 function parseDateToISO(d: string): string | null {
   // DD/MM/YYYY or DD.MM.YYYY
   const eu = d.match(/^(\d{1,2})[\/.](\d{1,2})[\/.](\d{4})$/);
@@ -365,6 +388,18 @@ function parseDateToISO(d: string): string | null {
   if (dm) return `${dm[3]}-${dm[2].padStart(2, '0')}-${dm[1].padStart(2, '0')}`;
   // Already YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+  // "15 mrt 2026", "3 februari 2026", "15-feb-2026", "1 jan. 2026"
+  const monthName = d.match(/^(\d{1,2})[\s\-./]+([a-zA-Zéû.]+)[\s\-./]+(\d{4})$/);
+  if (monthName) {
+    const m = monthNameToNumber(monthName[2]);
+    if (m) return `${monthName[3]}-${String(m).padStart(2, '0')}-${monthName[1].padStart(2, '0')}`;
+  }
+  // "maart 15, 2026", "February 3, 2026"
+  const monthFirst = d.match(/^([a-zA-Zéû.]+)\s+(\d{1,2}),?\s+(\d{4})$/);
+  if (monthFirst) {
+    const m = monthNameToNumber(monthFirst[1]);
+    if (m) return `${monthFirst[3]}-${String(m).padStart(2, '0')}-${monthFirst[2].padStart(2, '0')}`;
+  }
   return null;
 }
 
@@ -434,11 +469,12 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
 
   // ─── DATE ────────────────────────────────────────────────────────────
   let issueDate = '';
-  // Try near date-related keywords first
+  // Date keyword pattern (Dutch: datum, factuurdatum; French: date de facture; English: invoice date)
+  const dateKw = /(?:invoice\s*date|factuurdatum|datum\s*factuur|date\s*(?:de\s*)?facture|datum|date)/i;
+  // Try near date-related keywords first — numeric formats
   const dateKwPatterns = [
-    /(?:invoice\s*date|factuurdatum|datum\s*factuur|date\s*de\s*facture|datum|date)[\s.:]*(\d{1,2}[\/.]\d{1,2}[\/.]\d{4})/i,
-    /(?:invoice\s*date|factuurdatum|datum|date)[\s.:]*(\d{4}[\-\/]\d{1,2}[\-\/]\d{1,2})/i,
-    /(?:invoice\s*date|factuurdatum|datum|date)[\s.:]*(\d{1,2}-\d{1,2}-\d{4})/i,
+    new RegExp(dateKw.source + '[\\s.:]*' + '(\\d{1,2}[\\/.\\-]\\d{1,2}[\\/.\\-]\\d{4})', 'i'),
+    new RegExp(dateKw.source + '[\\s.:]*' + '(\\d{4}[\\-\\/]\\d{1,2}[\\-\\/]\\d{1,2})', 'i'),
   ];
   for (const pat of dateKwPatterns) {
     const m = text.match(pat);
@@ -447,9 +483,34 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
       if (d) { issueDate = d; break; }
     }
   }
+  // Try keyword + month name format: "Datum: 15 mrt 2026", "Factuurdatum 3 februari 2026", "Date: March 15, 2026"
+  if (!issueDate) {
+    const monthNameKw = new RegExp(
+      dateKw.source + '[\\s.:]*' + '(\\d{1,2}[\\s\\-./]+[a-zA-Zéû.]+[\\s\\-./]+\\d{4})',
+      'i'
+    );
+    const m = text.match(monthNameKw);
+    if (m) {
+      const d = parseDateToISO(m[1]);
+      if (d) issueDate = d;
+    }
+  }
+  // Also try "Month DD, YYYY" format near keywords
+  if (!issueDate) {
+    const monthFirstKw = new RegExp(
+      dateKw.source + '[\\s.:]*' + '([a-zA-Zéû.]+\\s+\\d{1,2},?\\s+\\d{4})',
+      'i'
+    );
+    const m = text.match(monthFirstKw);
+    if (m) {
+      const d = parseDateToISO(m[1]);
+      if (d) issueDate = d;
+    }
+  }
   // Fallback: any date in the first ~30 lines
   if (!issueDate) {
     const topText = lines.slice(0, 30).join('\n');
+    // Numeric dates
     const anyDate = topText.match(/(\d{1,2}[\/.]\d{1,2}[\/.]\d{4})/);
     if (anyDate) {
       const d = parseDateToISO(anyDate[1]);
@@ -458,6 +519,14 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
     if (!issueDate) {
       const isoDate = topText.match(/(\d{4}-\d{2}-\d{2})/);
       if (isoDate) issueDate = isoDate[1];
+    }
+    // Month name dates: "15 mrt 2026", "3 februari 2026"
+    if (!issueDate) {
+      const monthNameDate = topText.match(/(\d{1,2}[\s\-./]+(?:jan(?:uari)?|feb(?:ruari)?|mrt|maart|apr(?:il)?|mei|jun[i]?|jul[i]?|aug(?:ustus)?|sep(?:t(?:ember)?)?|okt(?:ober)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|january|february|march|may|june|july|august|october)\.?[\s\-./]+\d{4})/i);
+      if (monthNameDate) {
+        const d = parseDateToISO(monthNameDate[1]);
+        if (d) issueDate = d;
+      }
     }
   }
   if (!issueDate) {
@@ -951,6 +1020,32 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     const existingDemoBatch = db.prepare("SELECT id, filename FROM demo_upload_batches WHERE month = ? AND domain = 'demo'").get(inferredMonth) as any;
     const existingSalesBatch = db.prepare("SELECT id, filename FROM demo_upload_batches WHERE month = ? AND domain = 'sales'").get(inferredMonth) as any;
 
+    // Detect category conflicts: supplier already exists in DB with a different category
+    const existingSupplierCategories = db.prepare(
+      'SELECT supplier, category, domain, COUNT(*) as cnt FROM demo_invoices GROUP BY supplier, category, domain'
+    ).all() as { supplier: string; category: string; domain: string; cnt: number }[];
+    const supplierCatMap = new Map<string, { category: string; domain: string; cnt: number }[]>();
+    for (const row of existingSupplierCategories) {
+      const key = row.supplier.toLowerCase();
+      if (!supplierCatMap.has(key)) supplierCatMap.set(key, []);
+      supplierCatMap.get(key)!.push(row);
+    }
+    const categoryConflicts: { supplier: string; newCategory: string; newDomain: string; existingCategories: { category: string; domain: string; count: number }[] }[] = [];
+    for (const inv of classified) {
+      if (!inv.category || !inv.domain) continue;
+      const existing = supplierCatMap.get(inv.supplierName.toLowerCase());
+      if (!existing) continue;
+      const hasConflict = existing.some(e => e.category !== inv.category || e.domain !== inv.domain);
+      if (hasConflict && !categoryConflicts.some(c => c.supplier.toLowerCase() === inv.supplierName.toLowerCase())) {
+        categoryConflicts.push({
+          supplier: inv.supplierName,
+          newCategory: inv.category,
+          newDomain: inv.domain,
+          existingCategories: existing.map(e => ({ category: e.category, domain: e.domain, count: e.cnt })),
+        });
+      }
+    }
+
     // Separate own-company invoices so we can report them to the user
     const ownCompanyInvoices = classified.filter(inv => isOwnCompany(inv.supplierName));
 
@@ -1014,6 +1109,7 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
         amount: inv.amount,
         date: inv.issueDate,
       })),
+      categoryConflicts,
       warnings,
       // Reconciliation data
       reconciliation: {
@@ -1268,6 +1364,44 @@ router.post('/confirm-import', (req: Request, res: Response) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Reconciliation endpoint — verify total invoice counts after bulk uploads
+// ═══════════════════════════════════════════════════════════════════════════════
+// CUSTOM CATEGORIES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.get('/categories', (_req: Request, res: Response) => {
+  try {
+    const custom = db.prepare('SELECT id, name, domain FROM demo_custom_categories ORDER BY domain, name').all();
+    res.json({ custom });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/categories', (req: Request, res: Response) => {
+  try {
+    const { name, domain } = req.body;
+    if (!name || !domain) { res.status(400).json({ error: 'name and domain required' }); return; }
+    if (!['demo', 'sales'].includes(domain)) { res.status(400).json({ error: 'domain must be demo or sales' }); return; }
+    const trimmed = name.trim();
+    if (!trimmed) { res.status(400).json({ error: 'Category name cannot be empty' }); return; }
+    db.prepare('INSERT OR IGNORE INTO demo_custom_categories (name, domain) VALUES (?, ?)').run(trimmed, domain);
+    db.saveToDisk();
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/categories/:id', (req: Request, res: Response) => {
+  try {
+    db.prepare('DELETE FROM demo_custom_categories WHERE id = ?').run(req.params.id);
+    db.saveToDisk();
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/reconciliation', (_req: Request, res: Response) => {
   try {
     const total = (db.prepare('SELECT COUNT(*) as cnt FROM demo_invoices').get() as any).cnt;

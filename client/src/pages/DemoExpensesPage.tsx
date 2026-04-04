@@ -7,23 +7,12 @@ import {
   Eye, AlertTriangle, Clock, ChevronLeft, Pencil, Check,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
+import { useCategories, DEMO_CATEGORIES, SALES_CATEGORIES } from '../lib/categories';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
 // ═══════════════════════════════════════════════════════════════════════════════
-
-const DEMO_CATEGORIES = [
-  'Salaries', 'Cars', 'Overhead', 'Consumables', 'Materials',
-  'Utilities and Maintenance', 'Feedstock', 'Subcontractors and Consultants',
-  'Regulatory', 'Equipment', 'Couriers', 'Other',
-];
-
-const SALES_CATEGORIES = [
-  'Raw Materials', 'Logistics', 'Blenders', 'Shipping',
-];
-
-const ALL_CATEGORIES = [...DEMO_CATEGORIES, ...SALES_CATEGORIES];
 
 const CAT_COLORS: Record<string, string> = {
   'Salaries': '#6366f1',
@@ -520,6 +509,7 @@ function MultiSelect({ label, options, selected, onChange }: {
 
 export default function DemoExpensesPage() {
   const { addToast } = useToast();
+  const { demoCategories, salesCategories, allCategories: hookCategories, addCategory } = useCategories();
   // Data
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [batches, setBatches] = useState<Batch[]>([]);
@@ -547,6 +537,10 @@ export default function DemoExpensesPage() {
 
   // Delete invoice
   const [deletingInvoice, setDeletingInvoice] = useState<{ id: number; invoice_id: string; supplier: string } | null>(null);
+
+  // New category
+  const [newCatName, setNewCatName] = useState('');
+  const [newCatDomain, setNewCatDomain] = useState<'demo' | 'sales'>('demo');
 
   // Inline editing
   const [editingRow, setEditingRow] = useState<number | null>(null);
@@ -706,10 +700,10 @@ export default function DemoExpensesPage() {
   }, [summary]);
 
   const domainCategories = useMemo(() => {
-    if (filterDomain === 'demo') return DEMO_CATEGORIES;
-    if (filterDomain === 'sales') return SALES_CATEGORIES;
-    return ALL_CATEGORIES;
-  }, [filterDomain]);
+    if (filterDomain === 'demo') return demoCategories;
+    if (filterDomain === 'sales') return salesCategories;
+    return hookCategories;
+  }, [filterDomain, demoCategories, salesCategories, hookCategories]);
 
   const allCategories = useMemo(() => {
     if (!summary) return domainCategories;
@@ -794,6 +788,23 @@ export default function DemoExpensesPage() {
                 selected={filterCategories}
                 onChange={setFilterCategories}
               />
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Add Category</label>
+                <div className="flex gap-1">
+                  <input type="text" value={newCatName} onChange={e => setNewCatName(e.target.value)}
+                    placeholder="New category..."
+                    className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm w-32"
+                    onKeyDown={e => { if (e.key === 'Enter' && newCatName.trim()) { addCategory(newCatName.trim(), newCatDomain); setNewCatName(''); addToast(`Added "${newCatName.trim()}" to ${newCatDomain}`, 'success'); } }}
+                  />
+                  <select value={newCatDomain} onChange={e => setNewCatDomain(e.target.value as 'demo' | 'sales')}
+                    className="border border-gray-300 rounded-lg px-1 py-1.5 text-xs w-16">
+                    <option value="demo">Demo</option>
+                    <option value="sales">Sales</option>
+                  </select>
+                  <button onClick={() => { if (newCatName.trim()) { addCategory(newCatName.trim(), newCatDomain); setNewCatName(''); addToast(`Added "${newCatName.trim()}" to ${newCatDomain}`, 'success'); } }}
+                    className="px-2 py-1.5 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700">+</button>
+                </div>
+              </div>
               <MultiSelect
                 label="Suppliers"
                 options={summary?.suppliers || []}

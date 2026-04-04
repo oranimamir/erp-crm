@@ -10,20 +10,9 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDate } from '../lib/dates';
+import { useCategories } from '../lib/categories';
 import SearchBar from '../components/ui/SearchBar';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const DEMO_CATEGORIES = [
-  'Salaries', 'Cars', 'Overhead', 'Consumables', 'Materials',
-  'Utilities and Maintenance', 'Feedstock', 'Subcontractors and Consultants',
-  'Regulatory', 'Equipment', 'Couriers', 'Other',
-];
-
-const SALES_CATEGORIES = ['Raw Materials', 'Logistics', 'Blenders', 'Shipping'];
 
 const CAT_COLORS: Record<string, string> = {
   'Salaries': '#6366f1', 'Cars': '#8b5cf6', 'Overhead': '#3b82f6',
@@ -400,6 +389,7 @@ type SubTab = 'demo' | 'sales' | 'summary';
 export default function SupplierInvoicesPage() {
   const { addToast } = useToast();
   const { user } = useAuth();
+  const { demoCategories, salesCategories, addCategory } = useCategories();
 
   // Sub-tab
   const [activeTab, setActiveTab] = useState<SubTab>('demo');
@@ -467,11 +457,13 @@ export default function SupplierInvoicesPage() {
   const [showAddSupplier, setShowAddSupplier] = useState(false);
   const [newSupplierName, setNewSupplierName] = useState('');
   const [newSupplierCategory, setNewSupplierCategory] = useState('');
+  const [newCatName, setNewCatName] = useState('');
+  const [newCatDomain, setNewCatDomain] = useState<'demo' | 'sales'>('demo');
 
   // Summary search
   const [summarySearch, setSummarySearch] = useState('');
 
-  const domainCategories = activeTab === 'demo' ? DEMO_CATEGORIES : SALES_CATEGORIES;
+  const domainCategories = activeTab === 'demo' ? demoCategories : salesCategories;
 
   // Reset filters when switching tabs
   const handleTabChange = (tab: SubTab) => {
@@ -694,6 +686,14 @@ export default function SupplierInvoicesPage() {
         if (ownCompany > 0) parts.push(`${ownCompany} flagged as own-company (review to keep or skip)`);
         if (parts.length > 0) {
           addToast(`Needs review: ${parts.join(', ')}. Check the review list below.`, 'error');
+        }
+      }
+
+      // Show category conflicts
+      if (res.data.categoryConflicts?.length > 0) {
+        for (const c of res.data.categoryConflicts) {
+          const existing = c.existingCategories.map((e: any) => `${e.category} (${e.domain}, ${e.count} inv.)`).join(', ');
+          addToast(`Category conflict: "${c.supplier}" is being imported as ${c.newCategory} (${c.newDomain}), but already has: ${existing}. Review in the list below.`, 'error');
         }
       }
 
@@ -1030,6 +1030,23 @@ export default function SupplierInvoicesPage() {
           <Card className="p-4">
             <div className="flex flex-wrap items-end gap-4">
               <MultiSelect label="Categories" options={allCategories} selected={filterCategories} onChange={setFilterCategories} />
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Add Category</label>
+                <div className="flex gap-1">
+                  <input type="text" value={newCatName} onChange={e => setNewCatName(e.target.value)}
+                    placeholder="New category..."
+                    className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm w-32"
+                    onKeyDown={e => { if (e.key === 'Enter' && newCatName.trim()) { addCategory(newCatName.trim(), newCatDomain); setNewCatName(''); addToast(`Added "${newCatName.trim()}" to ${newCatDomain}`, 'success'); } }}
+                  />
+                  <select value={newCatDomain} onChange={e => setNewCatDomain(e.target.value as 'demo' | 'sales')}
+                    className="border border-gray-300 rounded-lg px-1 py-1.5 text-xs w-16">
+                    <option value="demo">Demo</option>
+                    <option value="sales">Sales</option>
+                  </select>
+                  <button onClick={() => { if (newCatName.trim()) { addCategory(newCatName.trim(), newCatDomain); setNewCatName(''); addToast(`Added "${newCatName.trim()}" to ${newCatDomain}`, 'success'); } }}
+                    className="px-2 py-1.5 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700">+</button>
+                </div>
+              </div>
               <MultiSelect label="Suppliers" options={summary?.suppliers || []} selected={filterSuppliers} onChange={setFilterSuppliers} />
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Month</label>
@@ -1608,7 +1625,7 @@ export default function SupplierInvoicesPage() {
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
               {pendingUpload.unknownSuppliers.map((u: any) => {
                 const a = unknownAssignments[u.supplier] || { domain: 'demo', category: 'Other', remember: false };
-                const cats = a.domain === 'sales' ? SALES_CATEGORIES : DEMO_CATEGORIES;
+                const cats = a.domain === 'sales' ? salesCategories : demoCategories;
                 const isPreviewing = previewingUnknown === u.supplier;
                 return (
                   <div key={u.supplier} className="border border-gray-200 rounded-lg overflow-hidden">
@@ -1866,7 +1883,7 @@ export default function SupplierInvoicesPage() {
                     <select value={singlePreview.category}
                       onChange={e => setSinglePreview(prev => prev ? { ...prev, category: e.target.value } : null)}
                       className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
-                      {(singlePreview.domain === 'sales' ? SALES_CATEGORIES : DEMO_CATEGORIES).map(c => <option key={c} value={c}>{c}</option>)}
+                      {(singlePreview.domain === 'sales' ? salesCategories : demoCategories).map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                   </div>
                 </div>
