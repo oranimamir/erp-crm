@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
+import { useCategories } from '../lib/categories';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -54,6 +55,7 @@ const DEMO_CATEGORIES_LIST = [
 
 function DemoSuppliersTab() {
   const { addToast } = useToast();
+  const { demoCategories, addCategory, customCategories, removeCategory } = useCategories();
   const [data, setData] = useState<{ hardcoded: any[]; userDefined: any[] }>({ hardcoded: [], userDefined: [] });
   const [userMappings, setUserMappings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -63,6 +65,7 @@ function DemoSuppliersTab() {
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editCat, setEditCat] = useState('');
+  const [newCatName, setNewCatName] = useState('');
 
   const fetchData = () => {
     Promise.all([
@@ -130,6 +133,36 @@ function DemoSuppliersTab() {
         <Button onClick={() => setShowAdd(true)}><Plus size={16} /> Add Supplier</Button>
       </div>
 
+      {/* Add / manage categories */}
+      <Card className="p-4">
+        <h3 className="text-sm font-semibold text-gray-900 mb-3">Categories</h3>
+        <div className="flex flex-wrap gap-2 mb-3">
+          {demoCategories.map(c => {
+            const custom = customCategories.find(cc => cc.name === c && cc.domain === 'demo');
+            return (
+              <span key={c} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
+                <span className="w-2 h-2 rounded-sm" style={{ background: DEMO_CAT_COLORS[c] || '#6b7280' }} />
+                {c}
+                {custom && (
+                  <button onClick={async () => { await removeCategory(custom.id); addToast(`Removed "${c}"`, 'success'); }}
+                    className="ml-0.5 text-gray-400 hover:text-red-500"><X size={12} /></button>
+                )}
+              </span>
+            );
+          })}
+        </div>
+        <div className="flex items-center gap-2">
+          <input type="text" value={newCatName} onChange={e => setNewCatName(e.target.value)}
+            placeholder="New category name..."
+            className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm flex-1 max-w-xs focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            onKeyDown={e => { if (e.key === 'Enter' && newCatName.trim()) { addCategory(newCatName.trim(), 'demo'); setNewCatName(''); addToast(`Added "${newCatName.trim()}"`, 'success'); } }} />
+          <Button size="sm" onClick={() => { if (newCatName.trim()) { addCategory(newCatName.trim(), 'demo'); setNewCatName(''); addToast(`Added "${newCatName.trim()}"`, 'success'); } }}
+            disabled={!newCatName.trim()}>
+            <Plus size={14} /> Add
+          </Button>
+        </div>
+      </Card>
+
       {/* User-defined suppliers table */}
       {userMappings.length > 0 && (
         <Card className="overflow-hidden">
@@ -156,7 +189,7 @@ function DemoSuppliersTab() {
                         <select value={editCat} onChange={e => setEditCat(e.target.value)}
                           className="border border-gray-300 rounded px-2 py-0.5 text-xs bg-white focus:ring-2 focus:ring-primary-500"
                           autoFocus>
-                          {DEMO_CATEGORIES_LIST.map(c => <option key={c} value={c}>{c}</option>)}
+                          {demoCategories.map(c => <option key={c} value={c}>{c}</option>)}
                         </select>
                       ) : (
                         <span className="inline-flex items-center gap-1.5 text-xs font-medium">
@@ -226,7 +259,7 @@ function DemoSuppliersTab() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
                 <select value={newCategory} onChange={e => setNewCategory(e.target.value)}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
-                  {DEMO_CATEGORIES_LIST.map(c => <option key={c} value={c}>{c}</option>)}
+                  {demoCategories.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
             </div>

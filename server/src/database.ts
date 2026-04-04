@@ -1042,6 +1042,17 @@ export async function initializeDatabase() {
     `).run();
   } catch { /* ignore */ }
 
+  // Fix: reset unrealistic VAT amounts for PDF-only invoices (no XML source)
+  // Belgian max VAT is 21%, so anything above 22% of amount is likely a parsing error
+  try {
+    db.prepare(`
+      UPDATE demo_invoices SET vat_amount = 0
+      WHERE (xml_filename IS NULL OR xml_filename = '')
+        AND vat_amount > amount * 0.22
+        AND amount > 0
+    `).run();
+  } catch { /* ignore */ }
+
   db.saveToDisk();
 }
 
