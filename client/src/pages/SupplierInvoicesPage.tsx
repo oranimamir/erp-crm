@@ -1815,10 +1815,10 @@ export default function SupplierInvoicesPage() {
                         <div>
                           <label className="block text-xs font-medium text-gray-500 mb-1">Domain</label>
                           <select value={a.domain}
-                            onChange={e => setUnknownAssignments(prev => ({
-                              ...prev,
-                              [u.supplier]: { ...prev[u.supplier], domain: e.target.value, category: e.target.value === 'sales' ? 'Raw Materials' : 'Other' }
-                            }))}
+                            onChange={e => setUnknownAssignments(prev => {
+                              const cur = prev[u.supplier] || { domain: 'demo', category: 'Other', remember: false };
+                              return { ...prev, [u.supplier]: { ...cur, domain: e.target.value, category: e.target.value === 'sales' ? 'Raw Materials' : 'Other' } };
+                            })}
                             className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
                             <option value="demo">Demo Expenses</option>
                             <option value="sales">Sales Activities</option>
@@ -1827,7 +1827,10 @@ export default function SupplierInvoicesPage() {
                         <div>
                           <label className="block text-xs font-medium text-gray-500 mb-1">Category</label>
                           <select value={a.category}
-                            onChange={e => setUnknownAssignments(prev => ({ ...prev, [u.supplier]: { ...prev[u.supplier], category: e.target.value } }))}
+                            onChange={e => setUnknownAssignments(prev => {
+                              const cur = prev[u.supplier] || { domain: 'demo', category: 'Other', remember: false };
+                              return { ...prev, [u.supplier]: { ...cur, category: e.target.value } };
+                            })}
                             className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
                             {cats.map(c => <option key={c} value={c}>{c}</option>)}
                           </select>
@@ -1835,7 +1838,10 @@ export default function SupplierInvoicesPage() {
                       </div>
                       <label className="flex items-center gap-2 mt-3 text-sm text-gray-600 cursor-pointer">
                         <input type="checkbox" checked={a.remember}
-                          onChange={e => setUnknownAssignments(prev => ({ ...prev, [u.supplier]: { ...prev[u.supplier], remember: e.target.checked } }))}
+                          onChange={e => setUnknownAssignments(prev => {
+                            const cur = prev[u.supplier] || { domain: 'demo', category: 'Other', remember: false };
+                            return { ...prev, [u.supplier]: { ...cur, remember: e.target.checked } };
+                          })}
                           className="rounded border-gray-300" />
                         Remember this supplier for future uploads
                       </label>

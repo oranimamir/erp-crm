@@ -1547,6 +1547,7 @@ router.get('/batches', (req: Request, res: Response) => {
 router.delete('/batches/:id', (req: Request, res: Response) => {
   try {
     const batch = db.prepare('SELECT filename, month FROM demo_upload_batches WHERE id = ?').get(req.params.id) as any;
+    if (!batch) { res.status(404).json({ error: 'Batch not found' }); return; }
     db.prepare('DELETE FROM demo_invoices WHERE batch_id = ?').run(req.params.id);
     db.prepare('DELETE FROM demo_upload_batches WHERE id = ?').run(req.params.id);
     db.saveToDisk();
@@ -1892,6 +1893,7 @@ router.patch('/invoices/:id/amount', (req: Request, res: Response) => {
     if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
     const newAmount = amount != null ? Number(amount) : inv.amount;
+    if (isNaN(newAmount) || newAmount < 0) { res.status(400).json({ error: 'Invalid amount' }); return; }
     const newCurrency = currency || inv.currency;
     db.prepare('UPDATE demo_invoices SET amount = ?, currency = ? WHERE id = ?').run(newAmount, newCurrency, req.params.id);
 
@@ -1923,6 +1925,7 @@ router.patch('/invoices/:id/date', (req: Request, res: Response) => {
   try {
     const { issue_date } = req.body;
     if (!issue_date) { res.status(400).json({ error: 'issue_date required' }); return; }
+    if (!/^\d{4}-\d{2}-\d{2}/.test(issue_date)) { res.status(400).json({ error: 'Invalid date format, expected YYYY-MM-DD' }); return; }
 
     const inv = db.prepare('SELECT id FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
     if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
