@@ -1606,7 +1606,7 @@ router.patch('/invoices/:id/category', (req: Request, res: Response) => {
     const inv = db.prepare('SELECT supplier, domain FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
     if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
-    if (isAcerta(inv.supplier)) {
+    if (false && isAcerta(inv.supplier)) { // Acerta lock removed — allow editing all invoices
       res.status(400).json({ error: 'Cannot override category for Acerta invoices' });
       return;
     }

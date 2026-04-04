@@ -1098,12 +1098,7 @@ export default function DemoExpensesPage() {
                           )}
                         </td>
                         <td className="px-4 py-3">
-                          {acerta ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded text-xs font-medium">
-                              {inv.category}
-                              <span className="text-[10px] text-indigo-400" title="Locked — Acerta is always Salaries">🔒</span>
-                            </span>
-                          ) : isEditing ? (
+                          {isEditing ? (
                             <select value={editCategory} onChange={e => setEditCategory(e.target.value)}
                               className="border border-gray-300 rounded px-2 py-0.5 text-xs bg-white focus:ring-2 focus:ring-primary-500">
                               {(editDomain === 'sales' ? salesCategories : demoCategories).map(c => <option key={c} value={c}>{c}</option>)}
