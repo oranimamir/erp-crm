@@ -709,6 +709,13 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
   const curSym = '(?:€|\\$|£|EUR|USD|GBP)';
 
   const amountPatterns: { pattern: RegExp; inclVat?: boolean }[] = [
+    // ── Commercial invoice patterns (Chinese/Asian suppliers) ──
+    // "AMOUNT" column with currency-prefixed value: "AMOUNT USD31,200.00"
+    { pattern: new RegExp(`\\bAMOUNT\\b.{0,20}?${curSym}\\s*${eurNum}`, 'i') },
+    // TOTAL line with currency-prefixed amount (skip quantity info between): "TOTAL 24.000MTS USD31,200.00"
+    { pattern: new RegExp(`(?:totaal|total|totale|montant)\\b.{0,60}?${curSym}\\s*${eurNum}`, 'i') },
+
+    // ── European invoice patterns ──
     // "Te betalen" / "Te betalen bedrag" (Dutch: amount to pay — usually incl. BTW)
     { pattern: new RegExp(`(?:te\\s*betalen(?:\\s*bedrag)?|verschuldigd\\s*bedrag)\\s*[:. ]*\\s*${curSym}?\\s*${eurNum}`, 'i'), inclVat: true },
     // "Totaalbedrag" (Dutch: grand total — usually incl. BTW)
