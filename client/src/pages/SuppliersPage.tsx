@@ -183,7 +183,12 @@ function DemoSuppliersTab() {
                   const isEditing = editingId === m.id;
                   return (
                   <tr key={m.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-2.5 text-gray-900 capitalize">{m.display_name || m.supplier_pattern}</td>
+                    <td className="px-4 py-2.5">
+                      <Link to={`/supplier-invoices?supplier=${encodeURIComponent(m.display_name || m.supplier_pattern)}`}
+                        className="text-primary-600 hover:text-primary-800 font-medium capitalize">
+                        {m.display_name || m.supplier_pattern}
+                      </Link>
+                    </td>
                     <td className="px-4 py-2.5">
                       {isEditing ? (
                         <select value={editCat} onChange={e => setEditCat(e.target.value)}
@@ -233,9 +238,10 @@ function DemoSuppliersTab() {
             </div>
             <div className="flex flex-wrap gap-1.5">
               {suppliers.map(s => (
-                <span key={s.name} className={`inline-block px-2 py-0.5 rounded text-xs capitalize ${s.source === 'user' ? 'bg-primary-50 text-primary-700 border border-primary-200' : 'bg-gray-100 text-gray-700'}`}>
+                <Link key={s.name} to={`/supplier-invoices?supplier=${encodeURIComponent(s.name)}`}
+                  className={`inline-block px-2 py-0.5 rounded text-xs capitalize cursor-pointer hover:ring-2 hover:ring-primary-300 transition-shadow ${s.source === 'user' ? 'bg-primary-50 text-primary-700 border border-primary-200' : 'bg-gray-100 text-gray-700'}`}>
                   {s.name}
-                </span>
+                </Link>
               ))}
             </div>
           </Card>

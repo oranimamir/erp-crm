@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import api from '../lib/api';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -395,9 +396,11 @@ export default function SupplierInvoicesPage() {
   const { addToast } = useToast();
   const { user } = useAuth();
   const { demoCategories, salesCategories, addCategory } = useCategories();
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  // Sub-tab
-  const [activeTab, setActiveTab] = useState<SubTab>('demo');
+  // Sub-tab — default to 'demo' unless URL says otherwise
+  const initialTab = (searchParams.get('tab') as SubTab) || 'demo';
+  const [activeTab, setActiveTab] = useState<SubTab>(initialTab);
 
   // Data
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -411,10 +414,11 @@ export default function SupplierInvoicesPage() {
   const [singleUploading, setSingleUploading] = useState(false);
   const [singlePreview, setSinglePreview] = useState<SingleUploadPreview | null>(null);
 
-  // Search & Filters
+  // Search & Filters — initialize supplier filter from URL param if present
+  const initialSupplier = searchParams.get('supplier');
   const [search, setSearch] = useState('');
   const [filterCategories, setFilterCategories] = useState<string[]>([]);
-  const [filterSuppliers, setFilterSuppliers] = useState<string[]>([]);
+  const [filterSuppliers, setFilterSuppliers] = useState<string[]>(initialSupplier ? [initialSupplier] : []);
   const [filterMonth, setFilterMonth] = useState('');
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
@@ -488,7 +492,9 @@ export default function SupplierInvoicesPage() {
   // ─── FETCH HELPERS ──────────────────────────────────────────────────────────
 
   const buildFilterParams = useCallback(() => {
-    const params: Record<string, string> = { domain: activeTab };
+    const params: Record<string, string> = {};
+    // When filtering by supplier, show all domains; otherwise filter by active tab
+    if (filterSuppliers.length === 0) params.domain = activeTab;
     if (search) params.search = search;
     if (filterCategories.length > 0) params.categories = filterCategories.join(',');
     if (filterSuppliers.length > 0) params.suppliers = filterSuppliers.join(',');

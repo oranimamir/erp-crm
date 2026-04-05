@@ -1445,7 +1445,7 @@ router.get('/invoices', (req: Request, res: Response) => {
     }
     if (suppliers) {
       const supps = (suppliers as string).split(',');
-      sql += ` AND supplier IN (${supps.map(() => '?').join(',')})`;
+      sql += ` AND (${supps.map(() => 'LOWER(supplier) = LOWER(?)').join(' OR ')})`;
       params.push(...supps);
     }
     if (month) { sql += ' AND month = ?'; params.push(month); }
@@ -1488,7 +1488,7 @@ router.get('/summary', (req: Request, res: Response) => {
     }
     if (suppliers) {
       const supps = (suppliers as string).split(',');
-      where += ` AND supplier IN (${supps.map(() => '?').join(',')})`;
+      where += ` AND (${supps.map(() => 'LOWER(supplier) = LOWER(?)').join(' OR ')})`;
       params.push(...supps);
     }
     if (month) { where += ' AND month = ?'; params.push(month); }
