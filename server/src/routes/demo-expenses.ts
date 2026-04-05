@@ -1101,14 +1101,22 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       !duplicateInvoiceIds.has(inv.invoiceId)
     );
 
-    // Flag invoices that need user attention (amount=0, fallback date, unknown supplier, own-company)
+    // Flag invoices that need user attention (amount=0, fallback date, unknown supplier, own-company, bad dates)
     const today = new Date().toISOString().substring(0, 10);
+    const currentYear = new Date().getFullYear();
     const warnings: { invoiceId: string; supplier: string; issues: string[] }[] = [];
     for (const inv of newInvoices) {
       const issues: string[] = [];
       if (isOwnCompany(inv.supplierName)) issues.push('own_company');
       if (inv.amount === 0) issues.push('amount_zero');
       if (!inv.issueDate || inv.issueDate === today) issues.push('date_uncertain');
+      // Date sanity checks
+      if (inv.issueDate && inv.issueDate !== today) {
+        const invoiceDate = new Date(inv.issueDate);
+        const invoiceYear = invoiceDate.getFullYear();
+        if (inv.issueDate > today) issues.push('date_future');
+        if (invoiceYear < 2020 || invoiceYear > currentYear + 1) issues.push('date_illogical');
+      }
       const pdfBase = typeof inv.pdfFilename === 'string' ? inv.pdfFilename.replace(/\.pdf$/i, '').split('/').pop() : null;
       if (inv.supplierName === 'Unknown' || inv.supplierName === pdfBase) {
         issues.push('supplier_uncertain');
@@ -1468,6 +1476,43 @@ router.get('/reconciliation', (_req: Request, res: Response) => {
       uniqueSuppliers, duplicateWarnings, zeroAmount, noDate,
       bySupplier, byMonth,
     });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/data-quality', (req: Request, res: Response) => {
+  try {
+    const today = new Date().toISOString().substring(0, 10);
+    const currentYear = new Date().getFullYear();
+    const invoices = db.prepare('SELECT id, invoice_id, issue_date, supplier, amount, created_at FROM demo_invoices').all() as any[];
+    const issues: { id: number; invoice_id: string; supplier: string; issue: string; detail: string }[] = [];
+    for (const inv of invoices) {
+      if (inv.issue_date) {
+        const d = new Date(inv.issue_date);
+        const y = d.getFullYear();
+        if (inv.issue_date > today) {
+          issues.push({ id: inv.id, invoice_id: inv.invoice_id, supplier: inv.supplier, issue: 'date_future', detail: `Invoice date ${inv.issue_date} is in the future` });
+        }
+        if (y < 2020 || y > currentYear + 1) {
+          issues.push({ id: inv.id, invoice_id: inv.invoice_id, supplier: inv.supplier, issue: 'date_illogical', detail: `Invoice date ${inv.issue_date} has illogical year ${y}` });
+        }
+        // Invoice date after upload date (created_at)
+        if (inv.created_at) {
+          const uploadDate = inv.created_at.substring(0, 10);
+          if (inv.issue_date > uploadDate) {
+            issues.push({ id: inv.id, invoice_id: inv.invoice_id, supplier: inv.supplier, issue: 'date_after_upload', detail: `Invoice date ${inv.issue_date} is after upload date ${uploadDate}` });
+          }
+        }
+      }
+      if (inv.amount === 0) {
+        issues.push({ id: inv.id, invoice_id: inv.invoice_id, supplier: inv.supplier, issue: 'amount_zero', detail: 'Amount is 0' });
+      }
+      if (!inv.issue_date) {
+        issues.push({ id: inv.id, invoice_id: inv.invoice_id, supplier: inv.supplier, issue: 'date_missing', detail: 'No issue date' });
+      }
+    }
+    res.json({ total_invoices: invoices.length, issues_found: issues.length, issues });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1975,6 +2020,14 @@ router.patch('/invoices/:id/date', (req: Request, res: Response) => {
     if (!issue_date) { res.status(400).json({ error: 'issue_date required' }); return; }
     if (!/^\d{4}-\d{2}-\d{2}/.test(issue_date)) { res.status(400).json({ error: 'Invalid date format, expected YYYY-MM-DD' }); return; }
 
+    // Validate date sanity
+    const dateObj = new Date(issue_date);
+    const year = dateObj.getFullYear();
+    const today = new Date().toISOString().substring(0, 10);
+    const dateWarnings: string[] = [];
+    if (year < 2020 || year > new Date().getFullYear() + 1) dateWarnings.push(`Year ${year} looks illogical`);
+    if (issue_date > today) dateWarnings.push('Date is in the future');
+
     const inv = db.prepare('SELECT id FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
     if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
@@ -1989,7 +2042,7 @@ router.patch('/invoices/:id/date', (req: Request, res: Response) => {
       performedBy: (req as any).user?.display_name || 'Unknown',
       performedById: (req as any).user?.userId,
     });
-    res.json({ success: true });
+    res.json({ success: true, warnings: dateWarnings.length > 0 ? dateWarnings : undefined });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to update date' });
   }

@@ -74,7 +74,25 @@ class DatabaseWrapper {
     }, 100);
   }
 
-  saveToDisk() {
+  /** Clean up old backups and temp files to free disk space */
+  cleanupDiskSpace() {
+    try {
+      const dir = path.dirname(dbPath);
+      const base = path.basename(dbPath, '.db');
+      // Remove temp files
+      try { fs.unlinkSync(dbPath + '.tmp'); } catch {}
+      // Keep only 1 backup
+      const backups = fs.readdirSync(dir)
+        .filter((f: string) => f.startsWith(base + '_backup_') && f.endsWith('.db'))
+        .sort()
+        .reverse();
+      for (const old of backups.slice(1)) {
+        try { fs.unlinkSync(path.join(dir, old)); console.log(`[db] Deleted old backup: ${old}`); } catch {}
+      }
+    } catch {}
+  }
+
+  saveToDisk(): boolean {
     try {
       const data = this.sqlDb.export();
       const buffer = Buffer.from(data);
@@ -82,10 +100,29 @@ class DatabaseWrapper {
       const tmpPath = dbPath + '.tmp';
       fs.writeFileSync(tmpPath, buffer);
       fs.renameSync(tmpPath, dbPath);
+      return true;
     } catch (err: any) {
       console.error(`[db] Save to disk failed (${err.code || err.message})`);
       // Clean up partial temp file if it exists
       try { fs.unlinkSync(dbPath + '.tmp'); } catch {}
+      // If disk is full, try cleaning up space and retry once
+      if (err.code === 'ENOSPC') {
+        console.warn('[db] Disk full — cleaning up and retrying save...');
+        this.cleanupDiskSpace();
+        try {
+          const data = this.sqlDb.export();
+          const buffer = Buffer.from(data);
+          const tmpPath = dbPath + '.tmp';
+          fs.writeFileSync(tmpPath, buffer);
+          fs.renameSync(tmpPath, dbPath);
+          console.log('[db] Save succeeded after cleanup');
+          return true;
+        } catch (retryErr: any) {
+          console.error(`[db] Save still failed after cleanup (${retryErr.code || retryErr.message})`);
+          try { fs.unlinkSync(dbPath + '.tmp'); } catch {}
+        }
+      }
+      return false;
     }
   }
 
@@ -93,16 +130,8 @@ class DatabaseWrapper {
   backupToDisk() {
     try {
       if (fs.existsSync(dbPath)) {
-        // Clean up old backup files first — keep only the 2 most recent
-        const dir = path.dirname(dbPath);
-        const base = path.basename(dbPath, '.db');
-        const backups = fs.readdirSync(dir)
-          .filter((f: string) => f.startsWith(base + '_backup_') && f.endsWith('.db'))
-          .sort()
-          .reverse();
-        for (const old of backups.slice(2)) {
-          try { fs.unlinkSync(path.join(dir, old)); } catch (_) {}
-        }
+        // Clean up old backup files first — keep only 1
+        this.cleanupDiskSpace();
 
         const backupPath = dbPath.replace(/\.db$/, '') + '_backup_' + Date.now() + '.db';
         fs.copyFileSync(dbPath, backupPath);
@@ -183,6 +212,9 @@ const db = new DatabaseWrapper();
 
 export async function initializeDatabase() {
   await db.init();
+
+  // Free disk space before doing anything else
+  db.cleanupDiskSpace();
 
   // Create a backup before running any migrations (protects against data loss)
   db.backupToDisk();

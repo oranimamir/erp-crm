@@ -1800,6 +1800,8 @@ export default function SupplierInvoicesPage() {
                             )}
                             {w.issues.includes('amount_zero') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Amount is €0 — please verify</span>}
                             {w.issues.includes('date_uncertain') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Date could not be read — please verify</span>}
+                            {w.issues.includes('date_future') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Date is in the future — please correct</span>}
+                            {w.issues.includes('date_illogical') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Date looks wrong (illogical year) — please correct</span>}
                             {w.issues.includes('supplier_uncertain') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Supplier not recognised — please verify</span>}
                           </div>
                         );
