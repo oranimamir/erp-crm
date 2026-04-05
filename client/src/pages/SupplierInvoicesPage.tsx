@@ -1763,12 +1763,13 @@ export default function SupplierInvoicesPage() {
               {pendingUpload.unknownSuppliers.map((u: any) => {
                 const isReviewed = reviewedIds.has(u.invoiceId);
                 if (isReviewed && !showReviewed) {
+                  const isSkipped = skipIds.includes(u.invoiceId);
                   return (
-                    <div key={u.supplier} className="border border-green-200 bg-green-50 rounded-lg px-4 py-2 flex items-center justify-between">
+                    <div key={u.supplier} className={`border rounded-lg px-4 py-2 flex items-center justify-between ${isSkipped ? 'border-red-200 bg-red-50' : 'border-green-200 bg-green-50'}`}>
                       <div className="flex items-center gap-2">
-                        <Check size={14} className="text-green-500" />
-                        <span className="text-sm text-green-700 font-medium">{u.invoiceId || 'no ID'}</span>
-                        <span className="text-xs text-green-600">— Reviewed</span>
+                        {isSkipped ? <X size={14} className="text-red-500" /> : <Check size={14} className="text-green-500" />}
+                        <span className={`text-sm font-medium ${isSkipped ? 'text-red-700' : 'text-green-700'}`}>{u.invoiceId || 'no ID'}</span>
+                        <span className={`text-xs ${isSkipped ? 'text-red-600' : 'text-green-600'}`}>{isSkipped ? '— Will not upload' : '— Reviewed'}</span>
                         {flagOverrides[u.invoiceId] && <Flag size={12} className="text-amber-500 fill-amber-500" />}
                       </div>
                       <button onClick={() => setReviewedIds(prev => { const next = new Set(prev); next.delete(u.invoiceId); return next; })}
@@ -1943,7 +1944,14 @@ export default function SupplierInvoicesPage() {
                           className="rounded border-gray-300" />
                         Remember this supplier for future uploads
                       </label>
-                      <div className="flex items-center gap-2 mt-3">
+                      <div className="flex items-center gap-2 mt-3 flex-wrap">
+                        <button
+                          onClick={() => setSkipIds(prev => prev.includes(u.invoiceId) ? prev.filter(id => id !== u.invoiceId) : [...prev, u.invoiceId])}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${skipIds.includes(u.invoiceId) ? 'bg-red-50 border-red-300 text-red-700' : 'border-gray-300 text-gray-500 hover:bg-gray-50'}`}
+                        >
+                          <X size={12} />
+                          {skipIds.includes(u.invoiceId) ? 'Will not upload' : 'Do not upload'}
+                        </button>
                         <button
                           onClick={() => setFlagOverrides(prev => ({ ...prev, [u.invoiceId]: !prev[u.invoiceId] }))}
                           className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${flagOverrides[u.invoiceId] ? 'bg-amber-50 border-amber-300 text-amber-700' : 'border-gray-300 text-gray-500 hover:bg-gray-50'}`}
