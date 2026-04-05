@@ -420,10 +420,10 @@ export default function SupplierInvoicesPage() {
   const [filterCategories, setFilterCategories] = useState<string[]>([]);
   const [filterSuppliers, setFilterSuppliers] = useState<string[]>(initialSupplier ? [initialSupplier] : []);
   const [filterMonth, setFilterMonth] = useState('');
-  const [filterDateFrom, setFilterDateFrom] = useState('');
+  const [filterDateFrom, setFilterDateFrom] = useState('2026-01-01');
   const [filterDateTo, setFilterDateTo] = useState('');
   const [filterFlagged, setFilterFlagged] = useState(false);
-  const [showFilters, setShowFilters] = useState(false);
+  const [showFilters, setShowFilters] = useState(true);
 
   // Sort
   const [sortBy, setSortBy] = useState<string>('issue_date');

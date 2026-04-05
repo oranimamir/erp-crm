@@ -522,10 +522,10 @@ export default function DemoExpensesPage() {
   const [filterCategories, setFilterCategories] = useState<string[]>([]);
   const [filterSuppliers, setFilterSuppliers] = useState<string[]>([]);
   const [filterMonth, setFilterMonth] = useState('');
-  const [filterDateFrom, setFilterDateFrom] = useState('');
+  const [filterDateFrom, setFilterDateFrom] = useState('2026-01-01');
   const [filterDateTo, setFilterDateTo] = useState('');
   const [summaryFromMonth, setSummaryFromMonth] = useState('2026-01');
-  const [showFilters, setShowFilters] = useState(false);
+  const [showFilters, setShowFilters] = useState(true);
 
   // Sort
   const [sortBy, setSortBy] = useState<string>('issue_date');
