@@ -15,12 +15,53 @@ class DatabaseWrapper {
 
   async init() {
     const SQL = await initSqlJs();
-    if (fs.existsSync(dbPath)) {
-      const buffer = fs.readFileSync(dbPath);
-      this.sqlDb = new SQL.Database(buffer);
-    } else {
+
+    // Try loading main DB, then backups, then start fresh
+    const candidates: string[] = [];
+    if (fs.existsSync(dbPath)) candidates.push(dbPath);
+    // Find backup files sorted newest-first
+    try {
+      const dir = path.dirname(dbPath);
+      const base = path.basename(dbPath, '.db');
+      const backups = fs.readdirSync(dir)
+        .filter((f: string) => f.startsWith(base + '_backup_') && f.endsWith('.db'))
+        .sort()
+        .reverse();
+      for (const b of backups) candidates.push(path.join(dir, b));
+    } catch {}
+
+    let loaded = false;
+    for (const candidate of candidates) {
+      try {
+        const buffer = fs.readFileSync(candidate);
+        const testDb = new SQL.Database(buffer);
+        // Integrity check — will throw if corrupted
+        const result = testDb.exec('PRAGMA integrity_check');
+        const status = result[0]?.values[0]?.[0];
+        if (status !== 'ok') {
+          console.error(`[db] Integrity check failed for ${candidate}: ${status}`);
+          testDb.close();
+          continue;
+        }
+        this.sqlDb = testDb;
+        loaded = true;
+        if (candidate !== dbPath) {
+          console.warn(`[db] Main DB corrupted — restored from backup: ${candidate}`);
+          // Save restored DB as the main file
+          this.saveToDisk();
+        }
+        console.log(`[db] Loaded database from ${candidate}`);
+        break;
+      } catch (err: any) {
+        console.error(`[db] Failed to load ${candidate}: ${err.message}`);
+      }
+    }
+
+    if (!loaded) {
+      console.warn('[db] No valid database found — starting with empty database');
       this.sqlDb = new SQL.Database();
     }
+
     // Enable foreign keys
     this.sqlDb.run('PRAGMA foreign_keys = ON;');
   }
@@ -37,9 +78,14 @@ class DatabaseWrapper {
     try {
       const data = this.sqlDb.export();
       const buffer = Buffer.from(data);
-      fs.writeFileSync(dbPath, buffer);
+      // Write to temp file first, then rename — atomic swap prevents corruption on ENOSPC
+      const tmpPath = dbPath + '.tmp';
+      fs.writeFileSync(tmpPath, buffer);
+      fs.renameSync(tmpPath, dbPath);
     } catch (err: any) {
       console.error(`[db] Save to disk failed (${err.code || err.message})`);
+      // Clean up partial temp file if it exists
+      try { fs.unlinkSync(dbPath + '.tmp'); } catch {}
     }
   }
 
