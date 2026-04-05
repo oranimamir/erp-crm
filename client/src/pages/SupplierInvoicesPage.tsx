@@ -7,7 +7,7 @@ import { useToast } from '../contexts/ToastContext';
 import {
   Trash2, FileSpreadsheet, Filter, X, ChevronUp, ChevronDown,
   Eye, AlertTriangle, Clock, ChevronLeft, Upload, Loader2,
-  Pencil, Check, Plus, UserPlus,
+  Pencil, Check, Plus, UserPlus, Flag, ChevronRight,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDate } from '../lib/dates';
@@ -41,7 +41,7 @@ const SUPPLIER_COLORS = [
 interface Invoice {
   id: number; invoice_id: string; issue_date: string; supplier: string;
   category: string; domain: string; amount: number; vat_amount: number; currency: string;
-  month: string; xml_filename: string; duplicate_warning: number; created_at: string;
+  month: string; xml_filename: string; duplicate_warning: number; flagged: number; created_at: string;
 }
 
 interface Batch {
@@ -422,6 +422,7 @@ export default function SupplierInvoicesPage() {
   const [filterMonth, setFilterMonth] = useState('');
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
+  const [filterFlagged, setFilterFlagged] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
 
   // Sort
@@ -446,6 +447,9 @@ export default function SupplierInvoicesPage() {
   const [dateOverrides, setDateOverrides] = useState<Record<string, string>>({});
   const [previewingUnknown, setPreviewingUnknown] = useState<string | null>(null);
   const [skipIds, setSkipIds] = useState<string[]>([]);
+  const [reviewedIds, setReviewedIds] = useState<Set<string>>(new Set());
+  const [showReviewed, setShowReviewed] = useState(false);
+  const [flagOverrides, setFlagOverrides] = useState<Record<string, boolean>>({});
 
   // ZIP upload note
   const [zipNote, setZipNote] = useState('');
@@ -501,8 +505,9 @@ export default function SupplierInvoicesPage() {
     if (filterMonth) params.month = filterMonth;
     if (filterDateFrom) params.date_from = filterDateFrom;
     if (filterDateTo) params.date_to = filterDateTo;
+    if (filterFlagged) params.flagged = '1';
     return params;
-  }, [activeTab, search, filterCategories, filterSuppliers, filterMonth, filterDateFrom, filterDateTo]);
+  }, [activeTab, search, filterCategories, filterSuppliers, filterMonth, filterDateFrom, filterDateTo, filterFlagged]);
 
   const fetchMonthlySummary = useCallback(async () => {
     try {
@@ -793,11 +798,12 @@ export default function SupplierInvoicesPage() {
         }
       }
 
-      // Apply amount/date overrides to _fullData before sending
+      // Apply amount/date/flag overrides to _fullData before sending
       const patchedData = upload._fullData.map((inv: any) => {
         const patched = { ...inv };
         if (amountOverrides[inv.invoiceId] !== undefined) patched.amount = amountOverrides[inv.invoiceId];
         if (dateOverrides[inv.invoiceId]) patched.issueDate = dateOverrides[inv.invoiceId];
+        if (flagOverrides[inv.invoiceId]) patched.flagged = true;
         return patched;
       });
 
@@ -847,6 +853,9 @@ export default function SupplierInvoicesPage() {
       setDateOverrides({});
       setSkipIds([]);
       setZipNote('');
+      setReviewedIds(new Set());
+      setShowReviewed(false);
+      setFlagOverrides({});
       fetchAll();
     } catch (err: any) {
       console.error('[ZIP import] Error:', err?.response?.data || err);
@@ -927,7 +936,7 @@ export default function SupplierInvoicesPage() {
   }, [summary]);
 
   const grandTotal = summary?.by_category.reduce((s, c) => s + c.total, 0) || 0;
-  const hasFilters = search !== '' || filterCategories.length > 0 || filterSuppliers.length > 0 || filterMonth || filterDateFrom || filterDateTo;
+  const hasFilters = search !== '' || filterCategories.length > 0 || filterSuppliers.length > 0 || filterMonth || filterDateFrom || filterDateTo || filterFlagged;
 
   const clearFilters = () => {
     setSearch('');
@@ -936,6 +945,7 @@ export default function SupplierInvoicesPage() {
     setFilterMonth('');
     setFilterDateFrom('');
     setFilterDateTo('');
+    setFilterFlagged(false);
   };
 
   // Filtered summary data for search on Summary tab
@@ -1089,6 +1099,14 @@ export default function SupplierInvoicesPage() {
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Date To</label>
                 <input type="date" value={filterDateTo} onChange={e => setFilterDateTo(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Flagged</label>
+                <button onClick={() => setFilterFlagged(!filterFlagged)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border transition-colors ${filterFlagged ? 'bg-amber-50 border-amber-300 text-amber-700' : 'border-gray-300 text-gray-500 hover:bg-gray-50'}`}>
+                  <Flag size={14} className={filterFlagged ? 'fill-amber-500' : ''} />
+                  {filterFlagged ? 'Showing flagged' : 'All'}
+                </button>
               </div>
               {hasFilters && (
                 <button onClick={clearFilters} className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 px-2 py-1.5">
@@ -1553,6 +1571,7 @@ export default function SupplierInvoicesPage() {
                             <td className="px-4 py-3">
                               <button onClick={() => setViewingInvoice(inv.id)} className="text-primary-600 hover:text-primary-800 font-medium flex items-center gap-1">
                                 {inv.duplicate_warning ? <AlertTriangle size={14} className="text-amber-500" /> : null}
+                                {inv.flagged ? <Flag size={12} className="text-amber-500 fill-amber-500" /> : null}
                                 {inv.invoice_id}
                               </button>
                             </td>
@@ -1634,6 +1653,15 @@ export default function SupplierInvoicesPage() {
                                         className="text-gray-400 hover:text-primary-600 transition-colors" title="Edit invoice">
                                         <Pencil size={14} />
                                       </button>
+                                    <button onClick={async () => {
+                                      try {
+                                        await api.patch(`/demo-expenses/invoices/${inv.id}/flag`, { flagged: !inv.flagged });
+                                        fetchAll();
+                                      } catch { addToast('Failed to update flag', 'error'); }
+                                    }} className={`transition-colors ${inv.flagged ? 'text-amber-500 hover:text-amber-600' : 'text-gray-400 hover:text-amber-500'}`}
+                                      title={inv.flagged ? 'Remove flag' : 'Flag for later'}>
+                                      <Flag size={14} className={inv.flagged ? 'fill-amber-500' : ''} />
+                                    </button>
                                     <button onClick={() => setViewingInvoice(inv.id)} className="text-gray-400 hover:text-primary-600 transition-colors" title="View invoice">
                                       <Eye size={16} />
                                     </button>
@@ -1721,9 +1749,33 @@ export default function SupplierInvoicesPage() {
                 Review each invoice, correct the supplier name if needed, and classify into <strong>Demo Expenses</strong> or <strong>Sales Activities</strong>.
                 {(pendingUpload.warnings?.length > 0) && <span className="text-amber-600 font-medium"> Some invoices need attention — check the warning badges below.</span>}
               </p>
+              {reviewedIds.size > 0 && (
+                <div className="flex items-center gap-3 mt-2">
+                  <span className="text-xs text-green-600 font-medium">{reviewedIds.size} reviewed</span>
+                  <button onClick={() => setShowReviewed(!showReviewed)}
+                    className="text-xs text-primary-600 hover:underline">
+                    {showReviewed ? 'Hide reviewed' : 'Show reviewed'}
+                  </button>
+                </div>
+              )}
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
               {pendingUpload.unknownSuppliers.map((u: any) => {
+                const isReviewed = reviewedIds.has(u.invoiceId);
+                if (isReviewed && !showReviewed) {
+                  return (
+                    <div key={u.supplier} className="border border-green-200 bg-green-50 rounded-lg px-4 py-2 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Check size={14} className="text-green-500" />
+                        <span className="text-sm text-green-700 font-medium">{u.invoiceId || 'no ID'}</span>
+                        <span className="text-xs text-green-600">— Reviewed</span>
+                        {flagOverrides[u.invoiceId] && <Flag size={12} className="text-amber-500 fill-amber-500" />}
+                      </div>
+                      <button onClick={() => setReviewedIds(prev => { const next = new Set(prev); next.delete(u.invoiceId); return next; })}
+                        className="text-xs text-gray-500 hover:text-gray-700">Undo</button>
+                    </div>
+                  );
+                }
                 const a = unknownAssignments[u.supplier] || { domain: 'demo', category: 'Other', remember: false };
                 const cats = a.domain === 'sales' ? salesCategories : demoCategories;
                 const isPreviewing = previewingUnknown === u.supplier;
@@ -1889,6 +1941,23 @@ export default function SupplierInvoicesPage() {
                           className="rounded border-gray-300" />
                         Remember this supplier for future uploads
                       </label>
+                      <div className="flex items-center gap-2 mt-3">
+                        <button
+                          onClick={() => setFlagOverrides(prev => ({ ...prev, [u.invoiceId]: !prev[u.invoiceId] }))}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${flagOverrides[u.invoiceId] ? 'bg-amber-50 border-amber-300 text-amber-700' : 'border-gray-300 text-gray-500 hover:bg-gray-50'}`}
+                          title={flagOverrides[u.invoiceId] ? 'Remove flag' : 'Flag for later review'}
+                        >
+                          <Flag size={12} className={flagOverrides[u.invoiceId] ? 'fill-amber-500' : ''} />
+                          {flagOverrides[u.invoiceId] ? 'Flagged' : 'Flag for later'}
+                        </button>
+                        <button
+                          onClick={() => setReviewedIds(prev => { const next = new Set(prev); next.add(u.invoiceId); return next; })}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-green-300 text-green-700 bg-green-50 hover:bg-green-100 transition-colors"
+                        >
+                          <Check size={12} />
+                          Mark as reviewed
+                        </button>
+                      </div>
                     </div>
 
                     {/* Invoice preview */}

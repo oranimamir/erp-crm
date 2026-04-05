@@ -467,65 +467,105 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
     invoiceId = fileBaseName;
   }
 
-  // ─── DATE ────────────────────────────────────────────────────────────
+  // ─── DATE ──────────────────────────────��─────────────────────────────
   let issueDate = '';
-  // Date keyword pattern (Dutch: datum, factuurdatum; French: date de facture; English: invoice date)
+  // Due-date keywords to EXCLUDE (Dutch, French, English)
+  const dueDateKw = /(?:vervaldatum|vervaldag|vervaldag|échéance|date\s*d['']?échéance|due\s*date|payment\s*date|betaaldatum|uiterste\s*betaaldatum)/i;
+  // Invoice-date keywords (prefer these matches)
   const dateKw = /(?:invoice\s*date|factuurdatum|datum\s*factuur|date\s*(?:de\s*)?facture|datum|date)/i;
-  // Try near date-related keywords first — numeric formats
-  const dateKwPatterns = [
-    new RegExp(dateKw.source + '[\\s.:]*' + '(\\d{1,2}[\\/.\\-]\\d{1,2}[\\/.\\-]\\d{4})', 'i'),
-    new RegExp(dateKw.source + '[\\s.:]*' + '(\\d{4}[\\-\\/]\\d{1,2}[\\-\\/]\\d{1,2})', 'i'),
-  ];
-  for (const pat of dateKwPatterns) {
-    const m = text.match(pat);
-    if (m) {
-      const d = parseDateToISO(m[1]);
+
+  // Helper: check if a match position is near a due-date keyword (within 60 chars before)
+  const isNearDueDate = (fullText: string, matchIndex: number): boolean => {
+    const preceding = fullText.substring(Math.max(0, matchIndex - 60), matchIndex);
+    return dueDateKw.test(preceding);
+  };
+
+  // Strategy 1: keyword-anchored line search — look for date keyword lines, extract date from same/next line
+  for (let i = 0; i < lines.length && !issueDate; i++) {
+    const line = lines[i];
+    if (!dateKw.test(line)) continue;
+    if (dueDateKw.test(line)) continue; // skip due-date lines
+
+    // Search this line and the next line for a date
+    const searchText = line + (lines[i + 1] ? ' ' + lines[i + 1] : '');
+
+    // Try numeric formats: DD/MM/YYYY, DD.MM.YYYY, DD-MM-YYYY
+    const numDate = searchText.match(/(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})/);
+    if (numDate) {
+      const d = parseDateToISO(numDate[0]);
+      if (d) { issueDate = d; break; }
+    }
+    // Try YYYY-MM-DD
+    const isoMatch = searchText.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (isoMatch) { issueDate = isoMatch[0]; break; }
+    // Try month name: "15 mrt 2026", "3 februari 2026"
+    const monthNameMatch = searchText.match(/(\d{1,2})[\s\-./]+([a-zA-Zéû.]+)[\s\-./]+(\d{4})/);
+    if (monthNameMatch) {
+      const d = parseDateToISO(monthNameMatch[0]);
+      if (d) { issueDate = d; break; }
+    }
+    // Try "Month DD, YYYY": "March 15, 2026"
+    const monthFirstMatch = searchText.match(/([a-zA-Zéû.]+)\s+(\d{1,2}),?\s+(\d{4})/);
+    if (monthFirstMatch) {
+      const d = parseDateToISO(monthFirstMatch[0]);
       if (d) { issueDate = d; break; }
     }
   }
-  // Try keyword + month name format: "Datum: 15 mrt 2026", "Factuurdatum 3 februari 2026", "Date: March 15, 2026"
+
+  // Strategy 2: regex scan of full text with keyword proximity
   if (!issueDate) {
-    const monthNameKw = new RegExp(
-      dateKw.source + '[\\s.:]*' + '(\\d{1,2}[\\s\\-./]+[a-zA-Zéû.]+[\\s\\-./]+\\d{4})',
-      'i'
-    );
-    const m = text.match(monthNameKw);
-    if (m) {
-      const d = parseDateToISO(m[1]);
-      if (d) issueDate = d;
+    const dateKwPatterns = [
+      new RegExp(dateKw.source + '[\\s.:]*' + '(\\d{1,2}[\\/.\\-]\\d{1,2}[\\/.\\-]\\d{4})', 'gi'),
+      new RegExp(dateKw.source + '[\\s.:]*' + '(\\d{4}[\\-\\/]\\d{1,2}[\\-\\/]\\d{1,2})', 'gi'),
+      new RegExp(dateKw.source + '[\\s.:]*' + '(\\d{1,2}[\\s\\-./]+[a-zA-Zéû.]+[\\s\\-./]+\\d{4})', 'gi'),
+      new RegExp(dateKw.source + '[\\s.:]*' + '([a-zA-Zéû.]+\\s+\\d{1,2},?\\s+\\d{4})', 'gi'),
+    ];
+    for (const pat of dateKwPatterns) {
+      let m;
+      while ((m = pat.exec(text)) !== null) {
+        if (isNearDueDate(text, m.index)) continue;
+        const dateStr = m[m.length - 1]; // last capture group is the date
+        const d = parseDateToISO(dateStr);
+        if (d) { issueDate = d; break; }
+      }
+      if (issueDate) break;
     }
   }
-  // Also try "Month DD, YYYY" format near keywords
-  if (!issueDate) {
-    const monthFirstKw = new RegExp(
-      dateKw.source + '[\\s.:]*' + '([a-zA-Zéû.]+\\s+\\d{1,2},?\\s+\\d{4})',
-      'i'
-    );
-    const m = text.match(monthFirstKw);
-    if (m) {
-      const d = parseDateToISO(m[1]);
-      if (d) issueDate = d;
-    }
-  }
-  // Fallback: any date in the first ~30 lines
+
+  // Strategy 3: Fallback — scan first ~30 lines for any date, excluding due-date proximity
   if (!issueDate) {
     const topText = lines.slice(0, 30).join('\n');
-    // Numeric dates
-    const anyDate = topText.match(/(\d{1,2}[\/.]\d{1,2}[\/.]\d{4})/);
-    if (anyDate) {
-      const d = parseDateToISO(anyDate[1]);
-      if (d) issueDate = d;
+    // Numeric dates: DD/MM/YYYY, DD.MM.YYYY, DD-MM-YYYY
+    const numericDateRe = /\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{4}/g;
+    let match;
+    while ((match = numericDateRe.exec(topText)) !== null) {
+      if (isNearDueDate(topText, match.index)) continue;
+      const d = parseDateToISO(match[0]);
+      if (d) { issueDate = d; break; }
     }
+    // YYYY-MM-DD
     if (!issueDate) {
-      const isoDate = topText.match(/(\d{4}-\d{2}-\d{2})/);
-      if (isoDate) issueDate = isoDate[1];
+      const isoRe = /\d{4}-\d{2}-\d{2}/g;
+      while ((match = isoRe.exec(topText)) !== null) {
+        if (isNearDueDate(topText, match.index)) continue;
+        issueDate = match[0]; break;
+      }
+    }
+    // YYYYMMDD compact format (e.g. 20260315)
+    if (!issueDate) {
+      const compactRe = /\b(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\b/g;
+      while ((match = compactRe.exec(topText)) !== null) {
+        if (isNearDueDate(topText, match.index)) continue;
+        issueDate = `${match[1]}-${match[2]}-${match[3]}`; break;
+      }
     }
     // Month name dates: "15 mrt 2026", "3 februari 2026"
     if (!issueDate) {
-      const monthNameDate = topText.match(/(\d{1,2}[\s\-./]+(?:jan(?:uari)?|feb(?:ruari)?|mrt|maart|apr(?:il)?|mei|jun[i]?|jul[i]?|aug(?:ustus)?|sep(?:t(?:ember)?)?|okt(?:ober)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|january|february|march|may|june|july|august|october)\.?[\s\-./]+\d{4})/i);
-      if (monthNameDate) {
-        const d = parseDateToISO(monthNameDate[1]);
-        if (d) issueDate = d;
+      const monthNameRe = /(\d{1,2})[\s\-./]+(?:jan(?:uari)?|feb(?:ruari)?|mrt|maart|apr(?:il)?|mei|jun[i]?|jul[i]?|aug(?:ustus)?|sep(?:t(?:ember)?)?|okt(?:ober)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|january|february|march|may|june|july|august|october)\.?[\s\-./]+(\d{4})/gi;
+      while ((match = monthNameRe.exec(topText)) !== null) {
+        if (isNearDueDate(topText, match.index)) continue;
+        const d = parseDateToISO(match[0]);
+        if (d) { issueDate = d; break; }
       }
     }
   }
@@ -1292,8 +1332,8 @@ router.post('/confirm-import', (req: Request, res: Response) => {
 
       const results: any[] = [];
       const insertInv = db.prepare(`
-        INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, line_items, embedded_pdf, pdf_filename, xml_filename, duplicate_warning)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, line_items, embedded_pdf, pdf_filename, xml_filename, duplicate_warning, flagged)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       for (const [domain, domainInvoices] of Object.entries(byDomain)) {
@@ -1312,7 +1352,7 @@ router.post('/confirm-import', (req: Request, res: Response) => {
             batchId, inv.invoiceId, inv.issueDate, inv.supplier, inv.category, domain,
             inv.amount, inv.vatAmount || 0, inv.currency || 'EUR', invMonth,
             inv.lineItems || '[]', inv.embeddedPdf || null, inv.pdfFilename || null,
-            inv.xmlFilename || null, isDuplicateIncluded ? 1 : 0,
+            inv.xmlFilename || null, isDuplicateIncluded ? 1 : 0, inv.flagged ? 1 : 0,
           );
         }
 
@@ -1428,8 +1468,8 @@ router.get('/reconciliation', (_req: Request, res: Response) => {
 
 router.get('/invoices', (req: Request, res: Response) => {
   try {
-    const { domain, categories, suppliers, month, date_from, date_to, sort_by, sort_dir, search } = req.query;
-    let sql = 'SELECT id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, xml_filename, duplicate_warning, created_at FROM demo_invoices WHERE 1=1';
+    const { domain, categories, suppliers, month, date_from, date_to, sort_by, sort_dir, search, flagged } = req.query;
+    let sql = 'SELECT id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, xml_filename, duplicate_warning, flagged, created_at FROM demo_invoices WHERE 1=1';
     const params: any[] = [];
 
     if (search) {
@@ -1451,6 +1491,7 @@ router.get('/invoices', (req: Request, res: Response) => {
     if (month) { sql += ' AND month = ?'; params.push(month); }
     if (date_from) { sql += ' AND issue_date >= ?'; params.push(date_from); }
     if (date_to) { sql += ' AND issue_date <= ?'; params.push(date_to); }
+    if (flagged === '1') { sql += ' AND flagged = 1'; }
 
     const validSortCols = ['invoice_id', 'issue_date', 'supplier', 'category', 'domain', 'amount', 'month', 'created_at'];
     const sortCol = validSortCols.includes(sort_by as string) ? sort_by : 'issue_date';
@@ -1944,6 +1985,19 @@ router.patch('/invoices/:id/date', (req: Request, res: Response) => {
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to update date' });
+  }
+});
+
+router.patch('/invoices/:id/flag', (req: Request, res: Response) => {
+  try {
+    const { flagged } = req.body;
+    const inv = db.prepare('SELECT id FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
+    if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
+    db.prepare('UPDATE demo_invoices SET flagged = ? WHERE id = ?').run(flagged ? 1 : 0, req.params.id);
+    db.saveToDisk();
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to update flag' });
   }
 });
 

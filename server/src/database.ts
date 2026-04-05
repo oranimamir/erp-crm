@@ -1020,6 +1020,7 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE demo_supplier_mappings ADD COLUMN display_name TEXT NOT NULL DEFAULT ''`); } catch (_) {}
   try { db.exec(`ALTER TABLE demo_upload_batches ADD COLUMN note TEXT NOT NULL DEFAULT ''`); } catch (_) {}
   try { db.exec(`ALTER TABLE demo_upload_batches ADD COLUMN uploaded_by_name TEXT NOT NULL DEFAULT ''`); } catch (_) {}
+  try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN flagged INTEGER DEFAULT 0`); } catch (_) {}
 
   // Custom categories table
   db.exec(`
