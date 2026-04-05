@@ -1008,7 +1008,8 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
         lineItems: inv.lineItems,
         embeddedPdf: inv.embeddedPdf || null,
       }));
-    const uniqueUnknowns = [...new Map(unknownSuppliers.map(u => [u.supplier.toLowerCase(), u])).values()];
+    // Show ALL unknown invoices (not just unique-per-supplier) so user reviews each one
+    const uniqueUnknowns = [...new Map(unknownSuppliers.map(u => [u.invoiceId, u])).values()];
 
     // --- Duplicate detection against existing DB invoices ---
     // An invoice is a duplicate if: same invoice_id, OR same supplier+amount+date
@@ -1096,18 +1097,18 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     // Separate own-company invoices so we can report them to the user
     const ownCompanyInvoices = classified.filter(inv => isOwnCompany(inv.supplierName));
 
-    // Auto-exclude duplicates but KEEP own-company invoices (flagged for user review)
-    const newInvoices = classified.filter(inv =>
-      !duplicateInvoiceIds.has(inv.invoiceId)
-    );
+    // ALL invoices go through (including duplicates) — duplicates are flagged for user review
+    // The user can choose to skip or force-import each one
+    const allInvoices = classified;
 
-    // Flag invoices that need user attention (amount=0, fallback date, unknown supplier, own-company, bad dates)
+    // Flag invoices that need user attention (amount=0, fallback date, unknown supplier, own-company, bad dates, duplicates)
     const today = new Date().toISOString().substring(0, 10);
     const currentYear = new Date().getFullYear();
     const warnings: { invoiceId: string; supplier: string; issues: string[] }[] = [];
-    for (const inv of newInvoices) {
+    for (const inv of allInvoices) {
       const issues: string[] = [];
       if (isOwnCompany(inv.supplierName)) issues.push('own_company');
+      if (duplicateInvoiceIds.has(inv.invoiceId)) issues.push('duplicate');
       if (inv.amount === 0) issues.push('amount_zero');
       if (!inv.issueDate || inv.issueDate === today) issues.push('date_uncertain');
       // Date sanity checks
@@ -1132,10 +1133,11 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     const pairedCount = parsed.filter(inv => inv.xmlFilename && inv.embeddedPdf).length;
     const existingDbCount = (db.prepare('SELECT COUNT(*) as cnt FROM demo_invoices').get() as any).cnt;
 
-    console.log(`[upload-zip] Summary: ${allFileNames.length} files (${xmlFiles.length} XML + ${pdfFiles.size} PDF, ${failedFiles.length} failed) → ${parsed.length} parsed (${pairedCount} paired, ${xmlOnlyCount} XML-only, ${pdfOnlyCount} PDF-only) → ${deduped.length} after in-ZIP dedup → ${newInvoices.length} new (${duplicates.length} DB duplicates, ${inZipDuplicateCount} in-ZIP duplicates, ${ownCompanyInvoices.length} own-company excluded, ${warnings.length} with warnings). DB has ${existingDbCount} invoices.`);
+    const nonDuplicateCount = allInvoices.filter(inv => !duplicateInvoiceIds.has(inv.invoiceId)).length;
+    console.log(`[upload-zip] Summary: ${allFileNames.length} files (${xmlFiles.length} XML + ${pdfFiles.size} PDF, ${failedFiles.length} failed) → ${parsed.length} parsed (${pairedCount} paired, ${xmlOnlyCount} XML-only, ${pdfOnlyCount} PDF-only) → ${deduped.length} after in-ZIP dedup → ${nonDuplicateCount} new + ${duplicates.length} duplicates (${inZipDuplicateCount} in-ZIP duplicates, ${ownCompanyInvoices.length} own-company, ${warnings.length} with warnings). DB has ${existingDbCount} invoices.`);
 
     res.json({
-      parsed: newInvoices.map(inv => ({
+      parsed: allInvoices.map(inv => ({
         invoiceId: inv.invoiceId,
         issueDate: inv.issueDate,
         supplier: inv.supplierName,
@@ -1150,7 +1152,7 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
         isAcerta: inv.isAcerta,
       })),
       inferredMonth,
-      unknownSuppliers: uniqueUnknowns.filter(u => !duplicateInvoiceIds.has(u.invoiceId)),
+      unknownSuppliers: uniqueUnknowns,
       duplicates,
       duplicatesSkipped: duplicates.length,
       inZipDuplicatesRemoved: inZipDuplicateCount,
@@ -1181,10 +1183,10 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
         warningsCount: warnings.length,
         failedToParse: failedFiles.length,
         failedFiles: failedFiles,
-        readyToImport: newInvoices.length,
+        readyToImport: nonDuplicateCount,
         existingDbTotal: existingDbCount,
       },
-      _fullData: newInvoices.map(inv => ({
+      _fullData: allInvoices.map(inv => ({
         invoiceId: inv.invoiceId,
         issueDate: inv.issueDate,
         supplier: inv.supplierName,

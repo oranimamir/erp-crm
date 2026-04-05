@@ -692,7 +692,7 @@ export default function SupplierInvoicesPage() {
         }
       }
       if (res.data.duplicatesSkipped > 0) {
-        addToast(`${res.data.duplicatesSkipped} duplicate invoice(s) already in the system — skipped automatically`, 'info');
+        addToast(`${res.data.duplicatesSkipped} duplicate invoice(s) found — marked for skip, you can un-skip in review`, 'info');
       }
       if (res.data.inZipDuplicatesRemoved > 0) {
         addToast(`${res.data.inZipDuplicatesRemoved} duplicate(s) within the ZIP removed`, 'info');
@@ -702,7 +702,9 @@ export default function SupplierInvoicesPage() {
         const badDate = res.data.warnings.filter((w: any) => w.issues.includes('date_uncertain')).length;
         const badSupplier = res.data.warnings.filter((w: any) => w.issues.includes('supplier_uncertain')).length;
         const ownCompany = res.data.warnings.filter((w: any) => w.issues.includes('own_company')).length;
+        const dupCount = res.data.warnings.filter((w: any) => w.issues.includes('duplicate')).length;
         const parts: string[] = [];
+        if (dupCount > 0) parts.push(`${dupCount} duplicate(s) auto-skipped`);
         if (zeroAmt > 0) parts.push(`${zeroAmt} with amount €0`);
         if (badDate > 0) parts.push(`${badDate} with uncertain date`);
         if (badSupplier > 0) parts.push(`${badSupplier} with unrecognised supplier`);
@@ -760,11 +762,11 @@ export default function SupplierInvoicesPage() {
             remember: false,
           }];
         })));
-        // Auto-skip own-company invoices by default (user can un-skip by correcting supplier name)
-        const ownCompanyIds = (res.data.warnings || [])
-          .filter((w: any) => w.issues.includes('own_company'))
+        // Auto-skip own-company and duplicate invoices by default (user can un-skip)
+        const autoSkipIds = (res.data.warnings || [])
+          .filter((w: any) => w.issues.includes('own_company') || w.issues.includes('duplicate'))
           .map((w: any) => w.invoiceId);
-        if (ownCompanyIds.length > 0) setSkipIds(ownCompanyIds);
+        if (autoSkipIds.length > 0) setSkipIds(autoSkipIds);
         setShowUnknownModal(true);
       } else if (res.data.existingDemoBatch || res.data.existingSalesBatch) {
         setShowMonthConflict(true);
@@ -1801,6 +1803,7 @@ export default function SupplierInvoicesPage() {
                             )}
                             {w.issues.includes('amount_zero') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Amount is €0 — please verify</span>}
                             {w.issues.includes('date_uncertain') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Date could not be read — please verify</span>}
+                            {w.issues.includes('duplicate') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">Duplicate — already in system (auto-skipped, click "Do not upload" to undo)</span>}
                             {w.issues.includes('date_future') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Date is in the future — please correct</span>}
                             {w.issues.includes('date_illogical') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Date looks wrong (illogical year) — please correct</span>}
                             {w.issues.includes('supplier_uncertain') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Supplier not recognised — please verify</span>}
