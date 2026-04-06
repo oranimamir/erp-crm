@@ -457,6 +457,12 @@ export default function SupplierInvoicesPage() {
   const [selectedForDelete, setSelectedForDelete] = useState<Set<number>>(new Set());
   const [deletingDuplicates, setDeletingDuplicates] = useState(false);
 
+  // VAT audit
+  const [runningVatAudit, setRunningVatAudit] = useState(false);
+  const [vatIssues, setVatIssues] = useState<any[] | null>(null);
+  const [showVatModal, setShowVatModal] = useState(false);
+  const [fixingVat, setFixingVat] = useState(false);
+
   // ZIP upload note
   const [zipNote, setZipNote] = useState('');
   const [showZipNoteModal, setShowZipNoteModal] = useState(false);
@@ -944,6 +950,40 @@ export default function SupplierInvoicesPage() {
     });
   };
 
+  // ─── VAT AUDIT ─────────────────────────────────────────────────────────────
+  const handleVatAudit = async () => {
+    setRunningVatAudit(true);
+    try {
+      const res = await api.get('/demo-expenses/vat-audit');
+      if (res.data.issuesFound === 0) {
+        addToast(`VAT audit complete — no issues found (${res.data.totalInvoices} invoices checked)`, 'success');
+      } else {
+        setVatIssues(res.data.issues);
+        setShowVatModal(true);
+      }
+    } catch {
+      addToast('Failed to run VAT audit', 'error');
+    } finally {
+      setRunningVatAudit(false);
+    }
+  };
+
+  const handleFixVat = async (id: number, newVat: number) => {
+    setFixingVat(true);
+    try {
+      await api.patch(`/demo-expenses/invoices/${id}/vat`, { vat_amount: newVat });
+      addToast('VAT updated', 'success');
+      // Remove from issues list
+      setVatIssues(prev => prev ? prev.filter(i => i.id !== id) : null);
+      if (vatIssues && vatIssues.length <= 1) setShowVatModal(false);
+      fetchAll();
+    } catch {
+      addToast('Failed to update VAT', 'error');
+    } finally {
+      setFixingVat(false);
+    }
+  };
+
   // ─── SINGLE UPLOAD HANDLERS ────────────────────────────────────────────────
 
   const handleSingleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1206,6 +1246,10 @@ export default function SupplierInvoicesPage() {
               <Button variant="secondary" onClick={handleCheckDuplicates} disabled={checkingDuplicates}>
                 {checkingDuplicates ? <Loader2 size={16} className="animate-spin" /> : <AlertTriangle size={16} />}
                 {checkingDuplicates ? 'Scanning...' : 'Check Duplicates'}
+              </Button>
+              <Button variant="secondary" onClick={handleVatAudit} disabled={runningVatAudit}>
+                {runningVatAudit ? <Loader2 size={16} className="animate-spin" /> : <FileSpreadsheet size={16} />}
+                {runningVatAudit ? 'Auditing...' : 'VAT Audit'}
               </Button>
             </div>
 
@@ -2081,6 +2125,84 @@ export default function SupplierInvoicesPage() {
         </div>
       )}
 
+
+      {/* VAT Audit Modal */}
+      {showVatModal && vatIssues && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-5xl w-full mx-4 max-h-[90vh] flex flex-col">
+            <div className="p-6 border-b flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">VAT Audit Results</h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  Found {vatIssues.length} invoice(s) with potential VAT issues. Review and fix as needed.
+                </p>
+              </div>
+              <button onClick={() => setShowVatModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-gray-50">
+                  <tr className="border-b">
+                    <th className="text-left px-4 py-3 font-medium text-gray-600">Invoice ID</th>
+                    <th className="text-left px-4 py-3 font-medium text-gray-600">Supplier</th>
+                    <th className="text-center px-4 py-3 font-medium text-gray-600">Country</th>
+                    <th className="text-right px-4 py-3 font-medium text-gray-600">Amount</th>
+                    <th className="text-right px-4 py-3 font-medium text-gray-600">Current VAT</th>
+                    <th className="text-right px-4 py-3 font-medium text-gray-600">Suggested</th>
+                    <th className="text-left px-4 py-3 font-medium text-gray-600">Issue</th>
+                    <th className="text-right px-4 py-3 font-medium text-gray-600">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {vatIssues.map((issue: any) => (
+                    <tr key={issue.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3 font-medium text-gray-900">{issue.invoice_id}</td>
+                      <td className="px-4 py-3 text-gray-600">{issue.supplier}</td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                          issue.country === 'BE' ? 'bg-yellow-100 text-yellow-700' : 'bg-blue-100 text-blue-700'
+                        }`}>
+                          {issue.country || '??'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right font-medium">
+                        {issue.currency === 'GBP' ? '\u00A3' : issue.currency === 'USD' ? '$' : '\u20AC'}
+                        {issue.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td className={`px-4 py-3 text-right font-medium ${issue.suggested_vat === 0 && issue.current_vat > 0 ? 'text-red-600' : ''}`}>
+                        {issue.current_vat.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td className="px-4 py-3 text-right font-medium text-green-600">
+                        {issue.suggested_vat != null ? issue.suggested_vat.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-xs text-gray-500 max-w-xs">{issue.issue}</td>
+                      <td className="px-4 py-3 text-right">
+                        {issue.suggested_vat != null && (
+                          <button
+                            onClick={() => handleFixVat(issue.id, issue.suggested_vat)}
+                            disabled={fixingVat}
+                            className="px-3 py-1 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium disabled:opacity-50"
+                          >
+                            {fixingVat ? '...' : issue.suggested_vat === 0 ? 'Set to 0' : 'Apply'}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="p-4 border-t flex items-center justify-between">
+              <span className="text-sm text-gray-500">{vatIssues.length} issue(s) remaining</span>
+              <button onClick={() => setShowVatModal(false)} className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50">
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Duplicate Check Modal */}
       {showDuplicateModal && duplicateGroups && (

@@ -2183,6 +2183,29 @@ router.patch('/invoices/:id/flag', (req: Request, res: Response) => {
   }
 });
 
+router.patch('/invoices/:id/vat', (req: Request, res: Response) => {
+  try {
+    const { vat_amount } = req.body;
+    if (vat_amount == null) { res.status(400).json({ error: 'vat_amount required' }); return; }
+    const inv = db.prepare('SELECT id, invoice_id, supplier FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
+    if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
+    const newVat = Number(vat_amount);
+    if (isNaN(newVat) || newVat < 0) { res.status(400).json({ error: 'Invalid vat_amount' }); return; }
+    db.prepare('UPDATE demo_invoices SET vat_amount = ? WHERE id = ?').run(newVat, req.params.id);
+    db.saveToDisk();
+    notifyAdmin({
+      entity: 'Supplier Invoice',
+      action: 'updated',
+      label: `VAT updated to ${newVat} for ${inv.invoice_id} (${inv.supplier})`,
+      performedBy: (req as any).user?.display_name || 'Unknown',
+      performedById: (req as any).user?.userId,
+    });
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to update VAT' });
+  }
+});
+
 router.patch('/invoices/:id/domain', (req: Request, res: Response) => {
   try {
     const { domain } = req.body;
@@ -2401,6 +2424,163 @@ router.get('/check-duplicates', (_req: Request, res: Response) => {
   } catch (err: any) {
     console.error('[demo-expenses] check-duplicates error:', err);
     res.status(500).json({ error: 'Failed to check for duplicates' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VAT AUDIT — check existing invoices for VAT issues
+// ═══════════════════════════════════════════════════════════════════════════════
+router.get('/vat-audit', async (_req: Request, res: Response) => {
+  try {
+    const allInvoices = db.prepare(
+      'SELECT id, invoice_id, issue_date, supplier, amount, vat_amount, currency, domain, category, embedded_pdf, xml_filename FROM demo_invoices'
+    ).all() as any[];
+
+    const issues: {
+      id: number;
+      invoice_id: string;
+      supplier: string;
+      amount: number;
+      current_vat: number;
+      suggested_vat: number | null;
+      currency: string;
+      domain: string;
+      issue: string;
+      country: string;
+    }[] = [];
+
+    // Known non-Belgian supplier patterns (common ones from the supplier map)
+    const NON_BE_SUPPLIERS = [
+      { pattern: 'chemoxy', country: 'GB' },
+      { pattern: 'henan', country: 'CN' },
+      { pattern: 'jindan', country: 'CN' },
+      { pattern: 'seqens', country: 'FR' },
+      { pattern: 'brenntag nederland', country: 'NL' },
+      { pattern: 'caldic', country: 'NL' },
+      { pattern: 'jungbunzlauer', country: 'DE' },
+      { pattern: 'corbion', country: 'NL' },
+    ];
+
+    // Known Belgian supplier patterns
+    const BE_SUPPLIERS = [
+      'acerta', 'kbc', 'belfius', 'proximus', 'telenet', 'elia', 'engie',
+      'bpost', 'securitas', 'athlon', 'modalizy', 'lyreco', 'vanbreda',
+      'ethias', 'edenred', 'coolblue', 'bnp', 'axa', 'dhl express belgium',
+    ];
+
+    for (const inv of allInvoices) {
+      const supplierLower = inv.supplier.toLowerCase();
+      let country = '';
+
+      // Determine country from known patterns
+      for (const { pattern, country: c } of NON_BE_SUPPLIERS) {
+        if (supplierLower.includes(pattern)) { country = c; break; }
+      }
+      if (!country) {
+        for (const p of BE_SUPPLIERS) {
+          if (supplierLower.includes(p)) { country = 'BE'; break; }
+        }
+      }
+
+      // If we have XML, try to extract country from it
+      if (!country && inv.xml_filename) {
+        // Can't re-parse XML without the original file, but we can check the supplier name
+        // for common Belgian legal suffixes (BV, NV, BVBA with Belgian-sounding names)
+      }
+
+      // If we have embedded PDF, check for country indicators
+      if (!country && inv.embedded_pdf) {
+        try {
+          const pdfBuf = Buffer.from(inv.embedded_pdf, 'base64');
+          const result = await (pdfParse as any)(pdfBuf);
+          const text = result.text || '';
+
+          const beVatAll = text.match(/\bBE\s?0[\d.\s]{8,12}\b/g) || [];
+          if (beVatAll.length >= 2) {
+            country = 'BE';
+          } else if (beVatAll.length === 1) {
+            const hasNonBE = /\b(united kingdom|UK|germany|deutschland|france|nederland|netherlands|china|india|usa|ireland)\b/i.test(text);
+            if (hasNonBE) {
+              // Detect which non-BE country
+              if (/\b(United Kingdom|England)\b/i.test(text)) country = 'GB';
+              else if (/\b(Deutschland|Germany)\b/i.test(text)) country = 'DE';
+              else if (/\b(Nederland|Netherlands)\b/i.test(text)) country = 'NL';
+              else if (/\b(France)\b/i.test(text)) country = 'FR';
+              else if (/\b(China)\b/i.test(text)) country = 'CN';
+              else if (/\b(India)\b/i.test(text)) country = 'IN';
+              else if (/\b(Ireland)\b/i.test(text)) country = 'IE';
+            } else {
+              country = 'BE';
+            }
+          } else {
+            if (/\b(United Kingdom|England)\b/i.test(text)) country = 'GB';
+            else if (/\b(Deutschland|Germany)\b/i.test(text)) country = 'DE';
+            else if (/\b(Nederland|Netherlands|Pays-Bas)\b/i.test(text)) country = 'NL';
+            else if (/\b(France)\b/i.test(text)) country = 'FR';
+            else if (/\b(China|中国)\b/i.test(text)) country = 'CN';
+            else if (/\b(India)\b/i.test(text)) country = 'IN';
+          }
+        } catch { /* PDF parse failed, skip */ }
+      }
+
+      const isBelgian = country === 'BE';
+      const isNonBelgian = country !== '' && country !== 'BE';
+
+      // Issue 1: Non-Belgian supplier has VAT > 0
+      if (isNonBelgian && inv.vat_amount > 0) {
+        issues.push({
+          id: inv.id,
+          invoice_id: inv.invoice_id,
+          supplier: inv.supplier,
+          amount: inv.amount,
+          current_vat: inv.vat_amount,
+          suggested_vat: 0,
+          currency: inv.currency,
+          domain: inv.domain,
+          issue: `Non-Belgian supplier (${country}) should not charge VAT — reverse charge applies`,
+          country,
+        });
+      }
+
+      // Issue 2: Belgian supplier, has amount but 0 VAT, and amount looks like it could be 21% off
+      if (isBelgian && inv.vat_amount === 0 && inv.amount > 100) {
+        // Check if amount / 1.21 gives a round-ish number (suggesting incl. VAT total was stored)
+        const possibleExcl = inv.amount / 1.21;
+        const possibleVat = inv.amount - possibleExcl;
+        const isRoundExcl = Math.abs(possibleExcl - Math.round(possibleExcl)) < 0.5;
+        // Only flag if the amount is suspicious — exact multiples of 1.21
+        if (isRoundExcl && inv.amount > 200) {
+          issues.push({
+            id: inv.id,
+            invoice_id: inv.invoice_id,
+            supplier: inv.supplier,
+            amount: inv.amount,
+            current_vat: 0,
+            suggested_vat: Math.round(possibleVat * 100) / 100,
+            currency: inv.currency,
+            domain: inv.domain,
+            issue: `Belgian supplier with 0 VAT — amount ${inv.amount} could be incl. 21% BTW (excl. would be ${possibleExcl.toFixed(2)})`,
+            country,
+          });
+        }
+      }
+    }
+
+    // Sort: non-Belgian with VAT first (clear errors), then Belgian with 0 VAT (potential issues)
+    issues.sort((a, b) => {
+      if (a.suggested_vat === 0 && b.suggested_vat !== 0) return -1;
+      if (a.suggested_vat !== 0 && b.suggested_vat === 0) return 1;
+      return Math.abs(b.current_vat) - Math.abs(a.current_vat);
+    });
+
+    res.json({
+      totalInvoices: allInvoices.length,
+      issuesFound: issues.length,
+      issues,
+    });
+  } catch (err: any) {
+    console.error('[demo-expenses] vat-audit error:', err);
+    res.status(500).json({ error: 'Failed to run VAT audit' });
   }
 });
 
