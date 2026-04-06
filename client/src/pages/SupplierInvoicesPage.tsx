@@ -1428,6 +1428,101 @@ export default function SupplierInvoicesPage() {
                   );
                 })()}
 
+                {/* Quarterly Expenses & VAT */}
+                {(filteredMonthlySummary?.by_month || []).length > 0 && (() => {
+                  const rows = filteredMonthlySummary?.by_month || [];
+                  // Build quarter → { demo, sales, demoVat, salesVat } map
+                  const byQ: Record<string, { demo: number; sales: number; demoVat: number; salesVat: number; demoCnt: number; salesCnt: number }> = {};
+                  for (const r of rows) {
+                    if (r.month < summaryFromMonth) continue;
+                    const [y, mo] = r.month.split('-');
+                    const q = `${y}-Q${Math.ceil(parseInt(mo) / 3)}`;
+                    if (!byQ[q]) byQ[q] = { demo: 0, sales: 0, demoVat: 0, salesVat: 0, demoCnt: 0, salesCnt: 0 };
+                    if (r.domain === 'demo') { byQ[q].demo += r.total; byQ[q].demoVat += r.vat_total; byQ[q].demoCnt += r.count; }
+                    else { byQ[q].sales += r.total; byQ[q].salesVat += r.vat_total; byQ[q].salesCnt += r.count; }
+                  }
+                  const qSorted = Object.entries(byQ).sort((a, b) => a[0].localeCompare(b[0]));
+                  if (qSorted.length === 0) return null;
+                  let tDemo = 0, tSales = 0, vtDemo = 0, vtSales = 0;
+                  for (const [, v] of qSorted) { tDemo += v.demo; tSales += v.sales; vtDemo += v.demoVat; vtSales += v.salesVat; }
+
+                  return (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      <Card className="overflow-hidden">
+                        <div className="p-4 border-b bg-gray-50">
+                          <h3 className="text-sm font-semibold text-gray-900">Quarterly Expenses (excl. BTW)</h3>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="bg-gray-50 border-b">
+                                <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase">Quarter</th>
+                                <th className="text-right px-4 py-2 text-xs font-medium text-emerald-600 uppercase">Demo</th>
+                                <th className="text-right px-4 py-2 text-xs font-medium text-blue-600 uppercase">Sales</th>
+                                <th className="text-right px-4 py-2 text-xs font-medium text-gray-700 uppercase">Total</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                              {qSorted.map(([q, v]) => (
+                                <tr key={q} className="hover:bg-gray-50">
+                                  <td className="px-4 py-2 text-gray-700 font-medium">{q}</td>
+                                  <td className="px-4 py-2 text-right tabular-nums text-emerald-700">{fmt(v.demo)}</td>
+                                  <td className="px-4 py-2 text-right tabular-nums text-blue-700">{fmt(v.sales)}</td>
+                                  <td className="px-4 py-2 text-right tabular-nums font-semibold text-gray-900">{fmt(v.demo + v.sales)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                            <tfoot>
+                              <tr className="bg-gray-50 border-t-2 border-gray-300 font-bold">
+                                <td className="px-4 py-2 text-gray-900">Total</td>
+                                <td className="px-4 py-2 text-right tabular-nums text-emerald-700">{fmt(tDemo)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums text-blue-700">{fmt(tSales)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums text-gray-900">{fmt(tDemo + tSales)}</td>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      </Card>
+
+                      <Card className="overflow-hidden">
+                        <div className="p-4 border-b bg-gray-50">
+                          <h3 className="text-sm font-semibold text-gray-900">Quarterly VAT (BTW)</h3>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="bg-gray-50 border-b">
+                                <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase">Quarter</th>
+                                <th className="text-right px-4 py-2 text-xs font-medium text-emerald-600 uppercase">Demo</th>
+                                <th className="text-right px-4 py-2 text-xs font-medium text-blue-600 uppercase">Sales</th>
+                                <th className="text-right px-4 py-2 text-xs font-medium text-gray-700 uppercase">Total</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                              {qSorted.map(([q, v]) => (
+                                <tr key={q} className="hover:bg-gray-50">
+                                  <td className="px-4 py-2 text-gray-700 font-medium">{q}</td>
+                                  <td className="px-4 py-2 text-right tabular-nums text-emerald-700">{fmt(v.demoVat)}</td>
+                                  <td className="px-4 py-2 text-right tabular-nums text-blue-700">{fmt(v.salesVat)}</td>
+                                  <td className="px-4 py-2 text-right tabular-nums font-semibold text-gray-900">{fmt(v.demoVat + v.salesVat)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                            <tfoot>
+                              <tr className="bg-gray-50 border-t-2 border-gray-300 font-bold">
+                                <td className="px-4 py-2 text-gray-900">Total</td>
+                                <td className="px-4 py-2 text-right tabular-nums text-emerald-700">{fmt(vtDemo)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums text-blue-700">{fmt(vtSales)}</td>
+                                <td className="px-4 py-2 text-right tabular-nums text-gray-900">{fmt(vtDemo + vtSales)}</td>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      </Card>
+                    </div>
+                  );
+                })()}
+
                 {/* Demo vs Sales side-by-side monthly chart */}
                 {(() => {
                   const byMonth = monthlySummary.by_month;

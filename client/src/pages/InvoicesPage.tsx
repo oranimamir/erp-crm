@@ -380,6 +380,67 @@ export default function InvoicesPage() {
                     </div>
                   </div>
                 </div>
+
+                {/* Quarterly Summary */}
+                {(() => {
+                  const qMap: Record<string, { inv: number; wire: number; invCnt: number; wireCnt: number }> = {};
+                  for (const m of sorted) {
+                    const [y, mo] = m.split('-');
+                    const q = `${y}-Q${Math.ceil(parseInt(mo) / 3)}`;
+                    if (!qMap[q]) qMap[q] = { inv: 0, wire: 0, invCnt: 0, wireCnt: 0 };
+                    const inv = invMap.get(m);
+                    const wire = wireMap.get(m);
+                    if (inv) { qMap[q].inv += inv.total_eur; qMap[q].invCnt += inv.count; }
+                    if (wire) { qMap[q].wire += wire.total_eur; qMap[q].wireCnt += wire.count; }
+                  }
+                  const qSorted = Object.entries(qMap).sort((a, b) => a[0].localeCompare(b[0]));
+                  if (qSorted.length < 1) return null;
+                  let tInv = 0, tWire = 0;
+                  for (const [, v] of qSorted) { tInv += v.inv; tWire += v.wire; }
+                  return (
+                    <div className="mt-5">
+                      <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Quarterly Summary</h3>
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-gray-50 border-b">
+                            <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase">Quarter</th>
+                            <th className="text-right px-4 py-2 text-xs font-medium text-blue-600 uppercase">Invoices</th>
+                            <th className="text-right px-4 py-2 text-xs font-medium text-gray-400 uppercase">#</th>
+                            <th className="text-right px-4 py-2 text-xs font-medium text-green-600 uppercase">Wire Transfers</th>
+                            <th className="text-right px-4 py-2 text-xs font-medium text-gray-400 uppercase">#</th>
+                            <th className="text-right px-4 py-2 text-xs font-medium text-gray-700 uppercase">Balance</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {qSorted.map(([q, v]) => (
+                            <tr key={q} className="hover:bg-gray-50">
+                              <td className="px-4 py-2 text-gray-700 font-medium">{q}</td>
+                              <td className="px-4 py-2 text-right tabular-nums text-blue-700">{fmtEur(v.inv)}</td>
+                              <td className="px-4 py-2 text-right tabular-nums text-gray-400">{v.invCnt}</td>
+                              <td className="px-4 py-2 text-right tabular-nums text-green-700">{fmtEur(v.wire)}</td>
+                              <td className="px-4 py-2 text-right tabular-nums text-gray-400">{v.wireCnt}</td>
+                              <td className={`px-4 py-2 text-right tabular-nums font-semibold ${v.inv - v.wire >= 0 ? 'text-amber-600' : 'text-green-700'}`}>
+                                {fmtEur(v.inv - v.wire)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr className="bg-gray-50 border-t-2 border-gray-300 font-bold">
+                            <td className="px-4 py-2 text-gray-900">Total</td>
+                            <td className="px-4 py-2 text-right tabular-nums text-blue-700">{fmtEur(tInv)}</td>
+                            <td className="px-4 py-2 text-right tabular-nums text-gray-400"></td>
+                            <td className="px-4 py-2 text-right tabular-nums text-green-700">{fmtEur(tWire)}</td>
+                            <td className="px-4 py-2 text-right tabular-nums text-gray-400"></td>
+                            <td className={`px-4 py-2 text-right tabular-nums ${tInv - tWire >= 0 ? 'text-amber-600' : 'text-green-700'}`}>
+                              {fmtEur(tInv - tWire)}
+                            </td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  );
+                })()}
               </div>
             );
           })()}
