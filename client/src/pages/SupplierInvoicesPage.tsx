@@ -450,6 +450,13 @@ export default function SupplierInvoicesPage() {
   const [showReviewed, setShowReviewed] = useState(false);
   const [flagOverrides, setFlagOverrides] = useState<Record<string, boolean>>({});
 
+  // Check duplicates
+  const [checkingDuplicates, setCheckingDuplicates] = useState(false);
+  const [duplicateGroups, setDuplicateGroups] = useState<any[] | null>(null);
+  const [showDuplicateModal, setShowDuplicateModal] = useState(false);
+  const [selectedForDelete, setSelectedForDelete] = useState<Set<number>>(new Set());
+  const [deletingDuplicates, setDeletingDuplicates] = useState(false);
+
   // ZIP upload note
   const [zipNote, setZipNote] = useState('');
   const [showZipNoteModal, setShowZipNoteModal] = useState(false);
@@ -879,6 +886,64 @@ export default function SupplierInvoicesPage() {
     setZipNote('');
   };
 
+  // ─── CHECK DUPLICATES ───────────────────────────────────────────────────────
+  const handleCheckDuplicates = async () => {
+    setCheckingDuplicates(true);
+    try {
+      const res = await api.get('/demo-expenses/check-duplicates');
+      if (res.data.totalGroups === 0) {
+        addToast('No duplicates found', 'success');
+      } else {
+        setDuplicateGroups(res.data.groups);
+        setSelectedForDelete(new Set());
+        setShowDuplicateModal(true);
+      }
+    } catch {
+      addToast('Failed to check for duplicates', 'error');
+    } finally {
+      setCheckingDuplicates(false);
+    }
+  };
+
+  const handleDeleteDuplicates = async () => {
+    if (selectedForDelete.size === 0) return;
+    setDeletingDuplicates(true);
+    let deleted = 0;
+    for (const id of selectedForDelete) {
+      try {
+        await api.delete(`/demo-expenses/invoices/${id}`);
+        deleted++;
+      } catch {
+        addToast(`Failed to delete invoice #${id}`, 'error');
+      }
+    }
+    addToast(`Deleted ${deleted} duplicate invoice(s)`, 'success');
+    setShowDuplicateModal(false);
+    setDuplicateGroups(null);
+    setSelectedForDelete(new Set());
+    setDeletingDuplicates(false);
+    fetchAll();
+  };
+
+  const toggleDeleteSelection = (id: number) => {
+    setSelectedForDelete(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectNewerInGroup = (invoices: any[]) => {
+    // Keep the oldest (lowest id), select all others for deletion
+    const sorted = [...invoices].sort((a, b) => a.id - b.id);
+    setSelectedForDelete(prev => {
+      const next = new Set(prev);
+      for (let i = 1; i < sorted.length; i++) next.add(sorted[i].id);
+      return next;
+    });
+  };
+
   // ─── SINGLE UPLOAD HANDLERS ────────────────────────────────────────────────
 
   const handleSingleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1137,6 +1202,10 @@ export default function SupplierInvoicesPage() {
               <Button variant="secondary" onClick={() => singleInputRef.current?.click()} disabled={singleUploading}>
                 {singleUploading ? <Loader2 size={16} className="animate-spin" /> : <FileSpreadsheet size={16} />}
                 {singleUploading ? 'Parsing...' : 'Upload Single Invoice'}
+              </Button>
+              <Button variant="secondary" onClick={handleCheckDuplicates} disabled={checkingDuplicates}>
+                {checkingDuplicates ? <Loader2 size={16} className="animate-spin" /> : <AlertTriangle size={16} />}
+                {checkingDuplicates ? 'Scanning...' : 'Check Duplicates'}
               </Button>
             </div>
 
@@ -2012,6 +2081,111 @@ export default function SupplierInvoicesPage() {
         </div>
       )}
 
+
+      {/* Duplicate Check Modal */}
+      {showDuplicateModal && duplicateGroups && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-5xl w-full mx-4 max-h-[90vh] flex flex-col">
+            <div className="p-6 border-b flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">Suspected Duplicates</h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  Found {duplicateGroups.length} group(s) with potential duplicates. Select invoices to delete.
+                </p>
+              </div>
+              <button onClick={() => setShowDuplicateModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {duplicateGroups.map((group, gi) => {
+                const reasonLabel = group.reason === 'exact_id' ? 'Exact ID Match'
+                  : group.reason === 'copy_suffix' ? 'Copy Suffix Match'
+                  : 'Same Supplier + Amount + Date';
+                const reasonColor = group.reason === 'exact_id' ? 'bg-red-100 text-red-700'
+                  : group.reason === 'copy_suffix' ? 'bg-orange-100 text-orange-700'
+                  : 'bg-yellow-100 text-yellow-700';
+                return (
+                  <div key={gi} className="border border-gray-200 rounded-lg overflow-hidden">
+                    <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-b">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${reasonColor}`}>
+                        {reasonLabel}
+                      </span>
+                      <button
+                        onClick={() => selectNewerInGroup(group.invoices)}
+                        className="text-xs text-primary-600 hover:text-primary-700 font-medium hover:underline"
+                      >
+                        Select newer
+                      </button>
+                    </div>
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b bg-gray-50/50">
+                          <th className="w-10 px-3 py-2"></th>
+                          <th className="text-left px-3 py-2 font-medium text-gray-600">Invoice ID</th>
+                          <th className="text-left px-3 py-2 font-medium text-gray-600">Supplier</th>
+                          <th className="text-right px-3 py-2 font-medium text-gray-600">Amount</th>
+                          <th className="text-left px-3 py-2 font-medium text-gray-600">Date</th>
+                          <th className="text-left px-3 py-2 font-medium text-gray-600">Domain</th>
+                          <th className="text-left px-3 py-2 font-medium text-gray-600">Category</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {group.invoices.map((inv: any) => (
+                          <tr key={inv.id} className={`hover:bg-gray-50 ${selectedForDelete.has(inv.id) ? 'bg-red-50' : ''}`}>
+                            <td className="px-3 py-2 text-center">
+                              <input
+                                type="checkbox"
+                                checked={selectedForDelete.has(inv.id)}
+                                onChange={() => toggleDeleteSelection(inv.id)}
+                                className="rounded border-gray-300 text-red-600 focus:ring-red-500"
+                              />
+                            </td>
+                            <td className="px-3 py-2 font-medium text-gray-900">{inv.invoice_id}</td>
+                            <td className="px-3 py-2 text-gray-600">{inv.supplier}</td>
+                            <td className="px-3 py-2 text-right font-medium text-gray-900">
+                              {inv.currency === 'GBP' ? '\u00A3' : inv.currency === 'USD' ? '$' : '\u20AC'}
+                              {inv.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                            <td className="px-3 py-2 text-gray-600">{formatDate(inv.issue_date)}</td>
+                            <td className="px-3 py-2">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${DOMAIN_COLORS[inv.domain] || 'bg-gray-100 text-gray-700'}`}>
+                                {inv.domain}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-gray-600 text-xs">{inv.category}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="p-4 border-t flex items-center justify-between">
+              <span className="text-sm text-gray-500">
+                {selectedForDelete.size > 0 ? `${selectedForDelete.size} invoice(s) selected for deletion` : 'Select invoices to delete'}
+              </span>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowDuplicateModal(false)}
+                  className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDeleteDuplicates}
+                  disabled={selectedForDelete.size === 0 || deletingDuplicates}
+                  className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {deletingDuplicates ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                  Delete Selected ({selectedForDelete.size})
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Single Upload Preview Modal */}
       {singlePreview && (

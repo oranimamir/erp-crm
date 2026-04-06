@@ -2214,4 +2214,103 @@ router.delete('/supplier-mappings/:id', (req: Request, res: Response) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// CHECK DUPLICATES — scan all demo_invoices for suspected duplicates
+// ═══════════════════════════════════════════════════════════════════════════════
+router.get('/check-duplicates', (_req: Request, res: Response) => {
+  try {
+    const allInvoices = db.prepare(
+      'SELECT id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month FROM demo_invoices'
+    ).all() as { id: number; invoice_id: string; issue_date: string; supplier: string; category: string; domain: string; amount: number; vat_amount: number; currency: string; month: string }[];
+
+    // Track which id-pairs we've already grouped to avoid duplicates across strategies
+    const seenPairs = new Set<string>();
+    const pairKey = (a: number, b: number) => a < b ? `${a}|${b}` : `${b}|${a}`;
+
+    const groups: { reason: string; invoices: typeof allInvoices }[] = [];
+
+    // --- Strategy 1: Exact invoice_id match ---
+    const exactIdMap = new Map<string, typeof allInvoices>();
+    for (const inv of allInvoices) {
+      const key = inv.invoice_id;
+      if (!exactIdMap.has(key)) exactIdMap.set(key, []);
+      exactIdMap.get(key)!.push(inv);
+    }
+    for (const [, invs] of exactIdMap) {
+      if (invs.length < 2) continue;
+      // Mark all pairs as seen
+      for (let i = 0; i < invs.length; i++) {
+        for (let j = i + 1; j < invs.length; j++) {
+          seenPairs.add(pairKey(invs[i].id, invs[j].id));
+        }
+      }
+      groups.push({ reason: 'exact_id', invoices: invs });
+    }
+
+    // --- Strategy 2: Copy-suffix match (e.g. "SI037954" vs "SI037954 (2)") ---
+    const copySuffixRegex = /\s*\(\d+\)\s*$/;
+    const baseIdMap = new Map<string, typeof allInvoices>();
+    for (const inv of allInvoices) {
+      const baseId = inv.invoice_id.replace(copySuffixRegex, '');
+      // Only index if this invoice actually has a suffix OR shares a base with another
+      if (!baseIdMap.has(baseId)) baseIdMap.set(baseId, []);
+      baseIdMap.get(baseId)!.push(inv);
+    }
+    for (const [, invs] of baseIdMap) {
+      if (invs.length < 2) continue;
+      // Must have at least one pair with matching amount AND date
+      // Also skip if all invoice_ids are identical (already caught by strategy 1)
+      const allSameId = invs.every(i => i.invoice_id === invs[0].invoice_id);
+      if (allSameId) continue;
+
+      // Find sub-groups where amount+date match
+      const matched: typeof allInvoices = [];
+      for (let i = 0; i < invs.length; i++) {
+        for (let j = i + 1; j < invs.length; j++) {
+          if (seenPairs.has(pairKey(invs[i].id, invs[j].id))) continue;
+          if (Math.abs(invs[i].amount - invs[j].amount) < 0.01 && invs[i].issue_date === invs[j].issue_date) {
+            if (!matched.includes(invs[i])) matched.push(invs[i]);
+            if (!matched.includes(invs[j])) matched.push(invs[j]);
+            seenPairs.add(pairKey(invs[i].id, invs[j].id));
+          }
+        }
+      }
+      if (matched.length >= 2) {
+        groups.push({ reason: 'copy_suffix', invoices: matched });
+      }
+    }
+
+    // --- Strategy 3: Combo match (same supplier + amount + date, different IDs) ---
+    const comboMap = new Map<string, typeof allInvoices>();
+    for (const inv of allInvoices) {
+      if (inv.amount === 0) continue; // skip zero-amount to avoid false positives
+      const key = `${inv.supplier.toLowerCase()}|${Math.round(inv.amount * 100)}|${inv.issue_date}`;
+      if (!comboMap.has(key)) comboMap.set(key, []);
+      comboMap.get(key)!.push(inv);
+    }
+    for (const [, invs] of comboMap) {
+      if (invs.length < 2) continue;
+      // Filter to only unseen pairs
+      const unseen: typeof allInvoices = [];
+      for (let i = 0; i < invs.length; i++) {
+        for (let j = i + 1; j < invs.length; j++) {
+          if (seenPairs.has(pairKey(invs[i].id, invs[j].id))) continue;
+          if (!unseen.includes(invs[i])) unseen.push(invs[i]);
+          if (!unseen.includes(invs[j])) unseen.push(invs[j]);
+          seenPairs.add(pairKey(invs[i].id, invs[j].id));
+        }
+      }
+      if (unseen.length >= 2) {
+        groups.push({ reason: 'combo_match', invoices: unseen });
+      }
+    }
+
+    const totalSuspected = groups.reduce((s, g) => s + g.invoices.length, 0);
+    res.json({ groups, totalGroups: groups.length, totalSuspected });
+  } catch (err: any) {
+    console.error('[demo-expenses] check-duplicates error:', err);
+    res.status(500).json({ error: 'Failed to check for duplicates' });
+  }
+});
+
 export default router;
