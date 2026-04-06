@@ -463,6 +463,11 @@ export default function SupplierInvoicesPage() {
   const [showVatModal, setShowVatModal] = useState(false);
   const [fixingVat, setFixingVat] = useState(false);
 
+  // Quick preview for duplicates / VAT audit modals
+  const [previewInvoiceId, setPreviewInvoiceId] = useState<number | null>(null);
+  const [previewPdf, setPreviewPdf] = useState<string | null>(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+
   // ZIP upload note
   const [zipNote, setZipNote] = useState('');
   const [showZipNoteModal, setShowZipNoteModal] = useState(false);
@@ -924,7 +929,7 @@ export default function SupplierInvoicesPage() {
       }
     }
     addToast(`Deleted ${deleted} duplicate invoice(s)`, 'success');
-    setShowDuplicateModal(false);
+    setShowDuplicateModal(false); setPreviewInvoiceId(null); setPreviewPdf(null);
     setDuplicateGroups(null);
     setSelectedForDelete(new Set());
     setDeletingDuplicates(false);
@@ -975,12 +980,32 @@ export default function SupplierInvoicesPage() {
       addToast('VAT updated', 'success');
       // Remove from issues list
       setVatIssues(prev => prev ? prev.filter(i => i.id !== id) : null);
-      if (vatIssues && vatIssues.length <= 1) setShowVatModal(false);
+      if (vatIssues && vatIssues.length <= 1) { setShowVatModal(false); setPreviewInvoiceId(null); setPreviewPdf(null); }
       fetchAll();
     } catch {
       addToast('Failed to update VAT', 'error');
     } finally {
       setFixingVat(false);
+    }
+  };
+
+  // ─── QUICK PREVIEW (for duplicate / VAT modals) ─────────────────────────────
+  const toggleQuickPreview = async (id: number) => {
+    if (previewInvoiceId === id) {
+      setPreviewInvoiceId(null);
+      setPreviewPdf(null);
+      return;
+    }
+    setPreviewInvoiceId(id);
+    setPreviewPdf(null);
+    setLoadingPreview(true);
+    try {
+      const res = await api.get(`/demo-expenses/invoices/${id}`);
+      setPreviewPdf(res.data.embedded_pdf || null);
+    } catch {
+      addToast('Failed to load invoice preview', 'error');
+    } finally {
+      setLoadingPreview(false);
     }
   };
 
@@ -2137,7 +2162,7 @@ export default function SupplierInvoicesPage() {
                   Found {vatIssues.length} invoice(s) with potential VAT issues. Review and fix as needed.
                 </p>
               </div>
-              <button onClick={() => setShowVatModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100">
+              <button onClick={() => { setShowVatModal(false); setPreviewInvoiceId(null); setPreviewPdf(null); }} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100">
                 <X size={20} />
               </button>
             </div>
@@ -2153,50 +2178,77 @@ export default function SupplierInvoicesPage() {
                     <th className="text-right px-4 py-3 font-medium text-gray-600">Suggested</th>
                     <th className="text-left px-4 py-3 font-medium text-gray-600">Issue</th>
                     <th className="text-right px-4 py-3 font-medium text-gray-600">Action</th>
+                    <th className="w-10 px-3 py-3"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {vatIssues.map((issue: any) => (
-                    <tr key={issue.id} className="hover:bg-gray-50">
-                      <td className="px-4 py-3 font-medium text-gray-900">{issue.invoice_id}</td>
-                      <td className="px-4 py-3 text-gray-600">{issue.supplier}</td>
-                      <td className="px-4 py-3 text-center">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                          issue.country === 'BE' ? 'bg-yellow-100 text-yellow-700' : 'bg-blue-100 text-blue-700'
-                        }`}>
-                          {issue.country || '??'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right font-medium">
-                        {issue.currency === 'GBP' ? '\u00A3' : issue.currency === 'USD' ? '$' : '\u20AC'}
-                        {issue.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </td>
-                      <td className={`px-4 py-3 text-right font-medium ${issue.suggested_vat === 0 && issue.current_vat > 0 ? 'text-red-600' : ''}`}>
-                        {issue.current_vat.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </td>
-                      <td className="px-4 py-3 text-right font-medium text-green-600">
-                        {issue.suggested_vat != null ? issue.suggested_vat.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
-                      </td>
-                      <td className="px-4 py-3 text-xs text-gray-500 max-w-xs">{issue.issue}</td>
-                      <td className="px-4 py-3 text-right">
-                        {issue.suggested_vat != null && (
+                    <React.Fragment key={issue.id}>
+                      <tr className="hover:bg-gray-50">
+                        <td className="px-4 py-3 font-medium text-gray-900">{issue.invoice_id}</td>
+                        <td className="px-4 py-3 text-gray-600">{issue.supplier}</td>
+                        <td className="px-4 py-3 text-center">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                            issue.country === 'BE' ? 'bg-yellow-100 text-yellow-700' : 'bg-blue-100 text-blue-700'
+                          }`}>
+                            {issue.country || '??'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-right font-medium">
+                          {issue.currency === 'GBP' ? '\u00A3' : issue.currency === 'USD' ? '$' : '\u20AC'}
+                          {issue.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className={`px-4 py-3 text-right font-medium ${issue.suggested_vat === 0 && issue.current_vat > 0 ? 'text-red-600' : ''}`}>
+                          {issue.current_vat.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="px-4 py-3 text-right font-medium text-green-600">
+                          {issue.suggested_vat != null ? issue.suggested_vat.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-500 max-w-xs">{issue.issue}</td>
+                        <td className="px-4 py-3 text-right">
+                          {issue.suggested_vat != null && (
+                            <button
+                              onClick={() => handleFixVat(issue.id, issue.suggested_vat)}
+                              disabled={fixingVat}
+                              className="px-3 py-1 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium disabled:opacity-50"
+                            >
+                              {fixingVat ? '...' : issue.suggested_vat === 0 ? 'Set to 0' : 'Apply'}
+                            </button>
+                          )}
+                        </td>
+                        <td className="px-3 py-3 text-center">
                           <button
-                            onClick={() => handleFixVat(issue.id, issue.suggested_vat)}
-                            disabled={fixingVat}
-                            className="px-3 py-1 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium disabled:opacity-50"
+                            onClick={() => toggleQuickPreview(issue.id)}
+                            className={`p-1 rounded hover:bg-gray-100 ${previewInvoiceId === issue.id ? 'text-primary-600' : 'text-gray-400 hover:text-gray-600'}`}
+                            title="Preview invoice PDF"
                           >
-                            {fixingVat ? '...' : issue.suggested_vat === 0 ? 'Set to 0' : 'Apply'}
+                            {loadingPreview && previewInvoiceId === issue.id ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
                           </button>
-                        )}
-                      </td>
-                    </tr>
+                        </td>
+                      </tr>
+                      {previewInvoiceId === issue.id && (
+                        <tr>
+                          <td colSpan={9} className="p-0">
+                            <div className="bg-gray-50 border-t border-b border-gray-200 p-3">
+                              {loadingPreview ? (
+                                <div className="flex items-center justify-center py-8 text-gray-400"><Loader2 size={20} className="animate-spin mr-2" /> Loading preview...</div>
+                              ) : previewPdf ? (
+                                <iframe src={`data:application/pdf;base64,${previewPdf}`} className="w-full h-[400px] rounded-lg border border-gray-200 bg-white" title="Invoice preview" />
+                              ) : (
+                                <p className="text-center py-6 text-sm text-gray-400">No PDF preview available for this invoice</p>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>
             </div>
             <div className="p-4 border-t flex items-center justify-between">
               <span className="text-sm text-gray-500">{vatIssues.length} issue(s) remaining</span>
-              <button onClick={() => setShowVatModal(false)} className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50">
+              <button onClick={() => { setShowVatModal(false); setPreviewInvoiceId(null); setPreviewPdf(null); }} className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50">
                 Close
               </button>
             </div>
@@ -2215,7 +2267,7 @@ export default function SupplierInvoicesPage() {
                   Found {duplicateGroups.length} group(s) with potential duplicates. Select invoices to delete.
                 </p>
               </div>
-              <button onClick={() => setShowDuplicateModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100">
+              <button onClick={() => { setShowDuplicateModal(false); setPreviewInvoiceId(null); setPreviewPdf(null); }} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100">
                 <X size={20} />
               </button>
             </div>
@@ -2250,33 +2302,60 @@ export default function SupplierInvoicesPage() {
                           <th className="text-left px-3 py-2 font-medium text-gray-600">Date</th>
                           <th className="text-left px-3 py-2 font-medium text-gray-600">Domain</th>
                           <th className="text-left px-3 py-2 font-medium text-gray-600">Category</th>
+                          <th className="w-10 px-3 py-2"></th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
                         {group.invoices.map((inv: any) => (
-                          <tr key={inv.id} className={`hover:bg-gray-50 ${selectedForDelete.has(inv.id) ? 'bg-red-50' : ''}`}>
-                            <td className="px-3 py-2 text-center">
-                              <input
-                                type="checkbox"
-                                checked={selectedForDelete.has(inv.id)}
-                                onChange={() => toggleDeleteSelection(inv.id)}
-                                className="rounded border-gray-300 text-red-600 focus:ring-red-500"
-                              />
-                            </td>
-                            <td className="px-3 py-2 font-medium text-gray-900">{inv.invoice_id}</td>
-                            <td className="px-3 py-2 text-gray-600">{inv.supplier}</td>
-                            <td className="px-3 py-2 text-right font-medium text-gray-900">
-                              {inv.currency === 'GBP' ? '\u00A3' : inv.currency === 'USD' ? '$' : '\u20AC'}
-                              {inv.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </td>
-                            <td className="px-3 py-2 text-gray-600">{formatDate(inv.issue_date)}</td>
-                            <td className="px-3 py-2">
-                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${DOMAIN_COLORS[inv.domain] || 'bg-gray-100 text-gray-700'}`}>
-                                {inv.domain}
-                              </span>
-                            </td>
-                            <td className="px-3 py-2 text-gray-600 text-xs">{inv.category}</td>
-                          </tr>
+                          <React.Fragment key={inv.id}>
+                            <tr className={`hover:bg-gray-50 ${selectedForDelete.has(inv.id) ? 'bg-red-50' : ''}`}>
+                              <td className="px-3 py-2 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedForDelete.has(inv.id)}
+                                  onChange={() => toggleDeleteSelection(inv.id)}
+                                  className="rounded border-gray-300 text-red-600 focus:ring-red-500"
+                                />
+                              </td>
+                              <td className="px-3 py-2 font-medium text-gray-900">{inv.invoice_id}</td>
+                              <td className="px-3 py-2 text-gray-600">{inv.supplier}</td>
+                              <td className="px-3 py-2 text-right font-medium text-gray-900">
+                                {inv.currency === 'GBP' ? '\u00A3' : inv.currency === 'USD' ? '$' : '\u20AC'}
+                                {inv.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                              <td className="px-3 py-2 text-gray-600">{formatDate(inv.issue_date)}</td>
+                              <td className="px-3 py-2">
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${DOMAIN_COLORS[inv.domain] || 'bg-gray-100 text-gray-700'}`}>
+                                  {inv.domain}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-gray-600 text-xs">{inv.category}</td>
+                              <td className="px-3 py-2 text-center">
+                                <button
+                                  onClick={() => toggleQuickPreview(inv.id)}
+                                  className={`p-1 rounded hover:bg-gray-100 ${previewInvoiceId === inv.id ? 'text-primary-600' : 'text-gray-400 hover:text-gray-600'}`}
+                                  title="Preview invoice PDF"
+                                >
+                                  {loadingPreview && previewInvoiceId === inv.id ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
+                                </button>
+                              </td>
+                            </tr>
+                            {previewInvoiceId === inv.id && (
+                              <tr>
+                                <td colSpan={8} className="p-0">
+                                  <div className="bg-gray-50 border-t border-b border-gray-200 p-3">
+                                    {loadingPreview ? (
+                                      <div className="flex items-center justify-center py-8 text-gray-400"><Loader2 size={20} className="animate-spin mr-2" /> Loading preview...</div>
+                                    ) : previewPdf ? (
+                                      <iframe src={`data:application/pdf;base64,${previewPdf}`} className="w-full h-[400px] rounded-lg border border-gray-200 bg-white" title="Invoice preview" />
+                                    ) : (
+                                      <p className="text-center py-6 text-sm text-gray-400">No PDF preview available for this invoice</p>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
                         ))}
                       </tbody>
                     </table>
@@ -2290,7 +2369,7 @@ export default function SupplierInvoicesPage() {
               </span>
               <div className="flex gap-3">
                 <button
-                  onClick={() => setShowDuplicateModal(false)}
+                  onClick={() => { setShowDuplicateModal(false); setPreviewInvoiceId(null); setPreviewPdf(null); }}
                   className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
                 >
                   Cancel
