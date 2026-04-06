@@ -435,32 +435,52 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
 
   // ─── INVOICE ID ──────────────────────────────────────────────────────
-  // Require a label followed by separator then the actual value
+  // Prefer filename-derived ID when it looks like an invoice number.
+  // PDF text extraction often jumbles multi-column layouts, making regex ID
+  // extraction unreliable (e.g. matching a phone number next to "Invoice No.").
+  // Filenames are typically more reliable since users name files by invoice number.
   let invoiceId = '';
-  const invIdPatterns = [
-    // "Factuurnummer: F2026-001", "Factuur nr: 123", "Factuurnr.: ABC-123"
-    /(?:factu(?:ur|re)\s*(?:no|nr|nummer|num)?\.?)[\s.:]+([A-Z0-9][\w\-\/\.]+)/i,
-    // "Invoice Number: INV-123", "Invoice nr.: 456", "Invoice: ABC/2026"
-    /(?:invoice\s*(?:no|nr|number|num|#|id)\.?)[\s.:]+([A-Z0-9][\w\-\/\.]+)/i,
-    // "Credit note nr: CN-123"
-    /(?:credit\s*(?:note|nota)\s*(?:no|nr|num)?\.?)[\s.:]+([A-Z0-9][\w\-\/\.]+)/i,
-    // "Document nr: 12345"
-    /(?:document\s*(?:no|nr|number|num)?\.?)[\s.:]+([A-Z0-9][\w\-\/\.]+)/i,
-    // "Bestellnummer: PO-123"  "Bestelnummer: 123"
-    /(?:bestell?\s*(?:nummer|nr)\.?)[\s.:]+([A-Z0-9][\w\-\/\.]+)/i,
-    // Standalone invoice-like codes: INV-2026-001, F2026/001, VF20260001
-    /\b((?:INV|VF|F|CR|CN)[\-\/]?\d{2,}[\w\-\/]*)\b/,
-  ];
-  for (const pat of invIdPatterns) {
-    const m = text.match(pat);
-    if (m && m[1].length >= 2) {
-      // Reject if the "ID" is just a common label word
-      const val = m[1].trim();
-      if (/^(invoice|factuur|facture|credit|debiteur|datum|date|nummer|number|btw|tva|page|total)$/i.test(val)) continue;
-      // Reject if it looks like a date
-      if (/^\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}$/.test(val)) continue;
-      invoiceId = val;
-      break;
+
+  // Check if filename itself is a usable invoice ID.
+  // Filenames are far more reliable than PDF text extraction (which jumbles columns).
+  // Only fall back to text parsing for truly generic/unusable filenames.
+  const filenameId = fileBaseName.replace(/\s+/g, ' ').trim();
+  const isGenericFilename = /^(invoice|factuur|facture|proforma|credit|debit|document|unknown|pdf|scan|img|image|page|receipt|spaces)\b/i.test(filenameId)
+    || /^(Loonaangifte|Uitnodiging|Sales Invoice Header|PDFOnly)/i.test(filenameId);
+  const looksLikeInvoiceId = !isGenericFilename && filenameId.length >= 3
+    && /[A-Z0-9]/i.test(filenameId);
+
+  if (looksLikeInvoiceId) {
+    invoiceId = filenameId;
+  }
+
+  // Fall back to text-based extraction if filename didn't provide a good ID
+  if (!invoiceId) {
+    const invIdPatterns = [
+      // "Factuurnummer: F2026-001", "Factuur nr: 123", "Factuurnr.: ABC-123"
+      /(?:factu(?:ur|re)\s*(?:no|nr|nummer|num)?\.?)[\s.:]+([A-Z0-9][\w\-\/\.]+)/i,
+      // "Invoice Number: INV-123", "Invoice nr.: 456", "Invoice: ABC/2026"
+      /(?:invoice\s*(?:no|nr|number|num|#|id)\.?)[\s.:]+([A-Z0-9][\w\-\/\.]+)/i,
+      // "Credit note nr: CN-123"
+      /(?:credit\s*(?:note|nota)\s*(?:no|nr|num)?\.?)[\s.:]+([A-Z0-9][\w\-\/\.]+)/i,
+      // "Document nr: 12345"
+      /(?:document\s*(?:no|nr|number|num)?\.?)[\s.:]+([A-Z0-9][\w\-\/\.]+)/i,
+      // "Bestellnummer: PO-123"  "Bestelnummer: 123"
+      /(?:bestell?\s*(?:nummer|nr)\.?)[\s.:]+([A-Z0-9][\w\-\/\.]+)/i,
+      // Standalone invoice-like codes: INV-2026-001, F2026/001, VF20260001
+      /\b((?:INV|VF|F|CR|CN)[\-\/]?\d{2,}[\w\-\/]*)\b/,
+    ];
+    for (const pat of invIdPatterns) {
+      const m = text.match(pat);
+      if (m && m[1].length >= 2) {
+        // Reject if the "ID" is just a common label word
+        const val = m[1].trim();
+        if (/^(invoice|factuur|facture|credit|debiteur|datum|date|nummer|number|btw|tva|page|total)$/i.test(val)) continue;
+        // Reject if it looks like a date
+        if (/^\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}$/.test(val)) continue;
+        invoiceId = val;
+        break;
+      }
     }
   }
   if (!invoiceId) {
