@@ -8,7 +8,7 @@ import SearchBar from '../components/ui/SearchBar';
 import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
-import { Plus, FileText, Eye, Trash2, FileDown, ChevronUp, ChevronDown, FileSpreadsheet, Landmark, Download, X, Loader2, Filter, CalendarDays } from 'lucide-react';
+import { Plus, FileText, Eye, Trash2, FileDown, ChevronUp, ChevronDown, FileSpreadsheet, Landmark, Download, X, Loader2, Filter, CalendarDays, BarChart3 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
 
@@ -111,6 +111,12 @@ export default function InvoicesPage() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [loading, setLoading] = useState(true);
   const [deleteId, setDeleteId] = useState<number | null>(null);
+  const [monthlySummary, setMonthlySummary] = useState<{ invoicesByMonth: { month: string; total_eur: number; count: number }[]; wiresByMonth: { month: string; total_eur: number; count: number }[] } | null>(null);
+  const [showSummary, setShowSummary] = useState(true);
+
+  useEffect(() => {
+    api.get('/invoices/monthly-summary').then(res => setMonthlySummary(res.data)).catch(() => {});
+  }, []);
 
   // Persist filters to sessionStorage
   useEffect(() => {
@@ -268,6 +274,113 @@ export default function InvoicesPage() {
           </Link>
         </div>
       </div>
+
+      {/* Monthly Summary: Invoices vs Wire Transfers */}
+      {monthlySummary && (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+          <button
+            onClick={() => setShowSummary(!showSummary)}
+            className="w-full flex items-center justify-between px-6 py-3 text-left hover:bg-gray-50 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <BarChart3 size={18} className="text-primary-600" />
+              <h2 className="text-sm font-semibold text-gray-700">Monthly Overview (EUR)</h2>
+            </div>
+            {showSummary ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
+          </button>
+          {showSummary && (() => {
+            // Merge months from both datasets
+            const allMonths = new Set([
+              ...monthlySummary.invoicesByMonth.map(r => r.month),
+              ...monthlySummary.wiresByMonth.map(r => r.month),
+            ]);
+            const sorted = [...allMonths].sort();
+            const invMap = new Map(monthlySummary.invoicesByMonth.map(r => [r.month, r]));
+            const wireMap = new Map(monthlySummary.wiresByMonth.map(r => [r.month, r]));
+            const maxVal = Math.max(
+              ...monthlySummary.invoicesByMonth.map(r => r.total_eur),
+              ...monthlySummary.wiresByMonth.map(r => r.total_eur),
+              1
+            );
+            const fmtMonth = (m: string) => {
+              const [y, mo] = m.split('-');
+              return `${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(mo) - 1]} ${y}`;
+            };
+            const fmtEur = (n: number) => `\u20AC${n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+
+            const invTotal = monthlySummary.invoicesByMonth.reduce((s, r) => s + r.total_eur, 0);
+            const wireTotal = monthlySummary.wiresByMonth.reduce((s, r) => s + r.total_eur, 0);
+
+            return (
+              <div className="px-6 pb-5">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Invoices Generated */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Invoices Generated</h3>
+                      <span className="text-sm font-bold text-gray-900">{fmtEur(invTotal)}</span>
+                    </div>
+                    <div className="space-y-1.5">
+                      {sorted.map(m => {
+                        const inv = invMap.get(m);
+                        const val = inv?.total_eur || 0;
+                        const pct = (val / maxVal) * 100;
+                        return (
+                          <div key={`inv-${m}`} className="flex items-center gap-2 text-xs">
+                            <span className="w-16 text-gray-500 shrink-0">{fmtMonth(m)}</span>
+                            <div className="flex-1 bg-gray-100 rounded-full h-5 relative overflow-hidden">
+                              {val > 0 && (
+                                <div
+                                  className="bg-blue-500 h-full rounded-full transition-all duration-300"
+                                  style={{ width: `${Math.max(pct, 1)}%` }}
+                                />
+                              )}
+                            </div>
+                            <span className="w-24 text-right font-medium text-gray-700 shrink-0">
+                              {val > 0 ? `${fmtEur(val)} (${inv!.count})` : '-'}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Wire Transfers Made */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Wire Transfers Received</h3>
+                      <span className="text-sm font-bold text-gray-900">{fmtEur(wireTotal)}</span>
+                    </div>
+                    <div className="space-y-1.5">
+                      {sorted.map(m => {
+                        const wire = wireMap.get(m);
+                        const val = wire?.total_eur || 0;
+                        const pct = (val / maxVal) * 100;
+                        return (
+                          <div key={`wire-${m}`} className="flex items-center gap-2 text-xs">
+                            <span className="w-16 text-gray-500 shrink-0">{fmtMonth(m)}</span>
+                            <div className="flex-1 bg-gray-100 rounded-full h-5 relative overflow-hidden">
+                              {val > 0 && (
+                                <div
+                                  className="bg-green-500 h-full rounded-full transition-all duration-300"
+                                  style={{ width: `${Math.max(pct, 1)}%` }}
+                                />
+                              )}
+                            </div>
+                            <span className="w-24 text-right font-medium text-gray-700 shrink-0">
+                              {val > 0 ? `${fmtEur(val)} (${wire!.count})` : '-'}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
 
       <Card>
         <div className="p-4 border-b border-gray-100 space-y-3">

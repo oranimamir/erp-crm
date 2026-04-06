@@ -76,6 +76,32 @@ router.get('/', (req: Request, res: Response) => {
   res.json({ data: invoices, total, page, limit, totalPages: Math.ceil(total / limit) });
 });
 
+// Monthly summary: invoices generated & wire transfers made (in EUR)
+router.get('/monthly-summary', (_req: Request, res: Response) => {
+  // Customer invoices aggregated by month (use eur_amount when available, else amount)
+  const invoicesByMonth = db.prepare(`
+    SELECT strftime('%Y-%m', COALESCE(i.invoice_date, i.created_at)) as month,
+      SUM(COALESCE(i.eur_amount, i.amount)) as total_eur,
+      COUNT(*) as count
+    FROM invoices i
+    WHERE i.type = 'customer' AND i.status != 'cancelled'
+    GROUP BY month ORDER BY month
+  `).all() as { month: string; total_eur: number; count: number }[];
+
+  // Wire transfers aggregated by month (use eur_amount when available, else amount)
+  const wiresByMonth = db.prepare(`
+    SELECT strftime('%Y-%m', wt.transfer_date) as month,
+      SUM(COALESCE(wt.eur_amount, wt.amount)) as total_eur,
+      COUNT(*) as count
+    FROM wire_transfers wt
+    JOIN invoices i ON wt.invoice_id = i.id
+    WHERE i.type = 'customer'
+    GROUP BY month ORDER BY month
+  `).all() as { month: string; total_eur: number; count: number }[];
+
+  res.json({ invoicesByMonth, wiresByMonth });
+});
+
 router.get('/:id', (req: Request, res: Response) => {
   const invoice = db.prepare(`
     SELECT i.*, c.name as customer_name, s.name as supplier_name
