@@ -226,9 +226,31 @@ function parseUBLInvoice(xmlString: string) {
   const customerParty = root['AccountingCustomerParty']?.['Party'];
   let supplierName = extractPartyName(supplierParty);
   // If the "supplier" is actually our own company, the real counterparty is the customer
-  if (isOwnCompany(supplierName) && customerParty) {
+  const supplierIsOwnCompany = isOwnCompany(supplierName);
+  if (supplierIsOwnCompany && customerParty) {
     supplierName = extractPartyName(customerParty) || supplierName;
   }
+
+  // Extract supplier country from postal address or VAT number
+  function extractCountry(party: any): string {
+    if (!party) return '';
+    const country = party['PostalAddress']?.['Country']?.['IdentificationCode'];
+    if (country) {
+      const code = typeof country === 'object' ? country['#text'] : String(country);
+      if (code) return code.toUpperCase();
+    }
+    // Fallback: extract from VAT number prefix (e.g. "BE0725717772")
+    const taxScheme = party['PartyTaxScheme'];
+    const taxId = Array.isArray(taxScheme) ? taxScheme[0]?.['CompanyID'] : taxScheme?.['CompanyID'];
+    const vatNum = typeof taxId === 'object' ? taxId?.['#text'] : String(taxId || '');
+    const countryPrefix = vatNum.match(/^([A-Z]{2})/)?.[1];
+    if (countryPrefix) return countryPrefix;
+    return '';
+  }
+  // The actual supplier's country (not our own company's)
+  const supplierCountry = supplierIsOwnCompany && customerParty
+    ? extractCountry(customerParty)
+    : extractCountry(supplierParty);
 
   // Tax-exclusive amount
   const lmt = root['LegalMonetaryTotal'];
@@ -304,6 +326,15 @@ function parseUBLInvoice(xmlString: string) {
     }
   }
 
+  // VAT sanity check based on supplier country
+  // Non-Belgian suppliers typically don't charge VAT to a Belgian company (intra-community / reverse charge)
+  const isBelgian = supplierCountry === 'BE';
+  if (!isBelgian && vatAmount > 0) {
+    // Non-Belgian supplier charging VAT is unusual — likely a parsing artifact
+    // Keep it but log for awareness
+    console.log(`[ubl-parse] Non-Belgian supplier (${supplierCountry || '??'}) "${supplierName}" has VAT ${vatAmount} — keeping as-is`);
+  }
+
   return {
     invoiceId: typeof invoiceId === 'object' ? (invoiceId as any)['#text'] || String(invoiceId) : String(invoiceId),
     issueDate: typeof issueDate === 'object' ? (issueDate as any)['#text'] || String(issueDate) : String(issueDate),
@@ -311,6 +342,7 @@ function parseUBLInvoice(xmlString: string) {
     amount,
     vatAmount,
     currency: typeof currency === 'object' ? (currency as any)['#text'] || 'EUR' : String(currency),
+    supplierCountry,
     lineItems,
     embeddedPdf,
     pdfFilename,
@@ -797,6 +829,41 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
     }
   }
 
+  // ─── SUPPLIER COUNTRY DETECTION ──────────────────────────────────────
+  // Detect if supplier is Belgian from VAT number (BE0...) or address
+  let supplierCountry = '';
+  // Look for Belgian VAT number: BE0xxxxxxxxx or BE 0xxx.xxx.xxx
+  const beVatMatch = text.match(/\bBE\s?0[\d.\s]{8,12}\b/);
+  if (beVatMatch) {
+    // Check this isn't OUR VAT number (TripleW is Belgian too)
+    // If we find 2+ BE VAT numbers, supplier is likely Belgian
+    // If we find 1, check if it's near supplier-related context vs customer
+    const beVatAll = text.match(/\bBE\s?0[\d.\s]{8,12}\b/g) || [];
+    if (beVatAll.length >= 2) {
+      supplierCountry = 'BE'; // Both parties are Belgian
+    } else {
+      // Single BE VAT — could be ours or theirs. Check text context.
+      // If supplier name or nearby text has Belgian indicators, mark as BE
+      const hasNonBelgianIndicator = /\b(united kingdom|UK|germany|deutschland|france|nederland|netherlands|china|india|usa|ireland)\b/i.test(text);
+      if (!hasNonBelgianIndicator) supplierCountry = 'BE';
+    }
+  }
+  // Check for explicit country indicators if no VAT number found
+  if (!supplierCountry) {
+    if (/\b(United Kingdom|England|Scotland|Wales)\b/i.test(text)) supplierCountry = 'GB';
+    else if (/\b(Deutschland|Germany)\b/i.test(text)) supplierCountry = 'DE';
+    else if (/\b(Nederland|Netherlands|Pays-Bas)\b/i.test(text)) supplierCountry = 'NL';
+    else if (/\b(France|République Française)\b/i.test(text)) supplierCountry = 'FR';
+    else if (/\b(Ireland|Éire)\b/i.test(text)) supplierCountry = 'IE';
+    else if (/\b(China|中国|P\.?R\.?\s*C)\b/i.test(text)) supplierCountry = 'CN';
+    else if (/\b(India)\b/i.test(text)) supplierCountry = 'IN';
+  }
+  const isBelgianSupplier = supplierCountry === 'BE' || supplierCountry === '';
+  // If no country detected and we found Belgian-specific keywords, assume Belgian
+  if (!supplierCountry && /\b(btw|belgisch|belgi[eë]|bruxelles|brussel|antwerp|gent|liège)\b/i.test(text)) {
+    supplierCountry = 'BE';
+  }
+
   // ─── VAT/BTW AMOUNT ──────────────────────────────────────────────────
   let vatAmount = 0;
   const vatPatterns = [
@@ -804,16 +871,39 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
     new RegExp(`(?:btw|tva)\\s*(?:\\d+[.,]?\\d*\\s*%)?\\s*[:.]*\\s*(?:€|EUR)?\\s*${eurNum}`, 'i'),
     // "VAT Amount: 300.56" or "Tax amount: EUR 300,56"
     new RegExp(`(?:vat|tax|mwst)\\s*(?:amount|bedrag)?\\s*[:.]*\\s*(?:€|EUR)?\\s*${eurNum}`, 'i'),
+    // "Vat Amount In GBP0.00" (Chemoxy-style)
+    new RegExp(`(?:vat|btw|tva)\\s*(?:amount)?\\s*(?:in)?\\s*(?:€|EUR|GBP|USD)?\\s*${eurNum}`, 'i'),
   ];
   for (const pat of vatPatterns) {
     // Search reversed text to prefer the last (bottom-of-document) match
     const m = reversedText.match(pat);
     if (m) {
       const parsed = parseEuropeanNumber(m[1]);
-      if (parsed > 0 && !looksLikeDateNumber(m[1], parsed)) {
+      if (!looksLikeDateNumber(m[1], parsed)) {
         vatAmount = parsed;
         break;
       }
+    }
+  }
+
+  // VAT sanity checks based on supplier country
+  if (!isBelgianSupplier && vatAmount > 0) {
+    // Non-Belgian suppliers typically don't charge VAT to a Belgian company
+    // (intra-community supply / reverse charge). The parsed VAT is likely noise.
+    console.log(`[pdf-parse] Non-Belgian supplier (${supplierCountry}) "${supplierName}" — zeroing parsed VAT ${vatAmount} (reverse charge expected)`);
+    vatAmount = 0;
+  }
+
+  // For Belgian suppliers: if no VAT was parsed but amount > 0,
+  // check if the "total incl. VAT" was used as amount (common for Belgian invoices)
+  // Belgian standard VAT is 21%. If amount / 1.21 gives a clean-ish number, flag it.
+  // We don't auto-correct — just log for awareness.
+  if (isBelgianSupplier && vatAmount === 0 && amount > 0 && !matchedInclVat) {
+    const possibleExcl = amount / 1.21;
+    const possibleVat = amount - possibleExcl;
+    // Check if "21%" appears in the text — strong indicator that VAT should be present
+    if (/\b21\s*%/.test(text) || /\b21,00\s*%/.test(text)) {
+      console.log(`[pdf-parse] Belgian supplier "${supplierName}" mentions 21% but no VAT parsed — amount=${amount}, possible VAT=${possibleVat.toFixed(2)}`);
     }
   }
 
@@ -822,7 +912,7 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
     amount = Math.round((amount - vatAmount) * 100) / 100;
   }
 
-  console.log(`[pdf-parse] ${pdfFilename}: id="${invoiceId}" supplier="${supplierName}" date=${issueDate} amount=${amount} vat=${vatAmount} currency=${currency}`);
+  console.log(`[pdf-parse] ${pdfFilename}: id="${invoiceId}" supplier="${supplierName}" country=${supplierCountry || '??'} date=${issueDate} amount=${amount} vat=${vatAmount} currency=${currency}`);
 
   return {
     invoiceId,
@@ -831,6 +921,7 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
     amount,
     vatAmount,
     currency,
+    supplierCountry,
     lineItems: [] as { description: string; amount: number }[],
     embeddedPdf: null as string | null,
     pdfFilename,
