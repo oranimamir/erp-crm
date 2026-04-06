@@ -27,6 +27,7 @@ router.get('/', (req: Request, res: Response) => {
     date: 'COALESCE(i.invoice_date, i.created_at)',
     amount: 'i.amount',
     name: 'COALESCE(c.name, s.name)',
+    wire_date: 'wt.last_wire_date',
   };
   const sortBy = (req.query.sort_by as string) || 'date';
   const sortDir = (req.query.sort_dir as string) === 'asc' ? 'ASC' : 'DESC';
@@ -59,13 +60,19 @@ router.get('/', (req: Request, res: Response) => {
   if (wire === 'yes') { conditions.push('COALESCE(wt.wire_transfer_count, 0) > 0'); }
   if (wire === 'no')  { conditions.push('(wt.wire_transfer_count IS NULL OR wt.wire_transfer_count = 0)'); }
   if (customer) { conditions.push('c.name LIKE ?'); params.push(`%${customer}%`); }
+  // Wire transfer date range filter
+  const wireDateFrom = (req.query.wire_date_from as string) || '';
+  const wireDateTo   = (req.query.wire_date_to   as string) || '';
+  if (wireDateFrom) { conditions.push("wt.last_wire_date >= ?"); params.push(wireDateFrom); }
+  if (wireDateTo)   { conditions.push("wt.last_wire_date <= ?"); params.push(wireDateTo); }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
-  const wtJoin = `LEFT JOIN (SELECT invoice_id, COUNT(*) as wire_transfer_count FROM wire_transfers GROUP BY invoice_id) wt ON wt.invoice_id = i.id`;
+  const wtJoin = `LEFT JOIN (SELECT invoice_id, COUNT(*) as wire_transfer_count, MAX(transfer_date) as last_wire_date FROM wire_transfers GROUP BY invoice_id) wt ON wt.invoice_id = i.id`;
   const total = (db.prepare(`SELECT COUNT(*) as count FROM invoices i LEFT JOIN customers c ON i.customer_id = c.id LEFT JOIN suppliers s ON i.supplier_id = s.id ${wtJoin} ${where}`).get(...params) as any).count;
   const invoices = db.prepare(`
     SELECT i.*, c.name as customer_name, s.name as supplier_name,
-      COALESCE(wt.wire_transfer_count, 0) as wire_transfer_count
+      COALESCE(wt.wire_transfer_count, 0) as wire_transfer_count,
+      wt.last_wire_date
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
     LEFT JOIN suppliers s ON i.supplier_id = s.id

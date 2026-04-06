@@ -107,6 +107,8 @@ export default function InvoicesPage() {
   const [customerFilter, setCustomerFilter] = useState(saved.customerFilter || '');
   const [dateFrom,    setDateFrom]    = useState(saved.dateFrom || '');
   const [dateTo,      setDateTo]      = useState(saved.dateTo || '');
+  const [wireDateFrom, setWireDateFrom] = useState(saved.wireDateFrom || '');
+  const [wireDateTo,   setWireDateTo]   = useState(saved.wireDateTo || '');
   const [sortBy, setSortBy] = useState('date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [loading, setLoading] = useState(true);
@@ -120,8 +122,8 @@ export default function InvoicesPage() {
 
   // Persist filters to sessionStorage
   useEffect(() => {
-    saveFilters({ search, statusFilter, yearFilter, monthFilter, wireFilter, customerFilter, dateFrom, dateTo });
-  }, [search, statusFilter, yearFilter, monthFilter, wireFilter, customerFilter, dateFrom, dateTo]);
+    saveFilters({ search, statusFilter, yearFilter, monthFilter, wireFilter, customerFilter, dateFrom, dateTo, wireDateFrom, wireDateTo });
+  }, [search, statusFilter, yearFilter, monthFilter, wireFilter, customerFilter, dateFrom, dateTo, wireDateFrom, wireDateTo]);
 
   // Preview modal
   const [previewItem, setPreviewItem] = useState<{ fileName: string; filePath: string; subfolder: string } | null>(null);
@@ -199,6 +201,8 @@ export default function InvoicesPage() {
         customer: customerFilter || undefined,
         date_from: dateFrom || undefined,
         date_to:   dateTo   || undefined,
+        wire_date_from: wireDateFrom || undefined,
+        wire_date_to:   wireDateTo   || undefined,
         sort_by: sortBy,
         sort_dir: sortDir,
       },
@@ -212,7 +216,7 @@ export default function InvoicesPage() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchInvoices(); }, [page, search, statusFilter, yearFilter, monthFilter, wireFilter, customerFilter, dateFrom, dateTo, sortBy, sortDir]);
+  useEffect(() => { fetchInvoices(); }, [page, search, statusFilter, yearFilter, monthFilter, wireFilter, customerFilter, dateFrom, dateTo, wireDateFrom, wireDateTo, sortBy, sortDir]);
 
   const handleDelete = async () => {
     if (!deleteId) return;
@@ -429,16 +433,25 @@ export default function InvoicesPage() {
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2 text-sm text-gray-500">
               <CalendarDays size={14} />
-              <span>Date range:</span>
+              <span>Invoice date:</span>
               <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPage(1); }}
                 className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm" />
               <span>to</span>
               <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setPage(1); }}
                 className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm" />
             </div>
-            {(statusFilter.length > 0 || yearFilter || monthFilter.length > 0 || wireFilter || customerFilter || dateFrom || dateTo || search) && (
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <Landmark size={14} />
+              <span>Wire date:</span>
+              <input type="date" value={wireDateFrom} onChange={e => { setWireDateFrom(e.target.value); setPage(1); }}
+                className={`rounded-lg border px-2 py-1.5 text-sm ${wireDateFrom ? 'border-green-400 bg-green-50' : 'border-gray-300'}`} />
+              <span>to</span>
+              <input type="date" value={wireDateTo} onChange={e => { setWireDateTo(e.target.value); setPage(1); }}
+                className={`rounded-lg border px-2 py-1.5 text-sm ${wireDateTo ? 'border-green-400 bg-green-50' : 'border-gray-300'}`} />
+            </div>
+            {(statusFilter.length > 0 || yearFilter || monthFilter.length > 0 || wireFilter || customerFilter || dateFrom || dateTo || wireDateFrom || wireDateTo || search) && (
               <button
-                onClick={() => { setSearch(''); setStatusFilter([]); setYearFilter(''); setMonthFilter([]); setWireFilter(''); setCustomerFilter(''); setDateFrom(''); setDateTo(''); setPage(1); }}
+                onClick={() => { setSearch(''); setStatusFilter([]); setYearFilter(''); setMonthFilter([]); setWireFilter(''); setCustomerFilter(''); setDateFrom(''); setDateTo(''); setWireDateFrom(''); setWireDateTo(''); setPage(1); }}
                 className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100"
               >
                 <X size={12} /> Clear all filters
@@ -478,9 +491,15 @@ export default function InvoicesPage() {
                   <th className="text-center px-4 py-3 font-medium text-gray-600">Wire</th>
                   <th
                     className="text-left px-4 py-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900 select-none"
+                    onClick={() => handleSort('wire_date')}
+                  >
+                    <span className="flex items-center gap-1">Wire Date <SortIcon field="wire_date" /></span>
+                  </th>
+                  <th
+                    className="text-left px-4 py-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900 select-none"
                     onClick={() => handleSort('date')}
                   >
-                    <span className="flex items-center gap-1">Date <SortIcon field="date" /></span>
+                    <span className="flex items-center gap-1">Invoice Date <SortIcon field="date" /></span>
                   </th>
                   <th className="text-right px-4 py-3 font-medium text-gray-600">Actions</th>
                 </tr>
@@ -546,6 +565,7 @@ export default function InvoicesPage() {
                         <span className="text-gray-300">—</span>
                       )}
                     </td>
+                    <td className="px-4 py-3 text-gray-600">{inv.last_wire_date ? formatDateOrDash(inv.last_wire_date) : <span className="text-gray-300">—</span>}</td>
                     <td className="px-4 py-3 text-gray-600">{formatDateOrDash(inv.invoice_date || inv.due_date)}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
