@@ -1097,18 +1097,16 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     // Separate own-company invoices so we can report them to the user
     const ownCompanyInvoices = classified.filter(inv => isOwnCompany(inv.supplierName));
 
-    // ALL invoices go through (including duplicates) — duplicates are flagged for user review
-    // The user can choose to skip or force-import each one
-    const allInvoices = classified;
+    // Exclude duplicates — silently skip them (user doesn't want to review duplicates)
+    const newInvoices = classified.filter(inv => !duplicateInvoiceIds.has(inv.invoiceId));
 
-    // Flag invoices that need user attention (amount=0, fallback date, unknown supplier, own-company, bad dates, duplicates)
+    // Flag invoices that need user attention (amount=0, fallback date, unknown supplier, own-company, bad dates)
     const today = new Date().toISOString().substring(0, 10);
     const currentYear = new Date().getFullYear();
     const warnings: { invoiceId: string; supplier: string; issues: string[] }[] = [];
-    for (const inv of allInvoices) {
+    for (const inv of newInvoices) {
       const issues: string[] = [];
       if (isOwnCompany(inv.supplierName)) issues.push('own_company');
-      if (duplicateInvoiceIds.has(inv.invoiceId)) issues.push('duplicate');
       if (inv.amount === 0) issues.push('amount_zero');
       if (!inv.issueDate || inv.issueDate === today) issues.push('date_uncertain');
       // Date sanity checks
@@ -1133,11 +1131,10 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     const pairedCount = parsed.filter(inv => inv.xmlFilename && inv.embeddedPdf).length;
     const existingDbCount = (db.prepare('SELECT COUNT(*) as cnt FROM demo_invoices').get() as any).cnt;
 
-    const nonDuplicateCount = allInvoices.filter(inv => !duplicateInvoiceIds.has(inv.invoiceId)).length;
-    console.log(`[upload-zip] Summary: ${allFileNames.length} files (${xmlFiles.length} XML + ${pdfFiles.size} PDF, ${failedFiles.length} failed) → ${parsed.length} parsed (${pairedCount} paired, ${xmlOnlyCount} XML-only, ${pdfOnlyCount} PDF-only) → ${deduped.length} after in-ZIP dedup → ${nonDuplicateCount} new + ${duplicates.length} duplicates (${inZipDuplicateCount} in-ZIP duplicates, ${ownCompanyInvoices.length} own-company, ${warnings.length} with warnings). DB has ${existingDbCount} invoices.`);
+    console.log(`[upload-zip] Summary: ${allFileNames.length} files (${xmlFiles.length} XML + ${pdfFiles.size} PDF, ${failedFiles.length} failed) → ${parsed.length} parsed (${pairedCount} paired, ${xmlOnlyCount} XML-only, ${pdfOnlyCount} PDF-only) → ${deduped.length} after in-ZIP dedup → ${newInvoices.length} new (${duplicates.length} DB duplicates skipped, ${inZipDuplicateCount} in-ZIP duplicates, ${ownCompanyInvoices.length} own-company, ${warnings.length} with warnings). DB has ${existingDbCount} invoices.`);
 
     res.json({
-      parsed: allInvoices.map(inv => ({
+      parsed: newInvoices.map(inv => ({
         invoiceId: inv.invoiceId,
         issueDate: inv.issueDate,
         supplier: inv.supplierName,
@@ -1183,10 +1180,10 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
         warningsCount: warnings.length,
         failedToParse: failedFiles.length,
         failedFiles: failedFiles,
-        readyToImport: nonDuplicateCount,
+        readyToImport: newInvoices.length,
         existingDbTotal: existingDbCount,
       },
-      _fullData: allInvoices.map(inv => ({
+      _fullData: newInvoices.map(inv => ({
         invoiceId: inv.invoiceId,
         issueDate: inv.issueDate,
         supplier: inv.supplierName,
@@ -1300,19 +1297,29 @@ router.post('/confirm-import', (req: Request, res: Response) => {
           existingCombos.add(`${alias}|${r.amount}|${r.issue_date}`);
         }
       }
-      const nonDuplicate = filtered.filter((inv: any) => {
-        if (inv.invoiceId && existingIds.has(inv.invoiceId)) return false;
-        if (inv.amount === 0) return true; // don't combo-dedup zero-amount invoices
-        // Check with both original name and corrected name
+      const nonDuplicate: any[] = [];
+      const skippedDetails: { invoiceId: string; supplier: string; reason: string }[] = [];
+      for (const inv of filtered) {
+        if (inv.invoiceId && existingIds.has(inv.invoiceId)) {
+          skippedDetails.push({ invoiceId: inv.invoiceId, supplier: inv.supplier, reason: 'duplicate_id' });
+          continue;
+        }
+        if (inv.amount === 0) { nonDuplicate.push(inv); continue; }
         const originalName = (inv.supplier || '').toLowerCase();
         const correctedName = (nameOverrides?.[inv.supplier] || '').toLowerCase();
-        if (existingCombos.has(`${originalName}|${inv.amount}|${inv.issueDate}`)) return false;
-        if (correctedName && existingCombos.has(`${correctedName}|${inv.amount}|${inv.issueDate}`)) return false;
-        return true;
-      });
+        if (existingCombos.has(`${originalName}|${inv.amount}|${inv.issueDate}`)) {
+          skippedDetails.push({ invoiceId: inv.invoiceId, supplier: inv.supplier, reason: 'duplicate_combo' });
+          continue;
+        }
+        if (correctedName && existingCombos.has(`${correctedName}|${inv.amount}|${inv.issueDate}`)) {
+          skippedDetails.push({ invoiceId: inv.invoiceId, supplier: inv.supplier, reason: 'duplicate_combo' });
+          continue;
+        }
+        nonDuplicate.push(inv);
+      }
 
       if (nonDuplicate.length === 0) {
-        return { skippedAll: true, message: 'All invoices already exist in the system' };
+        return { skippedAll: true, message: 'All invoices already exist in the system', skippedDetails };
       }
 
       // Resolve final domain + category + supplier name for each invoice
@@ -1376,12 +1383,12 @@ router.post('/confirm-import', (req: Request, res: Response) => {
         results.push({ domain, count: domainInvoices.length, totalAmount });
       }
 
-      return { results, submitted: invoices.length, skippedByUser: skipSet.size, skippedAsDuplicate: filtered.length - nonDuplicate.length };
+      return { results, submitted: invoices.length, skippedByUser: skipSet.size, skippedAsDuplicate: filtered.length - nonDuplicate.length, skippedDetails };
     });
 
     const txResult = doImport();
     if (txResult && (txResult as any).skippedAll) {
-      res.json({ success: true, results: [], message: (txResult as any).message });
+      res.json({ success: true, results: [], message: (txResult as any).message, skippedDetails: (txResult as any).skippedDetails });
       return;
     }
     db.saveToDisk();
@@ -1398,9 +1405,11 @@ router.post('/confirm-import', (req: Request, res: Response) => {
     const dbTotal = (db.prepare('SELECT COUNT(*) as cnt FROM demo_invoices').get() as any).cnt;
     const demoTotal = (db.prepare("SELECT COUNT(*) as cnt FROM demo_invoices WHERE domain = 'demo'").get() as any).cnt;
     const salesTotal = (db.prepare("SELECT COUNT(*) as cnt FROM demo_invoices WHERE domain = 'sales'").get() as any).cnt;
+    const { skippedDetails: txSkipped } = txResult as any;
     res.json({
       success: true,
       results: importResults,
+      skippedDetails: txSkipped || [],
       reconciliation: {
         submitted,
         skippedByUser,

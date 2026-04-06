@@ -440,7 +440,6 @@ export default function SupplierInvoicesPage() {
   const [zipUploading, setZipUploading] = useState(false);
   const [pendingUpload, setPendingUpload] = useState<any>(null);
   const [showUnknownModal, setShowUnknownModal] = useState(false);
-  const [showMonthConflict, setShowMonthConflict] = useState(false);
   const [unknownAssignments, setUnknownAssignments] = useState<Record<string, { domain: string; category: string; remember: boolean }>>({});
   const [nameOverrides, setNameOverrides] = useState<Record<string, string>>({});
   const [amountOverrides, setAmountOverrides] = useState<Record<string, number>>({});
@@ -692,7 +691,7 @@ export default function SupplierInvoicesPage() {
         }
       }
       if (res.data.duplicatesSkipped > 0) {
-        addToast(`${res.data.duplicatesSkipped} duplicate invoice(s) found — marked for skip, you can un-skip in review`, 'info');
+        addToast(`${res.data.duplicatesSkipped} duplicate(s) already in system — skipped`, 'info');
       }
       if (res.data.inZipDuplicatesRemoved > 0) {
         addToast(`${res.data.inZipDuplicatesRemoved} duplicate(s) within the ZIP removed`, 'info');
@@ -702,9 +701,7 @@ export default function SupplierInvoicesPage() {
         const badDate = res.data.warnings.filter((w: any) => w.issues.includes('date_uncertain')).length;
         const badSupplier = res.data.warnings.filter((w: any) => w.issues.includes('supplier_uncertain')).length;
         const ownCompany = res.data.warnings.filter((w: any) => w.issues.includes('own_company')).length;
-        const dupCount = res.data.warnings.filter((w: any) => w.issues.includes('duplicate')).length;
         const parts: string[] = [];
-        if (dupCount > 0) parts.push(`${dupCount} duplicate(s) auto-skipped`);
         if (zeroAmt > 0) parts.push(`${zeroAmt} with amount €0`);
         if (badDate > 0) parts.push(`${badDate} with uncertain date`);
         if (badSupplier > 0) parts.push(`${badSupplier} with unrecognised supplier`);
@@ -764,12 +761,10 @@ export default function SupplierInvoicesPage() {
         })));
         // Auto-skip own-company and duplicate invoices by default (user can un-skip)
         const autoSkipIds = (res.data.warnings || [])
-          .filter((w: any) => w.issues.includes('own_company') || w.issues.includes('duplicate'))
+          .filter((w: any) => w.issues.includes('own_company'))
           .map((w: any) => w.invoiceId);
         if (autoSkipIds.length > 0) setSkipIds(autoSkipIds);
         setShowUnknownModal(true);
-      } else if (res.data.existingDemoBatch || res.data.existingSalesBatch) {
-        setShowMonthConflict(true);
       } else {
         await finalizeZipImport(res.data, {}, [], false, false);
       }
@@ -841,7 +836,14 @@ export default function SupplierInvoicesPage() {
       if (recon) {
         const skipParts: string[] = [];
         if (recon.skippedByUser > 0) skipParts.push(`${recon.skippedByUser} skipped by you`);
-        if (recon.skippedAsDuplicate > 0) skipParts.push(`${recon.skippedAsDuplicate} duplicate(s) caught`);
+        if (recon.skippedAsDuplicate > 0) {
+          skipParts.push(`${recon.skippedAsDuplicate} duplicate(s) caught`);
+          const skipped = res.data.skippedDetails || [];
+          if (skipped.length > 0) {
+            const names = skipped.map((s: any) => s.invoiceId).slice(0, 5).join(', ');
+            addToast(`Duplicates skipped: ${names}${skipped.length > 5 ? '...' : ''}`, 'info');
+          }
+        }
         const skipMsg = skipParts.length > 0 ? ` (${skipParts.join(', ')})` : '';
         addToast(`DB total: ${recon.dbTotalAfterImport} invoices (${recon.dbDemoCount} demo, ${recon.dbSalesCount} sales)${skipMsg}`, 'info');
       }
@@ -849,7 +851,6 @@ export default function SupplierInvoicesPage() {
       setPendingUpload(null);
       setPendingZipFile(null);
       setShowUnknownModal(false);
-      setShowMonthConflict(false);
       setUnknownAssignments({});
       setAmountOverrides({});
       setDateOverrides({});
@@ -869,7 +870,6 @@ export default function SupplierInvoicesPage() {
     setPendingUpload(null);
     setPendingZipFile(null);
     setShowUnknownModal(false);
-    setShowMonthConflict(false);
     setUnknownAssignments({});
     setNameOverrides({});
     setAmountOverrides({});
@@ -1803,7 +1803,6 @@ export default function SupplierInvoicesPage() {
                             )}
                             {w.issues.includes('amount_zero') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Amount is €0 — please verify</span>}
                             {w.issues.includes('date_uncertain') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Date could not be read — please verify</span>}
-                            {w.issues.includes('duplicate') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">Duplicate — already in system (auto-skipped, click "Do not upload" to undo)</span>}
                             {w.issues.includes('date_future') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Date is in the future — please correct</span>}
                             {w.issues.includes('date_illogical') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Date looks wrong (illogical year) — please correct</span>}
                             {w.issues.includes('supplier_uncertain') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Supplier not recognised — please verify</span>}
@@ -2006,36 +2005,13 @@ export default function SupplierInvoicesPage() {
               <button onClick={cancelZipUpload} className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
               <button onClick={() => {
                 setShowUnknownModal(false);
-                if (pendingUpload.existingDemoBatch || pendingUpload.existingSalesBatch) setShowMonthConflict(true);
-                else finalizeZipImport(pendingUpload, unknownAssignments, skipIds, false, false);
+                finalizeZipImport(pendingUpload, unknownAssignments, skipIds, false, false);
               }} className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium">Continue</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Month Conflict Modal */}
-      {showMonthConflict && pendingUpload && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 p-6">
-            <h2 className="text-lg font-bold text-gray-900 mb-2">Month Already Exists</h2>
-            <p className="text-sm text-gray-600 mb-4">
-              Data for <strong>{pendingUpload.inferredMonth}</strong> already exists. What would you like to do?
-            </p>
-            <div className="flex flex-col gap-2">
-              <button onClick={() => { setShowMonthConflict(false); finalizeZipImport(pendingUpload, unknownAssignments, skipIds, true, true); }}
-                className="w-full px-4 py-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded-lg hover:bg-red-100 text-left">
-                <strong>Replace</strong> — delete existing data and import new
-              </button>
-              <button onClick={() => { setShowMonthConflict(false); finalizeZipImport(pendingUpload, unknownAssignments, skipIds, false, false); }}
-                className="w-full px-4 py-3 text-sm bg-primary-50 border border-primary-200 text-primary-700 rounded-lg hover:bg-primary-100 text-left">
-                <strong>Merge</strong> — add alongside existing
-              </button>
-              <button onClick={cancelZipUpload} className="w-full px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Single Upload Preview Modal */}
       {singlePreview && (
