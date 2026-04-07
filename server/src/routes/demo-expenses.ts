@@ -2172,10 +2172,15 @@ router.patch('/invoices/:id/date', (req: Request, res: Response) => {
 
 router.patch('/invoices/:id/flag', (req: Request, res: Response) => {
   try {
-    const { flagged } = req.body;
-    const inv = db.prepare('SELECT id FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
+    const { flagged, from_vat_audit } = req.body;
+    const inv = db.prepare('SELECT id, vat_amount FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
     if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
     db.prepare('UPDATE demo_invoices SET flagged = ? WHERE id = ?').run(flagged ? 1 : 0, req.params.id);
+    if (from_vat_audit) {
+      db.prepare('INSERT INTO vat_audit_log (invoice_id, action, old_vat, new_vat, performed_by) VALUES (?, ?, ?, ?, ?)').run(
+        inv.id, 'flag', inv.vat_amount, inv.vat_amount, (req as any).user?.display_name || 'Unknown'
+      );
+    }
     db.saveToDisk();
     res.json({ success: true });
   } catch (err: any) {
@@ -2185,13 +2190,19 @@ router.patch('/invoices/:id/flag', (req: Request, res: Response) => {
 
 router.patch('/invoices/:id/vat', (req: Request, res: Response) => {
   try {
-    const { vat_amount } = req.body;
+    const { vat_amount, audit_action } = req.body;
     if (vat_amount == null) { res.status(400).json({ error: 'vat_amount required' }); return; }
-    const inv = db.prepare('SELECT id, invoice_id, supplier FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
+    const inv = db.prepare('SELECT id, invoice_id, supplier, vat_amount FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
     if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
     const newVat = Number(vat_amount);
     if (isNaN(newVat) || newVat < 0) { res.status(400).json({ error: 'Invalid vat_amount' }); return; }
+    const oldVat = inv.vat_amount;
     db.prepare('UPDATE demo_invoices SET vat_amount = ? WHERE id = ?').run(newVat, req.params.id);
+    if (audit_action) {
+      db.prepare('INSERT INTO vat_audit_log (invoice_id, action, old_vat, new_vat, performed_by) VALUES (?, ?, ?, ?, ?)').run(
+        inv.id, audit_action, oldVat, newVat, (req as any).user?.display_name || 'Unknown'
+      );
+    }
     db.saveToDisk();
     notifyAdmin({
       entity: 'Supplier Invoice',
@@ -2203,6 +2214,46 @@ router.patch('/invoices/:id/vat', (req: Request, res: Response) => {
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to update VAT' });
+  }
+});
+
+router.patch('/invoices/:id/vat-review', (req: Request, res: Response) => {
+  try {
+    const inv = db.prepare('SELECT id FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
+    if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
+    db.prepare('UPDATE demo_invoices SET vat_reviewed = 1 WHERE id = ?').run(req.params.id);
+    db.saveToDisk();
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to mark as reviewed' });
+  }
+});
+
+router.post('/invoices/:id/vat-keep', (req: Request, res: Response) => {
+  try {
+    const inv = db.prepare('SELECT id, vat_amount FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
+    if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
+    db.prepare('INSERT INTO vat_audit_log (invoice_id, action, old_vat, new_vat, performed_by) VALUES (?, ?, ?, ?, ?)').run(
+      inv.id, 'keep_vat', inv.vat_amount, inv.vat_amount, (req as any).user?.display_name || 'Unknown'
+    );
+    db.saveToDisk();
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to log keep VAT action' });
+  }
+});
+
+router.get('/vat-audit-log', (_req: Request, res: Response) => {
+  try {
+    const logs = db.prepare(`
+      SELECT l.*, i.invoice_id, i.supplier, i.amount, i.currency
+      FROM vat_audit_log l
+      JOIN demo_invoices i ON l.invoice_id = i.id
+      ORDER BY l.performed_at DESC
+    `).all();
+    res.json(logs);
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch audit log' });
   }
 });
 
@@ -2433,7 +2484,7 @@ router.get('/check-duplicates', (_req: Request, res: Response) => {
 router.get('/vat-audit', async (_req: Request, res: Response) => {
   try {
     const allInvoices = db.prepare(
-      'SELECT id, invoice_id, issue_date, supplier, amount, vat_amount, currency, domain, category, embedded_pdf, xml_filename FROM demo_invoices'
+      'SELECT id, invoice_id, issue_date, supplier, amount, vat_amount, currency, domain, category, embedded_pdf, xml_filename FROM demo_invoices WHERE vat_reviewed = 0'
     ).all() as any[];
 
     const issues: {

@@ -1099,6 +1099,20 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE demo_upload_batches ADD COLUMN note TEXT NOT NULL DEFAULT ''`); } catch (_) {}
   try { db.exec(`ALTER TABLE demo_upload_batches ADD COLUMN uploaded_by_name TEXT NOT NULL DEFAULT ''`); } catch (_) {}
   try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN flagged INTEGER DEFAULT 0`); } catch (_) {}
+  try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN vat_reviewed INTEGER DEFAULT 0`); } catch (_) {}
+
+  // VAT audit log table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vat_audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      invoice_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      old_vat REAL,
+      new_vat REAL,
+      performed_by TEXT,
+      performed_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
 
   // Custom categories table
   db.exec(`

@@ -462,6 +462,9 @@ export default function SupplierInvoicesPage() {
   const [vatIssues, setVatIssues] = useState<any[] | null>(null);
   const [showVatModal, setShowVatModal] = useState(false);
   const [fixingVat, setFixingVat] = useState(false);
+  const [manualVatId, setManualVatId] = useState<number | null>(null);
+  const [manualVatValue, setManualVatValue] = useState('');
+  const [actionTakenIds, setActionTakenIds] = useState<Set<number>>(new Set());
 
   // Quick preview for duplicates / VAT audit modals
   const [previewInvoiceId, setPreviewInvoiceId] = useState<number | null>(null);
@@ -973,19 +976,62 @@ export default function SupplierInvoicesPage() {
     }
   };
 
-  const handleFixVat = async (id: number, newVat: number) => {
+  const handleFixVat = async (id: number, newVat: number, action: string = 'set_to_0') => {
     setFixingVat(true);
     try {
-      await api.patch(`/demo-expenses/invoices/${id}/vat`, { vat_amount: newVat });
+      await api.patch(`/demo-expenses/invoices/${id}/vat`, { vat_amount: newVat, audit_action: action });
       addToast('VAT updated', 'success');
-      // Remove from issues list
-      setVatIssues(prev => prev ? prev.filter(i => i.id !== id) : null);
-      if (vatIssues && vatIssues.length <= 1) { setShowVatModal(false); setPreviewInvoiceId(null); setPreviewPdf(null); }
+      setActionTakenIds(prev => new Set(prev).add(id));
+      setManualVatId(null);
       fetchAll();
     } catch {
       addToast('Failed to update VAT', 'error');
     } finally {
       setFixingVat(false);
+    }
+  };
+
+  const handleKeepVat = async (issue: any) => {
+    setFixingVat(true);
+    try {
+      await api.post(`/demo-expenses/invoices/${issue.id}/vat-keep`);
+      addToast('VAT kept as-is', 'success');
+      setActionTakenIds(prev => new Set(prev).add(issue.id));
+    } catch {
+      addToast('Failed to log action', 'error');
+    } finally {
+      setFixingVat(false);
+    }
+  };
+
+  const handleManualVatSubmit = async (id: number) => {
+    const val = Number(manualVatValue);
+    if (isNaN(val) || val < 0) { addToast('Enter a valid VAT amount', 'error'); return; }
+    await handleFixVat(id, val, 'manual_insert');
+  };
+
+  const handleFlagForLater = async (id: number) => {
+    setFixingVat(true);
+    try {
+      await api.patch(`/demo-expenses/invoices/${id}/flag`, { flagged: true, from_vat_audit: true });
+      addToast('Flagged for later', 'success');
+      setActionTakenIds(prev => new Set(prev).add(id));
+    } catch {
+      addToast('Failed to flag invoice', 'error');
+    } finally {
+      setFixingVat(false);
+    }
+  };
+
+  const handleMarkReviewed = async (id: number) => {
+    try {
+      await api.patch(`/demo-expenses/invoices/${id}/vat-review`);
+      setVatIssues(prev => prev ? prev.filter(i => i.id !== id) : null);
+      setActionTakenIds(prev => { const s = new Set(prev); s.delete(id); return s; });
+      if (vatIssues && vatIssues.length <= 1) { setShowVatModal(false); setPreviewInvoiceId(null); setPreviewPdf(null); }
+      addToast('Marked as reviewed', 'success');
+    } catch {
+      addToast('Failed to mark as reviewed', 'error');
     }
   };
 
@@ -2249,7 +2295,7 @@ export default function SupplierInvoicesPage() {
       {/* VAT Audit Modal */}
       {showVatModal && vatIssues && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-xl shadow-2xl max-w-5xl w-full mx-4 max-h-[90vh] flex flex-col">
+          <div className="bg-white rounded-xl shadow-2xl max-w-7xl w-full mx-4 max-h-[90vh] flex flex-col">
             <div className="p-6 border-b flex items-center justify-between">
               <div>
                 <h2 className="text-lg font-bold text-gray-900">VAT Audit Results</h2>
@@ -2257,61 +2303,115 @@ export default function SupplierInvoicesPage() {
                   Found {vatIssues.length} invoice(s) with potential VAT issues. Review and fix as needed.
                 </p>
               </div>
-              <button onClick={() => { setShowVatModal(false); setPreviewInvoiceId(null); setPreviewPdf(null); }} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100">
+              <button onClick={() => { setShowVatModal(false); setPreviewInvoiceId(null); setPreviewPdf(null); setActionTakenIds(new Set()); setManualVatId(null); }} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100">
                 <X size={20} />
               </button>
             </div>
             <div className="flex-1 overflow-y-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm table-fixed">
                 <thead className="sticky top-0 bg-gray-50">
                   <tr className="border-b">
-                    <th className="text-left px-4 py-3 font-medium text-gray-600">Invoice ID</th>
-                    <th className="text-left px-4 py-3 font-medium text-gray-600">Supplier</th>
-                    <th className="text-center px-4 py-3 font-medium text-gray-600">Country</th>
-                    <th className="text-right px-4 py-3 font-medium text-gray-600">Amount</th>
-                    <th className="text-right px-4 py-3 font-medium text-gray-600">Current VAT</th>
-                    <th className="text-right px-4 py-3 font-medium text-gray-600">Suggested</th>
-                    <th className="text-left px-4 py-3 font-medium text-gray-600">Issue</th>
-                    <th className="text-right px-4 py-3 font-medium text-gray-600">Action</th>
-                    <th className="w-10 px-3 py-3"></th>
+                    <th className="text-left px-3 py-3 font-medium text-gray-600 w-[110px]">Invoice ID</th>
+                    <th className="text-left px-3 py-3 font-medium text-gray-600 w-[160px]">Supplier</th>
+                    <th className="text-center px-2 py-3 font-medium text-gray-600 w-[60px]">Country</th>
+                    <th className="text-right px-3 py-3 font-medium text-gray-600 w-[90px]">Amount</th>
+                    <th className="text-right px-3 py-3 font-medium text-gray-600 w-[90px]">Current VAT</th>
+                    <th className="text-right px-3 py-3 font-medium text-gray-600 w-[80px]">Suggested</th>
+                    <th className="text-left px-3 py-3 font-medium text-gray-600">Issue</th>
+                    <th className="text-center px-2 py-3 font-medium text-gray-600 w-[280px]">Action</th>
+                    <th className="w-10 px-2 py-3"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {vatIssues.map((issue: any) => (
                     <React.Fragment key={issue.id}>
-                      <tr className="hover:bg-gray-50">
-                        <td className="px-4 py-3 font-medium text-gray-900">{issue.invoice_id}</td>
-                        <td className="px-4 py-3 text-gray-600">{issue.supplier}</td>
-                        <td className="px-4 py-3 text-center">
+                      <tr className={`hover:bg-gray-50 ${actionTakenIds.has(issue.id) ? 'bg-green-50/50' : ''}`}>
+                        <td className="px-3 py-3 font-medium text-gray-900 truncate" title={issue.invoice_id}>{issue.invoice_id}</td>
+                        <td className="px-3 py-3 text-gray-600 truncate" title={issue.supplier}>{issue.supplier}</td>
+                        <td className="px-2 py-3 text-center">
                           <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
                             issue.country === 'BE' ? 'bg-yellow-100 text-yellow-700' : 'bg-blue-100 text-blue-700'
                           }`}>
                             {issue.country || '??'}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-right font-medium">
+                        <td className="px-3 py-3 text-right font-medium whitespace-nowrap">
                           {issue.currency === 'GBP' ? '\u00A3' : issue.currency === 'USD' ? '$' : '\u20AC'}
                           {issue.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
-                        <td className={`px-4 py-3 text-right font-medium ${issue.suggested_vat === 0 && issue.current_vat > 0 ? 'text-red-600' : ''}`}>
+                        <td className={`px-3 py-3 text-right font-medium whitespace-nowrap ${issue.suggested_vat === 0 && issue.current_vat > 0 ? 'text-red-600' : ''}`}>
                           {issue.current_vat.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
-                        <td className="px-4 py-3 text-right font-medium text-green-600">
+                        <td className="px-3 py-3 text-right font-medium text-green-600 whitespace-nowrap">
                           {issue.suggested_vat != null ? issue.suggested_vat.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
                         </td>
-                        <td className="px-4 py-3 text-xs text-gray-500 max-w-xs">{issue.issue}</td>
-                        <td className="px-4 py-3 text-right">
-                          {issue.suggested_vat != null && (
-                            <button
-                              onClick={() => handleFixVat(issue.id, issue.suggested_vat)}
-                              disabled={fixingVat}
-                              className="px-3 py-1 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium disabled:opacity-50"
-                            >
-                              {fixingVat ? '...' : issue.suggested_vat === 0 ? 'Set to 0' : 'Apply'}
-                            </button>
-                          )}
+                        <td className="px-3 py-3 text-xs text-gray-500 truncate" title={issue.issue}>{issue.issue}</td>
+                        <td className="px-2 py-3">
+                          <div className="flex items-center gap-1 justify-center">
+                            {actionTakenIds.has(issue.id) ? (
+                              <button
+                                onClick={() => handleMarkReviewed(issue.id)}
+                                disabled={fixingVat}
+                                className="px-3 py-1 text-xs bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium disabled:opacity-50 whitespace-nowrap"
+                              >
+                                ✓ Mark as reviewed
+                              </button>
+                            ) : (
+                              <>
+                                <button
+                                  onClick={() => handleFixVat(issue.id, 0, 'set_to_0')}
+                                  disabled={fixingVat}
+                                  className="px-2 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200 font-medium disabled:opacity-50 whitespace-nowrap"
+                                  title="Set VAT to 0"
+                                >
+                                  Set to 0
+                                </button>
+                                <button
+                                  onClick={() => handleKeepVat(issue)}
+                                  disabled={fixingVat}
+                                  className="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 font-medium disabled:opacity-50 whitespace-nowrap"
+                                  title="Keep current VAT"
+                                >
+                                  Keep
+                                </button>
+                                {manualVatId === issue.id ? (
+                                  <form onSubmit={(e) => { e.preventDefault(); handleManualVatSubmit(issue.id); }} className="flex items-center gap-1">
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      min="0"
+                                      value={manualVatValue}
+                                      onChange={e => setManualVatValue(e.target.value)}
+                                      className="w-16 px-1.5 py-0.5 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
+                                      placeholder="VAT"
+                                      autoFocus
+                                    />
+                                    <button type="submit" disabled={fixingVat} className="px-1.5 py-0.5 text-xs bg-primary-600 text-white rounded hover:bg-primary-700 disabled:opacity-50">OK</button>
+                                    <button type="button" onClick={() => setManualVatId(null)} className="px-1 py-0.5 text-xs text-gray-400 hover:text-gray-600">✕</button>
+                                  </form>
+                                ) : (
+                                  <button
+                                    onClick={() => { setManualVatId(issue.id); setManualVatValue(''); }}
+                                    disabled={fixingVat}
+                                    className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200 font-medium disabled:opacity-50 whitespace-nowrap"
+                                    title="Manually insert VAT amount"
+                                  >
+                                    Manual
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => handleFlagForLater(issue.id)}
+                                  disabled={fixingVat}
+                                  className="px-2 py-1 text-xs bg-amber-100 text-amber-700 rounded hover:bg-amber-200 font-medium disabled:opacity-50 whitespace-nowrap"
+                                  title="Flag for later review"
+                                >
+                                  Flag
+                                </button>
+                              </>
+                            )}
+                          </div>
                         </td>
-                        <td className="px-3 py-3 text-center">
+                        <td className="px-2 py-3 text-center">
                           <button
                             onClick={() => toggleQuickPreview(issue.id)}
                             className={`p-1 rounded hover:bg-gray-100 ${previewInvoiceId === issue.id ? 'text-primary-600' : 'text-gray-400 hover:text-gray-600'}`}
@@ -2343,7 +2443,7 @@ export default function SupplierInvoicesPage() {
             </div>
             <div className="p-4 border-t flex items-center justify-between">
               <span className="text-sm text-gray-500">{vatIssues.length} issue(s) remaining</span>
-              <button onClick={() => { setShowVatModal(false); setPreviewInvoiceId(null); setPreviewPdf(null); }} className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50">
+              <button onClick={() => { setShowVatModal(false); setPreviewInvoiceId(null); setPreviewPdf(null); setActionTakenIds(new Set()); setManualVatId(null); }} className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50">
                 Close
               </button>
             </div>
