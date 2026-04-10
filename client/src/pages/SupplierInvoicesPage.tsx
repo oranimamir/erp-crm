@@ -41,7 +41,7 @@ const SUPPLIER_COLORS = [
 interface Invoice {
   id: number; invoice_id: string; issue_date: string; supplier: string;
   category: string; domain: string; amount: number; vat_amount: number; currency: string;
-  month: string; xml_filename: string; duplicate_warning: number; flagged: number; created_at: string;
+  month: string; xml_filename: string; duplicate_warning: number; flagged: number; flag_comment: string; created_at: string;
 }
 
 interface Batch {
@@ -449,6 +449,8 @@ export default function SupplierInvoicesPage() {
   const [reviewedIds, setReviewedIds] = useState<Set<string>>(new Set());
   const [showReviewed, setShowReviewed] = useState(false);
   const [flagOverrides, setFlagOverrides] = useState<Record<string, boolean>>({});
+  const [flagCommentModal, setFlagCommentModal] = useState<{ id: number; currentlyFlagged: boolean; fromVatAudit?: boolean } | null>(null);
+  const [flagComment, setFlagComment] = useState('');
 
   // Check duplicates
   const [checkingDuplicates, setCheckingDuplicates] = useState(false);
@@ -1010,16 +1012,31 @@ export default function SupplierInvoicesPage() {
     await handleFixVat(id, val, 'manual_insert');
   };
 
-  const handleFlagForLater = async (id: number) => {
-    setFixingVat(true);
+  const handleFlagForLater = (id: number, fromVatAudit = false) => {
+    setFlagCommentModal({ id, currentlyFlagged: false, fromVatAudit });
+    setFlagComment('');
+  };
+
+  const submitFlag = async () => {
+    if (!flagCommentModal) return;
+    const { id, currentlyFlagged, fromVatAudit } = flagCommentModal;
+    const newFlagged = !currentlyFlagged;
     try {
-      await api.patch(`/demo-expenses/invoices/${id}/flag`, { flagged: true, from_vat_audit: true });
-      addToast('Flagged for later', 'success');
-      setActionTakenIds(prev => new Set(prev).add(id));
+      await api.patch(`/demo-expenses/invoices/${id}/flag`, {
+        flagged: newFlagged,
+        comment: newFlagged ? flagComment : '',
+        from_vat_audit: fromVatAudit,
+      });
+      addToast(newFlagged ? 'Flagged for later' : 'Flag removed', 'success');
+      if (fromVatAudit) {
+        setActionTakenIds(prev => new Set(prev).add(id));
+      }
+      fetchAll();
     } catch {
-      addToast('Failed to flag invoice', 'error');
+      addToast('Failed to update flag', 'error');
     } finally {
-      setFixingVat(false);
+      setFlagCommentModal(null);
+      setFlagComment('');
     }
   };
 
@@ -1852,7 +1869,7 @@ export default function SupplierInvoicesPage() {
                             <td className="px-4 py-3">
                               <button onClick={() => setViewingInvoice(inv.id)} className="text-primary-600 hover:text-primary-800 font-medium flex items-center gap-1">
                                 {inv.duplicate_warning ? <AlertTriangle size={14} className="text-amber-500" /> : null}
-                                {inv.flagged ? <Flag size={12} className="text-amber-500 fill-amber-500" /> : null}
+                                {inv.flagged ? <span title={inv.flag_comment || 'Flagged'}><Flag size={12} className="text-amber-500 fill-amber-500" /></span> : null}
                                 {inv.invoice_id}
                               </button>
                             </td>
@@ -1934,13 +1951,18 @@ export default function SupplierInvoicesPage() {
                                         className="text-gray-400 hover:text-primary-600 transition-colors" title="Edit invoice">
                                         <Pencil size={14} />
                                       </button>
-                                    <button onClick={async () => {
-                                      try {
-                                        await api.patch(`/demo-expenses/invoices/${inv.id}/flag`, { flagged: !inv.flagged });
-                                        fetchAll();
-                                      } catch { addToast('Failed to update flag', 'error'); }
+                                    <button onClick={() => {
+                                      if (inv.flagged) {
+                                        // Unflag directly (no comment needed)
+                                        api.patch(`/demo-expenses/invoices/${inv.id}/flag`, { flagged: false, comment: '' })
+                                          .then(() => fetchAll())
+                                          .catch(() => addToast('Failed to update flag', 'error'));
+                                      } else {
+                                        setFlagCommentModal({ id: inv.id, currentlyFlagged: false });
+                                        setFlagComment('');
+                                      }
                                     }} className={`transition-colors ${inv.flagged ? 'text-amber-500 hover:text-amber-600' : 'text-gray-400 hover:text-amber-500'}`}
-                                      title={inv.flagged ? 'Remove flag' : 'Flag for later'}>
+                                      title={inv.flagged ? (inv.flag_comment ? `Flagged: ${inv.flag_comment}` : 'Remove flag') : 'Flag for later'}>
                                       <Flag size={14} className={inv.flagged ? 'fill-amber-500' : ''} />
                                     </button>
                                     <button onClick={() => setViewingInvoice(inv.id)} className="text-gray-400 hover:text-primary-600 transition-colors" title="View invoice">
@@ -2318,7 +2340,7 @@ export default function SupplierInvoicesPage() {
                     <th className="text-right px-3 py-3 font-medium text-gray-600 w-[90px]">Current VAT</th>
                     <th className="text-right px-3 py-3 font-medium text-gray-600 w-[80px]">Suggested</th>
                     <th className="text-left px-3 py-3 font-medium text-gray-600">Issue</th>
-                    <th className="text-center px-2 py-3 font-medium text-gray-600 w-[280px]">Action</th>
+                    <th className="text-center px-2 py-3 font-medium text-gray-600 w-[340px]">Action</th>
                     <th className="w-10 px-2 py-3"></th>
                   </tr>
                 </thead>
@@ -2359,20 +2381,31 @@ export default function SupplierInvoicesPage() {
                             ) : (
                               <>
                                 <button
+                                  onClick={() => handleKeepVat(issue)}
+                                  disabled={fixingVat}
+                                  className="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 font-medium disabled:opacity-50 whitespace-nowrap"
+                                  title="Keep current VAT — no changes"
+                                >
+                                  Keep as is
+                                </button>
+                                <button
                                   onClick={() => handleFixVat(issue.id, 0, 'set_to_0')}
                                   disabled={fixingVat}
                                   className="px-2 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200 font-medium disabled:opacity-50 whitespace-nowrap"
                                   title="Set VAT to 0"
                                 >
-                                  Set to 0
+                                  VAT = 0
                                 </button>
                                 <button
-                                  onClick={() => handleKeepVat(issue)}
+                                  onClick={() => {
+                                    const calculatedVat = Math.round((issue.amount - issue.amount / 1.21) * 100) / 100;
+                                    handleFixVat(issue.id, calculatedVat, 'calculate_vat');
+                                  }}
                                   disabled={fixingVat}
-                                  className="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 font-medium disabled:opacity-50 whitespace-nowrap"
-                                  title="Keep current VAT"
+                                  className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200 font-medium disabled:opacity-50 whitespace-nowrap"
+                                  title={`Calculate 21% VAT: €${(Math.round((issue.amount - issue.amount / 1.21) * 100) / 100).toFixed(2)}`}
                                 >
-                                  Keep
+                                  Calc 21%
                                 </button>
                                 {manualVatId === issue.id ? (
                                   <form onSubmit={(e) => { e.preventDefault(); handleManualVatSubmit(issue.id); }} className="flex items-center gap-1">
@@ -2400,7 +2433,7 @@ export default function SupplierInvoicesPage() {
                                   </button>
                                 )}
                                 <button
-                                  onClick={() => handleFlagForLater(issue.id)}
+                                  onClick={() => handleFlagForLater(issue.id, true)}
                                   disabled={fixingVat}
                                   className="px-2 py-1 text-xs bg-amber-100 text-amber-700 rounded hover:bg-amber-200 font-medium disabled:opacity-50 whitespace-nowrap"
                                   title="Flag for later review"
@@ -2445,6 +2478,42 @@ export default function SupplierInvoicesPage() {
               <span className="text-sm text-gray-500">{vatIssues.length} issue(s) remaining</span>
               <button onClick={() => { setShowVatModal(false); setPreviewInvoiceId(null); setPreviewPdf(null); setActionTakenIds(new Set()); setManualVatId(null); }} className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50">
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Flag Comment Modal */}
+      {flagCommentModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4">
+            <div className="p-5 border-b">
+              <h3 className="text-base font-bold text-gray-900">Flag Invoice</h3>
+              <p className="text-sm text-gray-500 mt-1">Add a reason for flagging this invoice (optional).</p>
+            </div>
+            <div className="p-5">
+              <textarea
+                value={flagComment}
+                onChange={e => setFlagComment(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 resize-none"
+                rows={3}
+                placeholder="e.g. Need to verify VAT number with supplier..."
+                autoFocus
+              />
+            </div>
+            <div className="p-4 border-t flex items-center justify-end gap-2">
+              <button
+                onClick={() => { setFlagCommentModal(null); setFlagComment(''); }}
+                className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitFlag}
+                className="px-4 py-2 text-sm bg-amber-500 text-white rounded-lg hover:bg-amber-600 font-medium"
+              >
+                Flag Invoice
               </button>
             </div>
           </div>

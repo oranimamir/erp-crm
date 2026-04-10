@@ -1643,7 +1643,7 @@ router.get('/data-quality', (req: Request, res: Response) => {
 router.get('/invoices', (req: Request, res: Response) => {
   try {
     const { domain, categories, suppliers, month, date_from, date_to, sort_by, sort_dir, search, flagged } = req.query;
-    let sql = 'SELECT id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, xml_filename, duplicate_warning, flagged, created_at FROM demo_invoices WHERE 1=1';
+    let sql = 'SELECT id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, xml_filename, duplicate_warning, flagged, flag_comment, created_at FROM demo_invoices WHERE 1=1';
     const params: any[] = [];
 
     if (search) {
@@ -2172,10 +2172,12 @@ router.patch('/invoices/:id/date', (req: Request, res: Response) => {
 
 router.patch('/invoices/:id/flag', (req: Request, res: Response) => {
   try {
-    const { flagged, from_vat_audit } = req.body;
+    const { flagged, comment, from_vat_audit } = req.body;
     const inv = db.prepare('SELECT id, vat_amount FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
     if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
-    db.prepare('UPDATE demo_invoices SET flagged = ? WHERE id = ?').run(flagged ? 1 : 0, req.params.id);
+    db.prepare('UPDATE demo_invoices SET flagged = ?, flag_comment = ? WHERE id = ?').run(
+      flagged ? 1 : 0, flagged ? (comment || '') : '', req.params.id
+    );
     if (from_vat_audit) {
       db.prepare('INSERT INTO vat_audit_log (invoice_id, action, old_vat, new_vat, performed_by) VALUES (?, ?, ?, ?, ?)').run(
         inv.id, 'flag', inv.vat_amount, inv.vat_amount, (req as any).user?.display_name || 'Unknown'

@@ -1100,6 +1100,7 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE demo_upload_batches ADD COLUMN uploaded_by_name TEXT NOT NULL DEFAULT ''`); } catch (_) {}
   try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN flagged INTEGER DEFAULT 0`); } catch (_) {}
   try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN vat_reviewed INTEGER DEFAULT 0`); } catch (_) {}
+  try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN flag_comment TEXT DEFAULT ''`); } catch (_) {}
 
   // VAT audit log table
   db.exec(`
