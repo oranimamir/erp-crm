@@ -5,16 +5,8 @@ import { useToast } from '../contexts/ToastContext';
 import { useCategories } from '../lib/categories';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
-import Input from '../components/ui/Input';
-import Select from '../components/ui/Select';
-import Modal from '../components/ui/Modal';
-import SearchBar from '../components/ui/SearchBar';
-import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
-import EmptyState from '../components/ui/EmptyState';
-import Badge from '../components/ui/Badge';
-import { Plus, Truck, Eye, Pencil, Trash2, BarChart3, FileSpreadsheet, Beaker, Check, X, GitMerge, Loader2 } from 'lucide-react';
-import { downloadExcel } from '../lib/exportExcel';
+import { Plus, Truck, Eye, Pencil, Trash2, BarChart3, Beaker, Check, X, GitMerge, Loader2 } from 'lucide-react';
 
 const CHART_COLORS = [
   'bg-purple-500', 'bg-blue-500', 'bg-orange-400', 'bg-teal-500',
@@ -25,21 +17,6 @@ const DOT_COLORS = [
   'bg-red-400', 'bg-green-500', 'bg-pink-400', 'bg-indigo-500',
 ];
 
-const categoryOptions = [
-  { value: 'logistics', label: 'Logistics' },
-  { value: 'blenders', label: 'Blenders' },
-  { value: 'raw_materials', label: 'Raw Materials' },
-  { value: 'shipping', label: 'Shipping' },
-];
-
-const categoryColors: Record<string, 'blue' | 'purple' | 'orange' | 'green'> = {
-  logistics: 'blue', blenders: 'purple', raw_materials: 'orange', shipping: 'green',
-};
-
-const categoryLabels: Record<string, string> = {
-  logistics: 'Logistics', blenders: 'Blenders', raw_materials: 'Raw Materials', shipping: 'Shipping',
-};
-
 const DEMO_CAT_COLORS: Record<string, string> = {
   'Salaries': '#6366f1', 'Cars': '#8b5cf6', 'Overhead': '#3b82f6', 'Consumables': '#f59e0b',
   'Materials': '#10b981', 'Utilities and Maintenance': '#ef4444', 'Feedstock': '#14b8a6',
@@ -47,21 +24,25 @@ const DEMO_CAT_COLORS: Record<string, string> = {
   'Couriers': '#84cc16', 'Other': '#6b7280',
 };
 
-const DEMO_CATEGORIES_LIST = [
-  'Salaries', 'Cars', 'Overhead', 'Consumables', 'Materials',
-  'Utilities and Maintenance', 'Feedstock', 'Subcontractors and Consultants',
-  'Regulatory', 'Equipment', 'Couriers', 'Other',
-];
+const SALES_CAT_COLORS: Record<string, string> = {
+  'Raw Materials': '#f59e0b', 'Logistics': '#3b82f6', 'Blenders': '#8b5cf6', 'Shipping': '#10b981',
+};
 
-function DemoSuppliersTab() {
+function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
   const { addToast } = useToast();
-  const { demoCategories, addCategory, customCategories, removeCategory } = useCategories();
+  const { demoCategories, salesCategories, addCategory, customCategories, removeCategory } = useCategories();
+  const categories = domain === 'demo' ? demoCategories : salesCategories;
+  const colorMap = domain === 'demo' ? DEMO_CAT_COLORS : SALES_CAT_COLORS;
+  const defaultCategory = domain === 'demo' ? 'Other' : (salesCategories[0] || 'Logistics');
+  const domainLabel = domain === 'demo' ? 'Demo Expenses' : 'Sales Activities';
   const [data, setData] = useState<{ hardcoded: any[]; userDefined: any[] }>({ hardcoded: [], userDefined: [] });
   const [userMappings, setUserMappings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState('');
-  const [newCategory, setNewCategory] = useState('Other');
+  const [newCategory, setNewCategory] = useState(defaultCategory);
+  const [sortKey, setSortKey] = useState<'name' | 'category'>('name');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editCat, setEditCat] = useState('');
@@ -77,24 +58,24 @@ function DemoSuppliersTab() {
 
   const fetchData = () => {
     Promise.all([
-      api.get('/demo-expenses/demo-suppliers'),
-      api.get('/demo-expenses/supplier-mappings', { params: { domain: 'demo' } }),
+      api.get('/demo-expenses/demo-suppliers', { params: { domain } }),
+      api.get('/demo-expenses/supplier-mappings', { params: { domain } }),
     ]).then(([d, m]) => {
       setData(d.data);
       setUserMappings(m.data);
     }).catch(() => {}).finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => { setLoading(true); fetchData(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [domain]);
 
   const handleAdd = async () => {
     if (!newName.trim()) return;
     try {
-      await api.post('/demo-expenses/supplier-mappings', { supplierName: newName.trim(), category: newCategory, domain: 'demo' });
+      await api.post('/demo-expenses/supplier-mappings', { supplierName: newName.trim(), category: newCategory, domain });
       addToast(`Supplier "${newName.trim()}" added`, 'success');
       setShowAdd(false);
       setNewName('');
-      setNewCategory('Other');
+      setNewCategory(defaultCategory);
       fetchData();
     } catch (err: any) {
       addToast(err?.response?.data?.error || 'Failed to add supplier', 'error');
@@ -130,7 +111,7 @@ function DemoSuppliersTab() {
     setPreviewSupplier(null);
     setPreviewPdf(null);
     try {
-      const res = await api.get('/demo-expenses/supplier-duplicates');
+      const res = await api.get('/demo-expenses/supplier-duplicates', { params: { domain } });
       const groups: DupGroup[] = (res.data?.groups || []).map((g: any) => ({
         canonical: g.canonical,
         suppliers: g.suppliers,
@@ -220,7 +201,7 @@ function DemoSuppliersTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-gray-500">
-          Demo suppliers are used to automatically classify invoices into the Demo Expenses domain.
+          {domainLabel} suppliers are used to automatically classify invoices into the {domainLabel} domain.
         </p>
         <div className="flex gap-2">
           <Button variant="secondary" onClick={handleFindDuplicates} disabled={dupLoading}>
@@ -234,11 +215,11 @@ function DemoSuppliersTab() {
       <Card className="p-4">
         <h3 className="text-sm font-semibold text-gray-900 mb-3">Categories</h3>
         <div className="flex flex-wrap gap-2 mb-3">
-          {demoCategories.map(c => {
-            const custom = customCategories.find(cc => cc.name === c && cc.domain === 'demo');
+          {categories.map(c => {
+            const custom = customCategories.find(cc => cc.name === c && cc.domain === domain);
             return (
               <span key={c} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
-                <span className="w-2 h-2 rounded-sm" style={{ background: DEMO_CAT_COLORS[c] || '#6b7280' }} />
+                <span className="w-2 h-2 rounded-sm" style={{ background: colorMap[c] || '#6b7280' }} />
                 {c}
                 {custom && (
                   <button onClick={async () => { await removeCategory(custom.id); addToast(`Removed "${c}"`, 'success'); }}
@@ -252,8 +233,8 @@ function DemoSuppliersTab() {
           <input type="text" value={newCatName} onChange={e => setNewCatName(e.target.value)}
             placeholder="New category name..."
             className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm flex-1 max-w-xs focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-            onKeyDown={e => { if (e.key === 'Enter' && newCatName.trim()) { addCategory(newCatName.trim(), 'demo'); setNewCatName(''); addToast(`Added "${newCatName.trim()}"`, 'success'); } }} />
-          <Button size="sm" onClick={() => { if (newCatName.trim()) { addCategory(newCatName.trim(), 'demo'); setNewCatName(''); addToast(`Added "${newCatName.trim()}"`, 'success'); } }}
+            onKeyDown={e => { if (e.key === 'Enter' && newCatName.trim()) { addCategory(newCatName.trim(), domain); setNewCatName(''); addToast(`Added "${newCatName.trim()}"`, 'success'); } }} />
+          <Button size="sm" onClick={() => { if (newCatName.trim()) { addCategory(newCatName.trim(), domain); setNewCatName(''); addToast(`Added "${newCatName.trim()}"`, 'success'); } }}
             disabled={!newCatName.trim()}>
             <Plus size={14} /> Add
           </Button>
@@ -261,7 +242,20 @@ function DemoSuppliersTab() {
       </Card>
 
       {/* User-defined suppliers table */}
-      {userMappings.length > 0 && (
+      {userMappings.length > 0 && (() => {
+        const toggleSort = (key: 'name' | 'category') => {
+          if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+          else { setSortKey(key); setSortDir('asc'); }
+        };
+        const sortIndicator = (key: 'name' | 'category') => sortKey === key ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '';
+        const sortedMappings = [...userMappings].sort((a, b) => {
+          const av = (sortKey === 'name' ? (a.display_name || a.supplier_pattern || '') : (a.category || '')).toLowerCase();
+          const bv = (sortKey === 'name' ? (b.display_name || b.supplier_pattern || '') : (b.category || '')).toLowerCase();
+          if (av < bv) return sortDir === 'asc' ? -1 : 1;
+          if (av > bv) return sortDir === 'asc' ? 1 : -1;
+          return 0;
+        });
+        return (
         <Card className="overflow-hidden">
           <div className="px-5 py-3 border-b border-gray-100">
             <h3 className="text-sm font-semibold text-gray-900">User-Defined Suppliers ({userMappings.length})</h3>
@@ -270,13 +264,19 @@ function DemoSuppliersTab() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="text-left px-4 py-2.5 font-medium text-gray-600">Supplier Name</th>
-                  <th className="text-left px-4 py-2.5 font-medium text-gray-600">Category</th>
+                  <th onClick={() => toggleSort('name')}
+                    className="text-left px-4 py-2.5 font-medium text-gray-600 cursor-pointer select-none hover:text-gray-900">
+                    Supplier Name{sortIndicator('name')}
+                  </th>
+                  <th onClick={() => toggleSort('category')}
+                    className="text-left px-4 py-2.5 font-medium text-gray-600 cursor-pointer select-none hover:text-gray-900">
+                    Category{sortIndicator('category')}
+                  </th>
                   <th className="text-right px-4 py-2.5 font-medium text-gray-600 w-20">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {userMappings.map((m: any) => {
+                {sortedMappings.map((m: any) => {
                   const isEditing = editingId === m.id;
                   return (
                   <tr key={m.id} className="hover:bg-gray-50">
@@ -291,11 +291,11 @@ function DemoSuppliersTab() {
                         <select value={editCat} onChange={e => setEditCat(e.target.value)}
                           className="border border-gray-300 rounded px-2 py-0.5 text-xs bg-white focus:ring-2 focus:ring-primary-500"
                           autoFocus>
-                          {demoCategories.map(c => <option key={c} value={c}>{c}</option>)}
+                          {categories.map(c => <option key={c} value={c}>{c}</option>)}
                         </select>
                       ) : (
                         <span className="inline-flex items-center gap-1.5 text-xs font-medium">
-                          <span className="w-2 h-2 rounded-sm" style={{ background: DEMO_CAT_COLORS[m.category] || '#6b7280' }} />
+                          <span className="w-2 h-2 rounded-sm" style={{ background: colorMap[m.category] || '#6b7280' }} />
                           {m.category}
                         </span>
                       )}
@@ -322,14 +322,15 @@ function DemoSuppliersTab() {
             </table>
           </div>
         </Card>
-      )}
+        );
+      })()}
 
       {/* Hardcoded + user-defined grouped by category */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {Object.entries(byCategory).sort((a, b) => a[0].localeCompare(b[0])).map(([cat, suppliers]) => (
           <Card key={cat} className="p-4">
             <div className="flex items-center gap-2 mb-3">
-              <div className="w-3 h-3 rounded-sm" style={{ background: DEMO_CAT_COLORS[cat] || '#6b7280' }} />
+              <div className="w-3 h-3 rounded-sm" style={{ background: colorMap[cat] || '#6b7280' }} />
               <h3 className="text-sm font-semibold text-gray-900">{cat}</h3>
               <span className="text-xs text-gray-400 ml-auto">{suppliers.length}</span>
             </div>
@@ -349,7 +350,7 @@ function DemoSuppliersTab() {
       {showAdd && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 p-6">
-            <h2 className="text-lg font-bold text-gray-900 mb-4">Add Demo Supplier</h2>
+            <h2 className="text-lg font-bold text-gray-900 mb-4">Add {domainLabel} Supplier</h2>
             <div className="space-y-3 mb-6">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Supplier Name</label>
@@ -362,7 +363,7 @@ function DemoSuppliersTab() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
                 <select value={newCategory} onChange={e => setNewCategory(e.target.value)}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
-                  {demoCategories.map(c => <option key={c} value={c}>{c}</option>)}
+                  {categories.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
             </div>
@@ -467,78 +468,12 @@ function DemoSuppliersTab() {
 }
 
 export default function SuppliersPage() {
-  const { addToast } = useToast();
   const [activeTab, setActiveTab] = useState<'sales' | 'demo'>('sales');
-  const [suppliers, setSuppliers] = useState<any[]>([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [search, setSearch] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [showModal, setShowModal] = useState(false);
-  const [editing, setEditing] = useState<any>(null);
-  const [deleteId, setDeleteId] = useState<number | null>(null);
-  const [form, setForm] = useState({ name: '', email: '', phone: '', address: '', category: 'logistics', notes: '' });
-  const [saving, setSaving] = useState(false);
   const [paymentData, setPaymentData] = useState<any[]>([]);
-
-  const fetchSuppliers = () => {
-    setLoading(true);
-    api.get('/suppliers', { params: { page, limit: 20, search, category: categoryFilter } })
-      .then(res => { setSuppliers(res.data.data); setTotal(res.data.total); setTotalPages(res.data.totalPages); })
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => { fetchSuppliers(); }, [page, search, categoryFilter]);
 
   useEffect(() => {
     api.get('/dashboard/supplier-payments').then(r => setPaymentData(r.data)).catch(() => {});
   }, []);
-
-  const openCreate = () => {
-    setEditing(null);
-    setForm({ name: '', email: '', phone: '', address: '', category: 'logistics', notes: '' });
-    setShowModal(true);
-  };
-
-  const openEdit = (s: any) => {
-    setEditing(s);
-    setForm({ name: s.name || '', email: s.email || '', phone: s.phone || '', address: s.address || '', category: s.category, notes: s.notes || '' });
-    setShowModal(true);
-  };
-
-  const handleSave = async () => {
-    if (!form.name.trim()) { addToast('Name is required', 'error'); return; }
-    setSaving(true);
-    try {
-      if (editing) {
-        await api.put(`/suppliers/${editing.id}`, form);
-        addToast('Supplier updated', 'success');
-      } else {
-        await api.post('/suppliers', form);
-        addToast('Supplier created', 'success');
-      }
-      setShowModal(false);
-      fetchSuppliers();
-    } catch (err: any) {
-      addToast(err.response?.data?.error || 'Failed to save', 'error');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleDelete = async () => {
-    if (!deleteId) return;
-    try {
-      await api.delete(`/suppliers/${deleteId}`);
-      addToast('Supplier deleted', 'success');
-      fetchSuppliers();
-    } catch (err: any) {
-      addToast(err.response?.data?.error || 'Failed to delete', 'error');
-    }
-    setDeleteId(null);
-  };
 
   return (
     <div className="space-y-4">
@@ -562,102 +497,10 @@ export default function SuppliersPage() {
         </button>
       </div>
 
-      {activeTab === 'demo' ? (
-        <DemoSuppliersTab />
-      ) : (
-      <>
-      <div className="flex items-center justify-end">
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={async () => {
-            const res = await api.get('/suppliers', { params: { page: 1, limit: 9999, search, category: categoryFilter } });
-            downloadExcel('suppliers', ['Name', 'Category', 'Email', 'Phone', 'Address', 'Notes'],
-              res.data.data.map((s: any) => [s.name, s.category || '', s.email || '', s.phone || '', s.address || '', s.notes || '']));
-          }}><FileSpreadsheet size={16} /> Export Excel</Button>
-          <Button onClick={openCreate}><Plus size={16} /> Add Supplier</Button>
-        </div>
-      </div>
+      <DomainSuppliersTab domain={activeTab} />
 
-      <Card>
-        <div className="p-4 border-b border-gray-100">
-          <div className="flex flex-wrap items-center gap-4">
-            <div className="flex-1 min-w-[200px] max-w-sm">
-              <SearchBar value={search} onChange={v => { setSearch(v); setPage(1); }} placeholder="Search suppliers..." />
-            </div>
-            <select
-              value={categoryFilter}
-              onChange={e => { setCategoryFilter(e.target.value); setPage(1); }}
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
-            >
-              <option value="">All Categories</option>
-              {categoryOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-            <span className="text-sm text-gray-500">{total} suppliers</span>
-          </div>
-        </div>
-
-        {loading ? (
-          <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" /></div>
-        ) : suppliers.length === 0 ? (
-          <EmptyState icon={<Truck size={24} />} title="No suppliers found" description="Add your first supplier." action={<Button onClick={openCreate} size="sm"><Plus size={14} /> Add Supplier</Button>} />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Name</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Category</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Email</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Phone</th>
-                  <th className="text-right px-4 py-3 font-medium text-gray-600">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {suppliers.map(s => (
-                  <tr key={s.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 font-medium text-gray-900">{s.name}</td>
-                    <td className="px-4 py-3"><Badge variant={categoryColors[s.category] || 'gray'}>{categoryLabels[s.category] || s.category}</Badge></td>
-                    <td className="px-4 py-3 text-gray-600">{s.email || '-'}</td>
-                    <td className="px-4 py-3 text-gray-600">{s.phone || '-'}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-1">
-                        <Link to={`/suppliers/${s.id}`} className="p-1.5 text-gray-400 hover:text-primary-600 rounded"><Eye size={16} /></Link>
-                        <button onClick={() => openEdit(s)} className="p-1.5 text-gray-400 hover:text-primary-600 rounded"><Pencil size={16} /></button>
-                        <button onClick={() => setDeleteId(s.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded"><Trash2 size={16} /></button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
-      </Card>
-
-      <Modal open={showModal} onClose={() => setShowModal(false)} title={editing ? 'Edit Supplier' : 'New Supplier'} size="lg">
-        <div className="space-y-4">
-          <Input label="Name *" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
-          <Select label="Category *" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} options={categoryOptions} />
-          <div className="grid grid-cols-2 gap-4">
-            <Input label="Email" type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
-            <Input label="Phone" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} />
-          </div>
-          <Input label="Address" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
-          <div className="space-y-1">
-            <label className="block text-sm font-medium text-gray-700">Notes</label>
-            <textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={3} className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
-          </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="secondary" onClick={() => setShowModal(false)}>Cancel</Button>
-            <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving...' : editing ? 'Update' : 'Create'}</Button>
-          </div>
-        </div>
-      </Modal>
-
-      <ConfirmDialog open={deleteId !== null} onClose={() => setDeleteId(null)} onConfirm={handleDelete} title="Delete Supplier" message="Are you sure you want to delete this supplier?" confirmLabel="Delete" />
-
-      {/* Supplier Payments Chart */}
-      {(() => {
+      {/* Supplier Payments Chart (sales only) */}
+      {activeTab === 'sales' && (() => {
         const months = [...new Set(paymentData.map((d: any) => d.month))].sort() as string[];
         const names = [...new Set(paymentData.map((d: any) => d.supplier_name))] as string[];
         if (months.length === 0) return null;
@@ -722,8 +565,6 @@ export default function SuppliersPage() {
           </Card>
         );
       })()}
-      </>
-      )}
     </div>
   );
 }

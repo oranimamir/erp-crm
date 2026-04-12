@@ -1857,14 +1857,28 @@ router.get('/categories', (req: Request, res: Response) => {
   else res.json(ALL_CATEGORIES);
 });
 
-// Demo supplier list (from hardcoded + user-defined demo mappings)
-router.get('/demo-suppliers', (_req: Request, res: Response) => {
+// Domain supplier list (hardcoded + user-defined mappings, filtered by domain)
+router.get('/demo-suppliers', (req: Request, res: Response) => {
   try {
-    const hardcoded = [...new Set(DEMO_SUPPLIER_MAP.map(m => ({ pattern: m.pattern, category: m.category, source: 'hardcoded' })))];
-    const userDefined = db.prepare("SELECT supplier_pattern as pattern, category FROM demo_supplier_mappings WHERE domain = 'demo'").all() as any[];
+    const domain = (req.query.domain as string) || 'demo';
+    let hardcoded: { pattern: string; category: string; source: string }[] = [];
+    if (domain === 'demo') {
+      hardcoded = DEMO_SUPPLIER_MAP.map(m => ({ pattern: m.pattern, category: m.category, source: 'hardcoded' }));
+    } else if (domain === 'sales') {
+      // Sales hardcoded suppliers come from the /suppliers table
+      const salesRows = db.prepare('SELECT name, category FROM suppliers').all() as any[];
+      hardcoded = salesRows.map(s => ({
+        pattern: s.name,
+        category: SALES_CAT_DB_MAP[s.category] || s.category,
+        source: 'hardcoded',
+      }));
+    }
+    const userDefined = db.prepare(
+      'SELECT supplier_pattern as pattern, category FROM demo_supplier_mappings WHERE domain = ?'
+    ).all(domain) as any[];
     res.json({ hardcoded, userDefined: userDefined.map((u: any) => ({ ...u, source: 'user' })) });
   } catch (err: any) {
-    res.status(500).json({ error: 'Failed to fetch demo suppliers' });
+    res.status(500).json({ error: 'Failed to fetch suppliers' });
   }
 });
 
@@ -2409,11 +2423,17 @@ function levenshtein(a: string, b: string): number {
   return prev[b.length];
 }
 
-router.get('/supplier-duplicates', (_req: Request, res: Response) => {
+router.get('/supplier-duplicates', (req: Request, res: Response) => {
   try {
-    const rows = db.prepare(
-      "SELECT supplier as name, COUNT(*) as count, GROUP_CONCAT(id) as ids FROM demo_invoices WHERE supplier IS NOT NULL AND supplier != '' GROUP BY supplier"
-    ).all() as { name: string; count: number; ids: string }[];
+    const domain = req.query.domain as string;
+    let sql = "SELECT supplier as name, COUNT(*) as count, GROUP_CONCAT(id) as ids FROM demo_invoices WHERE supplier IS NOT NULL AND supplier != ''";
+    const params: any[] = [];
+    if (domain === 'demo' || domain === 'sales') {
+      sql += ' AND domain = ?';
+      params.push(domain);
+    }
+    sql += ' GROUP BY supplier';
+    const rows = db.prepare(sql).all(...params) as { name: string; count: number; ids: string }[];
 
     const items = rows
       .map(r => ({
