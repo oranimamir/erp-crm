@@ -37,7 +37,7 @@ router.get('/stats', async (_req: Request, res: Response) => {
   // Pending: sent/overdue invoices with due date (including late payments from prior periods)
   const pendingRows = db.prepare(`
     SELECT amount, UPPER(COALESCE(currency, 'USD')) as currency FROM invoices
-    WHERE type = 'customer' AND status IN ('sent', 'overdue', 'partially_paid')
+    WHERE type = 'customer' AND status IN ('sent', 'overdue')
       AND due_date IS NOT NULL
   `).all() as any[];
   const pendingAmount = await sumLiveEur(pendingRows);
@@ -104,7 +104,7 @@ router.get('/pending-invoices', async (_req: Request, res: Response) => {
     SELECT i.*, c.name as customer_name
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
-    WHERE i.type = 'customer' AND i.status IN ('draft', 'sent', 'overdue', 'partially_paid')
+    WHERE i.type = 'customer' AND i.status IN ('draft', 'sent', 'overdue')
     ORDER BY i.due_date ASC, i.created_at DESC LIMIT 200
   `).all() as any[];
   await attachLiveEur(invoices);
@@ -254,7 +254,7 @@ router.get('/forecast', async (_req: Request, res: Response) => {
   const pendingInvoices = db.prepare(`
     SELECT amount, UPPER(COALESCE(currency, 'USD')) as currency,
       strftime('%Y-%m', due_date) as month, due_date
-    FROM invoices WHERE type = 'customer' AND status IN ('sent', 'overdue', 'partially_paid')
+    FROM invoices WHERE type = 'customer' AND status IN ('sent', 'overdue')
       AND due_date IS NOT NULL
   `).all() as any[];
   await attachLiveEur(pendingInvoices);
@@ -413,7 +413,7 @@ router.get('/customer-forecast', async (_req: Request, res: Response) => {
       c.id as customer_id, c.name as customer_name
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
-    WHERE i.type = 'customer' AND i.status IN ('sent', 'overdue', 'partially_paid') AND i.due_date IS NOT NULL
+    WHERE i.type = 'customer' AND i.status IN ('sent', 'overdue') AND i.due_date IS NOT NULL
     ORDER BY i.due_date
   `).all() as any[];
   await attachLiveEur(pendingRows);

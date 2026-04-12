@@ -67,6 +67,9 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
   const [previewSupplier, setPreviewSupplier] = useState<string | null>(null);
   const [previewPdf, setPreviewPdf] = useState<string | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<Set<string>>(new Set());
+  const [manualCanonical, setManualCanonical] = useState('');
+  const [manualMerging, setManualMerging] = useState(false);
 
   const fetchData = () => {
     Promise.all([
@@ -75,6 +78,8 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
     ]).then(([d, m]) => {
       setData(d.data);
       setUserMappings(m.data);
+      setSelectedRowKeys(new Set());
+      setManualCanonical('');
     }).catch(() => {}).finally(() => setLoading(false));
   };
 
@@ -168,6 +173,34 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
 
   const updateGroup = (groupKey: string, patch: Partial<DupGroup>) => {
     setDupGroups(prev => (prev || []).map(g => g.suppliers[0]?.name === groupKey ? { ...g, ...patch } : g));
+  };
+
+  const toggleRowSelected = (rowKey: string, name: string) => {
+    setSelectedRowKeys(prev => {
+      const next = new Set(prev);
+      if (next.has(rowKey)) next.delete(rowKey);
+      else next.add(rowKey);
+      if (next.size === 1 && !manualCanonical.trim()) setManualCanonical(name);
+      if (next.size === 0) setManualCanonical('');
+      return next;
+    });
+  };
+
+  const handleManualMerge = async (rows: SupplierRow[]) => {
+    const names = rows.filter(r => selectedRowKeys.has(r.rowKey)).map(r => r.name);
+    if (names.length < 2) { addToast('Pick at least 2 suppliers', 'error'); return; }
+    const canonical = manualCanonical.trim();
+    if (!canonical) { addToast('Canonical name required', 'error'); return; }
+    setManualMerging(true);
+    try {
+      const res = await api.post('/demo-expenses/supplier-merge', { canonicalName: canonical, names, domain });
+      addToast(`Merged into "${canonical}" · ${res.data?.updatedInvoices || 0} invoices renamed`, 'success');
+      fetchData();
+    } catch (err: any) {
+      addToast(err?.response?.data?.error || 'Failed to merge', 'error');
+    } finally {
+      setManualMerging(false);
+    }
   };
 
   const toggleDupSelected = (groupKey: string, name: string) => {
@@ -297,15 +330,59 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
           if (av > bv) return sortDir === 'asc' ? 1 : -1;
           return 0;
         });
+        const visibleRowKeys = sortedRows.map(r => r.rowKey);
+        const allSelected = visibleRowKeys.length > 0 && visibleRowKeys.every(k => selectedRowKeys.has(k));
+        const someSelected = visibleRowKeys.some(k => selectedRowKeys.has(k));
+        const toggleSelectAll = () => {
+          setSelectedRowKeys(prev => {
+            if (allSelected) return new Set();
+            const next = new Set(prev);
+            for (const k of visibleRowKeys) next.add(k);
+            return next;
+          });
+          if (allSelected) setManualCanonical('');
+          else {
+            const firstRow = sortedRows[0];
+            if (firstRow && !manualCanonical.trim()) setManualCanonical(firstRow.name);
+          }
+        };
         return (
         <Card className="overflow-hidden">
-          <div className="px-5 py-3 border-b border-gray-100">
+          <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
             <h3 className="text-sm font-semibold text-gray-900">Suppliers ({allRows.length})</h3>
+            {selectedRowKeys.size >= 2 && (
+              <div className="flex items-center gap-2 flex-1 min-w-[260px] max-w-xl">
+                <span className="text-xs text-gray-500 shrink-0">{selectedRowKeys.size} selected →</span>
+                <input
+                  type="text"
+                  value={manualCanonical}
+                  onChange={e => setManualCanonical(e.target.value)}
+                  placeholder="Canonical name"
+                  className="flex-1 border border-gray-300 rounded-lg px-2.5 py-1 text-xs focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                />
+                <Button size="sm" onClick={() => handleManualMerge(sortedRows)} disabled={manualMerging || !manualCanonical.trim()}>
+                  {manualMerging ? 'Merging...' : 'Merge Selected'}
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => { setSelectedRowKeys(new Set()); setManualCanonical(''); }}>
+                  Clear
+                </Button>
+              </div>
+            )}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
+                  <th className="px-3 py-2.5 w-8">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      ref={el => { if (el) el.indeterminate = !allSelected && someSelected; }}
+                      onChange={toggleSelectAll}
+                      className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      title="Select all"
+                    />
+                  </th>
                   <th onClick={() => toggleSort('name')}
                     className="text-left px-4 py-2.5 font-medium text-gray-600 cursor-pointer select-none hover:text-gray-900">
                     Supplier Name{sortIndicator('name')}
@@ -321,8 +398,17 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
                 {sortedRows.map((row) => {
                   const isEditing = editingKey === row.rowKey;
                   const editable = row.source !== 'hardcoded' && row.id != null;
+                  const isSelected = selectedRowKeys.has(row.rowKey);
                   return (
-                  <tr key={row.rowKey} className="hover:bg-gray-50">
+                  <tr key={row.rowKey} className={`hover:bg-gray-50 ${isSelected ? 'bg-primary-50/40' : ''}`}>
+                    <td className="px-3 py-2.5 w-8">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleRowSelected(row.rowKey, row.name)}
+                        className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      />
+                    </td>
                     <td className="px-4 py-2.5">
                       <Link to={`/supplier-invoices?supplier=${encodeURIComponent(row.name)}&tab=${domain}`}
                         className="text-primary-600 hover:text-primary-800 font-medium capitalize">

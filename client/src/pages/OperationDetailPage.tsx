@@ -746,7 +746,7 @@ export default function OperationDetailPage() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {operation.invoices.map(inv => {
-                const canUploadWire = inv.status === 'sent' || inv.status === 'partially_paid' || inv.status === 'overdue';
+                const canUploadWire = inv.status === 'sent' || inv.status === 'overdue';
                 const isWireOpen = wireUploadInvoiceId === inv.id;
                 return [
                 <tr key={inv.id} className="hover:bg-gray-50">

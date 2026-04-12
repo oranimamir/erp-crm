@@ -176,7 +176,7 @@ router.get('/summary', async (req: Request, res: Response) => {
   const outstandingRows = db.prepare(`
     SELECT amount, UPPER(COALESCE(currency, 'USD')) as currency
     FROM invoices
-    WHERE type = 'customer' AND status IN ('sent', 'overdue', 'partially_paid') AND due_date IS NOT NULL
+    WHERE type = 'customer' AND status IN ('sent', 'overdue') AND due_date IS NOT NULL
       AND strftime('%Y', due_date) = ? ${custWhereOnly}
   `).all(year, ...custParams) as any[];
   const outstanding = await sumLiveEur(outstandingRows);
@@ -316,13 +316,6 @@ router.get('/debug-expenses', (_req: Request, res: Response) => {
     WHERE i.type = 'supplier' AND wt.transfer_date BETWEEN ? AND ?
   `).all(dateStart, dateEnd);
 
-  const invoicePayments = db.prepare(`
-    SELECT ip.id, ip.amount, ip.payment_date, ip.eur_amount, i.invoice_number, i.type as invoice_type, s.name as supplier_name
-    FROM invoice_payments ip JOIN invoices i ON ip.invoice_id = i.id
-    LEFT JOIN suppliers s ON i.supplier_id = s.id
-    WHERE i.type = 'supplier' AND ip.payment_date BETWEEN ? AND ?
-  `).all(dateStart, dateEnd);
-
   const payments = db.prepare(`
     SELECT p.id, p.amount, p.payment_date, i.invoice_number, i.type as invoice_type, s.name as supplier_name
     FROM payments p JOIN invoices i ON p.invoice_id = i.id
@@ -337,11 +330,10 @@ router.get('/debug-expenses', (_req: Request, res: Response) => {
     WHERE i.type = 'supplier' AND i.status = 'paid'
       AND i.payment_date IS NOT NULL AND i.payment_date BETWEEN ? AND ?
       AND NOT EXISTS (SELECT 1 FROM wire_transfers wt WHERE wt.invoice_id = i.id)
-      AND NOT EXISTS (SELECT 1 FROM invoice_payments ip WHERE ip.invoice_id = i.id)
       AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
   `).all(dateStart, dateEnd);
 
-  res.json({ month, wireTransfers, invoicePayments, payments, legacyPaid });
+  res.json({ month, wireTransfers, payments, legacyPaid });
 });
 
 // GET /analytics/demo-expenses — analytics for demo_invoices (demo expenses + sales activities)

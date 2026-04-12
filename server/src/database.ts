@@ -840,32 +840,18 @@ export async function initializeDatabase() {
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_activity_log_created_at ON activity_log(created_at)`); } catch (_) {}
   try { db.exec(`ALTER TABLE users ADD COLUMN notifications_last_read_at TEXT`); } catch (_) {}
 
-  // Add invoice_payments table for partial payment installment tracking
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS invoice_payments (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE RESTRICT,
-      amount REAL NOT NULL,
-      currency TEXT NOT NULL DEFAULT 'EUR',
-      fx_rate REAL,
-      eur_amount REAL,
-      payment_date TEXT NOT NULL,
-      notes TEXT,
-      created_by INTEGER,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    )
-  `);
-  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_invoice_payments_invoice_id ON invoice_payments(invoice_id)`); } catch (_) {}
+  // Drop the legacy invoice_payments installment table — partial payment flow removed
+  try { db.exec(`DROP TABLE IF EXISTS invoice_payments`); } catch (_) {}
 
-  // Add remainder_due_date to invoices
-  try { db.exec(`ALTER TABLE invoices ADD COLUMN remainder_due_date TEXT`); } catch (_) {}
+  // Normalize any legacy 'partially_paid' rows to 'sent' before the CHECK-constraint migration
+  try { db.exec(`UPDATE invoices SET status = 'sent' WHERE status = 'partially_paid'`); } catch (_) {}
 
-  // Migrate invoices CHECK constraint to allow new statuses
-  // CRITICAL: disable foreign keys to prevent CASCADE DELETE on wire_transfers/invoice_payments
-  // Use skipSave=true to avoid persisting intermediate states — only save after full migration
+  // Migrate invoices CHECK constraint. Partial-payment status removed — the new CHECK no
+  // longer allows 'partially_paid'. Use skipSave=true to avoid persisting intermediate states.
   try {
     const tableInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='invoices'").get() as any;
-    if (tableInfo?.sql && !tableInfo.sql.includes('paid_with_other')) {
+    const needsMigration = tableInfo?.sql && (tableInfo.sql.includes('partially_paid') || !tableInfo.sql.includes('paid_with_other'));
+    if (needsMigration) {
       db.exec(`PRAGMA foreign_keys = OFF`, true);
       db.exec(`
         ALTER TABLE invoices RENAME TO invoices_old;
@@ -877,7 +863,7 @@ export async function initializeDatabase() {
           type TEXT NOT NULL CHECK (type IN ('customer', 'supplier')),
           amount REAL NOT NULL,
           currency TEXT NOT NULL DEFAULT 'USD',
-          status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'sent', 'paid', 'overdue', 'cancelled', 'partially_paid', 'paid_with_other')),
+          status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'sent', 'paid', 'overdue', 'cancelled', 'paid_with_other')),
           due_date TEXT,
           notes TEXT,
           file_path TEXT,
@@ -891,7 +877,6 @@ export async function initializeDatabase() {
           operation_id INTEGER,
           fx_rate REAL,
           eur_amount REAL,
-          remainder_due_date TEXT,
           FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL,
           FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE SET NULL,
           CHECK (
@@ -899,7 +884,7 @@ export async function initializeDatabase() {
             (type = 'supplier' AND supplier_id IS NOT NULL AND customer_id IS NULL)
           )
         );
-        INSERT INTO invoices SELECT id, invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, notes, file_path, file_name, created_at, updated_at, invoice_date, payment_date, our_ref, po_number, operation_id, fx_rate, eur_amount, remainder_due_date FROM invoices_old;
+        INSERT INTO invoices SELECT id, invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, notes, file_path, file_name, created_at, updated_at, invoice_date, payment_date, our_ref, po_number, operation_id, fx_rate, eur_amount FROM invoices_old;
         DROP TABLE invoices_old;
       `, true);
       db.exec(`PRAGMA foreign_keys = ON`, true);
@@ -947,38 +932,6 @@ export async function initializeDatabase() {
     }
   } catch (err) {
     console.error('[db] wire_transfers CASCADE migration failed:', err);
-    try { db.exec(`PRAGMA foreign_keys = ON`, true); } catch (_) {}
-  }
-
-  // Remove ON DELETE CASCADE from invoice_payments
-  try {
-    const ipInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='invoice_payments'").get() as any;
-    if (ipInfo?.sql && ipInfo.sql.includes('ON DELETE CASCADE')) {
-      console.log('[db] Migrating invoice_payments: removing ON DELETE CASCADE');
-      db.exec(`PRAGMA foreign_keys = OFF`, true);
-      db.exec(`
-        ALTER TABLE invoice_payments RENAME TO invoice_payments_old;
-        CREATE TABLE invoice_payments (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE RESTRICT,
-          amount REAL NOT NULL,
-          currency TEXT NOT NULL DEFAULT 'EUR',
-          fx_rate REAL,
-          eur_amount REAL,
-          payment_date TEXT NOT NULL,
-          notes TEXT,
-          created_by INTEGER,
-          created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-        INSERT INTO invoice_payments SELECT * FROM invoice_payments_old;
-        DROP TABLE invoice_payments_old;
-      `, true);
-      db.exec(`PRAGMA foreign_keys = ON`, true);
-      db.saveToDisk();
-      console.log('[db] invoice_payments migration complete — CASCADE removed');
-    }
-  } catch (err) {
-    console.error('[db] invoice_payments CASCADE migration failed:', err);
     try { db.exec(`PRAGMA foreign_keys = ON`, true); } catch (_) {}
   }
 

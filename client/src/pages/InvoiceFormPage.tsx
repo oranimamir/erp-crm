@@ -7,7 +7,7 @@ import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
 import FileUpload from '../components/ui/FileUpload';
-import { ArrowLeft, Loader2, ChevronDown, X, Truck, CreditCard } from 'lucide-react';
+import { ArrowLeft, Loader2, ChevronDown, X, Truck } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 
 const typeOptions = [
@@ -24,7 +24,6 @@ const currencyOptions = [
 const statusOptions = [
   { value: 'draft', label: 'Draft' },
   { value: 'sent', label: 'Sent' },
-  { value: 'partially_paid', label: 'Partially Paid' },
   { value: 'paid', label: 'Paid' },
   { value: 'paid_with_other', label: 'Paid with Other Invoice' },
   { value: 'overdue', label: 'Overdue' },
@@ -181,18 +180,6 @@ export default function InvoiceFormPage() {
   const [saving, setSaving] = useState(false);
   const [scanning, setScanning] = useState(false);
 
-  // Initial payment section (new invoices only, supplier type)
-  const [hasInitialPayment, setHasInitialPayment] = useState(false);
-  const [initialPaymentAmount, setInitialPaymentAmount] = useState('');
-  const [initialPaymentDate, setInitialPaymentDate] = useState(new Date().toISOString().slice(0, 10));
-  const [remainderDueDate, setRemainderDueDate] = useState('');
-
-  // Edit-mode part payment
-  const [existingPayments, setExistingPayments] = useState<any[]>([]);
-  const [editPaymentAmount, setEditPaymentAmount] = useState('');
-  const [editPaymentDate, setEditPaymentDate] = useState(new Date().toISOString().slice(0, 10));
-  const [editPaymentNotes, setEditPaymentNotes] = useState('');
-
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
@@ -229,7 +216,6 @@ export default function InvoiceFormPage() {
             const filename = inv.file_path.split('/').pop() || inv.file_path;
             setCurrentFile({ name: filename, path: inv.file_path });
           }
-          setExistingPayments(res.data.invoice_payments || []);
         }
       } catch (err: any) {
         addToast(err.response?.data?.error || 'Failed to load data', 'error');
@@ -358,26 +344,10 @@ export default function InvoiceFormPage() {
       if (form.operation_id) formData.append('operation_id', form.operation_id);
       if (file) formData.append('file', file);
 
-      if (!isEdit && form.type === 'supplier' && hasInitialPayment && initialPaymentAmount && initialPaymentDate) {
-        formData.append('initial_payment_amount', initialPaymentAmount);
-        formData.append('initial_payment_date', initialPaymentDate);
-      }
-      if (!isEdit && form.type === 'supplier' && remainderDueDate) {
-        formData.append('remainder_due_date', remainderDueDate);
-      }
-
       if (isEdit) {
         await api.put(`/invoices/${id}`, formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
-        // Record part payment if entered
-        if (form.type === 'supplier' && editPaymentAmount && Number(editPaymentAmount) > 0 && editPaymentDate) {
-          await api.post(`/invoices/${id}/payments`, {
-            amount: editPaymentAmount,
-            payment_date: editPaymentDate,
-            notes: editPaymentNotes || undefined,
-          });
-        }
         addToast('Invoice updated', 'success');
       } else {
         await api.post('/invoices', formData, {
@@ -568,148 +538,6 @@ export default function InvoiceFormPage() {
               placeholder="Optional notes..."
             />
           </div>
-
-          {/* Part Payments section — edit mode for supplier invoices */}
-          {isEdit && form.type === 'supplier' && (
-            <div className="border border-gray-200 rounded-lg overflow-hidden">
-              <div className="px-4 py-3 bg-gray-50 flex items-center gap-2 border-b border-gray-200">
-                <CreditCard size={15} className="text-gray-400" />
-                <span className="text-sm font-medium text-gray-700">Part Payments</span>
-                {existingPayments.length > 0 && (
-                  <span className="ml-auto text-xs text-gray-500">
-                    {existingPayments.length} payment{existingPayments.length !== 1 ? 's' : ''} recorded
-                  </span>
-                )}
-              </div>
-
-              {/* Existing payments */}
-              {existingPayments.length > 0 && (
-                <div className="divide-y divide-gray-100 px-4">
-                  {existingPayments.map((p: any, i: number) => {
-                    const sym = form.currency === 'EUR' ? '€' : form.currency === 'GBP' ? '£' : '$';
-                    return (
-                      <div key={p.id || i} className="py-2 flex items-center gap-3 text-sm">
-                        <span className="text-gray-500 w-24 shrink-0">{p.payment_date?.slice(0, 10) || '-'}</span>
-                        <span className="font-medium text-green-700">{sym}{Number(p.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                        {p.notes && <span className="text-gray-400 truncate">{p.notes}</span>}
-                      </div>
-                    );
-                  })}
-                  {(() => {
-                    const totalPaid = existingPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0);
-                    const rem = Number(form.amount) - totalPaid;
-                    const sym = form.currency === 'EUR' ? '€' : form.currency === 'GBP' ? '£' : '$';
-                    return (
-                      <div className="py-2 flex items-center gap-3 text-xs text-gray-500 border-t border-gray-100">
-                        <span className="text-green-600 font-medium">{sym}{totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2 })} paid</span>
-                        {rem > 0.005 && <span className="text-amber-600 font-medium">{sym}{rem.toLocaleString(undefined, { minimumFractionDigits: 2 })} remaining</span>}
-                        {rem <= 0.005 && <span className="text-green-600">Fully paid</span>}
-                      </div>
-                    );
-                  })()}
-                </div>
-              )}
-
-              {/* Add new payment */}
-              {existingPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0) < Number(form.amount) && (
-                <div className="px-4 py-4 space-y-3 bg-white border-t border-gray-100">
-                  <p className="text-xs font-medium text-gray-600">Record a new payment</p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <Input
-                      label="Amount *"
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={editPaymentAmount}
-                      onChange={e => setEditPaymentAmount(e.target.value)}
-                      placeholder="0.00"
-                    />
-                    <Input
-                      label="Payment Date *"
-                      type="date"
-                      value={editPaymentDate}
-                      onChange={e => setEditPaymentDate(e.target.value)}
-                    />
-                  </div>
-                  <Input
-                    label="Notes (optional)"
-                    value={editPaymentNotes}
-                    onChange={e => setEditPaymentNotes(e.target.value)}
-                    placeholder="e.g. Second instalment"
-                  />
-                  {editPaymentAmount && form.amount && Number(editPaymentAmount) > 0 && (() => {
-                    const totalPaid = existingPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0) + Number(editPaymentAmount);
-                    const rem = Number(form.amount) - totalPaid;
-                    const sym = form.currency === 'EUR' ? '€' : form.currency === 'GBP' ? '£' : '$';
-                    return (
-                      <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                        {rem > 0.005
-                          ? <>Remaining balance after this payment: <strong>{sym}{rem.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong> — invoice will be marked as <strong>Partially Paid</strong></>
-                          : <>Invoice will be marked as <strong>Paid</strong></>}
-                      </p>
-                    );
-                  })()}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Initial Payment section — new supplier invoices only */}
-          {!isEdit && form.type === 'supplier' && (
-            <div className="border border-gray-200 rounded-lg overflow-hidden">
-              <button
-                type="button"
-                onClick={() => setHasInitialPayment(prev => !prev)}
-                className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 text-sm font-medium text-gray-700 transition-colors"
-              >
-                <div className="flex items-center gap-2">
-                  <CreditCard size={15} className="text-gray-400" />
-                  <span>An initial payment has already been made</span>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={hasInitialPayment}
-                  onChange={() => {}}
-                  className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 pointer-events-none"
-                />
-              </button>
-
-              {hasInitialPayment && (
-                <div className="px-4 py-4 space-y-4 bg-white">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <Input
-                      label="Amount Paid *"
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      max={form.amount || undefined}
-                      value={initialPaymentAmount}
-                      onChange={e => setInitialPaymentAmount(e.target.value)}
-                      placeholder="0.00"
-                    />
-                    <Input
-                      label="Payment Date *"
-                      type="date"
-                      value={initialPaymentDate}
-                      onChange={e => setInitialPaymentDate(e.target.value)}
-                    />
-                  </div>
-                  <Input
-                    label="Remaining Due Date (optional)"
-                    type="date"
-                    value={remainderDueDate}
-                    onChange={e => setRemainderDueDate(e.target.value)}
-                  />
-                  {form.amount && initialPaymentAmount && Number(initialPaymentAmount) < Number(form.amount) && (
-                    <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                      Remaining balance: {form.currency === 'EUR' ? '€' : form.currency === 'GBP' ? '£' : '$'}
-                      {(Number(form.amount) - Number(initialPaymentAmount)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} — invoice will be marked as <strong>Partially Paid</strong>
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
 
           <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
             <Button variant="secondary" type="button" onClick={() => navigate('/invoices')}>

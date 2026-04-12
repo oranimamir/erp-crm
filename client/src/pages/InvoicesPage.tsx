@@ -15,7 +15,6 @@ import { downloadExcel } from '../lib/exportExcel';
 const statusBadgeClasses: Record<string, string> = {
   draft:           'bg-gray-100 text-gray-700 border-gray-200',
   sent:            'bg-blue-100 text-blue-700 border-blue-200',
-  partially_paid:  'bg-orange-100 text-orange-700 border-orange-200',
   paid:            'bg-green-100 text-green-700 border-green-200',
   paid_with_other: 'bg-purple-100 text-purple-700 border-purple-200',
   overdue:         'bg-red-100 text-red-700 border-red-200',
@@ -25,7 +24,6 @@ const statusBadgeClasses: Record<string, string> = {
 const statusOptions = [
   { value: 'draft', label: 'Draft' },
   { value: 'sent', label: 'Sent' },
-  { value: 'partially_paid', label: 'Partially Paid' },
   { value: 'paid', label: 'Paid' },
   { value: 'paid_with_other', label: 'Paid with Other Invoice' },
   { value: 'overdue', label: 'Overdue' },

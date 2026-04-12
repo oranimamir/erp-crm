@@ -163,7 +163,7 @@ export default function DashboardPage() {
           <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
             <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
               Pending
-              <InfoBadge id="pending" text="Total amount from customer invoices that are sent, overdue, or partially paid and have a due date set. Late payments from past months are included here and rolled forward to the current month in the forecast." />
+              <InfoBadge id="pending" text="Total amount from customer invoices that are sent or overdue and have a due date set. Late payments from past months are included here and rolled forward to the current month in the forecast." />
             </p>
             <p className="text-lg sm:text-2xl font-bold text-amber-500 truncate">{fmt(pending)}</p>
             <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Sent invoices with due date</p>
