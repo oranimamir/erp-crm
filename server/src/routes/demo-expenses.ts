@@ -2502,17 +2502,26 @@ router.get('/supplier-duplicates', (req: Request, res: Response) => {
       for (let k = 1; k < idxs.length; k++) union(idxs[0], idxs[k]);
     }
 
-    // Pass 2: fuzzy by Levenshtein (only between distinct keys, both ≥4 chars)
+    // Pass 2: fuzzy match between distinct keys (both ≥4 chars).
+    // Two strategies, evaluated in order:
+    //   a) Containment — one key fully contains the other (handles "caldic" vs
+    //      "caldicbenelux"). Requires the shorter key to be ≥5 chars to avoid
+    //      noise like "co" matching every supplier.
+    //   b) Levenshtein typo distance, only when lengths are close enough.
     const uniqueKeys = [...byKey.keys()].filter(k => k.length >= 4);
     for (let i = 0; i < uniqueKeys.length; i++) {
       for (let j = i + 1; j < uniqueKeys.length; j++) {
         const a = uniqueKeys[i], b = uniqueKeys[j];
-        const maxLen = Math.max(a.length, b.length);
+        const shorter = a.length <= b.length ? a : b;
+        const longer = a.length <= b.length ? b : a;
+        if (shorter.length >= 5 && longer.includes(shorter)) {
+          union(byKey.get(a)![0], byKey.get(b)![0]);
+          continue;
+        }
+        const maxLen = longer.length;
         const threshold = maxLen <= 6 ? 1 : maxLen <= 12 ? 2 : 3;
-        // Quick reject by length
         if (Math.abs(a.length - b.length) > threshold) continue;
-        // One contained in the other (e.g. "profex" in "profexgroup")
-        if (a.includes(b) || b.includes(a) || levenshtein(a, b) <= threshold) {
+        if (levenshtein(a, b) <= threshold) {
           union(byKey.get(a)![0], byKey.get(b)![0]);
         }
       }

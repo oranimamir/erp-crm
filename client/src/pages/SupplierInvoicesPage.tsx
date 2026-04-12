@@ -414,13 +414,14 @@ export default function SupplierInvoicesPage() {
   const [singleUploading, setSingleUploading] = useState(false);
   const [singlePreview, setSinglePreview] = useState<SingleUploadPreview | null>(null);
 
-  // Search & Filters — initialize supplier filter from URL param if present
+  // Search & Filters — when arriving via supplier link, drop all default
+  // filters so every invoice for that supplier is visible.
   const initialSupplier = searchParams.get('supplier');
   const [search, setSearch] = useState('');
   const [filterCategories, setFilterCategories] = useState<string[]>([]);
   const [filterSuppliers, setFilterSuppliers] = useState<string[]>(initialSupplier ? [initialSupplier] : []);
   const [filterMonth, setFilterMonth] = useState('');
-  const [filterDateFrom, setFilterDateFrom] = useState('2026-01-01');
+  const [filterDateFrom, setFilterDateFrom] = useState(initialSupplier ? '' : '2026-01-01');
   const [filterDateTo, setFilterDateTo] = useState('');
   const [filterFlagged, setFilterFlagged] = useState(false);
   const [showFilters, setShowFilters] = useState(true);
