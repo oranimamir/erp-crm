@@ -13,7 +13,7 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
-import { Plus, Truck, Eye, Pencil, Trash2, BarChart3, FileSpreadsheet, Beaker, Check, X } from 'lucide-react';
+import { Plus, Truck, Eye, Pencil, Trash2, BarChart3, FileSpreadsheet, Beaker, Check, X, GitMerge } from 'lucide-react';
 import { downloadExcel } from '../lib/exportExcel';
 
 const CHART_COLORS = [
@@ -66,6 +66,11 @@ function DemoSuppliersTab() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editCat, setEditCat] = useState('');
   const [newCatName, setNewCatName] = useState('');
+  const [dupLoading, setDupLoading] = useState(false);
+  const [dupGroups, setDupGroups] = useState<{ canonical: string; suppliers: { name: string; count: number }[] }[] | null>(null);
+  const [dupCanonicals, setDupCanonicals] = useState<Record<number, string>>({});
+  const [dupSelected, setDupSelected] = useState<Record<number, Set<string>>>({});
+  const [merging, setMerging] = useState<number | null>(null);
 
   const fetchData = () => {
     Promise.all([
@@ -106,13 +111,71 @@ function DemoSuppliersTab() {
 
   const handleUpdateCategory = async (id: number) => {
     try {
-      await api.patch(`/demo-expenses/supplier-mappings/${id}`, { category: editCat });
-      addToast('Category updated', 'success');
+      const res = await api.patch(`/demo-expenses/supplier-mappings/${id}`, { category: editCat });
+      const cascaded = res.data?.cascadedInvoices || 0;
+      addToast(cascaded > 0 ? `Category updated · ${cascaded} invoices reclassified` : 'Category updated', 'success');
       setEditingId(null);
       fetchData();
     } catch (err: any) {
       addToast(err?.response?.data?.error || 'Failed to update', 'error');
     }
+  };
+
+  const handleFindDuplicates = async () => {
+    setDupLoading(true);
+    setDupGroups(null);
+    try {
+      const res = await api.get('/demo-expenses/supplier-duplicates');
+      const groups = res.data?.groups || [];
+      setDupGroups(groups);
+      const canonicals: Record<number, string> = {};
+      const selected: Record<number, Set<string>> = {};
+      groups.forEach((g: any, i: number) => {
+        canonicals[i] = g.canonical;
+        selected[i] = new Set(g.suppliers.map((s: any) => s.name));
+      });
+      setDupCanonicals(canonicals);
+      setDupSelected(selected);
+    } catch (err: any) {
+      addToast(err?.response?.data?.error || 'Failed to find duplicates', 'error');
+    } finally {
+      setDupLoading(false);
+    }
+  };
+
+  const handleMergeGroup = async (groupIdx: number) => {
+    const canonical = (dupCanonicals[groupIdx] || '').trim();
+    if (!canonical) { addToast('Enter a name for the consolidated supplier', 'error'); return; }
+    const names = [...(dupSelected[groupIdx] || new Set<string>())];
+    if (names.length < 2) { addToast('Select at least 2 suppliers to merge', 'error'); return; }
+    setMerging(groupIdx);
+    try {
+      const res = await api.post('/demo-expenses/supplier-merge', { canonicalName: canonical, names });
+      addToast(`Merged into "${canonical}" · ${res.data?.updatedInvoices || 0} invoices renamed`, 'success');
+      // Remove the merged group from the list
+      setDupGroups(prev => (prev || []).filter((_, i) => i !== groupIdx));
+      fetchData();
+    } catch (err: any) {
+      addToast(err?.response?.data?.error || 'Failed to merge', 'error');
+    } finally {
+      setMerging(null);
+    }
+  };
+
+  const toggleDupSelected = (groupIdx: number, name: string) => {
+    setDupSelected(prev => {
+      const next = { ...prev };
+      const set = new Set(next[groupIdx] || []);
+      if (set.has(name)) set.delete(name); else set.add(name);
+      next[groupIdx] = set;
+      return next;
+    });
+  };
+
+  const closeDupModal = () => {
+    setDupGroups(null);
+    setDupCanonicals({});
+    setDupSelected({});
   };
 
   if (loading) return <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" /></div>;
@@ -130,7 +193,12 @@ function DemoSuppliersTab() {
         <p className="text-sm text-gray-500">
           Demo suppliers are used to automatically classify invoices into the Demo Expenses domain.
         </p>
-        <Button onClick={() => setShowAdd(true)}><Plus size={16} /> Add Supplier</Button>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={handleFindDuplicates} disabled={dupLoading}>
+            <GitMerge size={16} /> {dupLoading ? 'Scanning...' : 'Find Duplicates'}
+          </Button>
+          <Button onClick={() => setShowAdd(true)}><Plus size={16} /> Add Supplier</Button>
+        </div>
       </div>
 
       {/* Add / manage categories */}
@@ -279,6 +347,67 @@ function DemoSuppliersTab() {
 
       {/* Delete Confirm */}
       <ConfirmDialog open={deleteId !== null} onClose={() => setDeleteId(null)} onConfirm={() => deleteId && handleDelete(deleteId)} title="Remove Supplier" message="Remove this user-defined supplier mapping? Hardcoded suppliers cannot be removed." confirmLabel="Remove" />
+
+      {/* Find Duplicates Modal */}
+      {dupGroups !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">Consolidate Similar Suppliers</h2>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {dupGroups.length === 0
+                    ? 'No similar suppliers found.'
+                    : `Found ${dupGroups.length} group${dupGroups.length === 1 ? '' : 's'} of similar names. Pick a canonical name and merge.`}
+                </p>
+              </div>
+              <button onClick={closeDupModal} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+              {dupGroups.length === 0 ? (
+                <div className="text-center py-12 text-sm text-gray-500">No similar suppliers detected.</div>
+              ) : (
+                dupGroups.map((g, i) => {
+                  const selected = dupSelected[i] || new Set<string>();
+                  return (
+                    <div key={i} className="border border-gray-200 rounded-lg p-4">
+                      <div className="space-y-2 mb-3">
+                        {g.suppliers.map(s => {
+                          const isSelected = selected.has(s.name);
+                          return (
+                            <label key={s.name} className="flex items-center gap-2 cursor-pointer text-sm">
+                              <input type="checkbox" checked={isSelected} onChange={() => toggleDupSelected(i, s.name)}
+                                className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                              <span className={`flex-1 capitalize ${isSelected ? 'text-gray-900' : 'text-gray-400 line-through'}`}>
+                                {s.name}
+                              </span>
+                              <span className="text-xs text-gray-400">{s.count} invoice{s.count === 1 ? '' : 's'}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                      <div className="flex items-end gap-2 pt-3 border-t border-gray-100">
+                        <div className="flex-1">
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Consolidated supplier name</label>
+                          <input type="text" value={dupCanonicals[i] || ''}
+                            onChange={e => setDupCanonicals(prev => ({ ...prev, [i]: e.target.value }))}
+                            className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500" />
+                        </div>
+                        <Button size="sm" onClick={() => handleMergeGroup(i)} disabled={merging === i || selected.size < 2}>
+                          {merging === i ? 'Merging...' : 'Merge'}
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            <div className="flex justify-end px-6 py-3 border-t border-gray-100">
+              <Button variant="secondary" onClick={closeDupModal}>Close</Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

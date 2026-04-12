@@ -2349,17 +2349,196 @@ router.patch('/supplier-mappings/:id', (req: Request, res: Response) => {
 
     params.push(req.params.id);
     db.prepare(`UPDATE demo_supplier_mappings SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+
+    // Cascade: re-classify all invoices whose supplier matches this pattern
+    let cascadedInvoices = 0;
+    const categoryChanged = category && category !== mapping.category;
+    const domainChanged = domain && domain !== mapping.domain;
+    if (categoryChanged || domainChanged) {
+      const newCategory = category || mapping.category;
+      const newDomain = domain || mapping.domain;
+      const pattern = `%${mapping.supplier_pattern.toLowerCase()}%`;
+      const r = db.prepare(
+        'UPDATE demo_invoices SET category = ?, domain = ? WHERE LOWER(supplier) LIKE ?'
+      ).run(newCategory, newDomain, pattern);
+      cascadedInvoices = (r as any).changes || 0;
+    }
+
     db.saveToDisk();
     notifyAdmin({
       entity: 'Supplier Mapping',
       action: 'updated',
-      label: `${mapping.supplier_pattern} — ${category ? `category → ${category}` : ''}${domain ? ` domain → ${domain}` : ''}`,
+      label: `${mapping.supplier_pattern} — ${category ? `category → ${category}` : ''}${domain ? ` domain → ${domain}` : ''}${cascadedInvoices > 0 ? ` (${cascadedInvoices} invoices reclassified)` : ''}`,
       performedBy: (req as any).user?.display_name || 'Unknown',
       performedById: (req as any).user?.userId,
     });
-    res.json({ success: true });
+    res.json({ success: true, cascadedInvoices });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to update supplier mapping' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SUPPLIER DUPLICATES — fuzzy-find similarly-named suppliers and merge them
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function normalizeSupplierName(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[.,\-_/&'"`()]/g, ' ')
+    .replace(/\b(bv|bvba|nv|sa|sarl|sprl|ltd|limited|gmbh|inc|llc|srl|spa|comm\s*v|cv|sl|plc|co|corporation|corp|company)\b/g, '')
+    .replace(/[^a-z0-9]/g, '')
+    .trim();
+}
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  let prev = new Array(b.length + 1);
+  let curr = new Array(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[b.length];
+}
+
+router.get('/supplier-duplicates', (_req: Request, res: Response) => {
+  try {
+    const rows = db.prepare(
+      "SELECT supplier as name, COUNT(*) as count FROM demo_invoices WHERE supplier IS NOT NULL AND supplier != '' GROUP BY supplier"
+    ).all() as { name: string; count: number }[];
+
+    const items = rows
+      .map(r => ({ name: r.name, count: r.count, key: normalizeSupplierName(r.name) }))
+      .filter(r => r.key.length > 0);
+
+    // Union-find
+    const parent = items.map((_, i) => i);
+    const find = (x: number): number => {
+      while (parent[x] !== x) {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+      }
+      return x;
+    };
+    const union = (a: number, b: number) => {
+      const ra = find(a), rb = find(b);
+      if (ra !== rb) parent[ra] = rb;
+    };
+
+    // Pass 1: exact normalized key
+    const byKey = new Map<string, number[]>();
+    for (let i = 0; i < items.length; i++) {
+      if (!byKey.has(items[i].key)) byKey.set(items[i].key, []);
+      byKey.get(items[i].key)!.push(i);
+    }
+    for (const idxs of byKey.values()) {
+      for (let k = 1; k < idxs.length; k++) union(idxs[0], idxs[k]);
+    }
+
+    // Pass 2: fuzzy by Levenshtein (only between distinct keys, both ≥4 chars)
+    const uniqueKeys = [...byKey.keys()].filter(k => k.length >= 4);
+    for (let i = 0; i < uniqueKeys.length; i++) {
+      for (let j = i + 1; j < uniqueKeys.length; j++) {
+        const a = uniqueKeys[i], b = uniqueKeys[j];
+        const maxLen = Math.max(a.length, b.length);
+        const threshold = maxLen <= 6 ? 1 : maxLen <= 12 ? 2 : 3;
+        // Quick reject by length
+        if (Math.abs(a.length - b.length) > threshold) continue;
+        // One contained in the other (e.g. "profex" in "profexgroup")
+        if (a.includes(b) || b.includes(a) || levenshtein(a, b) <= threshold) {
+          union(byKey.get(a)![0], byKey.get(b)![0]);
+        }
+      }
+    }
+
+    // Collect groups
+    const groupMap = new Map<number, typeof items>();
+    for (let i = 0; i < items.length; i++) {
+      const root = find(i);
+      if (!groupMap.has(root)) groupMap.set(root, []);
+      groupMap.get(root)!.push(items[i]);
+    }
+
+    const groups = [...groupMap.values()]
+      .filter(g => g.length >= 2)
+      .map(g => {
+        const sorted = g.slice().sort((a, b) => b.count - a.count || b.name.length - a.name.length);
+        return {
+          canonical: sorted[0].name,
+          suppliers: sorted.map(x => ({ name: x.name, count: x.count })),
+        };
+      })
+      .sort((a, b) => b.suppliers.length - a.suppliers.length);
+
+    res.json({ groups, totalGroups: groups.length });
+  } catch (err: any) {
+    console.error('[demo-expenses] supplier-duplicates error:', err);
+    res.status(500).json({ error: 'Failed to find supplier duplicates' });
+  }
+});
+
+router.post('/supplier-merge', (req: Request, res: Response) => {
+  try {
+    const { canonicalName, names } = req.body as { canonicalName: string; names: string[] };
+    if (!canonicalName || !canonicalName.trim() || !Array.isArray(names) || names.length === 0) {
+      res.status(400).json({ error: 'canonicalName and names[] required' });
+      return;
+    }
+    const canonical = canonicalName.trim();
+
+    // Rename invoices
+    let updatedInvoices = 0;
+    const updateInv = db.prepare('UPDATE demo_invoices SET supplier = ? WHERE LOWER(supplier) = LOWER(?)');
+    for (const n of names) {
+      if (!n) continue;
+      const r = updateInv.run(canonical, n);
+      updatedInvoices += (r as any).changes || 0;
+    }
+
+    // Consolidate user mappings: gather any existing mappings for these names,
+    // pick a category, delete them, then upsert one canonical mapping.
+    const lowerNames = names.map(n => n.toLowerCase()).filter(Boolean);
+    lowerNames.push(canonical.toLowerCase());
+    const placeholders = lowerNames.map(() => '?').join(',');
+    const existingMappings = db.prepare(
+      `SELECT id, supplier_pattern, category, domain FROM demo_supplier_mappings WHERE LOWER(supplier_pattern) IN (${placeholders}) AND is_user_defined = 1`
+    ).all(...lowerNames) as any[];
+
+    let inheritedCategory: string | null = null;
+    let inheritedDomain = 'demo';
+    if (existingMappings.length > 0) {
+      inheritedCategory = existingMappings[0].category;
+      inheritedDomain = existingMappings[0].domain || 'demo';
+      const ids = existingMappings.map(m => m.id);
+      const idP = ids.map(() => '?').join(',');
+      db.prepare(`DELETE FROM demo_supplier_mappings WHERE id IN (${idP})`).run(...ids);
+    }
+    if (inheritedCategory) {
+      db.prepare(
+        'INSERT OR REPLACE INTO demo_supplier_mappings (supplier_pattern, domain, category, display_name, is_user_defined) VALUES (?, ?, ?, ?, 1)'
+      ).run(canonical.toLowerCase(), inheritedDomain, inheritedCategory, canonical);
+    }
+
+    db.saveToDisk();
+    notifyAdmin({
+      entity: 'Supplier Mapping',
+      action: 'updated',
+      label: `Merged ${names.length} suppliers → "${canonical}" (${updatedInvoices} invoices renamed)`,
+      performedBy: (req as any).user?.display_name || 'Unknown',
+      performedById: (req as any).user?.userId,
+    });
+    res.json({ success: true, updatedInvoices });
+  } catch (err: any) {
+    console.error('[demo-expenses] supplier-merge error:', err);
+    res.status(500).json({ error: 'Failed to merge suppliers' });
   }
 });
 
