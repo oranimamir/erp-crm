@@ -1861,16 +1861,18 @@ router.get('/categories', (req: Request, res: Response) => {
 router.get('/demo-suppliers', (req: Request, res: Response) => {
   try {
     const domain = (req.query.domain as string) || 'demo';
-    let hardcoded: { pattern: string; category: string; source: string }[] = [];
+    let hardcoded: { id?: number; pattern: string; category: string; source: string }[] = [];
     if (domain === 'demo') {
       hardcoded = DEMO_SUPPLIER_MAP.map(m => ({ pattern: m.pattern, category: m.category, source: 'hardcoded' }));
     } else if (domain === 'sales') {
-      // Sales hardcoded suppliers come from the /suppliers table
-      const salesRows = db.prepare('SELECT name, category FROM suppliers').all() as any[];
+      // Sales hardcoded suppliers come from the /suppliers table — include id so the
+      // client can edit/delete them via /suppliers/:id.
+      const salesRows = db.prepare('SELECT id, name, category FROM suppliers').all() as any[];
       hardcoded = salesRows.map(s => ({
+        id: s.id,
         pattern: s.name,
         category: SALES_CAT_DB_MAP[s.category] || s.category,
-        source: 'hardcoded',
+        source: 'suppliers-table',
       }));
     }
     const userDefined = db.prepare(
@@ -2426,23 +2428,55 @@ function levenshtein(a: string, b: string): number {
 router.get('/supplier-duplicates', (req: Request, res: Response) => {
   try {
     const domain = req.query.domain as string;
-    let sql = "SELECT supplier as name, COUNT(*) as count, GROUP_CONCAT(id) as ids FROM demo_invoices WHERE supplier IS NOT NULL AND supplier != ''";
-    const params: any[] = [];
-    if (domain === 'demo' || domain === 'sales') {
-      sql += ' AND domain = ?';
-      params.push(domain);
-    }
-    sql += ' GROUP BY supplier';
-    const rows = db.prepare(sql).all(...params) as { name: string; count: number; ids: string }[];
+    const domainFilter = (domain === 'demo' || domain === 'sales') ? domain : null;
 
-    const items = rows
-      .map(r => ({
-        name: r.name,
-        count: r.count,
-        invoiceIds: (r.ids || '').split(',').map(Number).filter(n => !isNaN(n)).slice(0, 5),
-        key: normalizeSupplierName(r.name),
-      }))
-      .filter(r => r.key.length > 0);
+    // Pull names from THREE sources, deduped on lowercase name. The merge endpoint
+    // can then clean up any source that contains the duplicate.
+    type Item = { name: string; count: number; invoiceIds: number[]; key: string };
+    const byLower = new Map<string, Item>();
+    const addOrMerge = (rawName: string, count: number, invoiceIds: number[]) => {
+      if (!rawName) return;
+      const lower = rawName.toLowerCase();
+      const existing = byLower.get(lower);
+      if (existing) {
+        existing.count += count;
+        for (const id of invoiceIds) if (!existing.invoiceIds.includes(id)) existing.invoiceIds.push(id);
+        return;
+      }
+      const key = normalizeSupplierName(rawName);
+      if (!key) return;
+      byLower.set(lower, { name: rawName, count, invoiceIds: invoiceIds.slice(0, 5), key });
+    };
+
+    // Source 1: demo_invoices
+    {
+      let sql = "SELECT supplier as name, COUNT(*) as count, GROUP_CONCAT(id) as ids FROM demo_invoices WHERE supplier IS NOT NULL AND supplier != ''";
+      const params: any[] = [];
+      if (domainFilter) { sql += ' AND domain = ?'; params.push(domainFilter); }
+      sql += ' GROUP BY supplier';
+      const rows = db.prepare(sql).all(...params) as { name: string; count: number; ids: string }[];
+      for (const r of rows) {
+        const ids = (r.ids || '').split(',').map(Number).filter(n => !isNaN(n));
+        addOrMerge(r.name, r.count, ids);
+      }
+    }
+
+    // Source 2: demo_supplier_mappings (user-defined)
+    {
+      let sql = 'SELECT display_name, supplier_pattern FROM demo_supplier_mappings WHERE is_user_defined = 1';
+      const params: any[] = [];
+      if (domainFilter) { sql += ' AND domain = ?'; params.push(domainFilter); }
+      const rows = db.prepare(sql).all(...params) as { display_name: string | null; supplier_pattern: string }[];
+      for (const r of rows) addOrMerge(r.display_name || r.supplier_pattern, 0, []);
+    }
+
+    // Source 3: standalone suppliers table (sales hardcoded)
+    if (domainFilter === 'sales' || !domainFilter) {
+      const rows = db.prepare('SELECT name FROM suppliers').all() as { name: string }[];
+      for (const r of rows) addOrMerge(r.name, 0, []);
+    }
+
+    const items: Item[] = [...byLower.values()];
 
     // Union-find
     const parent = items.map((_, i) => i);
@@ -2512,50 +2546,84 @@ router.get('/supplier-duplicates', (req: Request, res: Response) => {
 
 router.post('/supplier-merge', (req: Request, res: Response) => {
   try {
-    const { canonicalName, names } = req.body as { canonicalName: string; names: string[] };
+    const { canonicalName, names, domain } = req.body as { canonicalName: string; names: string[]; domain?: string };
     if (!canonicalName || !canonicalName.trim() || !Array.isArray(names) || names.length === 0) {
       res.status(400).json({ error: 'canonicalName and names[] required' });
       return;
     }
     const canonical = canonicalName.trim();
+    const scopedDomain = (domain === 'demo' || domain === 'sales') ? domain : null;
 
-    // Rename invoices
+    // 1. Rename matching invoices (scoped by domain if provided)
     let updatedInvoices = 0;
-    const updateInv = db.prepare('UPDATE demo_invoices SET supplier = ? WHERE LOWER(supplier) = LOWER(?)');
+    const invSql = scopedDomain
+      ? 'UPDATE demo_invoices SET supplier = ? WHERE LOWER(supplier) = LOWER(?) AND domain = ?'
+      : 'UPDATE demo_invoices SET supplier = ? WHERE LOWER(supplier) = LOWER(?)';
+    const updateInv = db.prepare(invSql);
     for (const n of names) {
       if (!n) continue;
-      const r = updateInv.run(canonical, n);
+      const r = scopedDomain ? updateInv.run(canonical, n, scopedDomain) : updateInv.run(canonical, n);
       updatedInvoices += (r as any).changes || 0;
     }
 
-    // Consolidate user mappings: gather any existing mappings for these names,
-    // pick a category, delete them, then upsert one canonical mapping.
+    // 2. Consolidate demo_supplier_mappings — gather, delete, upsert canonical
     const lowerNames = names.map(n => n.toLowerCase()).filter(Boolean);
     lowerNames.push(canonical.toLowerCase());
     const placeholders = lowerNames.map(() => '?').join(',');
-    const existingMappings = db.prepare(
-      `SELECT id, supplier_pattern, category, domain FROM demo_supplier_mappings WHERE LOWER(supplier_pattern) IN (${placeholders}) AND is_user_defined = 1`
-    ).all(...lowerNames) as any[];
+    const mapSql = scopedDomain
+      ? `SELECT id, supplier_pattern, category, domain FROM demo_supplier_mappings WHERE LOWER(supplier_pattern) IN (${placeholders}) AND is_user_defined = 1 AND domain = ?`
+      : `SELECT id, supplier_pattern, category, domain FROM demo_supplier_mappings WHERE LOWER(supplier_pattern) IN (${placeholders}) AND is_user_defined = 1`;
+    const mapParams = scopedDomain ? [...lowerNames, scopedDomain] : lowerNames;
+    const existingMappings = db.prepare(mapSql).all(...mapParams) as any[];
 
     let inheritedCategory: string | null = null;
-    let inheritedDomain = 'demo';
+    let inheritedDomain: string = scopedDomain || 'demo';
     if (existingMappings.length > 0) {
       inheritedCategory = existingMappings[0].category;
-      inheritedDomain = existingMappings[0].domain || 'demo';
+      inheritedDomain = existingMappings[0].domain || inheritedDomain;
       const ids = existingMappings.map(m => m.id);
       const idP = ids.map(() => '?').join(',');
       db.prepare(`DELETE FROM demo_supplier_mappings WHERE id IN (${idP})`).run(...ids);
     }
-    // Fallback: derive category/domain from one of the (already-renamed) invoices
+
+    // 3. Consolidate standalone suppliers table (sales only) — keep one row, delete the rest
+    let consolidatedSuppliers = 0;
+    if (scopedDomain === 'sales' || (!scopedDomain && inheritedDomain === 'sales')) {
+      const supRows = db.prepare(
+        `SELECT id, name, category FROM suppliers WHERE LOWER(name) IN (${placeholders})`
+      ).all(...lowerNames) as any[];
+      if (supRows.length > 0) {
+        // Carry the kept row's category if we don't have one yet (DB form, e.g. 'raw_materials')
+        if (!inheritedCategory) {
+          const dbCat = supRows[0].category;
+          inheritedCategory = SALES_CAT_DB_MAP[dbCat] || dbCat;
+        }
+        // Find inverse SALES_CAT_DB_MAP entry for the kept row
+        const keepId = supRows[0].id;
+        // Rename kept row to canonical
+        db.prepare(`UPDATE suppliers SET name = ?, updated_at = datetime('now') WHERE id = ?`).run(canonical, keepId);
+        // Delete the rest
+        const deleteIds = supRows.slice(1).map(r => r.id);
+        if (deleteIds.length > 0) {
+          const dP = deleteIds.map(() => '?').join(',');
+          const r = db.prepare(`DELETE FROM suppliers WHERE id IN (${dP})`).run(...deleteIds);
+          consolidatedSuppliers = (r as any).changes || 0;
+        }
+      }
+    }
+
+    // 4. Fallback category from invoices if still unknown
     if (!inheritedCategory) {
       const sample = db.prepare(
         'SELECT category, domain FROM demo_invoices WHERE LOWER(supplier) = LOWER(?) LIMIT 1'
       ).get(canonical) as any;
       if (sample) {
         inheritedCategory = sample.category;
-        inheritedDomain = sample.domain || 'demo';
+        inheritedDomain = sample.domain || inheritedDomain;
       }
     }
+
+    // 5. Upsert canonical mapping
     if (inheritedCategory) {
       db.prepare(
         'INSERT OR REPLACE INTO demo_supplier_mappings (supplier_pattern, domain, category, display_name, is_user_defined) VALUES (?, ?, ?, ?, 1)'
@@ -2566,11 +2634,11 @@ router.post('/supplier-merge', (req: Request, res: Response) => {
     notifyAdmin({
       entity: 'Supplier Mapping',
       action: 'updated',
-      label: `Merged ${names.length} suppliers → "${canonical}" (${updatedInvoices} invoices renamed)`,
+      label: `Merged ${names.length} suppliers → "${canonical}" (${updatedInvoices} invoices renamed${consolidatedSuppliers ? `, ${consolidatedSuppliers} suppliers consolidated` : ''})`,
       performedBy: (req as any).user?.display_name || 'Unknown',
       performedById: (req as any).user?.userId,
     });
-    res.json({ success: true, updatedInvoices });
+    res.json({ success: true, updatedInvoices, consolidatedSuppliers });
   } catch (err: any) {
     console.error('[demo-expenses] supplier-merge error:', err);
     res.status(500).json({ error: 'Failed to merge suppliers' });

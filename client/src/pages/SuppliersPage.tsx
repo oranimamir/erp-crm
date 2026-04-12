@@ -28,6 +28,18 @@ const SALES_CAT_COLORS: Record<string, string> = {
   'Raw Materials': '#f59e0b', 'Logistics': '#3b82f6', 'Blenders': '#8b5cf6', 'Shipping': '#10b981',
 };
 
+// Display label → DB enum value (inverse of server SALES_CAT_DB_MAP). Used when
+// PATCHing the standalone /suppliers table from the unified Sales tab table.
+const SALES_DISPLAY_TO_DB: Record<string, string> = {
+  'Logistics': 'logistics',
+  'Blenders': 'blenders',
+  'Raw Materials': 'raw_materials',
+  'Shipping': 'shipping',
+};
+
+type RowSource = 'user-mapping' | 'suppliers-table' | 'hardcoded';
+type SupplierRow = { rowKey: string; id?: number; name: string; category: string; source: RowSource };
+
 function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
   const { addToast } = useToast();
   const { demoCategories, salesCategories, addCategory, customCategories, removeCategory } = useCategories();
@@ -43,8 +55,8 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
   const [newCategory, setNewCategory] = useState(defaultCategory);
   const [sortKey, setSortKey] = useState<'name' | 'category'>('name');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
-  const [deleteId, setDeleteId] = useState<number | null>(null);
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: number; source: RowSource } | null>(null);
+  const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editCat, setEditCat] = useState('');
   const [newCatName, setNewCatName] = useState('');
   const [dupLoading, setDupLoading] = useState(false);
@@ -82,23 +94,33 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
     }
   };
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = async (target: { id: number; source: RowSource }) => {
     try {
-      await api.delete(`/demo-expenses/supplier-mappings/${id}`);
+      const url = target.source === 'suppliers-table'
+        ? `/suppliers/${target.id}`
+        : `/demo-expenses/supplier-mappings/${target.id}`;
+      await api.delete(url);
       addToast('Supplier removed', 'success');
-      setDeleteId(null);
+      setDeleteTarget(null);
       fetchData();
     } catch {
       addToast('Failed to delete', 'error');
     }
   };
 
-  const handleUpdateCategory = async (id: number) => {
+  const handleUpdateCategory = async (row: SupplierRow) => {
+    if (row.id == null) return;
     try {
-      const res = await api.patch(`/demo-expenses/supplier-mappings/${id}`, { category: editCat });
-      const cascaded = res.data?.cascadedInvoices || 0;
-      addToast(cascaded > 0 ? `Category updated · ${cascaded} invoices reclassified` : 'Category updated', 'success');
-      setEditingId(null);
+      if (row.source === 'suppliers-table') {
+        const dbCat = SALES_DISPLAY_TO_DB[editCat] || editCat;
+        await api.patch(`/suppliers/${row.id}`, { category: dbCat });
+        addToast('Category updated', 'success');
+      } else {
+        const res = await api.patch(`/demo-expenses/supplier-mappings/${row.id}`, { category: editCat });
+        const cascaded = res.data?.cascadedInvoices || 0;
+        addToast(cascaded > 0 ? `Category updated · ${cascaded} invoices reclassified` : 'Category updated', 'success');
+      }
+      setEditingKey(null);
       fetchData();
     } catch (err: any) {
       addToast(err?.response?.data?.error || 'Failed to update', 'error');
@@ -133,7 +155,7 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
     if (group.selected.length < 2) { addToast('Select at least 2 suppliers to merge', 'error'); return; }
     setMerging(groupKey);
     try {
-      const res = await api.post('/demo-expenses/supplier-merge', { canonicalName: canonical, names: group.selected });
+      const res = await api.post('/demo-expenses/supplier-merge', { canonicalName: canonical, names: group.selected, domain });
       addToast(`Merged into "${canonical}" · ${res.data?.updatedInvoices || 0} invoices renamed`, 'success');
       setDupGroups(prev => (prev || []).filter(g => g.suppliers[0]?.name !== groupKey));
       fetchData();
@@ -190,7 +212,27 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
 
   if (loading) return <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" /></div>;
 
-  // Group by category
+  // Build unified row list: user-defined mappings + hardcoded entries (which for
+  // sales come from the standalone suppliers table and have an id, for demo come
+  // from the built-in DEMO_SUPPLIER_MAP and are read-only).
+  const allRows: SupplierRow[] = [
+    ...userMappings.map((m: any): SupplierRow => ({
+      rowKey: `mapping-${m.id}`,
+      id: m.id,
+      name: m.display_name || m.supplier_pattern,
+      category: m.category,
+      source: 'user-mapping',
+    })),
+    ...data.hardcoded.map((h: any): SupplierRow => ({
+      rowKey: h.source === 'suppliers-table' ? `suppliers-${h.id}` : `hardcoded-${h.pattern}`,
+      id: h.id,
+      name: h.pattern,
+      category: h.category,
+      source: h.source === 'suppliers-table' ? 'suppliers-table' : 'hardcoded',
+    })),
+  ];
+
+  // Group by category for the chip grid (keeps both user and hardcoded)
   const byCategory: Record<string, { name: string; source: string }[]> = {};
   for (const s of [...data.hardcoded, ...data.userDefined]) {
     if (!byCategory[s.category]) byCategory[s.category] = [];
@@ -241,16 +283,16 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
         </div>
       </Card>
 
-      {/* User-defined suppliers table */}
-      {userMappings.length > 0 && (() => {
+      {/* Unified suppliers table (user-defined + hardcoded for the active domain) */}
+      {allRows.length > 0 && (() => {
         const toggleSort = (key: 'name' | 'category') => {
           if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
           else { setSortKey(key); setSortDir('asc'); }
         };
         const sortIndicator = (key: 'name' | 'category') => sortKey === key ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '';
-        const sortedMappings = [...userMappings].sort((a, b) => {
-          const av = (sortKey === 'name' ? (a.display_name || a.supplier_pattern || '') : (a.category || '')).toLowerCase();
-          const bv = (sortKey === 'name' ? (b.display_name || b.supplier_pattern || '') : (b.category || '')).toLowerCase();
+        const sortedRows = [...allRows].sort((a, b) => {
+          const av = (sortKey === 'name' ? a.name : a.category).toLowerCase();
+          const bv = (sortKey === 'name' ? b.name : b.category).toLowerCase();
           if (av < bv) return sortDir === 'asc' ? -1 : 1;
           if (av > bv) return sortDir === 'asc' ? 1 : -1;
           return 0;
@@ -258,7 +300,7 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
         return (
         <Card className="overflow-hidden">
           <div className="px-5 py-3 border-b border-gray-100">
-            <h3 className="text-sm font-semibold text-gray-900">User-Defined Suppliers ({userMappings.length})</h3>
+            <h3 className="text-sm font-semibold text-gray-900">Suppliers ({allRows.length})</h3>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -276,15 +318,19 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {sortedMappings.map((m: any) => {
-                  const isEditing = editingId === m.id;
+                {sortedRows.map((row) => {
+                  const isEditing = editingKey === row.rowKey;
+                  const editable = row.source !== 'hardcoded' && row.id != null;
                   return (
-                  <tr key={m.id} className="hover:bg-gray-50">
+                  <tr key={row.rowKey} className="hover:bg-gray-50">
                     <td className="px-4 py-2.5">
-                      <Link to={`/supplier-invoices?supplier=${encodeURIComponent(m.display_name || m.supplier_pattern)}`}
+                      <Link to={`/supplier-invoices?supplier=${encodeURIComponent(row.name)}&tab=${domain}`}
                         className="text-primary-600 hover:text-primary-800 font-medium capitalize">
-                        {m.display_name || m.supplier_pattern}
+                        {row.name}
                       </Link>
+                      {row.source === 'hardcoded' && (
+                        <span className="ml-2 text-[10px] uppercase tracking-wide text-gray-400 font-medium">built-in</span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5">
                       {isEditing ? (
@@ -295,8 +341,8 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
                         </select>
                       ) : (
                         <span className="inline-flex items-center gap-1.5 text-xs font-medium">
-                          <span className="w-2 h-2 rounded-sm" style={{ background: colorMap[m.category] || '#6b7280' }} />
-                          {m.category}
+                          <span className="w-2 h-2 rounded-sm" style={{ background: colorMap[row.category] || '#6b7280' }} />
+                          {row.category}
                         </span>
                       )}
                     </td>
@@ -304,15 +350,15 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
                       <div className="flex items-center justify-end gap-1">
                         {isEditing ? (
                           <>
-                            <button onClick={() => handleUpdateCategory(m.id)} className="p-1 text-green-600 hover:text-green-700 rounded" title="Save"><Check size={14} /></button>
-                            <button onClick={() => setEditingId(null)} className="p-1 text-gray-400 hover:text-gray-600 rounded" title="Cancel"><X size={14} /></button>
+                            <button onClick={() => handleUpdateCategory(row)} className="p-1 text-green-600 hover:text-green-700 rounded" title="Save"><Check size={14} /></button>
+                            <button onClick={() => setEditingKey(null)} className="p-1 text-gray-400 hover:text-gray-600 rounded" title="Cancel"><X size={14} /></button>
                           </>
-                        ) : (
+                        ) : editable ? (
                           <>
-                            <button onClick={() => { setEditingId(m.id); setEditCat(m.category); }} className="p-1 text-gray-400 hover:text-primary-600 rounded" title="Edit category"><Pencil size={14} /></button>
-                            <button onClick={() => setDeleteId(m.id)} className="p-1 text-gray-400 hover:text-red-600 rounded" title="Delete"><Trash2 size={14} /></button>
+                            <button onClick={() => { setEditingKey(row.rowKey); setEditCat(row.category); }} className="p-1 text-gray-400 hover:text-primary-600 rounded" title="Edit category"><Pencil size={14} /></button>
+                            <button onClick={() => setDeleteTarget({ id: row.id!, source: row.source })} className="p-1 text-gray-400 hover:text-red-600 rounded" title="Delete"><Trash2 size={14} /></button>
                           </>
-                        )}
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -336,7 +382,7 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
             </div>
             <div className="flex flex-wrap gap-1.5">
               {suppliers.map(s => (
-                <Link key={s.name} to={`/supplier-invoices?supplier=${encodeURIComponent(s.name)}`}
+                <Link key={s.name} to={`/supplier-invoices?supplier=${encodeURIComponent(s.name)}&tab=${domain}`}
                   className={`inline-block px-2 py-0.5 rounded text-xs capitalize cursor-pointer hover:ring-2 hover:ring-primary-300 transition-shadow ${s.source === 'user' ? 'bg-primary-50 text-primary-700 border border-primary-200' : 'bg-gray-100 text-gray-700'}`}>
                   {s.name}
                 </Link>
@@ -376,7 +422,7 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
       )}
 
       {/* Delete Confirm */}
-      <ConfirmDialog open={deleteId !== null} onClose={() => setDeleteId(null)} onConfirm={() => deleteId && handleDelete(deleteId)} title="Remove Supplier" message="Remove this user-defined supplier mapping? Hardcoded suppliers cannot be removed." confirmLabel="Remove" />
+      <ConfirmDialog open={deleteTarget !== null} onClose={() => setDeleteTarget(null)} onConfirm={() => deleteTarget && handleDelete(deleteTarget)} title="Remove Supplier" message="Remove this supplier? Built-in entries cannot be removed." confirmLabel="Remove" />
 
       {/* Find Duplicates Modal */}
       {dupGroups !== null && (

@@ -70,6 +70,31 @@ router.put('/:id', (req: Request, res: Response) => {
   res.json(supplier);
 });
 
+router.patch('/:id', (req: Request, res: Response) => {
+  const existing = db.prepare('SELECT id, name FROM suppliers WHERE id = ?').get(req.params.id) as any;
+  if (!existing) { res.status(404).json({ error: 'Supplier not found' }); return; }
+
+  const { name, category } = req.body as { name?: string; category?: string };
+  const validCategories = ['logistics', 'blenders', 'raw_materials', 'shipping'];
+  if (category !== undefined && !validCategories.includes(category)) {
+    res.status(400).json({ error: `Category must be one of: ${validCategories.join(', ')}` });
+    return;
+  }
+
+  const updates: string[] = [];
+  const params: any[] = [];
+  if (name !== undefined) { updates.push('name = ?'); params.push(name); }
+  if (category !== undefined) { updates.push('category = ?'); params.push(category); }
+  if (updates.length === 0) { res.status(400).json({ error: 'Nothing to update' }); return; }
+
+  params.push(req.params.id);
+  db.prepare(`UPDATE suppliers SET ${updates.join(', ')}, updated_at = datetime('now') WHERE id = ?`).run(...params);
+
+  const supplier = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(req.params.id) as any;
+  notifyAdmin({ action: 'updated', entity: 'Supplier', label: supplier.name, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
+  res.json(supplier);
+});
+
 router.delete('/:id', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT name FROM suppliers WHERE id = ?').get(req.params.id) as any;
   const result = db.prepare('DELETE FROM suppliers WHERE id = ?').run(req.params.id);
