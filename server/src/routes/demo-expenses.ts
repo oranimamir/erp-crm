@@ -1861,19 +1861,59 @@ router.get('/categories', (req: Request, res: Response) => {
 router.get('/demo-suppliers', (req: Request, res: Response) => {
   try {
     const domain = (req.query.domain as string) || 'demo';
-    let hardcoded: { id?: number; pattern: string; category: string; source: string }[] = [];
+    let hardcoded: { id?: number | null; mappingId?: number | null; suppliersId?: number | null; pattern: string; category: string; invoiceCount?: number; source: string }[] = [];
     if (domain === 'demo') {
       hardcoded = DEMO_SUPPLIER_MAP.map(m => ({ pattern: m.pattern, category: m.category, source: 'hardcoded' }));
     } else if (domain === 'sales') {
-      // Sales hardcoded suppliers come from the /suppliers table — include id so the
-      // client can edit/delete them via /suppliers/:id.
-      const salesRows = db.prepare('SELECT id, name, category FROM suppliers').all() as any[];
-      hardcoded = salesRows.map(s => ({
-        id: s.id,
-        pattern: s.name,
-        category: SALES_CAT_DB_MAP[s.category] || s.category,
-        source: 'suppliers-table',
-      }));
+      // Source of truth = distinct suppliers actually referenced by sales
+      // invoices. Enrich with category + ids from the mapping tables so the
+      // client can still edit/delete the underlying records.
+      const invoiceRows = db.prepare(
+        `SELECT TRIM(supplier) AS name, COUNT(*) AS invoice_count
+         FROM demo_invoices
+         WHERE domain = 'sales' AND supplier IS NOT NULL AND TRIM(supplier) != ''
+         GROUP BY LOWER(TRIM(supplier))
+         ORDER BY name COLLATE NOCASE ASC`
+      ).all() as any[];
+
+      const mappings = db.prepare(
+        `SELECT id, supplier_pattern, display_name, category
+         FROM demo_supplier_mappings
+         WHERE domain = 'sales' AND is_user_defined = 1`
+      ).all() as any[];
+      const suppliersRows = db.prepare(
+        'SELECT id, name, category FROM suppliers'
+      ).all() as any[];
+
+      const mapByKey = new Map<string, any>();
+      for (const m of mappings) {
+        const key = (m.display_name || m.supplier_pattern || '').trim().toLowerCase();
+        if (key && !mapByKey.has(key)) mapByKey.set(key, m);
+      }
+      const supByKey = new Map<string, any>();
+      for (const s of suppliersRows) {
+        const key = (s.name || '').trim().toLowerCase();
+        if (key && !supByKey.has(key)) supByKey.set(key, s);
+      }
+
+      hardcoded = invoiceRows.map((r: any) => {
+        const key = r.name.toLowerCase();
+        const m = mapByKey.get(key);
+        const s = supByKey.get(key);
+        const category =
+          m?.category ||
+          (s ? (SALES_CAT_DB_MAP[s.category] || s.category) : null) ||
+          'Uncategorized';
+        return {
+          id: m?.id ?? s?.id,
+          mappingId: m?.id ?? null,
+          suppliersId: s?.id ?? null,
+          pattern: r.name,
+          category,
+          invoiceCount: r.invoice_count,
+          source: m ? 'user-mapping' : (s ? 'suppliers-table' : 'invoice-only'),
+        };
+      });
     }
     const userDefined = db.prepare(
       'SELECT supplier_pattern as pattern, category FROM demo_supplier_mappings WHERE domain = ?'
@@ -2561,27 +2601,27 @@ router.post('/supplier-merge', (req: Request, res: Response) => {
       return;
     }
     const canonical = canonicalName.trim();
+    const trimmedNames = names.map(n => (n || '').trim()).filter(Boolean);
     const scopedDomain = (domain === 'demo' || domain === 'sales') ? domain : null;
 
     // 1. Rename matching invoices (scoped by domain if provided)
     let updatedInvoices = 0;
     const invSql = scopedDomain
-      ? 'UPDATE demo_invoices SET supplier = ? WHERE LOWER(supplier) = LOWER(?) AND domain = ?'
-      : 'UPDATE demo_invoices SET supplier = ? WHERE LOWER(supplier) = LOWER(?)';
+      ? 'UPDATE demo_invoices SET supplier = ? WHERE LOWER(TRIM(supplier)) = LOWER(TRIM(?)) AND domain = ?'
+      : 'UPDATE demo_invoices SET supplier = ? WHERE LOWER(TRIM(supplier)) = LOWER(TRIM(?))';
     const updateInv = db.prepare(invSql);
-    for (const n of names) {
-      if (!n) continue;
+    for (const n of trimmedNames) {
       const r = scopedDomain ? updateInv.run(canonical, n, scopedDomain) : updateInv.run(canonical, n);
       updatedInvoices += (r as any).changes || 0;
     }
 
     // 2. Consolidate demo_supplier_mappings — gather, delete, upsert canonical
-    const lowerNames = names.map(n => n.toLowerCase()).filter(Boolean);
+    const lowerNames = trimmedNames.map(n => n.toLowerCase());
     lowerNames.push(canonical.toLowerCase());
     const placeholders = lowerNames.map(() => '?').join(',');
     const mapSql = scopedDomain
-      ? `SELECT id, supplier_pattern, category, domain FROM demo_supplier_mappings WHERE LOWER(supplier_pattern) IN (${placeholders}) AND is_user_defined = 1 AND domain = ?`
-      : `SELECT id, supplier_pattern, category, domain FROM demo_supplier_mappings WHERE LOWER(supplier_pattern) IN (${placeholders}) AND is_user_defined = 1`;
+      ? `SELECT id, supplier_pattern, category, domain FROM demo_supplier_mappings WHERE LOWER(TRIM(supplier_pattern)) IN (${placeholders}) AND is_user_defined = 1 AND domain = ?`
+      : `SELECT id, supplier_pattern, category, domain FROM demo_supplier_mappings WHERE LOWER(TRIM(supplier_pattern)) IN (${placeholders}) AND is_user_defined = 1`;
     const mapParams = scopedDomain ? [...lowerNames, scopedDomain] : lowerNames;
     const existingMappings = db.prepare(mapSql).all(...mapParams) as any[];
 
@@ -2599,7 +2639,7 @@ router.post('/supplier-merge', (req: Request, res: Response) => {
     let consolidatedSuppliers = 0;
     if (scopedDomain === 'sales' || (!scopedDomain && inheritedDomain === 'sales')) {
       const supRows = db.prepare(
-        `SELECT id, name, category FROM suppliers WHERE LOWER(name) IN (${placeholders})`
+        `SELECT id, name, category FROM suppliers WHERE LOWER(TRIM(name)) IN (${placeholders})`
       ).all(...lowerNames) as any[];
       if (supRows.length > 0) {
         // Carry the kept row's category if we don't have one yet (DB form, e.g. 'raw_materials')

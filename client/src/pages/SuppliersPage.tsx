@@ -37,8 +37,8 @@ const SALES_DISPLAY_TO_DB: Record<string, string> = {
   'Shipping': 'shipping',
 };
 
-type RowSource = 'user-mapping' | 'suppliers-table' | 'hardcoded';
-type SupplierRow = { rowKey: string; id?: number; name: string; category: string; source: RowSource };
+type RowSource = 'user-mapping' | 'suppliers-table' | 'hardcoded' | 'invoice-only';
+type SupplierRow = { rowKey: string; id?: number; name: string; category: string; source: RowSource; invoiceCount?: number };
 
 function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
   const { addToast } = useToast();
@@ -114,13 +114,21 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
   };
 
   const handleUpdateCategory = async (row: SupplierRow) => {
-    if (row.id == null) return;
     try {
-      if (row.source === 'suppliers-table') {
+      if (row.source === 'invoice-only') {
+        await api.post('/demo-expenses/supplier-mappings', {
+          supplierName: row.name,
+          category: editCat,
+          domain,
+        });
+        addToast(`Categorized "${row.name}"`, 'success');
+      } else if (row.source === 'suppliers-table') {
+        if (row.id == null) return;
         const dbCat = SALES_DISPLAY_TO_DB[editCat] || editCat;
         await api.patch(`/suppliers/${row.id}`, { category: dbCat });
         addToast('Category updated', 'success');
       } else {
+        if (row.id == null) return;
         const res = await api.patch(`/demo-expenses/supplier-mappings/${row.id}`, { category: editCat });
         const cascaded = res.data?.cascadedInvoices || 0;
         addToast(cascaded > 0 ? `Category updated · ${cascaded} invoices reclassified` : 'Category updated', 'success');
@@ -248,22 +256,35 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
   // Build unified row list: user-defined mappings + hardcoded entries (which for
   // sales come from the standalone suppliers table and have an id, for demo come
   // from the built-in DEMO_SUPPLIER_MAP and are read-only).
-  const allRows: SupplierRow[] = [
-    ...userMappings.map((m: any): SupplierRow => ({
-      rowKey: `mapping-${m.id}`,
-      id: m.id,
-      name: m.display_name || m.supplier_pattern,
-      category: m.category,
-      source: 'user-mapping',
-    })),
-    ...data.hardcoded.map((h: any): SupplierRow => ({
-      rowKey: h.source === 'suppliers-table' ? `suppliers-${h.id}` : `hardcoded-${h.pattern}`,
-      id: h.id,
-      name: h.pattern,
-      category: h.category,
-      source: h.source === 'suppliers-table' ? 'suppliers-table' : 'hardcoded',
-    })),
-  ];
+  const allRows: SupplierRow[] = domain === 'sales'
+    ? data.hardcoded.map((h: any): SupplierRow => ({
+        rowKey: h.mappingId
+          ? `mapping-${h.mappingId}`
+          : h.suppliersId
+            ? `suppliers-${h.suppliersId}`
+            : `invoice-${h.pattern.toLowerCase()}`,
+        id: h.id ?? undefined,
+        name: h.pattern,
+        category: h.category,
+        source: h.source as RowSource,
+        invoiceCount: h.invoiceCount,
+      }))
+    : [
+        ...userMappings.map((m: any): SupplierRow => ({
+          rowKey: `mapping-${m.id}`,
+          id: m.id,
+          name: m.display_name || m.supplier_pattern,
+          category: m.category,
+          source: 'user-mapping',
+        })),
+        ...data.hardcoded.map((h: any): SupplierRow => ({
+          rowKey: h.source === 'suppliers-table' ? `suppliers-${h.id}` : `hardcoded-${h.pattern}`,
+          id: h.id,
+          name: h.pattern,
+          category: h.category,
+          source: h.source === 'suppliers-table' ? 'suppliers-table' : 'hardcoded',
+        })),
+      ];
 
   // Group by category for the chip grid (keeps both user and hardcoded)
   const byCategory: Record<string, { name: string; source: string }[]> = {};
@@ -397,7 +418,8 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
               <tbody className="divide-y divide-gray-100">
                 {sortedRows.map((row) => {
                   const isEditing = editingKey === row.rowKey;
-                  const editable = row.source !== 'hardcoded' && row.id != null;
+                  const editable = row.source !== 'hardcoded' && (row.id != null || row.source === 'invoice-only');
+                  const deletable = editable && row.source !== 'invoice-only' && row.id != null;
                   const isSelected = selectedRowKeys.has(row.rowKey);
                   return (
                   <tr key={row.rowKey} className={`hover:bg-gray-50 ${isSelected ? 'bg-primary-50/40' : ''}`}>
@@ -416,6 +438,9 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
                       </Link>
                       {row.source === 'hardcoded' && (
                         <span className="ml-2 text-[10px] uppercase tracking-wide text-gray-400 font-medium">built-in</span>
+                      )}
+                      {typeof row.invoiceCount === 'number' && row.invoiceCount > 0 && (
+                        <span className="ml-2 text-[11px] text-gray-400">· {row.invoiceCount} invoice{row.invoiceCount === 1 ? '' : 's'}</span>
                       )}
                     </td>
                     <td className="px-4 py-2.5">
@@ -442,7 +467,9 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
                         ) : editable ? (
                           <>
                             <button onClick={() => { setEditingKey(row.rowKey); setEditCat(row.category); }} className="p-1 text-gray-400 hover:text-primary-600 rounded" title="Edit category"><Pencil size={14} /></button>
-                            <button onClick={() => setDeleteTarget({ id: row.id!, source: row.source })} className="p-1 text-gray-400 hover:text-red-600 rounded" title="Delete"><Trash2 size={14} /></button>
+                            {deletable && (
+                              <button onClick={() => setDeleteTarget({ id: row.id!, source: row.source })} className="p-1 text-gray-400 hover:text-red-600 rounded" title="Delete"><Trash2 size={14} /></button>
+                            )}
                           </>
                         ) : null}
                       </div>
