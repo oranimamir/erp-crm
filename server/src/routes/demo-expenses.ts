@@ -2412,11 +2412,16 @@ function levenshtein(a: string, b: string): number {
 router.get('/supplier-duplicates', (_req: Request, res: Response) => {
   try {
     const rows = db.prepare(
-      "SELECT supplier as name, COUNT(*) as count FROM demo_invoices WHERE supplier IS NOT NULL AND supplier != '' GROUP BY supplier"
-    ).all() as { name: string; count: number }[];
+      "SELECT supplier as name, COUNT(*) as count, GROUP_CONCAT(id) as ids FROM demo_invoices WHERE supplier IS NOT NULL AND supplier != '' GROUP BY supplier"
+    ).all() as { name: string; count: number; ids: string }[];
 
     const items = rows
-      .map(r => ({ name: r.name, count: r.count, key: normalizeSupplierName(r.name) }))
+      .map(r => ({
+        name: r.name,
+        count: r.count,
+        invoiceIds: (r.ids || '').split(',').map(Number).filter(n => !isNaN(n)).slice(0, 5),
+        key: normalizeSupplierName(r.name),
+      }))
       .filter(r => r.key.length > 0);
 
     // Union-find
@@ -2473,7 +2478,7 @@ router.get('/supplier-duplicates', (_req: Request, res: Response) => {
         const sorted = g.slice().sort((a, b) => b.count - a.count || b.name.length - a.name.length);
         return {
           canonical: sorted[0].name,
-          suppliers: sorted.map(x => ({ name: x.name, count: x.count })),
+          suppliers: sorted.map(x => ({ name: x.name, count: x.count, invoiceIds: x.invoiceIds })),
         };
       })
       .sort((a, b) => b.suppliers.length - a.suppliers.length);
@@ -2520,6 +2525,16 @@ router.post('/supplier-merge', (req: Request, res: Response) => {
       const ids = existingMappings.map(m => m.id);
       const idP = ids.map(() => '?').join(',');
       db.prepare(`DELETE FROM demo_supplier_mappings WHERE id IN (${idP})`).run(...ids);
+    }
+    // Fallback: derive category/domain from one of the (already-renamed) invoices
+    if (!inheritedCategory) {
+      const sample = db.prepare(
+        'SELECT category, domain FROM demo_invoices WHERE LOWER(supplier) = LOWER(?) LIMIT 1'
+      ).get(canonical) as any;
+      if (sample) {
+        inheritedCategory = sample.category;
+        inheritedDomain = sample.domain || 'demo';
+      }
     }
     if (inheritedCategory) {
       db.prepare(

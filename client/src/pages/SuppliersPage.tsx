@@ -13,7 +13,7 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
-import { Plus, Truck, Eye, Pencil, Trash2, BarChart3, FileSpreadsheet, Beaker, Check, X, GitMerge } from 'lucide-react';
+import { Plus, Truck, Eye, Pencil, Trash2, BarChart3, FileSpreadsheet, Beaker, Check, X, GitMerge, Loader2 } from 'lucide-react';
 import { downloadExcel } from '../lib/exportExcel';
 
 const CHART_COLORS = [
@@ -67,10 +67,13 @@ function DemoSuppliersTab() {
   const [editCat, setEditCat] = useState('');
   const [newCatName, setNewCatName] = useState('');
   const [dupLoading, setDupLoading] = useState(false);
-  const [dupGroups, setDupGroups] = useState<{ canonical: string; suppliers: { name: string; count: number }[] }[] | null>(null);
-  const [dupCanonicals, setDupCanonicals] = useState<Record<number, string>>({});
-  const [dupSelected, setDupSelected] = useState<Record<number, Set<string>>>({});
-  const [merging, setMerging] = useState<number | null>(null);
+  type DupSupplier = { name: string; count: number; invoiceIds: number[] };
+  type DupGroup = { canonical: string; suppliers: DupSupplier[]; selected: string[] };
+  const [dupGroups, setDupGroups] = useState<DupGroup[] | null>(null);
+  const [merging, setMerging] = useState<string | null>(null);
+  const [previewSupplier, setPreviewSupplier] = useState<string | null>(null);
+  const [previewPdf, setPreviewPdf] = useState<string | null>(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
 
   const fetchData = () => {
     Promise.all([
@@ -124,18 +127,16 @@ function DemoSuppliersTab() {
   const handleFindDuplicates = async () => {
     setDupLoading(true);
     setDupGroups(null);
+    setPreviewSupplier(null);
+    setPreviewPdf(null);
     try {
       const res = await api.get('/demo-expenses/supplier-duplicates');
-      const groups = res.data?.groups || [];
+      const groups: DupGroup[] = (res.data?.groups || []).map((g: any) => ({
+        canonical: g.canonical,
+        suppliers: g.suppliers,
+        selected: g.suppliers.map((s: any) => s.name),
+      }));
       setDupGroups(groups);
-      const canonicals: Record<number, string> = {};
-      const selected: Record<number, Set<string>> = {};
-      groups.forEach((g: any, i: number) => {
-        canonicals[i] = g.canonical;
-        selected[i] = new Set(g.suppliers.map((s: any) => s.name));
-      });
-      setDupCanonicals(canonicals);
-      setDupSelected(selected);
     } catch (err: any) {
       addToast(err?.response?.data?.error || 'Failed to find duplicates', 'error');
     } finally {
@@ -143,17 +144,17 @@ function DemoSuppliersTab() {
     }
   };
 
-  const handleMergeGroup = async (groupIdx: number) => {
-    const canonical = (dupCanonicals[groupIdx] || '').trim();
+  const handleMergeGroup = async (groupKey: string) => {
+    const group = (dupGroups || []).find(g => g.suppliers[0]?.name === groupKey);
+    if (!group) return;
+    const canonical = group.canonical.trim();
     if (!canonical) { addToast('Enter a name for the consolidated supplier', 'error'); return; }
-    const names = [...(dupSelected[groupIdx] || new Set<string>())];
-    if (names.length < 2) { addToast('Select at least 2 suppliers to merge', 'error'); return; }
-    setMerging(groupIdx);
+    if (group.selected.length < 2) { addToast('Select at least 2 suppliers to merge', 'error'); return; }
+    setMerging(groupKey);
     try {
-      const res = await api.post('/demo-expenses/supplier-merge', { canonicalName: canonical, names });
+      const res = await api.post('/demo-expenses/supplier-merge', { canonicalName: canonical, names: group.selected });
       addToast(`Merged into "${canonical}" · ${res.data?.updatedInvoices || 0} invoices renamed`, 'success');
-      // Remove the merged group from the list
-      setDupGroups(prev => (prev || []).filter((_, i) => i !== groupIdx));
+      setDupGroups(prev => (prev || []).filter(g => g.suppliers[0]?.name !== groupKey));
       fetchData();
     } catch (err: any) {
       addToast(err?.response?.data?.error || 'Failed to merge', 'error');
@@ -162,20 +163,48 @@ function DemoSuppliersTab() {
     }
   };
 
-  const toggleDupSelected = (groupIdx: number, name: string) => {
-    setDupSelected(prev => {
-      const next = { ...prev };
-      const set = new Set(next[groupIdx] || []);
-      if (set.has(name)) set.delete(name); else set.add(name);
-      next[groupIdx] = set;
-      return next;
-    });
+  const updateGroup = (groupKey: string, patch: Partial<DupGroup>) => {
+    setDupGroups(prev => (prev || []).map(g => g.suppliers[0]?.name === groupKey ? { ...g, ...patch } : g));
+  };
+
+  const toggleDupSelected = (groupKey: string, name: string) => {
+    setDupGroups(prev => (prev || []).map(g => {
+      if (g.suppliers[0]?.name !== groupKey) return g;
+      const has = g.selected.includes(name);
+      return { ...g, selected: has ? g.selected.filter(n => n !== name) : [...g.selected, name] };
+    }));
+  };
+
+  const togglePreview = async (supplierName: string, invoiceIds: number[]) => {
+    if (previewSupplier === supplierName) {
+      setPreviewSupplier(null);
+      setPreviewPdf(null);
+      return;
+    }
+    setPreviewSupplier(supplierName);
+    setPreviewPdf(null);
+    if (invoiceIds.length === 0) return;
+    setLoadingPreview(true);
+    try {
+      // Try invoice ids in order until one has an embedded PDF
+      for (const id of invoiceIds) {
+        const res = await api.get(`/demo-expenses/invoices/${id}`);
+        if (res.data?.embedded_pdf) {
+          setPreviewPdf(res.data.embedded_pdf);
+          break;
+        }
+      }
+    } catch {
+      addToast('Failed to load invoice preview', 'error');
+    } finally {
+      setLoadingPreview(false);
+    }
   };
 
   const closeDupModal = () => {
     setDupGroups(null);
-    setDupCanonicals({});
-    setDupSelected({});
+    setPreviewSupplier(null);
+    setPreviewPdf(null);
   };
 
   if (loading) return <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" /></div>;
@@ -367,34 +396,59 @@ function DemoSuppliersTab() {
               {dupGroups.length === 0 ? (
                 <div className="text-center py-12 text-sm text-gray-500">No similar suppliers detected.</div>
               ) : (
-                dupGroups.map((g, i) => {
-                  const selected = dupSelected[i] || new Set<string>();
+                dupGroups.map((g) => {
+                  const groupKey = g.suppliers[0]?.name;
+                  const selectedSet = new Set(g.selected);
                   return (
-                    <div key={i} className="border border-gray-200 rounded-lg p-4">
-                      <div className="space-y-2 mb-3">
+                    <div key={groupKey} className="border border-gray-200 rounded-lg p-4">
+                      <div className="space-y-1 mb-3">
                         {g.suppliers.map(s => {
-                          const isSelected = selected.has(s.name);
+                          const isSelected = selectedSet.has(s.name);
+                          const isPreviewing = previewSupplier === s.name;
                           return (
-                            <label key={s.name} className="flex items-center gap-2 cursor-pointer text-sm">
-                              <input type="checkbox" checked={isSelected} onChange={() => toggleDupSelected(i, s.name)}
-                                className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
-                              <span className={`flex-1 capitalize ${isSelected ? 'text-gray-900' : 'text-gray-400 line-through'}`}>
-                                {s.name}
-                              </span>
-                              <span className="text-xs text-gray-400">{s.count} invoice{s.count === 1 ? '' : 's'}</span>
-                            </label>
+                            <div key={s.name}>
+                              <div className="flex items-center gap-2 text-sm">
+                                <input type="checkbox" checked={isSelected} onChange={() => toggleDupSelected(groupKey, s.name)}
+                                  className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                                <span className={`flex-1 capitalize ${isSelected ? 'text-gray-900' : 'text-gray-400 line-through'}`}>
+                                  {s.name}
+                                </span>
+                                <span className="text-xs text-gray-400">{s.count} invoice{s.count === 1 ? '' : 's'}</span>
+                                <button
+                                  onClick={() => togglePreview(s.name, s.invoiceIds || [])}
+                                  className={`p-1 rounded hover:bg-gray-100 ${isPreviewing ? 'text-primary-600' : 'text-gray-400'}`}
+                                  title="Preview invoice"
+                                  disabled={!s.invoiceIds || s.invoiceIds.length === 0}
+                                >
+                                  {loadingPreview && isPreviewing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
+                                </button>
+                              </div>
+                              {isPreviewing && (
+                                <div className="mt-2 mb-2 ml-6 bg-gray-50 border border-gray-200 rounded-lg p-2">
+                                  {loadingPreview ? (
+                                    <div className="flex items-center justify-center py-8 text-gray-400 text-xs">
+                                      <Loader2 size={16} className="animate-spin mr-2" /> Loading preview...
+                                    </div>
+                                  ) : previewPdf ? (
+                                    <iframe src={`data:application/pdf;base64,${previewPdf}`} className="w-full h-[400px] rounded border border-gray-200 bg-white" title="Invoice preview" />
+                                  ) : (
+                                    <p className="text-center py-4 text-xs text-gray-400">No PDF preview available for this supplier</p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
                           );
                         })}
                       </div>
                       <div className="flex items-end gap-2 pt-3 border-t border-gray-100">
                         <div className="flex-1">
                           <label className="block text-xs font-medium text-gray-600 mb-1">Consolidated supplier name</label>
-                          <input type="text" value={dupCanonicals[i] || ''}
-                            onChange={e => setDupCanonicals(prev => ({ ...prev, [i]: e.target.value }))}
+                          <input type="text" value={g.canonical}
+                            onChange={e => updateGroup(groupKey, { canonical: e.target.value })}
                             className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500" />
                         </div>
-                        <Button size="sm" onClick={() => handleMergeGroup(i)} disabled={merging === i || selected.size < 2}>
-                          {merging === i ? 'Merging...' : 'Merge'}
+                        <Button size="sm" onClick={() => handleMergeGroup(groupKey)} disabled={merging === groupKey || g.selected.length < 2}>
+                          {merging === groupKey ? 'Merging...' : 'Merge'}
                         </Button>
                       </div>
                     </div>
