@@ -215,7 +215,7 @@ export default function OperationDetailPage() {
     try {
       const { data } = await api.get('/operations/categories');
       setCategories(data);
-    } catch { /* ignore */ }
+    } catch (err) { console.warn('fetchCategories failed', err); }
   }
 
   const handleWireUpload = async (invoiceId: number, file: File) => {
@@ -234,7 +234,7 @@ export default function OperationDetailPage() {
         paymentDate = scanRes.data.transfer_date;
         setWirePaymentDate(paymentDate);
       }
-    } catch { /* scan failed — use current date */ }
+    } catch (err) { console.warn('wire-transfer date scan failed, using current date', err); }
 
     setWireUploadStatus('Uploading & converting to EUR...');
     try {
@@ -494,7 +494,9 @@ export default function OperationDetailPage() {
     try {
       const { data } = await api.get('/orders', { params: { limit: 50, search: q } });
       setAvailableOrders(data.data || []);
-    } catch { /* ignore */ } finally {
+    } catch (err) {
+      console.warn('order search failed', err);
+    } finally {
       setLoadingOrders(false);
     }
   }

@@ -70,6 +70,8 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
   const [selectedRowKeys, setSelectedRowKeys] = useState<Set<string>>(new Set());
   const [manualCanonical, setManualCanonical] = useState('');
   const [manualMerging, setManualMerging] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
 
   const fetchData = () => {
     Promise.all([
@@ -86,7 +88,8 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
   useEffect(() => { setLoading(true); fetchData(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [domain]);
 
   const handleAdd = async () => {
-    if (!newName.trim()) return;
+    if (!newName.trim() || adding) return;
+    setAdding(true);
     try {
       await api.post('/demo-expenses/supplier-mappings', { supplierName: newName.trim(), category: newCategory, domain });
       addToast(`Supplier "${newName.trim()}" added`, 'success');
@@ -96,10 +99,15 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
       fetchData();
     } catch (err: any) {
       addToast(err?.response?.data?.error || 'Failed to add supplier', 'error');
+    } finally {
+      setAdding(false);
     }
   };
 
   const handleDelete = async (target: { id: number; source: RowSource }) => {
+    const key = `${target.source}-${target.id}`;
+    if (deletingKey === key) return;
+    setDeletingKey(key);
     try {
       const url = target.source === 'suppliers-table'
         ? `/suppliers/${target.id}`
@@ -108,8 +116,10 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
       addToast('Supplier removed', 'success');
       setDeleteTarget(null);
       fetchData();
-    } catch {
-      addToast('Failed to delete', 'error');
+    } catch (err: any) {
+      addToast(err?.response?.data?.error || 'Failed to delete supplier', 'error');
+    } finally {
+      setDeletingKey(null);
     }
   };
 
@@ -541,7 +551,7 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="secondary" onClick={() => { setShowAdd(false); setNewName(''); }}>Cancel</Button>
-              <Button onClick={handleAdd} disabled={!newName.trim()}>Add Supplier</Button>
+              <Button onClick={handleAdd} disabled={!newName.trim() || adding}>{adding ? 'Adding…' : 'Add Supplier'}</Button>
             </div>
           </div>
         </div>

@@ -248,12 +248,18 @@ router.put('/:id', uploadInvoice.single('file'), async (req: Request, res: Respo
   }
 });
 
+const VALID_INVOICE_STATUSES = ['draft', 'sent', 'paid', 'overdue', 'cancelled', 'paid_with_other'] as const;
+
 router.patch('/:id/status', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
   const { status, notes } = req.body;
   if (!status) { res.status(400).json({ error: 'Status is required' }); return; }
+  if (!VALID_INVOICE_STATUSES.includes(status)) {
+    res.status(400).json({ error: `Status must be one of: ${VALID_INVOICE_STATUSES.join(', ')}` });
+    return;
+  }
 
   db.prepare(`UPDATE invoices SET status=?, updated_at=datetime('now') WHERE id=?`).run(status, req.params.id);
   db.prepare(`INSERT INTO status_history (entity_type, entity_id, old_status, new_status, changed_by, notes) VALUES ('invoice', ?, ?, ?, ?, ?)`)

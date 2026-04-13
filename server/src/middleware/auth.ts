@@ -1,7 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'erp-crm-secret-key-change-in-production';
+// If JWT_SECRET isn't set we fall back to an ephemeral random secret for the
+// lifetime of this process — never a hardcoded constant. Production is
+// guarded by the fail-fast check in index.ts, so this only matters in dev,
+// where it means tokens are invalidated on restart (an acceptable tradeoff
+// versus a shared default).
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 const SERVICE_API_KEY = process.env.SERVICE_API_KEY || '';
 
 export interface AuthPayload {

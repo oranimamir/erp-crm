@@ -495,6 +495,7 @@ export default function SupplierInvoicesPage() {
   const [showAddSupplier, setShowAddSupplier] = useState(false);
   const [newSupplierName, setNewSupplierName] = useState('');
   const [newSupplierCategory, setNewSupplierCategory] = useState('');
+  const [addingSupplier, setAddingSupplier] = useState(false);
   const [newCatName, setNewCatName] = useState('');
   const [newCatDomain, setNewCatDomain] = useState<'demo' | 'sales'>('demo');
 
@@ -635,7 +636,8 @@ export default function SupplierInvoicesPage() {
   // ─── ADD SUPPLIER ────────────────────────────────────────────────────────
 
   const handleAddSupplier = async () => {
-    if (!newSupplierName.trim() || !newSupplierCategory) return;
+    if (!newSupplierName.trim() || !newSupplierCategory || addingSupplier) return;
+    setAddingSupplier(true);
     try {
       await api.post('/demo-expenses/supplier-mappings', {
         supplierName: newSupplierName.trim(),
@@ -648,6 +650,8 @@ export default function SupplierInvoicesPage() {
       setNewSupplierCategory('');
     } catch (err: any) {
       addToast(err?.response?.data?.error || 'Failed to add supplier', 'error');
+    } finally {
+      setAddingSupplier(false);
     }
   };
 
@@ -2785,8 +2789,8 @@ export default function SupplierInvoicesPage() {
             <div className="flex gap-3 justify-end">
               <button onClick={() => { setShowAddSupplier(false); setNewSupplierName(''); setNewSupplierCategory(''); }}
                 className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
-              <button onClick={handleAddSupplier} disabled={!newSupplierName.trim() || !newSupplierCategory}
-                className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed">Add Supplier</button>
+              <button onClick={handleAddSupplier} disabled={!newSupplierName.trim() || !newSupplierCategory || addingSupplier}
+                className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed">{addingSupplier ? 'Adding…' : 'Add Supplier'}</button>
             </div>
           </div>
         </div>
