@@ -480,7 +480,7 @@ router.get('/demo-expenses-monthly', (_req: Request, res: Response) => {
     const data = db.prepare(`
       SELECT month, SUM(amount) as total, SUM(vat_amount) as vat_total, COUNT(*) as count
       FROM demo_invoices
-      WHERE month LIKE ? || '%'
+      WHERE month LIKE ? || '%' AND domain = 'demo'
       GROUP BY month
       ORDER BY month ASC
     `).all(year);
