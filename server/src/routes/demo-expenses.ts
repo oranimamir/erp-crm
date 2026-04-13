@@ -912,6 +912,16 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
     amount = Math.round((amount - vatAmount) * 100) / 100;
   }
 
+  // Plausibility guard: the highest EU standard VAT rate is 27% (Hungary);
+  // Belgian standard is 21%. Anything above 30% of the net amount is almost
+  // certainly a mis-parse (e.g. the parser latched onto the subtotal under
+  // a "BTW" heading instead of the actual tax line). Zero it so the running
+  // VAT totals aren't inflated.
+  if (amount > 0 && vatAmount > amount * 0.30) {
+    console.log(`[pdf-parse] Implausible VAT ${vatAmount} on amount ${amount} for "${supplierName}" — zeroing (likely mis-parse)`);
+    vatAmount = 0;
+  }
+
   console.log(`[pdf-parse] ${pdfFilename}: id="${invoiceId}" supplier="${supplierName}" country=${supplierCountry || '??'} date=${issueDate} amount=${amount} vat=${vatAmount} currency=${currency}`);
 
   return {
@@ -2848,8 +2858,13 @@ router.get('/check-duplicates', (_req: Request, res: Response) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 router.get('/vat-audit', async (_req: Request, res: Response) => {
   try {
+    // Include already-reviewed rows if they have implausibly-high VAT —
+    // those are always wrong regardless of prior review status.
     const allInvoices = db.prepare(
-      'SELECT id, invoice_id, issue_date, supplier, amount, vat_amount, currency, domain, category, embedded_pdf, xml_filename FROM demo_invoices WHERE vat_reviewed = 0'
+      `SELECT id, invoice_id, issue_date, supplier, amount, vat_amount, currency, domain, category, embedded_pdf, xml_filename
+       FROM demo_invoices
+       WHERE vat_reviewed = 0
+          OR (amount > 0 AND vat_amount > amount * 0.30)`
     ).all() as any[];
 
     const issues: {
@@ -2956,6 +2971,27 @@ router.get('/vat-audit', async (_req: Request, res: Response) => {
           issue: `Non-Belgian supplier (${country}) should not charge VAT — reverse charge applies`,
           country,
         });
+      }
+
+      // Issue 3: VAT is implausibly high relative to net amount
+      // (higher than 30% — well above any EU standard VAT rate).
+      // This almost always means the parser grabbed the wrong number.
+      // Checked before Issue 2 so a single invoice surfaces the most
+      // important issue rather than only the "zero VAT" heuristic.
+      if (inv.amount > 0 && inv.vat_amount > inv.amount * 0.30) {
+        issues.push({
+          id: inv.id,
+          invoice_id: inv.invoice_id,
+          supplier: inv.supplier,
+          amount: inv.amount,
+          current_vat: inv.vat_amount,
+          suggested_vat: 0,
+          currency: inv.currency,
+          domain: inv.domain,
+          issue: `VAT ${inv.vat_amount.toFixed(2)} is ${((inv.vat_amount / inv.amount) * 100).toFixed(0)}% of amount — likely parse error`,
+          country,
+        });
+        continue;
       }
 
       // Issue 2: Belgian supplier, has amount but 0 VAT, and amount looks like it could be 21% off
