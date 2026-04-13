@@ -1659,7 +1659,7 @@ router.get('/invoices', (req: Request, res: Response) => {
     }
     if (suppliers) {
       const supps = (suppliers as string).split(',');
-      sql += ` AND (${supps.map(() => 'LOWER(supplier) = LOWER(?)').join(' OR ')})`;
+      sql += ` AND (${supps.map(() => 'LOWER(TRIM(supplier)) = LOWER(TRIM(?))').join(' OR ')})`;
       params.push(...supps);
     }
     if (month) { sql += ' AND month = ?'; params.push(month); }
@@ -1703,7 +1703,7 @@ router.get('/summary', (req: Request, res: Response) => {
     }
     if (suppliers) {
       const supps = (suppliers as string).split(',');
-      where += ` AND (${supps.map(() => 'LOWER(supplier) = LOWER(?)').join(' OR ')})`;
+      where += ` AND (${supps.map(() => 'LOWER(TRIM(supplier)) = LOWER(TRIM(?))').join(' OR ')})`;
       params.push(...supps);
     }
     if (month) { where += ' AND month = ?'; params.push(month); }
