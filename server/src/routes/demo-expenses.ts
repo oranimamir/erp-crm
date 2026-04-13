@@ -2807,10 +2807,14 @@ router.get('/check-duplicates', (_req: Request, res: Response) => {
     }
 
     // --- Strategy 3: Combo match (same supplier + amount + date, different IDs) ---
+    // Normalize supplier (trim + collapse whitespace + lowercase) and date
+    // (first 10 chars) so whitespace/casing/timestamp variants still collide.
+    const normSupplier = (s: string) => (s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+    const normDate = (d: string) => (d || '').substring(0, 10);
     const comboMap = new Map<string, typeof allInvoices>();
     for (const inv of allInvoices) {
       if (inv.amount === 0) continue; // skip zero-amount to avoid false positives
-      const key = `${inv.supplier.toLowerCase()}|${Math.round(inv.amount * 100)}|${inv.issue_date}`;
+      const key = `${normSupplier(inv.supplier)}|${Math.round(inv.amount * 100)}|${normDate(inv.issue_date)}`;
       if (!comboMap.has(key)) comboMap.set(key, []);
       comboMap.get(key)!.push(inv);
     }
