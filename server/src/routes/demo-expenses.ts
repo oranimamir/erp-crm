@@ -2366,25 +2366,49 @@ router.post('/supplier-mappings', (req: Request, res: Response) => {
       return;
     }
 
-    const existing = db.prepare('SELECT id FROM demo_supplier_mappings WHERE LOWER(supplier_pattern) = LOWER(?)').get(supplierName) as any;
+    const trimmedName = supplierName.trim();
+    if (!trimmedName) { res.status(400).json({ error: 'supplierName required' }); return; }
+
+    // Upsert: if a mapping already exists (user-defined or auto-detected), update
+    // it in place and promote to user-defined so cascades take effect here too.
+    const existing = db.prepare(
+      'SELECT id FROM demo_supplier_mappings WHERE LOWER(TRIM(supplier_pattern)) = LOWER(TRIM(?))'
+    ).get(trimmedName) as any;
+
+    let mappingId: number;
+    let action: 'created' | 'updated';
     if (existing) {
-      res.status(409).json({ error: `Supplier "${supplierName}" already exists` });
-      return;
+      db.prepare(
+        `UPDATE demo_supplier_mappings
+         SET domain = ?, category = ?, display_name = ?, is_user_defined = 1
+         WHERE id = ?`
+      ).run(domain, category, trimmedName, existing.id);
+      mappingId = existing.id;
+      action = 'updated';
+    } else {
+      const result = db.prepare(
+        'INSERT INTO demo_supplier_mappings (supplier_pattern, domain, category, display_name, is_user_defined) VALUES (?, ?, ?, ?, 1)'
+      ).run(trimmedName.toLowerCase(), domain, category, trimmedName);
+      mappingId = result.lastInsertRowid as number;
+      action = 'created';
     }
 
-    const result = db.prepare(
-      'INSERT INTO demo_supplier_mappings (supplier_pattern, domain, category, display_name, is_user_defined) VALUES (?, ?, ?, ?, 1)'
-    ).run(supplierName.toLowerCase(), domain, category, supplierName);
+    // Cascade: every invoice that uses this exact supplier name follows the
+    // new category and domain.
+    const cascadeRes = db.prepare(
+      'UPDATE demo_invoices SET category = ?, domain = ? WHERE LOWER(TRIM(supplier)) = LOWER(TRIM(?))'
+    ).run(category, domain, trimmedName);
+    const cascadedInvoices = (cascadeRes as any).changes || 0;
 
     db.saveToDisk();
     notifyAdmin({
       entity: 'Supplier Mapping',
-      action: 'created',
-      label: `${supplierName} → ${category} (${domain})`,
+      action,
+      label: `${trimmedName} → ${category} (${domain})${cascadedInvoices ? ` · ${cascadedInvoices} invoices reclassified` : ''}`,
       performedBy: (req as any).user?.display_name || 'Unknown',
       performedById: (req as any).user?.userId,
     });
-    res.json({ success: true, id: result.lastInsertRowid });
+    res.json({ success: true, id: mappingId, cascadedInvoices });
   } catch (err: any) {
     console.error('[demo-expenses] add supplier mapping error:', err);
     res.status(500).json({ error: 'Failed to add supplier' });

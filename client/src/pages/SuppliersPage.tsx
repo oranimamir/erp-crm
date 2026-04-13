@@ -114,14 +114,27 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
   };
 
   const handleUpdateCategory = async (row: SupplierRow) => {
+    if (!categories.includes(editCat)) {
+      addToast('Pick a category first', 'error');
+      return;
+    }
     try {
-      if (row.source === 'invoice-only') {
-        await api.post('/demo-expenses/supplier-mappings', {
+      // Sales domain: always route through the mapping endpoint so invoice
+      // categories cascade — the suppliers table is legacy and doesn't drive
+      // invoice classification.
+      if (domain === 'sales' && row.source !== 'user-mapping') {
+        const res = await api.post('/demo-expenses/supplier-mappings', {
           supplierName: row.name,
           category: editCat,
           domain,
         });
-        addToast(`Categorized "${row.name}"`, 'success');
+        const cascaded = res.data?.cascadedInvoices || 0;
+        addToast(
+          cascaded > 0
+            ? `Category set · ${cascaded} invoices reclassified`
+            : `Category set for "${row.name}"`,
+          'success'
+        );
       } else if (row.source === 'suppliers-table') {
         if (row.id == null) return;
         const dbCat = SALES_DISPLAY_TO_DB[editCat] || editCat;
@@ -466,7 +479,7 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
                           </>
                         ) : editable ? (
                           <>
-                            <button onClick={() => { setEditingKey(row.rowKey); setEditCat(row.category); }} className="p-1 text-gray-400 hover:text-primary-600 rounded" title="Edit category"><Pencil size={14} /></button>
+                            <button onClick={() => { setEditingKey(row.rowKey); setEditCat(categories.includes(row.category) ? row.category : (categories[0] || defaultCategory)); }} className="p-1 text-gray-400 hover:text-primary-600 rounded" title="Edit category"><Pencil size={14} /></button>
                             {deletable && (
                               <button onClick={() => setDeleteTarget({ id: row.id!, source: row.source })} className="p-1 text-gray-400 hover:text-red-600 rounded" title="Delete"><Trash2 size={14} /></button>
                             )}
