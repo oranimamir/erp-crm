@@ -9,6 +9,7 @@ import {
 import { formatDate } from '../lib/dates';
 import { useCategories, DEMO_CATEGORIES, SALES_CATEGORIES } from '../lib/categories';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
+import PdfPreview from '../components/ui/PdfPreview';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -354,7 +355,7 @@ function InvoiceViewer({ invoiceId, onClose }: { invoiceId: number; onClose: () 
             </div>
             <div className="flex-1 overflow-hidden">
               {inv.embedded_pdf ? (
-                <iframe src={`data:application/pdf;base64,${inv.embedded_pdf}`} className="w-full h-full border-0" title="Invoice PDF" />
+                <PdfPreview base64={inv.embedded_pdf} className="w-full h-full border-0" title="Invoice PDF" />
               ) : (
                 <div className="p-6 space-y-4 overflow-y-auto h-full">
                   <div className="grid grid-cols-2 gap-4 text-sm">

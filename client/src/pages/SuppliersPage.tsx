@@ -6,6 +6,7 @@ import { useCategories } from '../lib/categories';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
+import PdfPreview from '../components/ui/PdfPreview';
 import { Plus, Truck, Eye, Pencil, Trash2, BarChart3, Beaker, Check, X, GitMerge, Loader2 } from 'lucide-react';
 
 const CHART_COLORS = [
@@ -613,7 +614,7 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
                                       <Loader2 size={16} className="animate-spin mr-2" /> Loading preview...
                                     </div>
                                   ) : previewPdf ? (
-                                    <iframe src={`data:application/pdf;base64,${previewPdf}`} className="w-full h-[400px] rounded border border-gray-200 bg-white" title="Invoice preview" />
+                                    <PdfPreview base64={previewPdf} className="w-full h-[400px] rounded border border-gray-200 bg-white" title="Invoice preview" />
                                   ) : (
                                     <p className="text-center py-4 text-xs text-gray-400">No PDF preview available for this supplier</p>
                                   )}

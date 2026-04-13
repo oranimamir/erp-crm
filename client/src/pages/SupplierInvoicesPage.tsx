@@ -14,6 +14,7 @@ import { formatDate } from '../lib/dates';
 import { useCategories } from '../lib/categories';
 import SearchBar from '../components/ui/SearchBar';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
+import PdfPreview from '../components/ui/PdfPreview';
 
 const CAT_COLORS: Record<string, string> = {
   'Salaries': '#6366f1', 'Cars': '#8b5cf6', 'Overhead': '#3b82f6',
@@ -342,7 +343,7 @@ function InvoiceViewer({ invoiceId, onClose }: { invoiceId: number; onClose: () 
             </div>
             <div className="flex-1 overflow-hidden">
               {inv.embedded_pdf ? (
-                <iframe src={`data:application/pdf;base64,${inv.embedded_pdf}`} className="w-full h-full border-0" title="Invoice PDF" />
+                <PdfPreview base64={inv.embedded_pdf} className="w-full h-full border-0" title="Invoice PDF" />
               ) : (
                 <div className="p-6 space-y-4">
                   <div className="grid grid-cols-2 gap-4 text-sm">
@@ -2282,7 +2283,7 @@ export default function SupplierInvoicesPage() {
                     {isPreviewing && (
                       <div className="border-t border-gray-200 bg-gray-50">
                         {u.embeddedPdf ? (
-                          <iframe src={`data:application/pdf;base64,${u.embeddedPdf}`} className="w-full h-[400px]" title="Invoice preview" />
+                          <PdfPreview base64={u.embeddedPdf} className="w-full h-[400px]" title="Invoice preview" />
                         ) : u.lineItems && (() => {
                           const items = typeof u.lineItems === 'string' ? (() => { try { return JSON.parse(u.lineItems); } catch { return []; } })() : u.lineItems || [];
                           return items.length > 0 ? (
@@ -2466,7 +2467,7 @@ export default function SupplierInvoicesPage() {
                               {loadingPreview ? (
                                 <div className="flex items-center justify-center py-8 text-gray-400"><Loader2 size={20} className="animate-spin mr-2" /> Loading preview...</div>
                               ) : previewPdf ? (
-                                <iframe src={`data:application/pdf;base64,${previewPdf}`} className="w-full h-[400px] rounded-lg border border-gray-200 bg-white" title="Invoice preview" />
+                                <PdfPreview base64={previewPdf} className="w-full h-[400px] rounded-lg border border-gray-200 bg-white" title="Invoice preview" />
                               ) : (
                                 <p className="text-center py-6 text-sm text-gray-400">No PDF preview available for this invoice</p>
                               )}
@@ -2616,7 +2617,7 @@ export default function SupplierInvoicesPage() {
                                     {loadingPreview ? (
                                       <div className="flex items-center justify-center py-8 text-gray-400"><Loader2 size={20} className="animate-spin mr-2" /> Loading preview...</div>
                                     ) : previewPdf ? (
-                                      <iframe src={`data:application/pdf;base64,${previewPdf}`} className="w-full h-[400px] rounded-lg border border-gray-200 bg-white" title="Invoice preview" />
+                                      <PdfPreview base64={previewPdf} className="w-full h-[400px] rounded-lg border border-gray-200 bg-white" title="Invoice preview" />
                                     ) : (
                                       <p className="text-center py-6 text-sm text-gray-400">No PDF preview available for this invoice</p>
                                     )}
@@ -2670,7 +2671,7 @@ export default function SupplierInvoicesPage() {
                 {/* PDF Preview */}
                 {singlePreview.embeddedPdf && (
                   <div className="flex-1 min-w-0">
-                    <iframe src={`data:application/pdf;base64,${singlePreview.embeddedPdf}`} className="w-full h-[500px] rounded-lg border border-gray-200" title="Invoice Preview" />
+                    <PdfPreview base64={singlePreview.embeddedPdf} className="w-full h-[500px] rounded-lg border border-gray-200" title="Invoice Preview" />
                   </div>
                 )}
                 {/* Editable fields */}
