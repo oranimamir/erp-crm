@@ -11,6 +11,27 @@ import { getEurRate } from '../lib/fx.js';
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 
+export async function backfillDemoInvoicesFx(): Promise<{ scanned: number; updated: number; failed: number }> {
+  const rows = db.prepare(`
+    SELECT id, amount, vat_amount, currency, issue_date
+    FROM demo_invoices
+    WHERE UPPER(COALESCE(currency,'EUR')) != 'EUR' AND eur_amount IS NULL
+  `).all() as any[];
+  if (rows.length === 0) return { scanned: 0, updated: 0, failed: 0 };
+  let updated = 0, failed = 0;
+  const update = db.prepare(
+    'UPDATE demo_invoices SET fx_rate = ?, eur_amount = ?, vat_eur_amount = ? WHERE id = ?'
+  );
+  for (const r of rows) {
+    const fx = await computeFxFields(r.amount, r.vat_amount, r.currency, r.issue_date);
+    if (fx.fx_rate == null) { failed++; continue; }
+    update.run(fx.fx_rate, fx.eur_amount, fx.vat_eur_amount, r.id);
+    updated++;
+  }
+  if (updated > 0) db.saveToDisk();
+  return { scanned: rows.length, updated, failed };
+}
+
 async function computeFxFields(
   amount: number,
   vatAmount: number,

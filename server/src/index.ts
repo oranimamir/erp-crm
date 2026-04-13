@@ -31,7 +31,7 @@ import packagingRoutes from './routes/packaging.js';
 import backupRoutes from './routes/backup.js';
 import warehouseStockRoutes from './routes/warehouse-stock.js';
 import notificationRoutes from './routes/notifications.js';
-import demoExpenseRoutes from './routes/demo-expenses.js';
+import demoExpenseRoutes, { backfillDemoInvoicesFx } from './routes/demo-expenses.js';
 import cron from 'node-cron';
 import { checkEmailForStockUpdates } from './lib/email-stock.js';
 import { startBackupScheduler, buildCronExpr } from './lib/backup-scheduler.js';
@@ -194,4 +194,13 @@ app.get('*', (_req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  // Fire-and-forget: normalize any non-EUR demo invoices that still
+  // lack an eur_amount (e.g. uploaded before the multi-currency fix).
+  backfillDemoInvoicesFx()
+    .then((r) => {
+      if (r.scanned > 0) {
+        console.log(`[startup-fx-backfill] scanned=${r.scanned} updated=${r.updated} failed=${r.failed}`);
+      }
+    })
+    .catch((err) => console.warn('[startup-fx-backfill] error:', err));
 });
