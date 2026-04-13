@@ -1658,9 +1658,11 @@ router.get('/invoices', (req: Request, res: Response) => {
       params.push(...cats);
     }
     if (suppliers) {
-      const supps = (suppliers as string).split(',');
-      sql += ` AND (${supps.map(() => 'LOWER(TRIM(supplier)) = LOWER(TRIM(?))').join(' OR ')})`;
-      params.push(...supps);
+      const supps = (suppliers as string).split('|').filter(Boolean);
+      if (supps.length > 0) {
+        sql += ` AND (${supps.map(() => 'LOWER(TRIM(supplier)) = LOWER(TRIM(?))').join(' OR ')})`;
+        params.push(...supps);
+      }
     }
     if (month) { sql += ' AND month = ?'; params.push(month); }
     if (date_from) { sql += ' AND issue_date >= ?'; params.push(date_from); }
@@ -1702,9 +1704,11 @@ router.get('/summary', (req: Request, res: Response) => {
       params.push(...cats);
     }
     if (suppliers) {
-      const supps = (suppliers as string).split(',');
-      where += ` AND (${supps.map(() => 'LOWER(TRIM(supplier)) = LOWER(TRIM(?))').join(' OR ')})`;
-      params.push(...supps);
+      const supps = (suppliers as string).split('|').filter(Boolean);
+      if (supps.length > 0) {
+        where += ` AND (${supps.map(() => 'LOWER(TRIM(supplier)) = LOWER(TRIM(?))').join(' OR ')})`;
+        params.push(...supps);
+      }
     }
     if (month) { where += ' AND month = ?'; params.push(month); }
     if (date_from) { where += ' AND issue_date >= ?'; params.push(date_from); }

@@ -524,7 +524,7 @@ export default function SupplierInvoicesPage() {
     if (filterSuppliers.length === 0) params.domain = activeTab;
     if (search) params.search = search;
     if (filterCategories.length > 0) params.categories = filterCategories.join(',');
-    if (filterSuppliers.length > 0) params.suppliers = filterSuppliers.join(',');
+    if (filterSuppliers.length > 0) params.suppliers = filterSuppliers.join('|');
     if (filterMonth) params.month = filterMonth;
     if (filterDateFrom) params.date_from = filterDateFrom;
     if (filterDateTo) params.date_to = filterDateTo;

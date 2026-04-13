@@ -559,7 +559,7 @@ export default function DemoExpensesPage() {
     const params: Record<string, string> = {};
     if (filterDomain) params.domain = filterDomain;
     if (filterCategories.length > 0) params.categories = filterCategories.join(',');
-    if (filterSuppliers.length > 0) params.suppliers = filterSuppliers.join(',');
+    if (filterSuppliers.length > 0) params.suppliers = filterSuppliers.join('|');
     if (filterMonth) params.month = filterMonth;
     if (filterDateFrom) params.date_from = filterDateFrom;
     if (filterDateTo) params.date_to = filterDateTo;
