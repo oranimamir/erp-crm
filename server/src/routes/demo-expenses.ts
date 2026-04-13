@@ -1688,7 +1688,7 @@ router.get('/data-quality', (req: Request, res: Response) => {
 router.get('/invoices', (req: Request, res: Response) => {
   try {
     const { domain, categories, suppliers, month, date_from, date_to, sort_by, sort_dir, search, flagged } = req.query;
-    let sql = 'SELECT id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, xml_filename, duplicate_warning, flagged, flag_comment, created_at FROM demo_invoices WHERE 1=1';
+    let sql = 'SELECT id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, fx_rate, eur_amount, vat_eur_amount, month, xml_filename, duplicate_warning, flagged, flag_comment, created_at FROM demo_invoices WHERE 1=1';
     const params: any[] = [];
 
     if (search) {
