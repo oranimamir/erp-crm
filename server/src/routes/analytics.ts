@@ -362,31 +362,31 @@ router.get('/demo-expenses', (req: Request, res: Response) => {
 
   // Monthly totals by domain
   const monthly = db.prepare(
-    `SELECT month, domain, SUM(amount) as total, SUM(vat_amount) as vat_total, COUNT(*) as count
+    `SELECT month, domain, SUM(COALESCE(eur_amount, amount)) as total, SUM(COALESCE(vat_eur_amount, vat_amount)) as vat_total, COUNT(*) as count
      FROM demo_invoices WHERE ${where} GROUP BY month, domain ORDER BY month ASC`
   ).all(...params) as any[];
 
   // By category
   const byCategory = db.prepare(
-    `SELECT category, domain, SUM(amount) as total, SUM(vat_amount) as vat_total, COUNT(*) as count
+    `SELECT category, domain, SUM(COALESCE(eur_amount, amount)) as total, SUM(COALESCE(vat_eur_amount, vat_amount)) as vat_total, COUNT(*) as count
      FROM demo_invoices WHERE ${where} GROUP BY category, domain ORDER BY total DESC`
   ).all(...params) as any[];
 
   // By supplier
   const bySupplier = db.prepare(
-    `SELECT supplier, domain, category, SUM(amount) as total, SUM(vat_amount) as vat_total, COUNT(*) as count
+    `SELECT supplier, domain, category, SUM(COALESCE(eur_amount, amount)) as total, SUM(COALESCE(vat_eur_amount, vat_amount)) as vat_total, COUNT(*) as count
      FROM demo_invoices WHERE ${where} GROUP BY supplier ORDER BY total DESC LIMIT 30`
   ).all(...params) as any[];
 
   // Grand totals
   const totals = db.prepare(
-    `SELECT SUM(amount) as total_amount, SUM(vat_amount) as total_vat, COUNT(*) as invoice_count
+    `SELECT SUM(COALESCE(eur_amount, amount)) as total_amount, SUM(COALESCE(vat_eur_amount, vat_amount)) as total_vat, COUNT(*) as invoice_count
      FROM demo_invoices WHERE ${where}`
   ).get(...params) as any;
 
   // Domain totals
   const domainTotals = db.prepare(
-    `SELECT domain, SUM(amount) as total, SUM(vat_amount) as vat_total, COUNT(*) as count
+    `SELECT domain, SUM(COALESCE(eur_amount, amount)) as total, SUM(COALESCE(vat_eur_amount, vat_amount)) as vat_total, COUNT(*) as count
      FROM demo_invoices WHERE ${where} GROUP BY domain`
   ).all(...params) as any[];
 
@@ -509,7 +509,9 @@ router.get('/export-data', (req: Request, res: Response) => {
 
       result.supplier_expenses = db.prepare(`
         SELECT invoice_id, supplier, category, domain, amount, vat_amount,
-          currency, issue_date
+          currency, issue_date,
+          COALESCE(eur_amount, amount) as eur_amount,
+          COALESCE(vat_eur_amount, vat_amount) as vat_eur_amount
         FROM demo_invoices
         WHERE issue_date BETWEEN ? AND ?
           ${domainWhere}

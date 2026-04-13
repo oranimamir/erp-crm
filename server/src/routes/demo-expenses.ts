@@ -6,9 +6,30 @@ import multer from 'multer';
 // @ts-ignore — import lib directly to avoid pdf-parse's debug-mode crash in ESM
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import { notifyAdmin } from '../lib/notify.js';
+import { getEurRate } from '../lib/fx.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
+
+async function computeFxFields(
+  amount: number,
+  vatAmount: number,
+  currency: string,
+  issueDate: string,
+): Promise<{ fx_rate: number | null; eur_amount: number | null; vat_eur_amount: number | null }> {
+  const cur = (currency || 'EUR').toUpperCase();
+  if (cur === 'EUR') return { fx_rate: null, eur_amount: null, vat_eur_amount: null };
+  const dateForRate = /^\d{4}-\d{2}-\d{2}$/.test(issueDate || '') ? issueDate : 'latest';
+  const rate = await getEurRate(cur, dateForRate);
+  if (!rate || rate === 1.0) {
+    return { fx_rate: null, eur_amount: null, vat_eur_amount: null };
+  }
+  return {
+    fx_rate: rate,
+    eur_amount: Math.round(amount * rate * 100) / 100,
+    vat_eur_amount: Math.round((vatAmount || 0) * rate * 100) / 100,
+  };
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CATEGORY DEFINITIONS
@@ -1330,7 +1351,7 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
 // CONFIRM IMPORT — creates batches per domain
 // ═══════════════════════════════════════════════════════════════════════════════
 
-router.post('/confirm-import', (req: Request, res: Response) => {
+router.post('/confirm-import', async (req: Request, res: Response) => {
   try {
     const {
       invoices,
@@ -1355,6 +1376,16 @@ router.post('/confirm-import', (req: Request, res: Response) => {
     const userRow = userId ? db.prepare('SELECT display_name FROM users WHERE id = ?').get(userId) as any : null;
     const uploadedByName = userRow?.display_name || 'Unknown';
     const skipSet = new Set(skipInvoiceIds || []);
+
+    // Pre-fetch FX rates for all non-EUR invoices (transaction callback is sync).
+    const fxMap = new Map<string, { fx_rate: number | null; eur_amount: number | null; vat_eur_amount: number | null }>();
+    for (const inv of invoices as any[]) {
+      const cur = (inv.currency || 'EUR').toUpperCase();
+      if (cur === 'EUR') continue;
+      const key = `${cur}|${inv.issueDate}|${inv.amount}|${inv.vatAmount || 0}`;
+      if (fxMap.has(key)) continue;
+      fxMap.set(key, await computeFxFields(inv.amount, inv.vatAmount || 0, cur, inv.issueDate));
+    }
 
     const doImport = db.transaction(() => {
       // If replacing, delete existing batches
@@ -1477,8 +1508,8 @@ router.post('/confirm-import', (req: Request, res: Response) => {
 
       const results: any[] = [];
       const insertInv = db.prepare(`
-        INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, line_items, embedded_pdf, pdf_filename, xml_filename, duplicate_warning, flagged)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, line_items, embedded_pdf, pdf_filename, xml_filename, duplicate_warning, flagged, fx_rate, eur_amount, vat_eur_amount)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       for (const [domain, domainInvoices] of Object.entries(byDomain)) {
@@ -1493,11 +1524,15 @@ router.post('/confirm-import', (req: Request, res: Response) => {
           const isDuplicateIncluded = skipInvoiceIds && !skipSet.has(inv.invoiceId) && (req.body.duplicateInvoiceIds || []).includes(inv.invoiceId);
           // Derive month from the invoice's own issue_date, falling back to batch month
           const invMonth = inv.issueDate ? inv.issueDate.substring(0, 7) : month;
+          const cur = (inv.currency || 'EUR').toUpperCase();
+          const fxKey = `${cur}|${inv.issueDate}|${inv.amount}|${inv.vatAmount || 0}`;
+          const fx = fxMap.get(fxKey) || { fx_rate: null, eur_amount: null, vat_eur_amount: null };
           insertInv.run(
             batchId, inv.invoiceId, inv.issueDate, inv.supplier, inv.category, domain,
             inv.amount, inv.vatAmount || 0, inv.currency || 'EUR', invMonth,
             inv.lineItems || '[]', inv.embeddedPdf || null, inv.pdfFilename || null,
             inv.xmlFilename || null, isDuplicateIncluded ? 1 : 0, inv.flagged ? 1 : 0,
+            fx.fx_rate, fx.eur_amount, fx.vat_eur_amount,
           );
         }
 
@@ -1597,8 +1632,8 @@ router.get('/reconciliation', (_req: Request, res: Response) => {
     const demoCount = (db.prepare("SELECT COUNT(*) as cnt FROM demo_invoices WHERE domain = 'demo'").get() as any).cnt;
     const salesCount = (db.prepare("SELECT COUNT(*) as cnt FROM demo_invoices WHERE domain = 'sales'").get() as any).cnt;
     const batchCount = (db.prepare('SELECT COUNT(*) as cnt FROM demo_upload_batches').get() as any).cnt;
-    const bySupplier = db.prepare('SELECT supplier, COUNT(*) as cnt, SUM(amount) as total FROM demo_invoices GROUP BY supplier ORDER BY cnt DESC').all();
-    const byMonth = db.prepare('SELECT month, domain, COUNT(*) as cnt, SUM(amount) as total FROM demo_invoices GROUP BY month, domain ORDER BY month').all();
+    const bySupplier = db.prepare('SELECT supplier, COUNT(*) as cnt, SUM(COALESCE(eur_amount, amount)) as total FROM demo_invoices GROUP BY supplier ORDER BY cnt DESC').all();
+    const byMonth = db.prepare('SELECT month, domain, COUNT(*) as cnt, SUM(COALESCE(eur_amount, amount)) as total FROM demo_invoices GROUP BY month, domain ORDER BY month').all();
     const duplicateWarnings = (db.prepare('SELECT COUNT(*) as cnt FROM demo_invoices WHERE duplicate_warning = 1').get() as any).cnt;
     const zeroAmount = (db.prepare('SELECT COUNT(*) as cnt FROM demo_invoices WHERE amount = 0').get() as any).cnt;
     const noDate = (db.prepare("SELECT COUNT(*) as cnt FROM demo_invoices WHERE issue_date IS NULL OR issue_date = ''").get() as any).cnt;
@@ -1724,21 +1759,21 @@ router.get('/summary', (req: Request, res: Response) => {
     if (date_from) { where += ' AND issue_date >= ?'; params.push(date_from); }
     if (date_to) { where += ' AND issue_date <= ?'; params.push(date_to); }
 
-    const byCategory = db.prepare(`SELECT category, SUM(amount) as total, SUM(vat_amount) as vat_total FROM demo_invoices WHERE ${where} GROUP BY category ORDER BY total DESC`).all(...params);
-    const bySupplier = db.prepare(`SELECT supplier, SUM(amount) as total, SUM(vat_amount) as vat_total FROM demo_invoices WHERE ${where} GROUP BY supplier ORDER BY total DESC`).all(...params);
-    const monthlyByCategory = db.prepare(`SELECT month, category, SUM(amount) as total, SUM(vat_amount) as vat_total FROM demo_invoices WHERE ${where} GROUP BY month, category ORDER BY month ASC`).all(...params);
+    const byCategory = db.prepare(`SELECT category, SUM(COALESCE(eur_amount, amount)) as total, SUM(COALESCE(vat_eur_amount, vat_amount)) as vat_total FROM demo_invoices WHERE ${where} GROUP BY category ORDER BY total DESC`).all(...params);
+    const bySupplier = db.prepare(`SELECT supplier, SUM(COALESCE(eur_amount, amount)) as total, SUM(COALESCE(vat_eur_amount, vat_amount)) as vat_total FROM demo_invoices WHERE ${where} GROUP BY supplier ORDER BY total DESC`).all(...params);
+    const monthlyByCategory = db.prepare(`SELECT month, category, SUM(COALESCE(eur_amount, amount)) as total, SUM(COALESCE(vat_eur_amount, vat_amount)) as vat_total FROM demo_invoices WHERE ${where} GROUP BY month, category ORDER BY month ASC`).all(...params);
     const months = db.prepare(`SELECT DISTINCT month FROM demo_invoices WHERE ${domain ? 'domain = ?' : '1=1'} ORDER BY month ASC`).all(...(domain ? [domain] : []));
     const allSuppliers = db.prepare(`SELECT DISTINCT supplier FROM demo_invoices WHERE ${domain ? 'domain = ?' : '1=1'} ORDER BY supplier ASC`).all(...(domain ? [domain] : []));
     const allCategories = db.prepare(`SELECT DISTINCT category FROM demo_invoices WHERE ${domain ? 'domain = ?' : '1=1'} ORDER BY category ASC`).all(...(domain ? [domain] : []));
     const avgByCategory = db.prepare(
       `SELECT category, AVG(monthly_total) as avg_total FROM (
-        SELECT month, category, SUM(amount) as monthly_total FROM demo_invoices WHERE ${where} GROUP BY month, category
+        SELECT month, category, SUM(COALESCE(eur_amount, amount)) as monthly_total FROM demo_invoices WHERE ${where} GROUP BY month, category
       ) GROUP BY category ORDER BY avg_total DESC`
     ).all(...params);
-    const totals = db.prepare(`SELECT SUM(amount) as total_amount, SUM(vat_amount) as total_vat, COUNT(*) as invoice_count FROM demo_invoices WHERE ${where}`).get(...params) as any;
+    const totals = db.prepare(`SELECT SUM(COALESCE(eur_amount, amount)) as total_amount, SUM(COALESCE(vat_eur_amount, vat_amount)) as total_vat, COUNT(*) as invoice_count FROM demo_invoices WHERE ${where}`).get(...params) as any;
     // Monthly breakdown by domain (for amount and VAT tables)
     const monthlyByDomain = db.prepare(
-      `SELECT month, domain, SUM(amount) as total, SUM(vat_amount) as vat_total, COUNT(*) as cnt FROM demo_invoices WHERE ${where} GROUP BY month, domain ORDER BY month ASC`
+      `SELECT month, domain, SUM(COALESCE(eur_amount, amount)) as total, SUM(COALESCE(vat_eur_amount, vat_amount)) as vat_total, COUNT(*) as cnt FROM demo_invoices WHERE ${where} GROUP BY month, domain ORDER BY month ASC`
     ).all(...params);
 
     res.json({
@@ -1951,25 +1986,25 @@ router.get('/monthly-summary', (req: Request, res: Response) => {
 
     // Per-month totals by domain
     const byMonth = db.prepare(
-      `SELECT month, domain, SUM(amount) as total, SUM(vat_amount) as vat_total, COUNT(*) as count
+      `SELECT month, domain, SUM(COALESCE(eur_amount, amount)) as total, SUM(COALESCE(vat_eur_amount, vat_amount)) as vat_total, COUNT(*) as count
        FROM demo_invoices WHERE ${where} GROUP BY month, domain ORDER BY month ASC`
     ).all(...params) as any[];
 
     // Per-month + category breakdown
     const byMonthCategory = db.prepare(
-      `SELECT month, domain, category, SUM(amount) as total, SUM(vat_amount) as vat_total, COUNT(*) as count
+      `SELECT month, domain, category, SUM(COALESCE(eur_amount, amount)) as total, SUM(COALESCE(vat_eur_amount, vat_amount)) as vat_total, COUNT(*) as count
        FROM demo_invoices WHERE ${where} GROUP BY month, domain, category ORDER BY month ASC, total DESC`
     ).all(...params) as any[];
 
     // Grand totals
     const grandTotals = db.prepare(
-      `SELECT SUM(amount) as total_amount, SUM(vat_amount) as total_vat, COUNT(*) as invoice_count
+      `SELECT SUM(COALESCE(eur_amount, amount)) as total_amount, SUM(COALESCE(vat_eur_amount, vat_amount)) as total_vat, COUNT(*) as invoice_count
        FROM demo_invoices WHERE ${where}`
     ).get(...params) as any;
 
     // Domain totals
     const domainTotals = db.prepare(
-      `SELECT domain, SUM(amount) as total, SUM(vat_amount) as vat_total, COUNT(*) as count
+      `SELECT domain, SUM(COALESCE(eur_amount, amount)) as total, SUM(COALESCE(vat_eur_amount, vat_amount)) as vat_total, COUNT(*) as count
        FROM demo_invoices WHERE ${where} GROUP BY domain`
     ).all(...params) as any[];
 
@@ -2079,7 +2114,7 @@ router.post('/upload-single', upload.single('file'), async (req: Request, res: R
   }
 });
 
-router.post('/confirm-single', (req: Request, res: Response) => {
+router.post('/confirm-single', async (req: Request, res: Response) => {
   try {
     const { invoice } = req.body;
     if (!invoice) { res.status(400).json({ error: 'No invoice data' }); return; }
@@ -2097,6 +2132,13 @@ router.post('/confirm-single', (req: Request, res: Response) => {
       }
     }
 
+    const fx = await computeFxFields(
+      invoice.amount || 0,
+      invoice.vatAmount || 0,
+      invoice.currency || 'EUR',
+      invoice.date || '',
+    );
+
     // Create a single-invoice batch
     const batchResult = db.prepare(
       'INSERT INTO demo_upload_batches (filename, month, domain, invoice_count, total_amount, uploaded_by, uploaded_by_name, uploaded_at) VALUES (?, ?, ?, 1, ?, ?, ?, ?)'
@@ -2104,8 +2146,8 @@ router.post('/confirm-single', (req: Request, res: Response) => {
     const batchId = batchResult.lastInsertRowid;
 
     db.prepare(
-      `INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, line_items, embedded_pdf, pdf_filename, xml_filename, duplicate_warning)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+      `INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, line_items, embedded_pdf, pdf_filename, xml_filename, duplicate_warning, fx_rate, eur_amount, vat_eur_amount)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`
     ).run(
       batchId,
       invoice.invoiceId || '',
@@ -2121,6 +2163,9 @@ router.post('/confirm-single', (req: Request, res: Response) => {
       invoice.embeddedPdf || null,
       invoice.pdfFilename || null,
       invoice.xmlFilename || null,
+      fx.fx_rate,
+      fx.eur_amount,
+      fx.vat_eur_amount,
     );
 
     db.saveToDisk();
@@ -3033,6 +3078,32 @@ router.get('/vat-audit', async (_req: Request, res: Response) => {
   } catch (err: any) {
     console.error('[demo-expenses] vat-audit error:', err);
     res.status(500).json({ error: 'Failed to run VAT audit' });
+  }
+});
+
+router.post('/backfill-fx-rates', async (_req: Request, res: Response) => {
+  try {
+    const rows = db.prepare(`
+      SELECT id, amount, vat_amount, currency, issue_date
+      FROM demo_invoices
+      WHERE UPPER(COALESCE(currency,'EUR')) != 'EUR' AND eur_amount IS NULL
+    `).all() as any[];
+
+    let updated = 0, failed = 0;
+    const update = db.prepare(
+      'UPDATE demo_invoices SET fx_rate = ?, eur_amount = ?, vat_eur_amount = ? WHERE id = ?'
+    );
+    for (const r of rows) {
+      const fx = await computeFxFields(r.amount, r.vat_amount, r.currency, r.issue_date);
+      if (fx.fx_rate == null) { failed++; continue; }
+      update.run(fx.fx_rate, fx.eur_amount, fx.vat_eur_amount, r.id);
+      updated++;
+    }
+    db.saveToDisk();
+    res.json({ scanned: rows.length, updated, skipped: rows.length - updated - failed, failed });
+  } catch (err: any) {
+    console.error('[demo-expenses] backfill-fx-rates error:', err);
+    res.status(500).json({ error: 'Backfill failed' });
   }
 });
 

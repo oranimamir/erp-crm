@@ -1054,6 +1054,9 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN flagged INTEGER DEFAULT 0`); } catch (_) {}
   try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN vat_reviewed INTEGER DEFAULT 0`); } catch (_) {}
   try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN flag_comment TEXT DEFAULT ''`); } catch (_) {}
+  try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN fx_rate REAL`); } catch (_) {}
+  try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN eur_amount REAL`); } catch (_) {}
+  try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN vat_eur_amount REAL`); } catch (_) {}
 
   // VAT audit log table
   db.exec(`

@@ -163,7 +163,7 @@ router.get('/monthly-payments', (_req: Request, res: Response) => {
     let salesByMonth: Record<string, number> = {};
     try {
       const salesRows = db.prepare(`
-        SELECT month, SUM(amount) as total
+        SELECT month, SUM(COALESCE(eur_amount, amount)) as total
         FROM demo_invoices
         WHERE domain = 'sales'
         GROUP BY month
@@ -478,7 +478,7 @@ router.get('/demo-expenses-monthly', (_req: Request, res: Response) => {
   try {
     const year = new Date().getFullYear().toString();
     const data = db.prepare(`
-      SELECT month, SUM(amount) as total, SUM(vat_amount) as vat_total, COUNT(*) as count
+      SELECT month, SUM(COALESCE(eur_amount, amount)) as total, SUM(COALESCE(vat_eur_amount, vat_amount)) as vat_total, COUNT(*) as count
       FROM demo_invoices
       WHERE month LIKE ? || '%' AND domain = 'demo'
       GROUP BY month
