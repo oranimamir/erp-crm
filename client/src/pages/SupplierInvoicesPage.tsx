@@ -391,7 +391,20 @@ function InvoiceViewer({ invoiceId, onClose }: { invoiceId: number; onClose: () 
 // MAIN PAGE
 // ═══════════════════════════════════════════════════════════════════════════════
 
-type SubTab = 'demo' | 'sales' | 'summary';
+type SubTab = 'demo' | 'sales' | 'summary' | 'employees';
+
+interface EmployeeExpense {
+  id: number;
+  employee_name: string;
+  period_label: string;
+  period_month: string | null;
+  total_amount: number;
+  currency: string;
+  original_filename: string;
+  file_size: number;
+  uploaded_by_name: string;
+  uploaded_at: string;
+}
 
 export default function SupplierInvoicesPage() {
   const { addToast } = useToast();
@@ -504,6 +517,14 @@ export default function SupplierInvoicesPage() {
   const [summarySearch, setSummarySearch] = useState('');
   const [summaryFromMonth, setSummaryFromMonth] = useState('2026-01');
 
+  // Employee expenses
+  const [employeeExpenses, setEmployeeExpenses] = useState<EmployeeExpense[]>([]);
+  const [employeeSearch, setEmployeeSearch] = useState('');
+  const [employeeUploading, setEmployeeUploading] = useState(false);
+  const [editingExpenseId, setEditingExpenseId] = useState<number | null>(null);
+  const [editingExpenseDraft, setEditingExpenseDraft] = useState<Partial<EmployeeExpense>>({});
+  const employeeFileRef = useRef<HTMLInputElement>(null);
+
   const domainCategories = activeTab === 'demo' ? demoCategories : salesCategories;
 
   // Reset filters when switching tabs
@@ -516,6 +537,54 @@ export default function SupplierInvoicesPage() {
     setFilterDateFrom('');
     setFilterDateTo('');
     setViewingInvoice(null);
+    setEditingExpenseId(null);
+  };
+
+  // ─── EMPLOYEE EXPENSES HANDLERS ─────────────────────────────────────────────
+
+  const handleEmployeeFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setEmployeeUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await api.post('/employee-expenses', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      addToast(
+        `Uploaded: ${res.data.expense.employee_name} — €${(res.data.expense.total_amount || 0).toFixed(2)}`,
+        'success'
+      );
+      await fetchEmployeeExpenses();
+    } catch (err: any) {
+      addToast(err?.response?.data?.error || 'Upload failed', 'error');
+    } finally {
+      setEmployeeUploading(false);
+      if (employeeFileRef.current) employeeFileRef.current.value = '';
+    }
+  };
+
+  const handleDeleteEmployeeExpense = async (id: number) => {
+    try {
+      await api.delete(`/employee-expenses/${id}`);
+      addToast('Expense note deleted', 'success');
+      await fetchEmployeeExpenses();
+    } catch {
+      addToast('Delete failed', 'error');
+    }
+  };
+
+  const handleSaveExpenseEdit = async (id: number) => {
+    try {
+      await api.patch(`/employee-expenses/${id}`, editingExpenseDraft);
+      setEditingExpenseId(null);
+      setEditingExpenseDraft({});
+      await fetchEmployeeExpenses();
+      addToast('Saved', 'success');
+    } catch {
+      addToast('Save failed', 'error');
+    }
   };
 
   // ─── FETCH HELPERS ──────────────────────────────────────────────────────────
@@ -543,9 +612,22 @@ export default function SupplierInvoicesPage() {
     }
   }, [addToast]);
 
+  const fetchEmployeeExpenses = useCallback(async () => {
+    try {
+      const res = await api.get('/employee-expenses', {
+        params: employeeSearch ? { search: employeeSearch } : {},
+      });
+      setEmployeeExpenses(res.data);
+    } catch {
+      addToast('Failed to load employee expenses', 'error');
+    }
+  }, [employeeSearch, addToast]);
+
   const fetchAll = useCallback(async () => {
     try {
-      if (activeTab === 'summary') {
+      if (activeTab === 'employees') {
+        await fetchEmployeeExpenses();
+      } else if (activeTab === 'summary') {
         const [, batRes] = await Promise.all([
           fetchMonthlySummary(),
           api.get('/demo-expenses/batches'),
@@ -567,7 +649,7 @@ export default function SupplierInvoicesPage() {
     } finally {
       setLoading(false);
     }
-  }, [buildFilterParams, sortBy, sortDir, activeTab, addToast, fetchMonthlySummary]);
+  }, [buildFilterParams, sortBy, sortDir, activeTab, addToast, fetchMonthlySummary, fetchEmployeeExpenses]);
 
   useEffect(() => { setLoading(true); fetchAll(); }, [fetchAll]);
 
@@ -1191,6 +1273,8 @@ export default function SupplierInvoicesPage() {
               <div className="w-56">
                 {activeTab === 'summary' ? (
                   <SearchBar value={summarySearch} onChange={setSummarySearch} placeholder="Search summary..." />
+                ) : activeTab === 'employees' ? (
+                  <SearchBar value={employeeSearch} onChange={setEmployeeSearch} placeholder="Search expenses..." />
                 ) : (
                   <SearchBar value={search} onChange={setSearch} placeholder="Search invoices..." />
                 )}
@@ -1203,7 +1287,7 @@ export default function SupplierInvoicesPage() {
                 </div>
               )}
             </div>
-            {activeTab !== 'summary' && (
+            {activeTab !== 'summary' && activeTab !== 'employees' && (
               <>
                 <button
                   onClick={() => setShowFilters(f => !f)}
@@ -1251,6 +1335,16 @@ export default function SupplierInvoicesPage() {
               Sales Activities
             </button>
             <button
+              onClick={() => handleTabChange('employees')}
+              className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'employees'
+                  ? 'border-primary-600 text-primary-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Employees Expenses
+            </button>
+            <button
               onClick={() => handleTabChange('summary')}
               className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
                 activeTab === 'summary'
@@ -1264,7 +1358,7 @@ export default function SupplierInvoicesPage() {
         </div>
 
         {/* Filters */}
-        {showFilters && activeTab !== 'summary' && (
+        {showFilters && activeTab !== 'summary' && activeTab !== 'employees' && (
           <Card className="p-4">
             <div className="flex flex-wrap items-end gap-4">
               <MultiSelect label="Categories" options={allCategories} selected={filterCategories} onChange={setFilterCategories} />
@@ -1321,6 +1415,185 @@ export default function SupplierInvoicesPage() {
         {loading ? (
           <div className="flex items-center justify-center py-20">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
+          </div>
+        ) : activeTab === 'employees' ? (
+          /* ─── EMPLOYEES EXPENSES TAB ─────────────────────────────────────── */
+          <div className="space-y-4">
+            <div className="flex items-center gap-3">
+              <input
+                ref={employeeFileRef}
+                type="file"
+                accept=".xlsx,.xls,.xlsm"
+                onChange={handleEmployeeFileUpload}
+                className="hidden"
+              />
+              <Button
+                variant="primary"
+                onClick={() => employeeFileRef.current?.click()}
+                disabled={employeeUploading}
+              >
+                {employeeUploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                {employeeUploading ? 'Parsing...' : 'Upload Expense Note'}
+              </Button>
+              <span className="text-xs text-gray-500">
+                Accepts .xlsx / .xls. Auto-extracts employee name, period, and total.
+              </span>
+            </div>
+
+            {employeeExpenses.length === 0 ? (
+              <Card className="p-10 text-center text-gray-500">
+                No employee expense notes yet. Upload an Excel file to get started.
+              </Card>
+            ) : (
+              <Card className="overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 text-xs text-gray-600">
+                    <tr>
+                      <th className="px-4 py-2 text-left font-medium">Employee</th>
+                      <th className="px-4 py-2 text-left font-medium">Period</th>
+                      <th className="px-4 py-2 text-left font-medium">Month</th>
+                      <th className="px-4 py-2 text-right font-medium">Total (€)</th>
+                      <th className="px-4 py-2 text-left font-medium">File</th>
+                      <th className="px-4 py-2 text-left font-medium">Uploaded</th>
+                      <th className="px-4 py-2 text-right font-medium">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {employeeExpenses.map(exp => {
+                      const isEditing = editingExpenseId === exp.id;
+                      return (
+                        <tr key={exp.id} className="hover:bg-gray-50">
+                          <td className="px-4 py-2 font-medium text-gray-900">
+                            {isEditing ? (
+                              <input
+                                className="border border-gray-300 rounded px-2 py-1 text-sm w-40"
+                                value={editingExpenseDraft.employee_name ?? exp.employee_name}
+                                onChange={e => setEditingExpenseDraft(d => ({ ...d, employee_name: e.target.value }))}
+                              />
+                            ) : exp.employee_name}
+                          </td>
+                          <td className="px-4 py-2 text-gray-700">
+                            {isEditing ? (
+                              <input
+                                className="border border-gray-300 rounded px-2 py-1 text-sm w-32"
+                                value={editingExpenseDraft.period_label ?? exp.period_label}
+                                onChange={e => setEditingExpenseDraft(d => ({ ...d, period_label: e.target.value }))}
+                              />
+                            ) : (exp.period_label || '—')}
+                          </td>
+                          <td className="px-4 py-2 text-gray-700">
+                            {isEditing ? (
+                              <input
+                                type="month"
+                                className="border border-gray-300 rounded px-2 py-1 text-sm"
+                                value={editingExpenseDraft.period_month ?? exp.period_month ?? ''}
+                                onChange={e => setEditingExpenseDraft(d => ({ ...d, period_month: e.target.value }))}
+                              />
+                            ) : (exp.period_month || '—')}
+                          </td>
+                          <td className="px-4 py-2 text-right font-medium text-gray-900">
+                            {isEditing ? (
+                              <input
+                                type="number"
+                                step="0.01"
+                                className="border border-gray-300 rounded px-2 py-1 text-sm w-24 text-right"
+                                value={editingExpenseDraft.total_amount ?? exp.total_amount}
+                                onChange={e => setEditingExpenseDraft(d => ({ ...d, total_amount: parseFloat(e.target.value) }))}
+                              />
+                            ) : `€${(exp.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                          </td>
+                          <td className="px-4 py-2">
+                            <a
+                              href={`/api/employee-expenses/${exp.id}/file`}
+                              className="text-primary-600 hover:underline flex items-center gap-1"
+                              onClick={e => {
+                                e.preventDefault();
+                                const token = localStorage.getItem('token');
+                                fetch(`/api/employee-expenses/${exp.id}/file`, {
+                                  headers: { Authorization: `Bearer ${token}` },
+                                })
+                                  .then(r => r.blob())
+                                  .then(blob => {
+                                    const url = URL.createObjectURL(blob);
+                                    const a = document.createElement('a');
+                                    a.href = url;
+                                    a.download = exp.original_filename;
+                                    a.click();
+                                    URL.revokeObjectURL(url);
+                                  });
+                              }}
+                            >
+                              <FileSpreadsheet size={14} />
+                              <span className="truncate max-w-[200px]">{exp.original_filename}</span>
+                            </a>
+                          </td>
+                          <td className="px-4 py-2 text-gray-600 text-xs">
+                            {formatDate(exp.uploaded_at)}
+                            {exp.uploaded_by_name && <div className="text-gray-400">{exp.uploaded_by_name}</div>}
+                          </td>
+                          <td className="px-4 py-2 text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              {isEditing ? (
+                                <>
+                                  <button
+                                    onClick={() => handleSaveExpenseEdit(exp.id)}
+                                    className="p-1.5 text-green-600 hover:bg-green-50 rounded"
+                                    title="Save"
+                                  >
+                                    <Check size={15} />
+                                  </button>
+                                  <button
+                                    onClick={() => { setEditingExpenseId(null); setEditingExpenseDraft({}); }}
+                                    className="p-1.5 text-gray-500 hover:bg-gray-100 rounded"
+                                    title="Cancel"
+                                  >
+                                    <X size={15} />
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <button
+                                    onClick={() => {
+                                      setEditingExpenseId(exp.id);
+                                      setEditingExpenseDraft({
+                                        employee_name: exp.employee_name,
+                                        period_label: exp.period_label,
+                                        period_month: exp.period_month,
+                                        total_amount: exp.total_amount,
+                                      });
+                                    }}
+                                    className="p-1.5 text-gray-600 hover:bg-gray-100 rounded"
+                                    title="Edit"
+                                  >
+                                    <Pencil size={15} />
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteEmployeeExpense(exp.id)}
+                                    className="p-1.5 text-red-600 hover:bg-red-50 rounded"
+                                    title="Delete"
+                                  >
+                                    <Trash2 size={15} />
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot className="bg-gray-50 font-semibold">
+                    <tr>
+                      <td colSpan={3} className="px-4 py-2 text-right text-gray-700">Grand total</td>
+                      <td className="px-4 py-2 text-right text-gray-900">
+                        €{employeeExpenses.reduce((s, e) => s + (e.total_amount || 0), 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td colSpan={3} />
+                    </tr>
+                  </tfoot>
+                </table>
+              </Card>
+            )}
           </div>
         ) : activeTab === 'summary' ? (
           /* ─── MONTHLY SUMMARY TAB ──────────────────────────────────────────── */

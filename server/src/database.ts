@@ -1082,6 +1082,27 @@ export async function initializeDatabase() {
     )
   `);
 
+  // ── Employee expense notes (Supplier Invoices > Employees subtab) ─────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS employee_expenses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_name TEXT NOT NULL,
+      period_label TEXT NOT NULL DEFAULT '',
+      period_month TEXT,
+      total_amount REAL NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'EUR',
+      original_filename TEXT NOT NULL,
+      stored_filename TEXT NOT NULL,
+      file_size INTEGER NOT NULL DEFAULT 0,
+      uploaded_by INTEGER,
+      uploaded_by_name TEXT NOT NULL DEFAULT '',
+      uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (uploaded_by) REFERENCES users(id)
+    )
+  `);
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_employee_expenses_employee ON employee_expenses(employee_name)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_employee_expenses_period ON employee_expenses(period_month)`); } catch (_) {}
+
   // Keep old demo_expenses table for backward compat (won't be used by new code)
 
   // Backfill: derive month from issue_date for invoices that have a date but no month
