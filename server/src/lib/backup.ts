@@ -5,7 +5,9 @@ import archiver from 'archiver';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const dbPath      = process.env.DB_PATH      || path.join(__dirname, '..', 'data', 'erp.db');
+// backup.ts lives in server/src/lib, so the DB (server/data/erp.db) is two levels up,
+// matching database.ts which is in server/src and uses one '..'.
+const dbPath      = process.env.DB_PATH      || path.join(__dirname, '..', '..', 'data', 'erp.db');
 const uploadsBase = process.env.UPLOADS_PATH  || path.join(__dirname, '..', '..', 'uploads');
 const backupsDir  = process.env.BACKUPS_PATH  || path.join(__dirname, '..', '..', 'backups');
 
