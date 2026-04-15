@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import ExcelJS from 'exceljs';
 import db from '../database.js';
@@ -11,6 +12,29 @@ const router = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsDir = path.join(__dirname, '..', '..', 'uploads', 'employee-expenses');
 fs.mkdirSync(uploadsDir, { recursive: true });
+
+// One-time backfill: compute file_hash for legacy rows missing it
+try {
+  const rows = db.prepare(
+    `SELECT id, stored_filename FROM employee_expenses WHERE file_hash IS NULL`
+  ).all() as any[];
+  let updated = 0;
+  for (const r of rows) {
+    const full = path.join(uploadsDir, r.stored_filename);
+    if (!fs.existsSync(full)) continue;
+    const hash = crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
+    try {
+      db.prepare(`UPDATE employee_expenses SET file_hash = ? WHERE id = ?`).run(hash, r.id);
+      updated++;
+    } catch { /* duplicate hash on legacy row — leave null */ }
+  }
+  if (updated > 0) {
+    db.saveToDisk();
+    console.log(`[employee-expenses] Backfilled file_hash for ${updated} rows`);
+  }
+} catch (err) {
+  console.warn('[employee-expenses] hash backfill failed:', err);
+}
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadsDir),
@@ -210,6 +234,24 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
   if (!file) { res.status(400).json({ error: 'No file uploaded' }); return; }
 
   try {
+    // Hash the uploaded file — reject if we've seen identical bytes before
+    const fileBuffer = fs.readFileSync(file.path);
+    const fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+
+    const existing = db.prepare(
+      `SELECT id, employee_name, period_label, original_filename, uploaded_at
+       FROM employee_expenses WHERE file_hash = ?`
+    ).get(fileHash) as any;
+
+    if (existing) {
+      try { fs.unlinkSync(file.path); } catch { /* ignore */ }
+      res.status(409).json({
+        error: `Duplicate file — already uploaded as "${existing.original_filename}" (${existing.employee_name}, ${existing.period_label || existing.uploaded_at})`,
+        duplicate: existing,
+      });
+      return;
+    }
+
     const parsed = await parseExpenseNote(file.path);
 
     // Allow client override of employee / period
@@ -223,8 +265,8 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
     const result = db.prepare(`
       INSERT INTO employee_expenses
         (employee_name, period_label, period_month, total_amount, currency,
-         original_filename, stored_filename, file_size, uploaded_by, uploaded_by_name)
-      VALUES (?, ?, ?, ?, 'EUR', ?, ?, ?, ?, ?)
+         original_filename, stored_filename, file_size, file_hash, uploaded_by, uploaded_by_name)
+      VALUES (?, ?, ?, ?, 'EUR', ?, ?, ?, ?, ?, ?)
     `).run(
       employee,
       periodLabel,
@@ -233,6 +275,7 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
       file.originalname,
       path.basename(file.path),
       file.size,
+      fileHash,
       req.user?.userId ?? null,
       req.user?.display_name ?? req.user?.username ?? '',
     );

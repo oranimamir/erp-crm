@@ -1102,6 +1102,8 @@ export async function initializeDatabase() {
   `);
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_employee_expenses_employee ON employee_expenses(employee_name)`); } catch (_) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_employee_expenses_period ON employee_expenses(period_month)`); } catch (_) {}
+  try { db.exec(`ALTER TABLE employee_expenses ADD COLUMN file_hash TEXT`); } catch (_) {}
+  try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_employee_expenses_file_hash ON employee_expenses(file_hash) WHERE file_hash IS NOT NULL`); } catch (_) {}
 
   // Keep old demo_expenses table for backward compat (won't be used by new code)
 

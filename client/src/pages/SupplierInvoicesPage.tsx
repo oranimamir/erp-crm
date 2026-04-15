@@ -558,7 +558,8 @@ export default function SupplierInvoicesPage() {
       );
       await fetchEmployeeExpenses();
     } catch (err: any) {
-      addToast(err?.response?.data?.error || 'Upload failed', 'error');
+      const msg = err?.response?.data?.error || 'Upload failed';
+      addToast(msg, 'error');
     } finally {
       setEmployeeUploading(false);
       if (employeeFileRef.current) employeeFileRef.current.value = '';
