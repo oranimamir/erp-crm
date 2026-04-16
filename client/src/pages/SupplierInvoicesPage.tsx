@@ -1418,7 +1418,7 @@ export default function SupplierInvoicesPage() {
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
           </div>
         ) : activeTab === 'employees' ? (
-          /* ─── EMPLOYEES EXPENSES TAB ─────────────────────────────────────── */
+          /* ─── EMPLOYEES EXPENSES TAB — pivot table (employees × months) ──── */
           <div className="space-y-4">
             <div className="flex items-center gap-3">
               <input
@@ -1437,7 +1437,7 @@ export default function SupplierInvoicesPage() {
                 {employeeUploading ? 'Parsing...' : 'Upload Expense Note'}
               </Button>
               <span className="text-xs text-gray-500">
-                Accepts .xlsx / .xls. Auto-extracts employee name, period, and total.
+                Accepts .xlsx / .xls / .xlsm (up to 20 MB). Auto-extracts employee name, period, and total.
               </span>
             </div>
 
@@ -1445,114 +1445,188 @@ export default function SupplierInvoicesPage() {
               <Card className="p-10 text-center text-gray-500">
                 No employee expense notes yet. Upload an Excel file to get started.
               </Card>
-            ) : (
-              <Card className="overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 text-xs text-gray-600">
-                    <tr>
-                      <th className="px-4 py-2 text-left font-medium">Employee</th>
-                      <th className="px-4 py-2 text-left font-medium">Period</th>
-                      <th className="px-4 py-2 text-left font-medium">Month</th>
-                      <th className="px-4 py-2 text-right font-medium">Total (€)</th>
-                      <th className="px-4 py-2 text-left font-medium">File</th>
-                      <th className="px-4 py-2 text-left font-medium">Uploaded</th>
-                      <th className="px-4 py-2 text-right font-medium">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {employeeExpenses.map(exp => {
-                      const isEditing = editingExpenseId === exp.id;
-                      return (
-                        <tr key={exp.id} className="hover:bg-gray-50">
-                          <td className="px-4 py-2 font-medium text-gray-900">
-                            {isEditing ? (
-                              <input
-                                className="border border-gray-300 rounded px-2 py-1 text-sm w-40"
-                                value={editingExpenseDraft.employee_name ?? exp.employee_name}
-                                onChange={e => setEditingExpenseDraft(d => ({ ...d, employee_name: e.target.value }))}
-                              />
-                            ) : exp.employee_name}
+            ) : (() => {
+              // Build month columns: Jan 2026 → Dec 2026 (extend if data goes beyond)
+              const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+              const baseYear = 2026;
+              // Determine the latest month from data to know how far to extend columns
+              let maxYear = baseYear;
+              let maxMon = 12;
+              for (const e of employeeExpenses) {
+                if (e.period_month) {
+                  const [y, m] = e.period_month.split('-').map(Number);
+                  if (y > maxYear || (y === maxYear && m > maxMon)) { maxYear = y; maxMon = m; }
+                }
+              }
+              const months: string[] = []; // "2026-01", "2026-02", ...
+              for (let y = baseYear; y <= maxYear; y++) {
+                for (let m = 1; m <= 12; m++) {
+                  const key = `${y}-${String(m).padStart(2, '0')}`;
+                  months.push(key);
+                  if (y === maxYear && m === maxMon) break;
+                }
+              }
+
+              // Pivot: employee → month → list of expenses
+              const pivot = new Map<string, Map<string, EmployeeExpense[]>>();
+              const unassigned: EmployeeExpense[] = [];
+              for (const e of employeeExpenses) {
+                if (!e.period_month) { unassigned.push(e); continue; }
+                if (!pivot.has(e.employee_name)) pivot.set(e.employee_name, new Map());
+                const empMap = pivot.get(e.employee_name)!;
+                if (!empMap.has(e.period_month)) empMap.set(e.period_month, []);
+                empMap.get(e.period_month)!.push(e);
+              }
+              const employees = [...pivot.keys()].sort();
+
+              // Helpers
+              const fmt = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+              const downloadFile = (exp: EmployeeExpense) => {
+                const token = localStorage.getItem('token');
+                fetch(`/api/employee-expenses/${exp.id}/file`, {
+                  headers: { Authorization: `Bearer ${token}` },
+                })
+                  .then(r => r.blob())
+                  .then(blob => {
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = exp.original_filename;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  });
+              };
+
+              return (
+                <>
+                  <Card className="overflow-x-auto">
+                    <table className="w-full text-sm border-collapse">
+                      <thead className="bg-gray-50 text-xs text-gray-600 sticky top-0">
+                        <tr>
+                          <th className="px-4 py-2 text-left font-medium border-b border-r border-gray-200 sticky left-0 bg-gray-50 z-10 min-w-[160px]">Employee</th>
+                          {months.map(m => {
+                            const [y, mo] = m.split('-');
+                            return (
+                              <th key={m} className="px-3 py-2 text-center font-medium border-b border-gray-200 min-w-[100px]">
+                                {MONTH_NAMES[parseInt(mo, 10) - 1]} {y}
+                              </th>
+                            );
+                          })}
+                          <th className="px-4 py-2 text-right font-medium border-b border-l border-gray-200 bg-gray-100 min-w-[100px]">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {employees.map(emp => {
+                          const empMap = pivot.get(emp)!;
+                          let empTotal = 0;
+                          return (
+                            <tr key={emp} className="hover:bg-gray-50">
+                              <td className="px-4 py-2 font-medium text-gray-900 border-r border-gray-200 sticky left-0 bg-white z-10">{emp}</td>
+                              {months.map(m => {
+                                const items = empMap.get(m);
+                                if (!items || items.length === 0) {
+                                  return <td key={m} className="px-3 py-2 text-center text-gray-300">—</td>;
+                                }
+                                const cellTotal = items.reduce((s, e) => s + (e.total_amount || 0), 0);
+                                empTotal += cellTotal;
+                                return (
+                                  <td key={m} className="px-3 py-2 text-center">
+                                    <div className="font-medium text-gray-900">€{fmt(cellTotal)}</div>
+                                    {items.map(exp => (
+                                      <div key={exp.id} className="flex items-center justify-center gap-1 mt-0.5">
+                                        <button
+                                          onClick={() => downloadFile(exp)}
+                                          className="text-primary-600 hover:underline text-xs flex items-center gap-0.5"
+                                          title={exp.original_filename}
+                                        >
+                                          <FileSpreadsheet size={11} />
+                                          <span className="truncate max-w-[70px]">{exp.original_filename.replace(/\.[^.]+$/, '')}</span>
+                                        </button>
+                                        <button
+                                          onClick={() => {
+                                            setEditingExpenseId(exp.id);
+                                            setEditingExpenseDraft({
+                                              employee_name: exp.employee_name,
+                                              period_label: exp.period_label,
+                                              period_month: exp.period_month,
+                                              total_amount: exp.total_amount,
+                                            });
+                                          }}
+                                          className="p-0.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
+                                          title="Edit"
+                                        >
+                                          <Pencil size={11} />
+                                        </button>
+                                        <button
+                                          onClick={() => handleDeleteEmployeeExpense(exp.id)}
+                                          className="p-0.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"
+                                          title="Delete"
+                                        >
+                                          <Trash2 size={11} />
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </td>
+                                );
+                              })}
+                              <td className="px-4 py-2 text-right font-semibold text-gray-900 border-l border-gray-200 bg-gray-50">
+                                {empTotal > 0 ? `€${fmt(empTotal)}` : '—'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot className="bg-gray-100 font-semibold text-xs">
+                        <tr>
+                          <td className="px-4 py-2 text-right text-gray-700 border-r border-gray-200 sticky left-0 bg-gray-100 z-10">Monthly total</td>
+                          {months.map(m => {
+                            const colTotal = employeeExpenses
+                              .filter(e => e.period_month === m)
+                              .reduce((s, e) => s + (e.total_amount || 0), 0);
+                            return (
+                              <td key={m} className="px-3 py-2 text-center text-gray-900">
+                                {colTotal > 0 ? `€${fmt(colTotal)}` : '—'}
+                              </td>
+                            );
+                          })}
+                          <td className="px-4 py-2 text-right text-gray-900 border-l border-gray-200">
+                            €{fmt(employeeExpenses.filter(e => e.period_month).reduce((s, e) => s + (e.total_amount || 0), 0))}
                           </td>
-                          <td className="px-4 py-2 text-gray-700">
-                            {isEditing ? (
-                              <input
-                                className="border border-gray-300 rounded px-2 py-1 text-sm w-32"
-                                value={editingExpenseDraft.period_label ?? exp.period_label}
-                                onChange={e => setEditingExpenseDraft(d => ({ ...d, period_label: e.target.value }))}
-                              />
-                            ) : (exp.period_label || '—')}
-                          </td>
-                          <td className="px-4 py-2 text-gray-700">
-                            {isEditing ? (
-                              <input
-                                type="month"
-                                className="border border-gray-300 rounded px-2 py-1 text-sm"
-                                value={editingExpenseDraft.period_month ?? exp.period_month ?? ''}
-                                onChange={e => setEditingExpenseDraft(d => ({ ...d, period_month: e.target.value }))}
-                              />
-                            ) : (exp.period_month || '—')}
-                          </td>
-                          <td className="px-4 py-2 text-right font-medium text-gray-900">
-                            {isEditing ? (
-                              <input
-                                type="number"
-                                step="0.01"
-                                className="border border-gray-300 rounded px-2 py-1 text-sm w-24 text-right"
-                                value={editingExpenseDraft.total_amount ?? exp.total_amount}
-                                onChange={e => setEditingExpenseDraft(d => ({ ...d, total_amount: parseFloat(e.target.value) }))}
-                              />
-                            ) : `€${(exp.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                          </td>
-                          <td className="px-4 py-2">
-                            <a
-                              href={`/api/employee-expenses/${exp.id}/file`}
-                              className="text-primary-600 hover:underline flex items-center gap-1"
-                              onClick={e => {
-                                e.preventDefault();
-                                const token = localStorage.getItem('token');
-                                fetch(`/api/employee-expenses/${exp.id}/file`, {
-                                  headers: { Authorization: `Bearer ${token}` },
-                                })
-                                  .then(r => r.blob())
-                                  .then(blob => {
-                                    const url = URL.createObjectURL(blob);
-                                    const a = document.createElement('a');
-                                    a.href = url;
-                                    a.download = exp.original_filename;
-                                    a.click();
-                                    URL.revokeObjectURL(url);
-                                  });
-                              }}
-                            >
-                              <FileSpreadsheet size={14} />
-                              <span className="truncate max-w-[200px]">{exp.original_filename}</span>
-                            </a>
-                          </td>
-                          <td className="px-4 py-2 text-gray-600 text-xs">
-                            {formatDate(exp.uploaded_at)}
-                            {exp.uploaded_by_name && <div className="text-gray-400">{exp.uploaded_by_name}</div>}
-                          </td>
-                          <td className="px-4 py-2 text-right">
-                            <div className="flex items-center justify-end gap-1">
-                              {isEditing ? (
-                                <>
-                                  <button
-                                    onClick={() => handleSaveExpenseEdit(exp.id)}
-                                    className="p-1.5 text-green-600 hover:bg-green-50 rounded"
-                                    title="Save"
-                                  >
-                                    <Check size={15} />
-                                  </button>
-                                  <button
-                                    onClick={() => { setEditingExpenseId(null); setEditingExpenseDraft({}); }}
-                                    className="p-1.5 text-gray-500 hover:bg-gray-100 rounded"
-                                    title="Cancel"
-                                  >
-                                    <X size={15} />
-                                  </button>
-                                </>
-                              ) : (
-                                <>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </Card>
+
+                  {/* Unassigned expenses (no period_month) */}
+                  {unassigned.length > 0 && (
+                    <Card className="overflow-hidden">
+                      <div className="px-4 py-2 bg-amber-50 text-amber-800 text-xs font-medium border-b border-amber-200">
+                        Expenses without a month assignment — edit to assign a month
+                      </div>
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-50 text-xs text-gray-600">
+                          <tr>
+                            <th className="px-4 py-2 text-left font-medium">Employee</th>
+                            <th className="px-4 py-2 text-left font-medium">Period</th>
+                            <th className="px-4 py-2 text-right font-medium">Total (€)</th>
+                            <th className="px-4 py-2 text-left font-medium">File</th>
+                            <th className="px-4 py-2 text-right font-medium">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {unassigned.map(exp => (
+                            <tr key={exp.id} className="hover:bg-gray-50">
+                              <td className="px-4 py-2 font-medium text-gray-900">{exp.employee_name}</td>
+                              <td className="px-4 py-2 text-gray-700">{exp.period_label || '—'}</td>
+                              <td className="px-4 py-2 text-right font-medium text-gray-900">€{fmt(exp.total_amount || 0)}</td>
+                              <td className="px-4 py-2">
+                                <button onClick={() => downloadFile(exp)} className="text-primary-600 hover:underline flex items-center gap-1">
+                                  <FileSpreadsheet size={14} />
+                                  <span className="truncate max-w-[200px]">{exp.original_filename}</span>
+                                </button>
+                              </td>
+                              <td className="px-4 py-2 text-right">
+                                <div className="flex items-center justify-end gap-1">
                                   <button
                                     onClick={() => {
                                       setEditingExpenseId(exp.id);
@@ -1575,26 +1649,71 @@ export default function SupplierInvoicesPage() {
                                   >
                                     <Trash2 size={15} />
                                   </button>
-                                </>
-                              )}
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </Card>
+                  )}
+
+                  {/* Inline edit modal */}
+                  {editingExpenseId != null && (() => {
+                    const exp = employeeExpenses.find(e => e.id === editingExpenseId);
+                    if (!exp) return null;
+                    return (
+                      <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => { setEditingExpenseId(null); setEditingExpenseDraft({}); }}>
+                        <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
+                          <h3 className="text-lg font-semibold text-gray-900">Edit Expense</h3>
+                          <div className="space-y-3">
+                            <div>
+                              <label className="block text-xs font-medium text-gray-600 mb-1">Employee Name</label>
+                              <input
+                                className="border border-gray-300 rounded px-3 py-2 text-sm w-full"
+                                value={editingExpenseDraft.employee_name ?? exp.employee_name}
+                                onChange={e => setEditingExpenseDraft(d => ({ ...d, employee_name: e.target.value }))}
+                              />
                             </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                  <tfoot className="bg-gray-50 font-semibold">
-                    <tr>
-                      <td colSpan={3} className="px-4 py-2 text-right text-gray-700">Grand total</td>
-                      <td className="px-4 py-2 text-right text-gray-900">
-                        €{employeeExpenses.reduce((s, e) => s + (e.total_amount || 0), 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </td>
-                      <td colSpan={3} />
-                    </tr>
-                  </tfoot>
-                </table>
-              </Card>
-            )}
+                            <div>
+                              <label className="block text-xs font-medium text-gray-600 mb-1">Period Label</label>
+                              <input
+                                className="border border-gray-300 rounded px-3 py-2 text-sm w-full"
+                                value={editingExpenseDraft.period_label ?? exp.period_label}
+                                onChange={e => setEditingExpenseDraft(d => ({ ...d, period_label: e.target.value }))}
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-medium text-gray-600 mb-1">Month</label>
+                              <input
+                                type="month"
+                                className="border border-gray-300 rounded px-3 py-2 text-sm w-full"
+                                value={editingExpenseDraft.period_month ?? exp.period_month ?? ''}
+                                onChange={e => setEditingExpenseDraft(d => ({ ...d, period_month: e.target.value }))}
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-medium text-gray-600 mb-1">Total Amount (€)</label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                className="border border-gray-300 rounded px-3 py-2 text-sm w-full"
+                                value={editingExpenseDraft.total_amount ?? exp.total_amount}
+                                onChange={e => setEditingExpenseDraft(d => ({ ...d, total_amount: parseFloat(e.target.value) }))}
+                              />
+                            </div>
+                          </div>
+                          <div className="flex justify-end gap-2 pt-2">
+                            <Button variant="secondary" onClick={() => { setEditingExpenseId(null); setEditingExpenseDraft({}); }}>Cancel</Button>
+                            <Button variant="primary" onClick={() => handleSaveExpenseEdit(editingExpenseId)}>Save</Button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </>
+              );
+            })()}
           </div>
         ) : activeTab === 'summary' ? (
           /* ─── MONTHLY SUMMARY TAB ──────────────────────────────────────────── */
