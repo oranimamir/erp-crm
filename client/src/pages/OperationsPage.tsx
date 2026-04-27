@@ -4,7 +4,7 @@ import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import {
   Briefcase, Search, Plus, ChevronLeft, ChevronRight, FileText, Receipt,
-  FileSpreadsheet, ChevronUp, ChevronDown, Download, X, Truck, Loader2, ArrowLeftRight, Landmark, Filter, XCircle,
+  FileSpreadsheet, ChevronUp, ChevronDown, Download, X, Truck, Loader2, ArrowLeftRight, Landmark, Filter, XCircle, Trash2,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
@@ -192,6 +192,22 @@ export default function OperationsPage() {
       return;
     }
     applyStatus(id, newStatus);
+  };
+
+  const handleDelete = async (op: Operation) => {
+    const ok = confirm(
+      `Delete Operation ${op.operation_number}?\n\n` +
+      `This will also remove the linked order, all invoices, wire transfers, and uploaded documents. ` +
+      `This cannot be undone.`
+    );
+    if (!ok) return;
+    try {
+      await api.delete(`/operations/${op.id}`);
+      setOperations(prev => prev.filter(o => o.id !== op.id));
+      addToast('Operation deleted', 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to delete operation', 'error');
+    }
   };
 
   const applyStatus = async (id: number, status: string) => {
@@ -505,6 +521,7 @@ export default function OperationsPage() {
                     Dates <SortIcon field="order_date" />
                   </span>
                 </th>
+                <th className="text-right px-2 py-3 font-medium text-gray-600 w-10"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -648,6 +665,15 @@ export default function OperationsPage() {
                         <div className="text-[11px] text-gray-400">WT: {formatDate(op.wire_transfer_date)}</div>
                       )}
                     </div>
+                  </td>
+                  <td className="px-2 py-3 text-right" onClick={e => e.stopPropagation()}>
+                    <button
+                      onClick={() => handleDelete(op)}
+                      className="text-gray-300 hover:text-red-600 p-1 rounded hover:bg-red-50"
+                      title="Delete operation and all linked records"
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </td>
                 </tr>
               ))}

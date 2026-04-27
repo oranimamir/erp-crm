@@ -1057,6 +1057,8 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN fx_rate REAL`); } catch (_) {}
   try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN eur_amount REAL`); } catch (_) {}
   try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN vat_eur_amount REAL`); } catch (_) {}
+  try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN file_hash TEXT`); } catch (_) {}
+  try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_demo_invoices_file_hash ON demo_invoices(file_hash) WHERE file_hash IS NOT NULL`); } catch (_) {}
 
   // VAT audit log table
   db.exec(`

@@ -472,6 +472,25 @@ export default function OperationDetailPage() {
     }
   }
 
+  // ── Delete operation ─────────────────────────────────────────────────────────
+
+  async function handleDeleteOperation() {
+    if (!operation) return;
+    const ok = confirm(
+      `Delete Operation ${operation.operation_number}?\n\n` +
+      `This will also remove the linked order, all invoices, wire transfers, and uploaded documents. ` +
+      `This cannot be undone.`
+    );
+    if (!ok) return;
+    try {
+      await api.delete(`/operations/${operation.id}`);
+      addToast('Operation deleted', 'success');
+      navigate('/operations');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to delete operation', 'error');
+    }
+  }
+
   // ── Link Order modal ─────────────────────────────────────────────────────────
 
   async function openLinkOrder() {
@@ -552,6 +571,13 @@ export default function OperationDetailPage() {
               <Briefcase size={20} className="text-primary-600 shrink-0" />
               {operation.operation_number}
             </h1>
+            <button
+              onClick={handleDeleteOperation}
+              className="flex items-center gap-1 text-xs sm:text-sm text-red-600 hover:text-red-800 border border-red-200 bg-red-50 hover:bg-red-100 rounded-lg px-2 py-1"
+              title="Delete operation and all linked records"
+            >
+              <Trash2 size={13} /> Delete operation
+            </button>
             <select
               value={STATUS_OPTIONS.includes(operation.status) ? operation.status : ''}
               onChange={e => handleStatusChange(e.target.value)}

@@ -414,19 +414,46 @@ router.put('/:id', (req: Request, res: Response) => {
 // ── Delete operation ──────────────────────────────────────────────────────────
 
 router.delete('/:id', (req: Request, res: Response) => {
-  const existing = db.prepare('SELECT id FROM operations WHERE id = ?').get(req.params.id);
-  if (!existing) { res.status(404).json({ error: 'Operation not found' }); return; }
+  const op = db.prepare('SELECT id, operation_number, order_id FROM operations WHERE id = ?').get(req.params.id) as any;
+  if (!op) { res.status(404).json({ error: 'Operation not found' }); return; }
 
-  // Delete all associated document files
-  const docs = db.prepare('SELECT file_path FROM operation_documents WHERE operation_id = ?').all(req.params.id) as any[];
-  for (const doc of docs) {
-    const fp = path.join(uploadsBase, 'operation-docs', doc.file_path);
-    if (fs.existsSync(fp)) fs.unlinkSync(fp);
+  const unlinkSafe = (folder: string, filePath: string | null | undefined) => {
+    if (!filePath) return;
+    const fp = path.join(uploadsBase, folder, filePath);
+    if (fs.existsSync(fp)) {
+      try { fs.unlinkSync(fp); } catch (_) { /* ignore */ }
+    }
+  };
+
+  // 1. Linked invoices → wire transfers + invoice files + rows
+  const invoices = db.prepare('SELECT id, file_path FROM invoices WHERE operation_id = ?').all(op.id) as any[];
+  for (const inv of invoices) {
+    const transfers = db.prepare('SELECT id, file_path FROM wire_transfers WHERE invoice_id = ?').all(inv.id) as any[];
+    for (const t of transfers) unlinkSafe('wire-transfers', t.file_path);
+    db.prepare('DELETE FROM wire_transfers WHERE invoice_id = ?').run(inv.id);
+    unlinkSafe('invoices', inv.file_path);
+    db.prepare('DELETE FROM invoices WHERE id = ?').run(inv.id);
   }
 
-  db.prepare('DELETE FROM operations WHERE id = ?').run(req.params.id);
-  notifyAdmin({ action: 'deleted', entity: 'Operation', label: `Operation #${req.params.id}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
-  res.json({ message: 'Operation deleted' });
+  // 2. Linked order → file + row
+  if (op.order_id) {
+    const order = db.prepare('SELECT file_path FROM orders WHERE id = ?').get(op.order_id) as any;
+    if (order) {
+      unlinkSafe('orders', order.file_path);
+      db.prepare('DELETE FROM orders WHERE id = ?').run(op.order_id);
+    }
+  }
+
+  // 3. Operation documents (rows cascade via FK; remove files manually)
+  const docs = db.prepare('SELECT file_path FROM operation_documents WHERE operation_id = ?').all(op.id) as any[];
+  for (const doc of docs) unlinkSafe('operation-docs', doc.file_path);
+
+  // 4. Operation row
+  db.prepare('DELETE FROM operations WHERE id = ?').run(op.id);
+  db.saveToDisk();
+
+  notifyAdmin({ action: 'deleted', entity: 'Operation', label: `Operation ${op.operation_number}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
+  res.json({ message: 'Operation and all linked records deleted' });
 });
 
 // ── Upload document ───────────────────────────────────────────────────────────

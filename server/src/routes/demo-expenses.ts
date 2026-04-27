@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import crypto from 'crypto';
 import db from '../database.js';
 import JSZip from 'jszip';
 import { XMLParser } from 'fast-xml-parser';
@@ -10,6 +11,34 @@ import { getEurRate } from '../lib/fx.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
+
+const sha256 = (buf: Buffer | Uint8Array | string) =>
+  crypto.createHash('sha256').update(buf).digest('hex');
+
+// One-time backfill: compute file_hash for legacy demo_invoices rows that have an embedded PDF.
+try {
+  const rows = db.prepare(
+    `SELECT id, embedded_pdf FROM demo_invoices WHERE file_hash IS NULL AND embedded_pdf IS NOT NULL AND embedded_pdf != ''`
+  ).all() as any[];
+  let updated = 0;
+  for (const r of rows) {
+    try {
+      const buf = Buffer.from(r.embedded_pdf as string, 'base64');
+      if (buf.length === 0) continue;
+      const hash = sha256(buf);
+      try {
+        db.prepare(`UPDATE demo_invoices SET file_hash = ? WHERE id = ?`).run(hash, r.id);
+        updated++;
+      } catch { /* duplicate hash on legacy row — leave null */ }
+    } catch { /* malformed base64 — skip */ }
+  }
+  if (updated > 0) {
+    db.saveToDisk();
+    console.log(`[demo-expenses] Backfilled file_hash for ${updated} rows`);
+  }
+} catch (err) {
+  console.warn('[demo-expenses] hash backfill failed:', err);
+}
 
 export async function backfillDemoInvoicesFx(): Promise<{ scanned: number; updated: number; failed: number }> {
   const rows = db.prepare(`
@@ -990,8 +1019,9 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
 
     const filename = req.file.originalname || 'upload.zip';
     const zip = await JSZip.loadAsync(req.file.buffer);
-    const xmlFiles: { name: string; content: string }[] = [];
+    const xmlFiles: { name: string; content: string; hash: string }[] = [];
     const pdfFiles: Map<string, Buffer> = new Map();
+    const pdfHashes: Map<string, string> = new Map(); // pdfKey → sha256 of the PDF bytes
     const allFileNames: string[] = [];
 
     for (const [name, entry] of Object.entries(zip.files)) {
@@ -999,12 +1029,14 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       allFileNames.push(name);
       const lower = name.toLowerCase();
       if (lower.endsWith('.xml')) {
-        const content = await entry.async('string');
-        xmlFiles.push({ name, content });
+        const buf = await entry.async('nodebuffer');
+        xmlFiles.push({ name, content: buf.toString('utf-8'), hash: sha256(buf) });
       } else if (lower.endsWith('.pdf')) {
+        const buf = await entry.async('nodebuffer');
         const pdfKey = (name.replace(/\.pdf$/i, '').split('/').pop() || '').trim().toLowerCase();
-        if (pdfKey) pdfFiles.set(pdfKey, await entry.async('nodebuffer'));
-        else pdfFiles.set(`__blank_pdf_${pdfFiles.size}`, await entry.async('nodebuffer'));
+        const key = pdfKey || `__blank_pdf_${pdfFiles.size}`;
+        pdfFiles.set(key, buf);
+        pdfHashes.set(key, sha256(buf));
       }
     }
 
@@ -1019,9 +1051,10 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
         if (lower.endsWith('.xml')) continue; // already processed
         if (lower.endsWith('.pdf') || lower.endsWith('.jpg') || lower.endsWith('.png')) continue;
         try {
-          const content = await entry.async('string');
+          const buf = await entry.async('nodebuffer');
+          const content = buf.toString('utf-8');
           if (content.trim().startsWith('<?xml') || content.includes('<Invoice') || content.includes('<CreditNote')) {
-            xmlFiles.push({ name, content });
+            xmlFiles.push({ name, content, hash: sha256(buf) });
           }
         } catch { /* binary file, skip */ }
       }
@@ -1041,11 +1074,14 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       }
       const xmlBaseName = (xml.name.replace(/\.xml$/i, '').split('/').pop() || '').trim();
       const pairedPdf = pdfFiles.get(xmlBaseName.toLowerCase());
+      const pairedPdfHash = pdfHashes.get(xmlBaseName.toLowerCase());
       parsed.push({
         ...inv,
         xmlFilename: xml.name,
         embeddedPdf: inv.embeddedPdf || (pairedPdf ? pairedPdf.toString('base64') : null),
         pdfFilename: inv.pdfFilename || (pairedPdf ? xmlBaseName + '.pdf' : null),
+        // Hash the artifact users actually re-upload — prefer the PDF, fall back to the XML.
+        fileHash: pairedPdfHash || xml.hash,
       });
     }
 
@@ -1074,6 +1110,7 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
           xmlFilename: null,
           embeddedPdf: pdfBuffer.toString('base64'),
           pdfFilename: name,
+          fileHash: sha256(pdfBuffer),
         });
       } catch (err: any) {
         failedFiles.push({ name, type: 'pdf', reason: err?.message || 'Exception during PDF parsing' });
@@ -1174,6 +1211,20 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     // Show ALL unknown invoices (not just unique-per-supplier) so user reviews each one
     const uniqueUnknowns = [...new Map(unknownSuppliers.map(u => [u.invoiceId, u])).values()];
 
+    // --- File-hash dedup against existing DB invoices ---
+    // Catches the case where the same PDF is uploaded under a different filename and the
+    // metadata-based heuristics below would miss it.
+    const incomingHashes = classified.map((i: any) => i.fileHash).filter(Boolean) as string[];
+    const existingHashRows = incomingHashes.length
+      ? (db.prepare(
+          `SELECT file_hash, invoice_id, supplier, issue_date, pdf_filename, xml_filename
+           FROM demo_invoices WHERE file_hash IN (${incomingHashes.map(() => '?').join(',')})`
+        ).all(...incomingHashes) as any[])
+      : [];
+    const existingByHash = new Map(existingHashRows.map(r => [r.file_hash, r]));
+    const fileHashDuplicates: { newFilename: string; invoiceId: string; existing: any }[] = [];
+    const dropByHash = new Set<string>(); // invoiceIds to drop because identical bytes already exist
+
     // --- Duplicate detection against existing DB invoices ---
     // An invoice is a duplicate if: same invoice_id, OR same supplier+amount+date
     // Supplier matching must account for renamed suppliers (display_name ↔ original pattern)
@@ -1209,6 +1260,22 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     const duplicates: any[] = [];
     const duplicateInvoiceIds = new Set<string>();
     for (const inv of classified) {
+      // File-hash match — exact bytes already in the system, regardless of filename or parsed metadata
+      const hashHit = inv.fileHash ? existingByHash.get(inv.fileHash) : null;
+      if (hashHit) {
+        fileHashDuplicates.push({
+          newFilename: inv.pdfFilename || inv.xmlFilename || '(unknown)',
+          invoiceId: inv.invoiceId,
+          existing: {
+            invoiceId: hashHit.invoice_id,
+            supplier: hashHit.supplier,
+            date: hashHit.issue_date,
+            filename: hashHit.pdf_filename || hashHit.xml_filename,
+          },
+        });
+        if (inv.invoiceId) dropByHash.add(inv.invoiceId);
+        continue;
+      }
       const idMatch = inv.invoiceId && existingIdSet.has(inv.invoiceId);
       // Skip combo match for zero-amount invoices to avoid false positives
       const comboMatch = inv.amount > 0 && existingComboSet.has(`${inv.supplierName.toLowerCase()}|${inv.amount}|${inv.issueDate}`);
@@ -1261,7 +1328,11 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     const ownCompanyInvoices = classified.filter(inv => isOwnCompany(inv.supplierName));
 
     // Exclude duplicates — silently skip them (user doesn't want to review duplicates)
-    const newInvoices = classified.filter(inv => !duplicateInvoiceIds.has(inv.invoiceId));
+    const newInvoices = classified.filter((inv: any) => {
+      if (duplicateInvoiceIds.has(inv.invoiceId)) return false;
+      if (inv.fileHash && existingByHash.has(inv.fileHash)) return false;
+      return true;
+    });
 
     // Flag invoices that need user attention (amount=0, fallback date, unknown supplier, own-company, bad dates)
     const today = new Date().toISOString().substring(0, 10);
@@ -1315,6 +1386,8 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       unknownSuppliers: uniqueUnknowns,
       duplicates,
       duplicatesSkipped: duplicates.length,
+      fileHashDuplicates,
+      fileHashDuplicatesSkipped: fileHashDuplicates.length,
       inZipDuplicatesRemoved: inZipDuplicateCount,
       totalParsed: parsed.length,
       existingDemoBatch: existingDemoBatch ? { id: existingDemoBatch.id, filename: existingDemoBatch.filename } : null,
@@ -1360,6 +1433,7 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
         pdfFilename: inv.pdfFilename,
         xmlFilename: inv.xmlFilename,
         isAcerta: inv.isAcerta,
+        fileHash: inv.fileHash || null,
       })),
     });
   } catch (err: any) {
@@ -1448,6 +1522,9 @@ router.post('/confirm-import', async (req: Request, res: Response) => {
       const existingIds = new Set(
         (db.prepare('SELECT invoice_id FROM demo_invoices').all() as any[]).map((r: any) => r.invoice_id)
       );
+      const existingHashes = new Set(
+        (db.prepare(`SELECT file_hash FROM demo_invoices WHERE file_hash IS NOT NULL`).all() as any[]).map((r: any) => r.file_hash)
+      );
       const existingDbInvoices = db.prepare('SELECT supplier, amount, issue_date FROM demo_invoices').all() as any[];
       const existingCombos = new Set<string>();
       // Build alias map from supplier mappings for cross-name matching
@@ -1473,6 +1550,10 @@ router.post('/confirm-import', async (req: Request, res: Response) => {
       const nonDuplicate: any[] = [];
       const skippedDetails: { invoiceId: string; supplier: string; reason: string }[] = [];
       for (const inv of filtered) {
+        if (inv.fileHash && existingHashes.has(inv.fileHash)) {
+          skippedDetails.push({ invoiceId: inv.invoiceId, supplier: inv.supplier, reason: 'duplicate_file_hash' });
+          continue;
+        }
         if (inv.invoiceId && existingIds.has(inv.invoiceId)) {
           skippedDetails.push({ invoiceId: inv.invoiceId, supplier: inv.supplier, reason: 'duplicate_id' });
           continue;
@@ -1529,8 +1610,8 @@ router.post('/confirm-import', async (req: Request, res: Response) => {
 
       const results: any[] = [];
       const insertInv = db.prepare(`
-        INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, line_items, embedded_pdf, pdf_filename, xml_filename, duplicate_warning, flagged, fx_rate, eur_amount, vat_eur_amount)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, line_items, embedded_pdf, pdf_filename, xml_filename, duplicate_warning, flagged, fx_rate, eur_amount, vat_eur_amount, file_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       for (const [domain, domainInvoices] of Object.entries(byDomain)) {
@@ -1554,6 +1635,7 @@ router.post('/confirm-import', async (req: Request, res: Response) => {
             inv.lineItems || '[]', inv.embeddedPdf || null, inv.pdfFilename || null,
             inv.xmlFilename || null, isDuplicateIncluded ? 1 : 0, inv.flagged ? 1 : 0,
             fx.fx_rate, fx.eur_amount, fx.vat_eur_amount,
+            inv.fileHash || null,
           );
         }
 
@@ -2058,6 +2140,21 @@ router.post('/upload-single', upload.single('file'), async (req: Request, res: R
     const file = req.file;
     if (!file) { res.status(400).json({ error: 'No file uploaded' }); return; }
 
+    // Reject identical bytes already in the system, regardless of filename.
+    const fileHash = sha256(file.buffer);
+    const existing = db.prepare(
+      `SELECT id, invoice_id, supplier, issue_date, pdf_filename, xml_filename
+       FROM demo_invoices WHERE file_hash = ?`
+    ).get(fileHash) as any;
+    if (existing) {
+      const label = existing.pdf_filename || existing.xml_filename || `invoice ${existing.invoice_id}`;
+      res.status(409).json({
+        error: `Duplicate file — already uploaded as "${label}" (${existing.supplier}, invoice ${existing.invoice_id}, ${existing.issue_date})`,
+        duplicate: existing,
+      });
+      return;
+    }
+
     const filename = file.originalname.toLowerCase();
     let parsed: any = null;
 
@@ -2127,6 +2224,7 @@ router.post('/upload-single', upload.single('file'), async (req: Request, res: R
         pdfFilename: parsed.pdfFilename || null,
         xmlFilename: parsed.xmlFilename || null,
         embeddedPdf: parsed.embeddedPdf || null,
+        fileHash,
       },
     });
   } catch (err: any) {
@@ -2144,7 +2242,14 @@ router.post('/confirm-single', async (req: Request, res: Response) => {
     const userRow = userId ? db.prepare('SELECT display_name FROM users WHERE id = ?').get(userId) as any : null;
     const uploadedByName = userRow?.display_name || 'Unknown';
 
-    // Check for duplicate
+    // Check for duplicate (race-condition guard — same hash may have been imported between upload + confirm)
+    if (invoice.fileHash) {
+      const dup = db.prepare('SELECT id, invoice_id, supplier FROM demo_invoices WHERE file_hash = ?').get(invoice.fileHash) as any;
+      if (dup) {
+        res.status(409).json({ error: `Duplicate file — already imported as invoice ${dup.invoice_id} (${dup.supplier})` });
+        return;
+      }
+    }
     if (invoice.invoiceId) {
       const existing = db.prepare('SELECT id FROM demo_invoices WHERE invoice_id = ?').get(invoice.invoiceId) as any;
       if (existing) {
@@ -2167,8 +2272,8 @@ router.post('/confirm-single', async (req: Request, res: Response) => {
     const batchId = batchResult.lastInsertRowid;
 
     db.prepare(
-      `INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, line_items, embedded_pdf, pdf_filename, xml_filename, duplicate_warning, fx_rate, eur_amount, vat_eur_amount)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`
+      `INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, line_items, embedded_pdf, pdf_filename, xml_filename, duplicate_warning, fx_rate, eur_amount, vat_eur_amount, file_hash)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`
     ).run(
       batchId,
       invoice.invoiceId || '',
@@ -2187,6 +2292,7 @@ router.post('/confirm-single', async (req: Request, res: Response) => {
       fx.fx_rate,
       fx.eur_amount,
       fx.vat_eur_amount,
+      invoice.fileHash || null,
     );
 
     db.saveToDisk();

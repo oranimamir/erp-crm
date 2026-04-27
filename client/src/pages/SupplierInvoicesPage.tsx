@@ -805,6 +805,16 @@ export default function SupplierInvoicesPage() {
       if (res.data.duplicatesSkipped > 0) {
         addToast(`${res.data.duplicatesSkipped} duplicate(s) already in system — skipped`, 'info');
       }
+      if (res.data.fileHashDuplicatesSkipped > 0) {
+        const sample = (res.data.fileHashDuplicates || [])
+          .slice(0, 3)
+          .map((d: any) => `"${d.newFilename}" matches "${d.existing.filename}" (${d.existing.supplier})`)
+          .join('; ');
+        addToast(
+          `${res.data.fileHashDuplicatesSkipped} exact-byte duplicate file(s) already in system — skipped${sample ? `: ${sample}` : ''}`,
+          'info',
+        );
+      }
       if (res.data.inZipDuplicatesRemoved > 0) {
         addToast(`${res.data.inZipDuplicatesRemoved} duplicate(s) within the ZIP removed`, 'info');
       }
