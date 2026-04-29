@@ -261,7 +261,19 @@ router.patch('/:id/status', (req: Request, res: Response) => {
     return;
   }
 
-  db.prepare(`UPDATE invoices SET status=?, updated_at=datetime('now') WHERE id=?`).run(status, req.params.id);
+  // Auto-fill payment_date when transitioning to 'paid' so the invoice lands in the
+  // dashboard's Paid YTD bucket (which requires payment_date IS NOT NULL). Without
+  // this, the invoice silently leaves Pending without entering Paid YTD and the
+  // total revenues figure drops.
+  if (status === 'paid' && !existing.payment_date) {
+    const today = new Date().toISOString().split('T')[0];
+    db.prepare(`UPDATE invoices SET status=?, payment_date=?, updated_at=datetime('now') WHERE id=?`).run(status, today, req.params.id);
+  } else if (status !== 'paid' && existing.status === 'paid') {
+    // Reverting away from paid: clear payment_date so it doesn't pollute YTD if re-paid later
+    db.prepare(`UPDATE invoices SET status=?, payment_date=NULL, updated_at=datetime('now') WHERE id=?`).run(status, req.params.id);
+  } else {
+    db.prepare(`UPDATE invoices SET status=?, updated_at=datetime('now') WHERE id=?`).run(status, req.params.id);
+  }
   db.prepare(`INSERT INTO status_history (entity_type, entity_id, old_status, new_status, changed_by, notes) VALUES ('invoice', ?, ?, ?, ?, ?)`)
     .run(req.params.id, existing.status, status, req.user!.userId, notes || null);
 
@@ -316,11 +328,22 @@ router.post('/:id/wire-transfers', uploadWireTransfer.single('file'), async (req
   try {
     let fx_rate = 1;
     let eur_amount = amount;
-    try {
-      fx_rate = await getEurRate(invoice.currency || 'USD', payment_date);
+    // Reuse the invoice's stored fx_rate when present so the wire's EUR value lines up
+    // with the invoice's book value. Otherwise the dashboard's Paid YTD shifts whenever
+    // FX moves between invoice_date and payment_date.
+    if (invoice.fx_rate != null) {
+      fx_rate = invoice.fx_rate;
       eur_amount = amount * fx_rate;
-    } catch (fxErr) {
-      console.warn(`[wire-transfer] FX lookup failed for ${invoice.currency}/${payment_date}, proceeding without conversion:`, fxErr);
+    } else if ((invoice.currency || 'USD').toUpperCase() === 'EUR') {
+      fx_rate = 1;
+      eur_amount = amount;
+    } else {
+      try {
+        fx_rate = await getEurRate(invoice.currency || 'USD', payment_date);
+        eur_amount = amount * fx_rate;
+      } catch (fxErr) {
+        console.warn(`[wire-transfer] FX lookup failed for ${invoice.currency}/${payment_date}, proceeding without conversion:`, fxErr);
+      }
     }
 
     const result = db.prepare(`
@@ -331,14 +354,15 @@ router.post('/:id/wire-transfers', uploadWireTransfer.single('file'), async (req
     // Force immediate disk save — do NOT rely on the 100ms debounce for critical financial data
     db.saveToDisk();
 
-    // Immediately mark invoice as paid, and set payment_date from wire transfer date
-    const prevStatus = invoice.status;
-    db.prepare(`UPDATE invoices SET status='paid', payment_date=?, updated_at=datetime('now') WHERE id=?`).run(payment_date, req.params.id);
-    db.prepare(`INSERT INTO status_history (entity_type, entity_id, old_status, new_status, changed_by, notes) VALUES ('invoice', ?, ?, 'paid', ?, 'Auto-paid via wire transfer upload')`)
-      .run(req.params.id, prevStatus, req.user!.userId);
-
-    // Force save again after status update
-    db.saveToDisk();
+    // For already-paid invoices, the wire is just additional documentation: don't touch
+    // status, payment_date, or status history — that would shift the existing YTD bucket.
+    if (invoice.status !== 'paid') {
+      const prevStatus = invoice.status;
+      db.prepare(`UPDATE invoices SET status='paid', payment_date=?, updated_at=datetime('now') WHERE id=?`).run(payment_date, req.params.id);
+      db.prepare(`INSERT INTO status_history (entity_type, entity_id, old_status, new_status, changed_by, notes) VALUES ('invoice', ?, ?, 'paid', ?, 'Auto-paid via wire transfer upload')`)
+        .run(req.params.id, prevStatus, req.user!.userId);
+      db.saveToDisk();
+    }
 
     // Auto-complete linked operation: delivered + at least one wire transfer uploaded = completed
     if (invoice.operation_id) {

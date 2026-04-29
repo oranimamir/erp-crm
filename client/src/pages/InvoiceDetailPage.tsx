@@ -136,10 +136,11 @@ export default function InvoiceDetailPage() {
       formData.append('file', file);
       formData.append('payment_date', paymentDate);
       if (wireBankRef) formData.append('bank_reference', wireBankRef);
+      const wasPaid = invoice.status === 'paid';
       await api.post(`/invoices/${id}/wire-transfers`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      addToast('Wire transfer uploaded — invoice marked as Paid', 'success');
+      addToast(wasPaid ? 'Wire transfer attached' : 'Wire transfer uploaded — invoice marked as Paid', 'success');
       setWireBankRef('');
       setWireDateManuallySet(false);
       fetchInvoice();
@@ -427,8 +428,8 @@ export default function InvoiceDetailPage() {
             <h2 className="font-semibold text-gray-900">Wire Transfers ({wireTransfers.length})</h2>
           </div>
 
-          {/* Drag-drop upload zone — visible when invoice is 'sent' */}
-          {invoice.status === 'sent' && (
+          {/* Drag-drop upload zone — visible when invoice is 'sent', 'overdue', or already 'paid' (so users can attach the wire proof retroactively) */}
+          {(invoice.status === 'sent' || invoice.status === 'overdue' || invoice.status === 'paid') && (
             <div className="px-5 pt-4 pb-2 space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -477,7 +478,9 @@ export default function InvoiceDetailPage() {
                     <p className="text-sm font-medium text-gray-600">
                       {isDragging ? 'Drop file to upload' : 'Drag & drop wire transfer proof, or click to browse'}
                     </p>
-                    <p className="text-xs text-gray-400">PDF, JPEG, PNG, WebP · Immediately marks invoice as Paid</p>
+                    <p className="text-xs text-gray-400">
+                      PDF, JPEG, PNG, WebP · {invoice.status === 'paid' ? 'Attaches to existing paid invoice' : 'Immediately marks invoice as Paid'}
+                    </p>
                   </>
                 )}
                 <input
