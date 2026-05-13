@@ -33,6 +33,7 @@ import warehouseStockRoutes from './routes/warehouse-stock.js';
 import notificationRoutes from './routes/notifications.js';
 import demoExpenseRoutes, { backfillDemoInvoicesFx } from './routes/demo-expenses.js';
 import employeeExpenseRoutes from './routes/employee-expenses.js';
+import workingCapitalRoutes from './routes/working-capital.js';
 import cron from 'node-cron';
 import { checkEmailForStockUpdates } from './lib/email-stock.js';
 import { startBackupScheduler, buildCronExpr } from './lib/backup-scheduler.js';
@@ -167,6 +168,7 @@ app.use('/api/warehouse-stock', authenticateToken, warehouseStockRoutes);
 app.use('/api/notifications', authenticateToken, notificationRoutes);
 app.use('/api/demo-expenses', authenticateToken, demoExpenseRoutes);
 app.use('/api/employee-expenses', authenticateToken, employeeExpenseRoutes);
+app.use('/api/working-capital', authenticateToken, workingCapitalRoutes);
 
 // ── Serve built client in production ─────────────────────────────────────────
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');

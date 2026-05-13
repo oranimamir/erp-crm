@@ -311,6 +311,54 @@ router.get('/forecast', async (_req: Request, res: Response) => {
   res.json({ months: data, expected });
 });
 
+// Monthly EUR outflow from working_capital_forecasts (current calendar year),
+// split by status. Cancelled entries are excluded.
+router.get('/working-capital-forecast', async (_req: Request, res: Response) => {
+  const year = new Date().getFullYear();
+  const yearStr = String(year);
+
+  // Pull all non-cancelled rows for the year. Use stored eur_amount when available;
+  // for EUR entries (where eur_amount is null), the original amount IS the EUR value.
+  // For non-EUR entries that somehow lack a stored eur_amount, fall back to live FX.
+  const rows = db.prepare(`
+    SELECT id, amount, UPPER(COALESCE(currency, 'EUR')) as currency,
+      eur_amount, expected_date, status,
+      strftime('%Y-%m', expected_date) as month
+    FROM working_capital_forecasts
+    WHERE status != 'cancelled'
+      AND strftime('%Y', expected_date) = ?
+  `).all(yearStr) as any[];
+
+  // Resolve any missing eur_amount via live FX (rare — only if non-EUR row was saved
+  // when the FX API was unreachable). Keeps the panel aligned with stored values.
+  const missing = rows.filter(r => r.eur_amount == null && r.currency !== 'EUR');
+  if (missing.length > 0) {
+    const currencies = [...new Set(missing.map(r => r.currency))];
+    const rates: Record<string, number> = {};
+    await Promise.all(currencies.map(async c => { rates[c] = await getEurRate(c, 'latest'); }));
+    for (const r of missing) {
+      r.eur_amount = r.amount * (rates[r.currency] ?? 1);
+    }
+  }
+
+  const months: { month: string; planned: number; actualized: number }[] = [];
+  for (let m = 1; m <= 12; m++) {
+    const monthStr = `${year}-${String(m).padStart(2, '0')}`;
+    let planned = 0, actualized = 0;
+    for (const r of rows) {
+      if (r.month !== monthStr) continue;
+      const eur = r.eur_amount != null ? r.eur_amount : r.amount;
+      if (r.status === 'planned') planned += eur;
+      else if (r.status === 'actualized') actualized += eur;
+    }
+    months.push({ month: monthStr, planned, actualized });
+  }
+
+  const total_planned = months.reduce((s, m) => s + m.planned, 0);
+  const total_actualized = months.reduce((s, m) => s + m.actualized, 0);
+  res.json({ months, total_planned, total_actualized });
+});
+
 router.get('/paid-invoices', (_req: Request, res: Response) => {
   const invoices = db.prepare(`
     SELECT

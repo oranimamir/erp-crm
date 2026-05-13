@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import api from '../lib/api';
 import Card from '../components/ui/Card';
 import StatusBadge from '../components/ui/StatusBadge';
-import { TrendingUp, BarChart3, Scale, AlertTriangle, Users, Receipt, Info, X } from 'lucide-react';
+import { TrendingUp, TrendingDown, BarChart3, Scale, AlertTriangle, Users, Receipt, Info, X } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 
 interface Stats {
@@ -36,6 +36,9 @@ export default function DashboardPage() {
   const [customerForecast, setCustomerForecast] = useState<{ received: any[]; pending: any[]; expected: any[] }>({ received: [], pending: [], expected: [] });
   const [forecast, setForecast] = useState<any[]>([]);
   const [forecastExpected, setForecastExpected] = useState(0);
+  const [wcForecast, setWcForecast] = useState<any[]>([]);
+  const [wcTotalPlanned, setWcTotalPlanned] = useState(0);
+  const [wcTotalActualized, setWcTotalActualized] = useState(0);
   const [tonsYTD, setTonsYTD] = useState(0);
   const [priorYearOverdue, setPriorYearOverdue] = useState<{ invoices: any[]; total: number }>({ invoices: [], total: 0 });
   const [demoExpensesMonthly, setDemoExpensesMonthly] = useState<any[]>([]);
@@ -53,7 +56,8 @@ export default function DashboardPage() {
       api.get('/dashboard/prior-year-overdue'),
       api.get('/dashboard/customer-forecast'),
       api.get('/dashboard/demo-expenses-monthly'),
-    ]).then(([s, o, i, mp, fc, ty, pyo, cf, dem]) => {
+      api.get('/dashboard/working-capital-forecast'),
+    ]).then(([s, o, i, mp, fc, ty, pyo, cf, dem, wc]) => {
       setStats(s.data);
       setOpenOperations(o.data);
       setPendingInvoices(i.data);
@@ -66,6 +70,9 @@ export default function DashboardPage() {
       setPriorYearOverdue(pyo.data);
       setCustomerForecast(cf.data);
       setDemoExpensesMonthly(dem.data);
+      setWcForecast(wc.data?.months ?? []);
+      setWcTotalPlanned(wc.data?.total_planned ?? 0);
+      setWcTotalActualized(wc.data?.total_actualized ?? 0);
     }).catch((err) => console.error('[Dashboard] load failed:', err))
       .finally(() => setLoading(false));
   }, []);
@@ -489,6 +496,94 @@ export default function DashboardPage() {
                             title={`Received: €${m.paid.toLocaleString(undefined, { minimumFractionDigits: 2 })}`} />
                         )}
                         {m.paid === 0 && m.pending === 0 && (
+                          <div className="w-4/5 bg-gray-100 rounded-t" style={{ height: '2px' }} />
+                        )}
+                      </div>
+                      <span className={`text-[10px] relative z-10 mt-0.5 ${isCurrent ? 'font-bold text-primary-600' : 'text-gray-400'}`}>
+                        {new Date(m.month + '-02').toLocaleDateString('en-GB', { month: 'short' })}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </Card>
+        );
+      })()}
+
+      {/* Working Capital Outflow Forecast */}
+      {wcForecast.length > 0 && (wcTotalPlanned + wcTotalActualized) > 0 && (() => {
+        const currentMonth = new Date().toISOString().slice(0, 7);
+        const maxBar = Math.max(...wcForecast.map((m: any) => m.planned + m.actualized), 1);
+        const totalAll = wcTotalPlanned + wcTotalActualized;
+        return (
+          <Card>
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <TrendingDown size={16} className="text-gray-400" />
+                <h2 className="font-semibold text-gray-900">Working Capital Outflow Forecast {new Date().getFullYear()}</h2>
+              </div>
+              <div className="flex items-center gap-4 text-xs text-gray-500">
+                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-400 inline-block" /> Planned</span>
+                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-orange-300 inline-block" /> Actualized</span>
+                <Link to="/working-capital" className="text-primary-600 hover:underline ml-2">Manage →</Link>
+              </div>
+            </div>
+            <div className="p-5">
+              <div className="grid grid-cols-3 gap-3 pb-4 border-b border-gray-100 mb-4">
+                <div className="text-center">
+                  <p className="text-xs text-gray-500 mb-0.5">Planned</p>
+                  <p className="text-lg font-bold text-red-500">€{wcTotalPlanned.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                  <div className="flex flex-wrap justify-center gap-1 mt-1.5">
+                    {wcForecast.filter((m: any) => m.planned > 0).map((m: any) => (
+                      <span key={m.month} className="text-[10px] bg-red-50 text-red-700 border border-red-200 rounded px-1.5 py-0.5 font-medium">
+                        {new Date(m.month + '-02').toLocaleDateString('en-GB', { month: 'short' })}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div className="text-center">
+                  <p className="text-xs text-gray-500 mb-0.5">Actualized</p>
+                  <p className="text-lg font-bold text-orange-500">€{wcTotalActualized.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                  <div className="flex flex-wrap justify-center gap-1 mt-1.5">
+                    {wcForecast.filter((m: any) => m.actualized > 0).map((m: any) => (
+                      <span key={m.month} className="text-[10px] bg-orange-50 text-orange-700 border border-orange-200 rounded px-1.5 py-0.5 font-medium">
+                        {new Date(m.month + '-02').toLocaleDateString('en-GB', { month: 'short' })}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div className="text-center">
+                  <p className="text-xs text-gray-500 mb-0.5">Total Forecast Outflow</p>
+                  <p className="text-lg font-bold text-gray-900">€{totalAll.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                </div>
+              </div>
+              <div className="flex items-end gap-1" style={{ height: 180 }}>
+                {wcForecast.map((m: any) => {
+                  const isCurrent = m.month === currentMonth;
+                  const total = m.planned + m.actualized;
+                  const plannedH    = m.planned    > 0 ? Math.max((m.planned    / maxBar) * 140, 3) : 0;
+                  const actualizedH = m.actualized > 0 ? Math.max((m.actualized / maxBar) * 140, 3) : 0;
+                  return (
+                    <div key={m.month} className={`flex-1 flex flex-col items-center gap-0.5 h-full justify-end ${isCurrent ? 'relative' : ''}`}>
+                      {isCurrent && <div className="absolute inset-x-0 inset-y-0 bg-primary-50 rounded pointer-events-none" />}
+                      {total > 0 ? (
+                        <span className={`text-[9px] relative z-10 tabular-nums leading-none mb-0.5 ${isCurrent ? 'font-bold text-primary-600' : 'text-gray-400'}`}>
+                          {fmtAxis(total)}
+                        </span>
+                      ) : (
+                        <span className="text-[9px] leading-none mb-0.5 invisible">0</span>
+                      )}
+                      <div className="w-full flex flex-col items-center relative z-10">
+                        {m.planned > 0 && (
+                          <div className="w-4/5 bg-red-400 rounded-t" style={{ height: `${plannedH}px` }}
+                            title={`Planned: €${m.planned.toLocaleString(undefined, { minimumFractionDigits: 2 })}`} />
+                        )}
+                        {m.actualized > 0 && (
+                          <div className={`w-4/5 bg-orange-300 ${m.planned > 0 ? '' : 'rounded-t'}`} style={{ height: `${actualizedH}px` }}
+                            title={`Actualized: €${m.actualized.toLocaleString(undefined, { minimumFractionDigits: 2 })}`} />
+                        )}
+                        {m.planned === 0 && m.actualized === 0 && (
                           <div className="w-4/5 bg-gray-100 rounded-t" style={{ height: '2px' }} />
                         )}
                       </div>

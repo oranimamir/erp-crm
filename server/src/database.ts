@@ -1107,6 +1107,59 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE employee_expenses ADD COLUMN file_hash TEXT`); } catch (_) {}
   try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_employee_expenses_file_hash ON employee_expenses(file_hash) WHERE file_hash IS NOT NULL`); } catch (_) {}
 
+  // ── Net salary uploads (payroll summaries) ────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS net_salary_uploads (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      original_filename TEXT NOT NULL,
+      stored_filename TEXT NOT NULL,
+      month TEXT NOT NULL,
+      employee_count INTEGER NOT NULL DEFAULT 0,
+      total_amount REAL NOT NULL DEFAULT 0,
+      file_hash TEXT,
+      file_size INTEGER NOT NULL DEFAULT 0,
+      uploaded_by INTEGER,
+      uploaded_by_name TEXT NOT NULL DEFAULT '',
+      uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (uploaded_by) REFERENCES users(id)
+    )
+  `);
+  try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_net_salary_uploads_hash ON net_salary_uploads(file_hash) WHERE file_hash IS NOT NULL`); } catch (_) {}
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS net_salaries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      upload_id INTEGER NOT NULL,
+      employee_name TEXT NOT NULL,
+      net_amount REAL NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'EUR',
+      month TEXT NOT NULL,
+      FOREIGN KEY (upload_id) REFERENCES net_salary_uploads(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS working_capital_forecasts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      description TEXT NOT NULL,
+      supplier_id INTEGER,
+      order_id INTEGER,
+      amount REAL NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'EUR',
+      fx_rate REAL,
+      eur_amount REAL,
+      expected_date TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned','actualized','cancelled')),
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE SET NULL,
+      FOREIGN KEY (order_id)    REFERENCES orders(id)    ON DELETE SET NULL
+    )
+  `);
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_wc_forecasts_date ON working_capital_forecasts(expected_date)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_wc_forecasts_status ON working_capital_forecasts(status)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_net_salaries_month ON net_salaries(month)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_net_salaries_upload ON net_salaries(upload_id)`); } catch (_) {}
+
   // Keep old demo_expenses table for backward compat (won't be used by new code)
 
   // Backfill: derive month from issue_date for invoices that have a date but no month
