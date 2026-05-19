@@ -6,27 +6,44 @@ const router = Router();
 
 const VALID_STATUSES = ['planned', 'actualized', 'cancelled'] as const;
 
+const SELECT_WITH_JOINS = `
+  SELECT w.*,
+    op.operation_number,
+    COALESCE(c.name, s.name) AS operation_party_name
+  FROM working_capital_forecasts w
+  LEFT JOIN operations op ON op.id = w.operation_id
+  LEFT JOIN customers  c  ON c.id  = op.customer_id
+  LEFT JOIN suppliers  s  ON s.id  = op.supplier_id
+`;
+
+router.get('/supplier-names', (_req: Request, res: Response) => {
+  const rows = db.prepare(`
+    SELECT DISTINCT supplier AS name
+    FROM demo_invoices
+    WHERE supplier IS NOT NULL AND TRIM(supplier) != ''
+    ORDER BY supplier COLLATE NOCASE ASC
+  `).all() as any[];
+  res.json(rows.map(r => r.name));
+});
+
 router.get('/', (req: Request, res: Response) => {
   const status = (req.query.status as string) || '';
   const year   = (req.query.year   as string) || '';
   const month  = (req.query.month  as string) || '';
-  const supplier_id = (req.query.supplier_id as string) || '';
-  const order_id    = (req.query.order_id    as string) || '';
+  const supplier_name = (req.query.supplier_name as string) || '';
+  const operation_id  = (req.query.operation_id  as string) || '';
 
   const conditions: string[] = [];
   const params: any[] = [];
   if (status) { conditions.push('w.status = ?'); params.push(status); }
   if (year)   { conditions.push("strftime('%Y', w.expected_date) = ?"); params.push(year); }
   if (month)  { conditions.push("strftime('%m', w.expected_date) = ?"); params.push(month.padStart(2, '0')); }
-  if (supplier_id) { conditions.push('w.supplier_id = ?'); params.push(Number(supplier_id)); }
-  if (order_id)    { conditions.push('w.order_id = ?');    params.push(Number(order_id)); }
+  if (supplier_name) { conditions.push('w.supplier_name = ?'); params.push(supplier_name); }
+  if (operation_id)  { conditions.push('w.operation_id = ?'); params.push(Number(operation_id)); }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const rows = db.prepare(`
-    SELECT w.*, s.name AS supplier_name, o.order_number
-    FROM working_capital_forecasts w
-    LEFT JOIN suppliers s ON s.id = w.supplier_id
-    LEFT JOIN orders    o ON o.id = w.order_id
+    ${SELECT_WITH_JOINS}
     ${where}
     ORDER BY w.expected_date ASC, w.id ASC
   `).all(...params);
@@ -34,20 +51,14 @@ router.get('/', (req: Request, res: Response) => {
 });
 
 router.get('/:id', (req: Request, res: Response) => {
-  const row = db.prepare(`
-    SELECT w.*, s.name AS supplier_name, o.order_number
-    FROM working_capital_forecasts w
-    LEFT JOIN suppliers s ON s.id = w.supplier_id
-    LEFT JOIN orders    o ON o.id = w.order_id
-    WHERE w.id = ?
-  `).get(req.params.id);
+  const row = db.prepare(`${SELECT_WITH_JOINS} WHERE w.id = ?`).get(req.params.id);
   if (!row) { res.status(404).json({ error: 'Forecast entry not found' }); return; }
   res.json(row);
 });
 
 router.post('/', async (req: Request, res: Response) => {
   const {
-    description, supplier_id, order_id, amount, currency,
+    description, supplier_name, operation_id, amount, currency,
     expected_date, status, notes,
   } = req.body;
 
@@ -81,21 +92,15 @@ router.post('/', async (req: Request, res: Response) => {
   try {
     const result = db.prepare(`
       INSERT INTO working_capital_forecasts
-        (description, supplier_id, order_id, amount, currency, fx_rate, eur_amount, expected_date, status, notes)
+        (description, supplier_name, operation_id, amount, currency, fx_rate, eur_amount, expected_date, status, notes)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       description,
-      supplier_id ? Number(supplier_id) : null,
-      order_id    ? Number(order_id)    : null,
+      supplier_name?.trim() || null,
+      operation_id ? Number(operation_id) : null,
       amt, cur, fx_rate, eur_amount, expected_date, st, notes || null,
     );
-    const row = db.prepare(`
-      SELECT w.*, s.name AS supplier_name, o.order_number
-      FROM working_capital_forecasts w
-      LEFT JOIN suppliers s ON s.id = w.supplier_id
-      LEFT JOIN orders    o ON o.id = w.order_id
-      WHERE w.id = ?
-    `).get(result.lastInsertRowid);
+    const row = db.prepare(`${SELECT_WITH_JOINS} WHERE w.id = ?`).get(result.lastInsertRowid);
     res.status(201).json(row);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -107,7 +112,7 @@ router.put('/:id', async (req: Request, res: Response) => {
   if (!existing) { res.status(404).json({ error: 'Forecast entry not found' }); return; }
 
   const {
-    description, supplier_id, order_id, amount, currency,
+    description, supplier_name, operation_id, amount, currency,
     expected_date, status, notes,
   } = req.body;
 
@@ -143,33 +148,27 @@ router.put('/:id', async (req: Request, res: Response) => {
   try {
     db.prepare(`
       UPDATE working_capital_forecasts SET
-        description = ?,
-        supplier_id = ?,
-        order_id    = ?,
-        amount      = ?,
-        currency    = ?,
-        fx_rate     = ?,
-        eur_amount  = ?,
+        description   = ?,
+        supplier_name = ?,
+        operation_id  = ?,
+        amount        = ?,
+        currency      = ?,
+        fx_rate       = ?,
+        eur_amount    = ?,
         expected_date = ?,
-        status      = ?,
-        notes       = ?,
-        updated_at  = datetime('now')
+        status        = ?,
+        notes         = ?,
+        updated_at    = datetime('now')
       WHERE id = ?
     `).run(
       description ?? existing.description,
-      supplier_id !== undefined ? (supplier_id ? Number(supplier_id) : null) : existing.supplier_id,
-      order_id    !== undefined ? (order_id    ? Number(order_id)    : null) : existing.order_id,
+      supplier_name !== undefined ? (supplier_name?.trim() || null) : existing.supplier_name,
+      operation_id  !== undefined ? (operation_id  ? Number(operation_id) : null) : existing.operation_id,
       finalAmount, finalCurrency, fx_rate, eur_amount, finalDate, finalStatus,
       notes !== undefined ? (notes || null) : existing.notes,
       req.params.id,
     );
-    const row = db.prepare(`
-      SELECT w.*, s.name AS supplier_name, o.order_number
-      FROM working_capital_forecasts w
-      LEFT JOIN suppliers s ON s.id = w.supplier_id
-      LEFT JOIN orders    o ON o.id = w.order_id
-      WHERE w.id = ?
-    `).get(req.params.id);
+    const row = db.prepare(`${SELECT_WITH_JOINS} WHERE w.id = ?`).get(req.params.id);
     res.json(row);
   } catch (err: any) {
     res.status(400).json({ error: err.message });

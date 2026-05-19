@@ -1160,6 +1160,25 @@ export async function initializeDatabase() {
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_net_salaries_month ON net_salaries(month)`); } catch (_) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_net_salaries_upload ON net_salaries(upload_id)`); } catch (_) {}
 
+  // Switch working_capital_forecasts: supplier_id -> supplier_name (free text from XML invoices),
+  // order_id -> operation_id (link to operations instead of orders).
+  try { db.exec(`ALTER TABLE working_capital_forecasts ADD COLUMN supplier_name TEXT`); } catch (_) {}
+  try { db.exec(`ALTER TABLE working_capital_forecasts ADD COLUMN operation_id INTEGER REFERENCES operations(id) ON DELETE SET NULL`); } catch (_) {}
+  try {
+    db.prepare(`
+      UPDATE working_capital_forecasts
+      SET supplier_name = (SELECT name FROM suppliers WHERE suppliers.id = working_capital_forecasts.supplier_id)
+      WHERE supplier_name IS NULL AND supplier_id IS NOT NULL
+    `).run();
+  } catch { /* ignore */ }
+  try {
+    db.prepare(`
+      UPDATE working_capital_forecasts
+      SET operation_id = (SELECT op.id FROM operations op WHERE op.order_id = working_capital_forecasts.order_id LIMIT 1)
+      WHERE operation_id IS NULL AND order_id IS NOT NULL
+    `).run();
+  } catch { /* ignore */ }
+
   // Keep old demo_expenses table for backward compat (won't be used by new code)
 
   // Backfill: derive month from issue_date for invoices that have a date but no month

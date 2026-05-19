@@ -10,8 +10,8 @@ type Status = 'planned' | 'actualized' | 'cancelled';
 interface Forecast {
   id: number;
   description: string;
-  supplier_id: number | null;
-  order_id: number | null;
+  supplier_name: string | null;
+  operation_id: number | null;
   amount: number;
   currency: string;
   fx_rate: number | null;
@@ -19,12 +19,16 @@ interface Forecast {
   expected_date: string;
   status: Status;
   notes: string | null;
-  supplier_name?: string | null;
-  order_number?: string | null;
+  operation_number?: string | null;
+  operation_party_name?: string | null;
 }
 
-interface Supplier { id: number; name: string; }
-interface OrderRef { id: number; order_number: string; }
+interface OperationRef {
+  id: number;
+  operation_number: string;
+  customer_name?: string | null;
+  supplier_name?: string | null;
+}
 
 const CURRENCIES = ['EUR', 'USD', 'GBP', 'CHF', 'JPY', 'CNY'];
 const STATUSES: Status[] = ['planned', 'actualized', 'cancelled'];
@@ -54,8 +58,8 @@ function eurValue(f: Forecast): number {
 
 interface FormState {
   description: string;
-  supplier_id: string;
-  order_id: string;
+  supplier_name: string;
+  operation_id: string;
   amount: string;
   currency: string;
   expected_date: string;
@@ -65,8 +69,8 @@ interface FormState {
 
 const EMPTY_FORM: FormState = {
   description: '',
-  supplier_id: '',
-  order_id: '',
+  supplier_name: '',
+  operation_id: '',
   amount: '',
   currency: 'EUR',
   expected_date: new Date().toISOString().slice(0, 10),
@@ -76,15 +80,15 @@ const EMPTY_FORM: FormState = {
 
 export default function WorkingCapitalPage() {
   const [items, setItems] = useState<Forecast[]>([]);
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [orders, setOrders] = useState<OrderRef[]>([]);
+  const [supplierNames, setSupplierNames] = useState<string[]>([]);
+  const [operations, setOperations] = useState<OperationRef[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Filters
   const [filterYear, setFilterYear] = useState<string>(String(new Date().getFullYear()));
   const [filterMonth, setFilterMonth] = useState<string>('');
   const [filterStatus, setFilterStatus] = useState<string>('');
-  const [filterSupplier, setFilterSupplier] = useState<string>('');
+  const [filterSupplierName, setFilterSupplierName] = useState<string>('');
 
   // Modal
   const [modalOpen, setModalOpen] = useState(false);
@@ -96,10 +100,10 @@ export default function WorkingCapitalPage() {
   const load = () => {
     setLoading(true);
     const params: Record<string, string> = {};
-    if (filterYear)     params.year = filterYear;
-    if (filterMonth)    params.month = filterMonth;
-    if (filterStatus)   params.status = filterStatus;
-    if (filterSupplier) params.supplier_id = filterSupplier;
+    if (filterYear)         params.year = filterYear;
+    if (filterMonth)        params.month = filterMonth;
+    if (filterStatus)       params.status = filterStatus;
+    if (filterSupplierName) params.supplier_name = filterSupplierName;
     api.get('/working-capital', { params })
       .then(r => setItems(r.data))
       .catch(err => { console.error('[working-capital] load failed', err); setItems([]); })
@@ -108,15 +112,15 @@ export default function WorkingCapitalPage() {
 
   useEffect(() => {
     Promise.all([
-      api.get('/suppliers'),
-      api.get('/orders', { params: { limit: 200 } }),
-    ]).then(([s, o]) => {
-      setSuppliers(Array.isArray(s.data) ? s.data : s.data.data ?? []);
-      setOrders(Array.isArray(o.data) ? o.data : o.data.data ?? []);
-    }).catch(err => console.warn('[working-capital] suppliers/orders load failed', err));
+      api.get('/working-capital/supplier-names'),
+      api.get('/operations', { params: { limit: 1000, tab: 'active' } }),
+    ]).then(([sn, ops]) => {
+      setSupplierNames(Array.isArray(sn.data) ? sn.data : []);
+      setOperations(Array.isArray(ops.data) ? ops.data : ops.data.data ?? []);
+    }).catch(err => console.warn('[working-capital] supplier-names/operations load failed', err));
   }, []);
 
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [filterYear, filterMonth, filterStatus, filterSupplier]);
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [filterYear, filterMonth, filterStatus, filterSupplierName]);
 
   const totalEur = useMemo(
     () => items.filter(i => i.status !== 'cancelled').reduce((s, i) => s + eurValue(i), 0),
@@ -142,8 +146,8 @@ export default function WorkingCapitalPage() {
     setEditingId(f.id);
     setForm({
       description: f.description,
-      supplier_id: f.supplier_id ? String(f.supplier_id) : '',
-      order_id:    f.order_id    ? String(f.order_id)    : '',
+      supplier_name: f.supplier_name ?? '',
+      operation_id:  f.operation_id ? String(f.operation_id) : '',
       amount: String(f.amount),
       currency: (f.currency || 'EUR').toUpperCase(),
       expected_date: f.expected_date,
@@ -165,8 +169,8 @@ export default function WorkingCapitalPage() {
     setSaving(true);
     const payload = {
       description: form.description.trim(),
-      supplier_id: form.supplier_id ? Number(form.supplier_id) : null,
-      order_id:    form.order_id    ? Number(form.order_id)    : null,
+      supplier_name: form.supplier_name.trim() || null,
+      operation_id:  form.operation_id ? Number(form.operation_id) : null,
       amount: amt,
       currency: form.currency,
       expected_date: form.expected_date,
@@ -260,13 +264,13 @@ export default function WorkingCapitalPage() {
             {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
           <select className="text-sm border border-gray-300 rounded-lg px-2.5 py-1.5"
-            value={filterSupplier} onChange={e => setFilterSupplier(e.target.value)}>
+            value={filterSupplierName} onChange={e => setFilterSupplierName(e.target.value)}>
             <option value="">All suppliers</option>
-            {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            {supplierNames.map(name => <option key={name} value={name}>{name}</option>)}
           </select>
-          {(filterYear || filterMonth || filterStatus || filterSupplier) && (
+          {(filterYear || filterMonth || filterStatus || filterSupplierName) && (
             <button
-              onClick={() => { setFilterYear(''); setFilterMonth(''); setFilterStatus(''); setFilterSupplier(''); }}
+              onClick={() => { setFilterYear(''); setFilterMonth(''); setFilterStatus(''); setFilterSupplierName(''); }}
               className="text-sm text-gray-500 hover:text-gray-700 underline">
               Clear
             </button>
@@ -294,7 +298,7 @@ export default function WorkingCapitalPage() {
                   <th className="text-left px-4 py-2.5 font-medium">Expected date</th>
                   <th className="text-left px-4 py-2.5 font-medium">Description</th>
                   <th className="text-left px-4 py-2.5 font-medium">Supplier</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Order</th>
+                  <th className="text-left px-4 py-2.5 font-medium">Operation</th>
                   <th className="text-right px-4 py-2.5 font-medium">Amount</th>
                   <th className="text-right px-4 py-2.5 font-medium">EUR</th>
                   <th className="text-left px-4 py-2.5 font-medium">Status</th>
@@ -310,7 +314,7 @@ export default function WorkingCapitalPage() {
                       {it.notes && <div className="text-xs text-gray-400 mt-0.5">{it.notes}</div>}
                     </td>
                     <td className="px-4 py-2.5 text-gray-700">{it.supplier_name || <span className="text-gray-300">—</span>}</td>
-                    <td className="px-4 py-2.5 text-gray-700">{it.order_number || <span className="text-gray-300">—</span>}</td>
+                    <td className="px-4 py-2.5 text-gray-700">{it.operation_number || <span className="text-gray-300">—</span>}</td>
                     <td className="px-4 py-2.5 text-right tabular-nums text-gray-700">{fmtAmount(it.amount, it.currency)}</td>
                     <td className="px-4 py-2.5 text-right tabular-nums font-medium text-gray-900">{fmtEur(eurValue(it))}</td>
                     <td className="px-4 py-2.5">
@@ -395,20 +399,29 @@ export default function WorkingCapitalPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-700 mb-1">Supplier (optional)</label>
-                  <select value={form.supplier_id}
-                    onChange={e => setForm({ ...form, supplier_id: e.target.value })}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
-                    <option value="">— None —</option>
-                    {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
+                  <input
+                    list="wc-supplier-names"
+                    type="text"
+                    value={form.supplier_name}
+                    onChange={e => setForm({ ...form, supplier_name: e.target.value })}
+                    placeholder="Type or pick a supplier"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                  <datalist id="wc-supplier-names">
+                    {supplierNames.map(name => <option key={name} value={name} />)}
+                  </datalist>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Linked order (optional)</label>
-                  <select value={form.order_id}
-                    onChange={e => setForm({ ...form, order_id: e.target.value })}
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Linked operation (optional)</label>
+                  <select value={form.operation_id}
+                    onChange={e => setForm({ ...form, operation_id: e.target.value })}
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
                     <option value="">— None —</option>
-                    {orders.map(o => <option key={o.id} value={o.id}>{o.order_number}</option>)}
+                    {operations.map(o => (
+                      <option key={o.id} value={o.id}>
+                        {o.operation_number}{o.customer_name || o.supplier_name ? ` — ${o.customer_name || o.supplier_name}` : ''}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
