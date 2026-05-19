@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import api from '../lib/api';
 import Card from '../components/ui/Card';
 import StatusBadge from '../components/ui/StatusBadge';
-import { TrendingUp, TrendingDown, BarChart3, Scale, AlertTriangle, Users, Receipt, Info, X } from 'lucide-react';
+import { TrendingUp, BarChart3, Scale, AlertTriangle, Users, Receipt, Info, X } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 
 interface Stats {
@@ -37,8 +37,6 @@ export default function DashboardPage() {
   const [forecast, setForecast] = useState<any[]>([]);
   const [forecastExpected, setForecastExpected] = useState(0);
   const [wcForecast, setWcForecast] = useState<any[]>([]);
-  const [wcTotalPlanned, setWcTotalPlanned] = useState(0);
-  const [wcTotalActualized, setWcTotalActualized] = useState(0);
   const [tonsYTD, setTonsYTD] = useState(0);
   const [priorYearOverdue, setPriorYearOverdue] = useState<{ invoices: any[]; total: number }>({ invoices: [], total: 0 });
   const [demoExpensesMonthly, setDemoExpensesMonthly] = useState<any[]>([]);
@@ -71,8 +69,6 @@ export default function DashboardPage() {
       setCustomerForecast(cf.data);
       setDemoExpensesMonthly(dem.data);
       setWcForecast(wc.data?.months ?? []);
-      setWcTotalPlanned(wc.data?.total_planned ?? 0);
-      setWcTotalActualized(wc.data?.total_actualized ?? 0);
     }).catch((err) => console.error('[Dashboard] load failed:', err))
       .finally(() => setLoading(false));
   }, []);
@@ -312,23 +308,67 @@ export default function DashboardPage() {
 
       </div>
 
-      {/* Monthly Cash Flow Chart + Paid-per-Month breakdown */}
+      {/* Monthly Cash Flow Chart — actuals + expected income/expense */}
       <Card>
         <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2">
           <BarChart3 size={16} className="text-gray-400" />
           <h2 className="font-semibold text-gray-900">Monthly Cash Flow — EUR ({new Date().getFullYear()})</h2>
         </div>
         <div className="p-5">
-          {monthlyPayments.length === 0 ? (
-            <p className="text-center text-sm text-gray-500 py-8">No payment data available</p>
-          ) : (() => {
-            const maxVal = Math.max(...monthlyPayments.map((m: any) => Math.max(m.received, m.paid_out)), 1);
-            const latest = monthlyPayments[monthlyPayments.length - 1];
+          {(() => {
+            const year = new Date().getFullYear();
+            const nowMonth = new Date().getMonth() + 1; // 1-12
+            // Build a 12-month grid for the current year. Past+current months get
+            // actuals from monthlyPayments; all months can carry expected_expense
+            // (from working_capital_forecasts.planned). Expected income is the
+            // single forecastExpected value split equally across the 3 months of
+            // the next quarter. If next quarter spills into next year (i.e. now is
+            // Q4), expected income simply doesn't appear in this chart.
+            const currentQ = Math.floor((nowMonth - 1) / 3); // 0..3
+            const nextQ = currentQ + 1;
+            const nextQuarterMonths = nextQ <= 3
+              ? [nextQ * 3 + 1, nextQ * 3 + 2, nextQ * 3 + 3]
+              : []; // Q4 → no current-year months left
+            const expectedIncomePerMonth = nextQuarterMonths.length > 0
+              ? forecastExpected / nextQuarterMonths.length
+              : 0;
+
+            const paymentsByMonth = new Map<string, { received: number; paid_out: number }>();
+            for (const m of monthlyPayments) paymentsByMonth.set(m.month, { received: m.received ?? 0, paid_out: m.paid_out ?? 0 });
+            const wcByMonth = new Map<string, { planned: number; actualized: number }>();
+            for (const m of wcForecast) wcByMonth.set(m.month, { planned: m.planned ?? 0, actualized: m.actualized ?? 0 });
+
+            const rows = Array.from({ length: 12 }, (_, i) => {
+              const monthNum = i + 1;
+              const monthKey = `${year}-${String(monthNum).padStart(2, '0')}`;
+              const pay = paymentsByMonth.get(monthKey) ?? { received: 0, paid_out: 0 };
+              const wc  = wcByMonth.get(monthKey)       ?? { planned: 0, actualized: 0 };
+              const expectedIncome  = nextQuarterMonths.includes(monthNum) ? expectedIncomePerMonth : 0;
+              // Actualized WC outflows are real cash that's already gone — fold into paid_out.
+              const paidOut = pay.paid_out + wc.actualized;
+              return {
+                month: monthKey,
+                monthNum,
+                received: pay.received,
+                paid_out: paidOut,
+                expected_income: expectedIncome,
+                expected_expense: wc.planned,
+              };
+            });
+
+            const maxVal = Math.max(
+              ...rows.map(r => Math.max(r.received + r.expected_income, r.paid_out + r.expected_expense)),
+              1,
+            );
+            const latest = rows[nowMonth - 1];
             const net = (latest?.received ?? 0) - (latest?.paid_out ?? 0);
+            const totalExpectedIncome  = rows.reduce((s, r) => s + r.expected_income,  0);
+            const totalExpectedExpense = rows.reduce((s, r) => s + r.expected_expense, 0);
+
             return (
               <div className="space-y-4">
                 {/* Summary row */}
-                <div className="grid grid-cols-3 gap-4 pb-4 border-b border-gray-100">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-4 pb-4 border-b border-gray-100">
                   <div className="text-center">
                     <p className="text-xs text-gray-500 mb-0.5">Received (this month)</p>
                     <p className="text-lg font-bold text-green-600">€{(latest?.received ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
@@ -343,11 +383,23 @@ export default function DashboardPage() {
                       {net >= 0 ? '+' : ''}€{Math.abs(net).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                     </p>
                   </div>
+                  <div className="text-center">
+                    <p className="text-xs text-gray-500 mb-0.5">
+                      Expected Income (Q{nextQ + 1}{nextQuarterMonths.length === 0 ? ' — next year' : ''})
+                    </p>
+                    <p className="text-lg font-bold text-emerald-400">€{totalExpectedIncome.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-xs text-gray-500 mb-0.5">Expected Expense (planned)</p>
+                    <p className="text-lg font-bold text-rose-300">€{totalExpectedExpense.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                  </div>
                 </div>
                 {/* Legend */}
-                <div className="flex items-center gap-5 text-xs text-gray-500">
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-gray-500">
                   <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-green-500 inline-block" /> Received from clients</span>
-                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-400 inline-block" /> Paid to suppliers</span>
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-emerald-300 inline-block" /> Expected income (next quarter, split equally)</span>
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-400 inline-block" /> Paid out (suppliers + actualized WC)</span>
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-rose-200 inline-block" /> Expected expense (planned WC)</span>
                 </div>
                 {/* Bar chart with Y-axis */}
                 <div className="flex gap-2">
@@ -370,39 +422,77 @@ export default function DashboardPage() {
                           style={{ bottom: `${(pct / 100) * 165}px` }}
                         />
                       ))}
-                      {/* Bars */}
+                      {/* Bars: two stacked columns per month (income | outflow). Each column
+                          stacks actual + expected, with expected drawn ABOVE actual. */}
                       <div className="flex items-end gap-1.5 h-full">
-                        {monthlyPayments.map((m: any) => (
-                          <div key={m.month} className="flex-1 flex items-end justify-center gap-0.5 h-full">
-                            <div className="flex-1 max-w-[14px] flex flex-col items-center">
-                              {m.received > 0 && <span className="text-[10px] text-green-700 font-semibold tabular-nums whitespace-nowrap mb-0.5">{fmtAxis(m.received)}</span>}
-                              <div
-                                className="w-full bg-green-500 rounded-t transition-all"
-                                style={{ height: `${m.received > 0 ? Math.max((m.received / maxVal) * 140, 2) : 0}px` }}
-                                title={`Received: €${m.received.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
-                              />
+                        {rows.map(r => {
+                          const isCurrent = r.monthNum === nowMonth;
+                          const receivedH        = r.received         > 0 ? Math.max((r.received         / maxVal) * 140, 2) : 0;
+                          const expectedIncomeH  = r.expected_income  > 0 ? Math.max((r.expected_income  / maxVal) * 140, 2) : 0;
+                          const paidOutH         = r.paid_out         > 0 ? Math.max((r.paid_out         / maxVal) * 140, 2) : 0;
+                          const expectedExpenseH = r.expected_expense > 0 ? Math.max((r.expected_expense / maxVal) * 140, 2) : 0;
+                          const incomeTotal  = r.received + r.expected_income;
+                          const expenseTotal = r.paid_out + r.expected_expense;
+                          return (
+                            <div key={r.month} className={`flex-1 flex items-end justify-center gap-0.5 h-full ${isCurrent ? 'bg-primary-50/40 rounded' : ''}`}>
+                              {/* Income column: received (solid) at bottom, expected income (pale) on top */}
+                              <div className="flex-1 max-w-[14px] flex flex-col items-center">
+                                {incomeTotal > 0 && (
+                                  <span className="text-[10px] text-green-700 font-semibold tabular-nums whitespace-nowrap mb-0.5">
+                                    {fmtAxis(incomeTotal)}
+                                  </span>
+                                )}
+                                {r.expected_income > 0 && (
+                                  <div
+                                    className={`w-full bg-emerald-300 ${r.received > 0 ? '' : 'rounded-t'}`}
+                                    style={{ height: `${expectedIncomeH}px` }}
+                                    title={`Expected income: €${r.expected_income.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                                  />
+                                )}
+                                {r.received > 0 && (
+                                  <div
+                                    className={`w-full bg-green-500 ${r.expected_income > 0 ? '' : 'rounded-t'}`}
+                                    style={{ height: `${receivedH}px` }}
+                                    title={`Received: €${r.received.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                                  />
+                                )}
+                              </div>
+                              {/* Outflow column: paid out (solid) at bottom, expected expense (pale) on top */}
+                              <div className="flex-1 max-w-[14px] flex flex-col items-center">
+                                {expenseTotal > 0 && (
+                                  <span className="text-[10px] text-red-600 font-semibold tabular-nums whitespace-nowrap mb-0.5">
+                                    {fmtAxis(expenseTotal)}
+                                  </span>
+                                )}
+                                {r.expected_expense > 0 && (
+                                  <div
+                                    className={`w-full bg-rose-200 ${r.paid_out > 0 ? '' : 'rounded-t'}`}
+                                    style={{ height: `${expectedExpenseH}px` }}
+                                    title={`Expected expense (planned WC): €${r.expected_expense.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                                  />
+                                )}
+                                {r.paid_out > 0 && (
+                                  <div
+                                    className={`w-full bg-red-400 ${r.expected_expense > 0 ? '' : 'rounded-t'}`}
+                                    style={{ height: `${paidOutH}px` }}
+                                    title={`Paid out: €${r.paid_out.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                                  />
+                                )}
+                              </div>
+                              {incomeTotal === 0 && expenseTotal === 0 && (
+                                <div className="w-full max-w-[28px] bg-gray-100 rounded-t" style={{ height: '2px' }} />
+                              )}
                             </div>
-                            <div className="flex-1 max-w-[14px] flex flex-col items-center">
-                              {m.paid_out > 0 && <span className="text-[10px] text-red-600 font-semibold tabular-nums whitespace-nowrap mb-0.5">{fmtAxis(m.paid_out)}</span>}
-                              <div
-                                className="w-full bg-red-400 rounded-t transition-all"
-                                style={{ height: `${m.paid_out > 0 ? Math.max((m.paid_out / maxVal) * 140, 2) : 0}px` }}
-                                title={`Paid Out: €${m.paid_out.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
-                              />
-                            </div>
-                            {m.received === 0 && m.paid_out === 0 && (
-                              <div className="w-full max-w-[28px] bg-gray-100 rounded-t" style={{ height: '2px' }} />
-                            )}
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                     {/* X-axis month labels */}
                     <div className="flex gap-1.5 mt-1">
-                      {monthlyPayments.map((m: any) => (
-                        <div key={m.month} className="flex-1 text-center">
-                          <span className="text-[10px] text-gray-400 whitespace-nowrap">
-                            {new Date(m.month + '-01').toLocaleDateString(undefined, { month: 'short' })}
+                      {rows.map(r => (
+                        <div key={r.month} className="flex-1 text-center">
+                          <span className={`text-[10px] whitespace-nowrap ${r.monthNum === nowMonth ? 'font-bold text-primary-600' : 'text-gray-400'}`}>
+                            {new Date(r.month + '-02').toLocaleDateString(undefined, { month: 'short' })}
                           </span>
                         </div>
                       ))}
@@ -412,7 +502,6 @@ export default function DashboardPage() {
               </div>
             );
           })()}
-
         </div>
       </Card>
 
@@ -496,94 +585,6 @@ export default function DashboardPage() {
                             title={`Received: €${m.paid.toLocaleString(undefined, { minimumFractionDigits: 2 })}`} />
                         )}
                         {m.paid === 0 && m.pending === 0 && (
-                          <div className="w-4/5 bg-gray-100 rounded-t" style={{ height: '2px' }} />
-                        )}
-                      </div>
-                      <span className={`text-[10px] relative z-10 mt-0.5 ${isCurrent ? 'font-bold text-primary-600' : 'text-gray-400'}`}>
-                        {new Date(m.month + '-02').toLocaleDateString('en-GB', { month: 'short' })}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </Card>
-        );
-      })()}
-
-      {/* Working Capital Outflow Forecast */}
-      {wcForecast.length > 0 && (wcTotalPlanned + wcTotalActualized) > 0 && (() => {
-        const currentMonth = new Date().toISOString().slice(0, 7);
-        const maxBar = Math.max(...wcForecast.map((m: any) => m.planned + m.actualized), 1);
-        const totalAll = wcTotalPlanned + wcTotalActualized;
-        return (
-          <Card>
-            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <TrendingDown size={16} className="text-gray-400" />
-                <h2 className="font-semibold text-gray-900">Working Capital Outflow Forecast {new Date().getFullYear()}</h2>
-              </div>
-              <div className="flex items-center gap-4 text-xs text-gray-500">
-                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-400 inline-block" /> Planned</span>
-                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-orange-300 inline-block" /> Actualized</span>
-                <Link to="/working-capital" className="text-primary-600 hover:underline ml-2">Manage →</Link>
-              </div>
-            </div>
-            <div className="p-5">
-              <div className="grid grid-cols-3 gap-3 pb-4 border-b border-gray-100 mb-4">
-                <div className="text-center">
-                  <p className="text-xs text-gray-500 mb-0.5">Planned</p>
-                  <p className="text-lg font-bold text-red-500">€{wcTotalPlanned.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-                  <div className="flex flex-wrap justify-center gap-1 mt-1.5">
-                    {wcForecast.filter((m: any) => m.planned > 0).map((m: any) => (
-                      <span key={m.month} className="text-[10px] bg-red-50 text-red-700 border border-red-200 rounded px-1.5 py-0.5 font-medium">
-                        {new Date(m.month + '-02').toLocaleDateString('en-GB', { month: 'short' })}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-                <div className="text-center">
-                  <p className="text-xs text-gray-500 mb-0.5">Actualized</p>
-                  <p className="text-lg font-bold text-orange-500">€{wcTotalActualized.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-                  <div className="flex flex-wrap justify-center gap-1 mt-1.5">
-                    {wcForecast.filter((m: any) => m.actualized > 0).map((m: any) => (
-                      <span key={m.month} className="text-[10px] bg-orange-50 text-orange-700 border border-orange-200 rounded px-1.5 py-0.5 font-medium">
-                        {new Date(m.month + '-02').toLocaleDateString('en-GB', { month: 'short' })}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-                <div className="text-center">
-                  <p className="text-xs text-gray-500 mb-0.5">Total Forecast Outflow</p>
-                  <p className="text-lg font-bold text-gray-900">€{totalAll.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-                </div>
-              </div>
-              <div className="flex items-end gap-1" style={{ height: 180 }}>
-                {wcForecast.map((m: any) => {
-                  const isCurrent = m.month === currentMonth;
-                  const total = m.planned + m.actualized;
-                  const plannedH    = m.planned    > 0 ? Math.max((m.planned    / maxBar) * 140, 3) : 0;
-                  const actualizedH = m.actualized > 0 ? Math.max((m.actualized / maxBar) * 140, 3) : 0;
-                  return (
-                    <div key={m.month} className={`flex-1 flex flex-col items-center gap-0.5 h-full justify-end ${isCurrent ? 'relative' : ''}`}>
-                      {isCurrent && <div className="absolute inset-x-0 inset-y-0 bg-primary-50 rounded pointer-events-none" />}
-                      {total > 0 ? (
-                        <span className={`text-[9px] relative z-10 tabular-nums leading-none mb-0.5 ${isCurrent ? 'font-bold text-primary-600' : 'text-gray-400'}`}>
-                          {fmtAxis(total)}
-                        </span>
-                      ) : (
-                        <span className="text-[9px] leading-none mb-0.5 invisible">0</span>
-                      )}
-                      <div className="w-full flex flex-col items-center relative z-10">
-                        {m.planned > 0 && (
-                          <div className="w-4/5 bg-red-400 rounded-t" style={{ height: `${plannedH}px` }}
-                            title={`Planned: €${m.planned.toLocaleString(undefined, { minimumFractionDigits: 2 })}`} />
-                        )}
-                        {m.actualized > 0 && (
-                          <div className={`w-4/5 bg-orange-300 ${m.planned > 0 ? '' : 'rounded-t'}`} style={{ height: `${actualizedH}px` }}
-                            title={`Actualized: €${m.actualized.toLocaleString(undefined, { minimumFractionDigits: 2 })}`} />
-                        )}
-                        {m.planned === 0 && m.actualized === 0 && (
                           <div className="w-4/5 bg-gray-100 rounded-t" style={{ height: '2px' }} />
                         )}
                       </div>
