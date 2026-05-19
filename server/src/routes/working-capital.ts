@@ -6,15 +6,52 @@ const router = Router();
 
 const VALID_STATUSES = ['planned', 'actualized', 'cancelled'] as const;
 
-const SELECT_WITH_JOINS = `
-  SELECT w.*,
-    op.operation_number,
-    COALESCE(c.name, s.name) AS operation_party_name
+const FORECAST_BASE_SQL = `
+  SELECT w.*
   FROM working_capital_forecasts w
-  LEFT JOIN operations op ON op.id = w.operation_id
-  LEFT JOIN customers  c  ON c.id  = op.customer_id
-  LEFT JOIN suppliers  s  ON s.id  = op.supplier_id
 `;
+
+function attachOperations(forecasts: any[]) {
+  if (forecasts.length === 0) return forecasts;
+  const ids = forecasts.map(f => f.id);
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = db.prepare(`
+    SELECT fo.forecast_id, op.id, op.operation_number,
+      COALESCE(c.name, s.name) AS party_name
+    FROM working_capital_forecast_operations fo
+    JOIN operations op ON op.id = fo.operation_id
+    LEFT JOIN customers c ON c.id = op.customer_id
+    LEFT JOIN suppliers s ON s.id = op.supplier_id
+    WHERE fo.forecast_id IN (${placeholders})
+    ORDER BY op.operation_number ASC
+  `).all(...ids) as any[];
+
+  const byForecast = new Map<number, any[]>();
+  for (const r of rows) {
+    if (!byForecast.has(r.forecast_id)) byForecast.set(r.forecast_id, []);
+    byForecast.get(r.forecast_id)!.push({
+      id: r.id,
+      operation_number: r.operation_number,
+      party_name: r.party_name,
+    });
+  }
+  for (const f of forecasts) {
+    f.operations = byForecast.get(f.id) ?? [];
+  }
+  return forecasts;
+}
+
+function setForecastOperations(forecastId: number, operationIds: number[] | undefined) {
+  if (!operationIds) return; // explicit undefined = don't touch links
+  db.prepare('DELETE FROM working_capital_forecast_operations WHERE forecast_id = ?').run(forecastId);
+  if (operationIds.length === 0) return;
+  const insert = db.prepare(
+    'INSERT OR IGNORE INTO working_capital_forecast_operations (forecast_id, operation_id) VALUES (?, ?)'
+  );
+  for (const opId of operationIds) {
+    if (Number.isFinite(opId) && opId > 0) insert.run(forecastId, Number(opId));
+  }
+}
 
 router.get('/supplier-names', (_req: Request, res: Response) => {
   const rows = db.prepare(`
@@ -39,26 +76,29 @@ router.get('/', (req: Request, res: Response) => {
   if (year)   { conditions.push("strftime('%Y', w.expected_date) = ?"); params.push(year); }
   if (month)  { conditions.push("strftime('%m', w.expected_date) = ?"); params.push(month.padStart(2, '0')); }
   if (supplier_name) { conditions.push('w.supplier_name = ?'); params.push(supplier_name); }
-  if (operation_id)  { conditions.push('w.operation_id = ?'); params.push(Number(operation_id)); }
+  if (operation_id) {
+    conditions.push('EXISTS (SELECT 1 FROM working_capital_forecast_operations fo WHERE fo.forecast_id = w.id AND fo.operation_id = ?)');
+    params.push(Number(operation_id));
+  }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const rows = db.prepare(`
-    ${SELECT_WITH_JOINS}
+    ${FORECAST_BASE_SQL}
     ${where}
     ORDER BY w.expected_date ASC, w.id ASC
-  `).all(...params);
-  res.json(rows);
+  `).all(...params) as any[];
+  res.json(attachOperations(rows));
 });
 
 router.get('/:id', (req: Request, res: Response) => {
-  const row = db.prepare(`${SELECT_WITH_JOINS} WHERE w.id = ?`).get(req.params.id);
+  const row = db.prepare(`${FORECAST_BASE_SQL} WHERE w.id = ?`).get(req.params.id) as any;
   if (!row) { res.status(404).json({ error: 'Forecast entry not found' }); return; }
-  res.json(row);
+  res.json(attachOperations([row])[0]);
 });
 
 router.post('/', async (req: Request, res: Response) => {
   const {
-    description, supplier_name, operation_id, amount, currency,
+    description, supplier_name, operation_ids, amount, currency,
     expected_date, status, notes,
   } = req.body;
 
@@ -92,16 +132,19 @@ router.post('/', async (req: Request, res: Response) => {
   try {
     const result = db.prepare(`
       INSERT INTO working_capital_forecasts
-        (description, supplier_name, operation_id, amount, currency, fx_rate, eur_amount, expected_date, status, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (description, supplier_name, amount, currency, fx_rate, eur_amount, expected_date, status, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       description,
       supplier_name?.trim() || null,
-      operation_id ? Number(operation_id) : null,
       amt, cur, fx_rate, eur_amount, expected_date, st, notes || null,
     );
-    const row = db.prepare(`${SELECT_WITH_JOINS} WHERE w.id = ?`).get(result.lastInsertRowid);
-    res.status(201).json(row);
+    const forecastId = Number(result.lastInsertRowid);
+    setForecastOperations(forecastId, Array.isArray(operation_ids) ? operation_ids : []);
+    db.saveToDisk();
+
+    const row = db.prepare(`${FORECAST_BASE_SQL} WHERE w.id = ?`).get(forecastId) as any;
+    res.status(201).json(attachOperations([row])[0]);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -112,7 +155,7 @@ router.put('/:id', async (req: Request, res: Response) => {
   if (!existing) { res.status(404).json({ error: 'Forecast entry not found' }); return; }
 
   const {
-    description, supplier_name, operation_id, amount, currency,
+    description, supplier_name, operation_ids, amount, currency,
     expected_date, status, notes,
   } = req.body;
 
@@ -150,7 +193,6 @@ router.put('/:id', async (req: Request, res: Response) => {
       UPDATE working_capital_forecasts SET
         description   = ?,
         supplier_name = ?,
-        operation_id  = ?,
         amount        = ?,
         currency      = ?,
         fx_rate       = ?,
@@ -163,13 +205,17 @@ router.put('/:id', async (req: Request, res: Response) => {
     `).run(
       description ?? existing.description,
       supplier_name !== undefined ? (supplier_name?.trim() || null) : existing.supplier_name,
-      operation_id  !== undefined ? (operation_id  ? Number(operation_id) : null) : existing.operation_id,
       finalAmount, finalCurrency, fx_rate, eur_amount, finalDate, finalStatus,
       notes !== undefined ? (notes || null) : existing.notes,
       req.params.id,
     );
-    const row = db.prepare(`${SELECT_WITH_JOINS} WHERE w.id = ?`).get(req.params.id);
-    res.json(row);
+    if (operation_ids !== undefined) {
+      setForecastOperations(Number(req.params.id), Array.isArray(operation_ids) ? operation_ids : []);
+    }
+    db.saveToDisk();
+
+    const row = db.prepare(`${FORECAST_BASE_SQL} WHERE w.id = ?`).get(req.params.id) as any;
+    res.json(attachOperations([row])[0]);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -178,7 +224,9 @@ router.put('/:id', async (req: Request, res: Response) => {
 router.delete('/:id', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT id FROM working_capital_forecasts WHERE id = ?').get(req.params.id);
   if (!existing) { res.status(404).json({ error: 'Forecast entry not found' }); return; }
+  // ON DELETE CASCADE on the join table cleans up the operation links automatically
   db.prepare('DELETE FROM working_capital_forecasts WHERE id = ?').run(req.params.id);
+  db.saveToDisk();
   res.json({ message: 'Forecast entry deleted' });
 });
 

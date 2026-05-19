@@ -1196,6 +1196,28 @@ export async function initializeDatabase() {
     `).run();
   } catch { /* ignore */ }
 
+  // working_capital_forecast_operations: many-to-many link from a forecast entry
+  // to the operations it covers. Replaces the single operation_id column (kept for
+  // back-compat but no longer written by app code).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS working_capital_forecast_operations (
+      forecast_id  INTEGER NOT NULL,
+      operation_id INTEGER NOT NULL,
+      PRIMARY KEY (forecast_id, operation_id),
+      FOREIGN KEY (forecast_id)  REFERENCES working_capital_forecasts(id) ON DELETE CASCADE,
+      FOREIGN KEY (operation_id) REFERENCES operations(id)                 ON DELETE CASCADE
+    )
+  `);
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_wc_fo_forecast ON working_capital_forecast_operations(forecast_id)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_wc_fo_operation ON working_capital_forecast_operations(operation_id)`); } catch (_) {}
+  // Backfill: copy each forecast's single operation_id into the join table
+  try {
+    db.prepare(`
+      INSERT OR IGNORE INTO working_capital_forecast_operations (forecast_id, operation_id)
+      SELECT id, operation_id FROM working_capital_forecasts WHERE operation_id IS NOT NULL
+    `).run();
+  } catch { /* ignore */ }
+
   // Keep old demo_expenses table for backward compat (won't be used by new code)
 
   // Backfill: derive month from issue_date for invoices that have a date but no month

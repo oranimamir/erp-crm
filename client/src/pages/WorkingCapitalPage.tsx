@@ -2,16 +2,21 @@ import { useState, useEffect, useMemo, FormEvent } from 'react';
 import api from '../lib/api';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
-import { Plus, Pencil, Trash2, X, Wallet, Filter } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, Wallet, Filter, Search } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 
 type Status = 'planned' | 'actualized' | 'cancelled';
+
+interface ForecastOperation {
+  id: number;
+  operation_number: string;
+  party_name?: string | null;
+}
 
 interface Forecast {
   id: number;
   description: string;
   supplier_name: string | null;
-  operation_id: number | null;
   amount: number;
   currency: string;
   fx_rate: number | null;
@@ -19,8 +24,7 @@ interface Forecast {
   expected_date: string;
   status: Status;
   notes: string | null;
-  operation_number?: string | null;
-  operation_party_name?: string | null;
+  operations: ForecastOperation[];
 }
 
 interface OperationRef {
@@ -59,7 +63,7 @@ function eurValue(f: Forecast): number {
 interface FormState {
   description: string;
   supplier_name: string;
-  operation_id: string;
+  operation_ids: number[];
   amount: string;
   currency: string;
   expected_date: string;
@@ -70,13 +74,101 @@ interface FormState {
 const EMPTY_FORM: FormState = {
   description: '',
   supplier_name: '',
-  operation_id: '',
+  operation_ids: [],
   amount: '',
   currency: 'EUR',
   expected_date: new Date().toISOString().slice(0, 10),
   status: 'planned',
   notes: '',
 };
+
+interface OperationMultiPickerProps {
+  operations: OperationRef[];
+  selectedIds: number[];
+  onChange: (ids: number[]) => void;
+}
+
+function OperationMultiPicker({ operations, selectedIds, onChange }: OperationMultiPickerProps) {
+  const [search, setSearch] = useState('');
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const byId = useMemo(() => {
+    const m = new Map<number, OperationRef>();
+    for (const o of operations) m.set(o.id, o);
+    return m;
+  }, [operations]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return operations;
+    return operations.filter(o => {
+      const party = (o.customer_name || o.supplier_name || '').toLowerCase();
+      return o.operation_number.toLowerCase().includes(q) || party.includes(q);
+    });
+  }, [operations, search]);
+
+  const toggle = (id: number) => {
+    if (selectedSet.has(id)) onChange(selectedIds.filter(x => x !== id));
+    else onChange([...selectedIds, id]);
+  };
+
+  return (
+    <div className="space-y-2">
+      {selectedIds.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {selectedIds.map(id => {
+            const op = byId.get(id);
+            const label = op ? op.operation_number : `#${id}`;
+            return (
+              <span key={id} className="inline-flex items-center gap-1 bg-primary-50 text-primary-700 border border-primary-200 rounded-full px-2 py-0.5 text-xs">
+                {label}
+                <button
+                  type="button"
+                  onClick={() => toggle(id)}
+                  className="hover:bg-primary-100 rounded-full p-0.5"
+                  aria-label={`Remove ${label}`}
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      )}
+      <div className="relative">
+        <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+        <input
+          type="text"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search operations..."
+          className="w-full pl-8 pr-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+        />
+      </div>
+      <div className="border border-gray-200 rounded-lg max-h-40 overflow-y-auto bg-white">
+        {filtered.length === 0 ? (
+          <p className="text-xs text-gray-400 px-3 py-2 text-center">No operations match</p>
+        ) : (
+          <ul className="divide-y divide-gray-100">
+            {filtered.map(o => {
+              const checked = selectedSet.has(o.id);
+              return (
+                <li key={o.id}>
+                  <label className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50">
+                    <input type="checkbox" checked={checked} onChange={() => toggle(o.id)} className="h-3.5 w-3.5" />
+                    <span className="text-sm text-gray-900">{o.operation_number}</span>
+                    {(o.customer_name || o.supplier_name) && (
+                      <span className="text-xs text-gray-500 truncate">— {o.customer_name || o.supplier_name}</span>
+                    )}
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function WorkingCapitalPage() {
   const [items, setItems] = useState<Forecast[]>([]);
@@ -147,7 +239,7 @@ export default function WorkingCapitalPage() {
     setForm({
       description: f.description,
       supplier_name: f.supplier_name ?? '',
-      operation_id:  f.operation_id ? String(f.operation_id) : '',
+      operation_ids: (f.operations ?? []).map(o => o.id),
       amount: String(f.amount),
       currency: (f.currency || 'EUR').toUpperCase(),
       expected_date: f.expected_date,
@@ -170,7 +262,7 @@ export default function WorkingCapitalPage() {
     const payload = {
       description: form.description.trim(),
       supplier_name: form.supplier_name.trim() || null,
-      operation_id:  form.operation_id ? Number(form.operation_id) : null,
+      operation_ids: form.operation_ids,
       amount: amt,
       currency: form.currency,
       expected_date: form.expected_date,
@@ -298,7 +390,7 @@ export default function WorkingCapitalPage() {
                   <th className="text-left px-4 py-2.5 font-medium">Expected date</th>
                   <th className="text-left px-4 py-2.5 font-medium">Description</th>
                   <th className="text-left px-4 py-2.5 font-medium">Supplier</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Operation</th>
+                  <th className="text-left px-4 py-2.5 font-medium">Operations</th>
                   <th className="text-right px-4 py-2.5 font-medium">Amount</th>
                   <th className="text-right px-4 py-2.5 font-medium">EUR</th>
                   <th className="text-left px-4 py-2.5 font-medium">Status</th>
@@ -314,7 +406,17 @@ export default function WorkingCapitalPage() {
                       {it.notes && <div className="text-xs text-gray-400 mt-0.5">{it.notes}</div>}
                     </td>
                     <td className="px-4 py-2.5 text-gray-700">{it.supplier_name || <span className="text-gray-300">—</span>}</td>
-                    <td className="px-4 py-2.5 text-gray-700">{it.operation_number || <span className="text-gray-300">—</span>}</td>
+                    <td className="px-4 py-2.5 text-gray-700">
+                      {it.operations && it.operations.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {it.operations.map(op => (
+                            <span key={op.id} className="inline-block bg-gray-100 text-gray-700 rounded px-1.5 py-0.5 text-xs">
+                              {op.operation_number}
+                            </span>
+                          ))}
+                        </div>
+                      ) : <span className="text-gray-300">—</span>}
+                    </td>
                     <td className="px-4 py-2.5 text-right tabular-nums text-gray-700">{fmtAmount(it.amount, it.currency)}</td>
                     <td className="px-4 py-2.5 text-right tabular-nums font-medium text-gray-900">{fmtEur(eurValue(it))}</td>
                     <td className="px-4 py-2.5">
@@ -348,8 +450,8 @@ export default function WorkingCapitalPage() {
       {/* Modal */}
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !saving && setModalOpen(false)}>
-          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full" onClick={e => e.stopPropagation()}>
-            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white">
               <h2 className="font-semibold text-gray-900">
                 {editingId == null ? 'Add Forecast Entry' : 'Edit Forecast Entry'}
               </h2>
@@ -396,34 +498,30 @@ export default function WorkingCapitalPage() {
                   </select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Supplier (optional)</label>
-                  <input
-                    list="wc-supplier-names"
-                    type="text"
-                    value={form.supplier_name}
-                    onChange={e => setForm({ ...form, supplier_name: e.target.value })}
-                    placeholder="Type or pick a supplier"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                  />
-                  <datalist id="wc-supplier-names">
-                    {supplierNames.map(name => <option key={name} value={name} />)}
-                  </datalist>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Linked operation (optional)</label>
-                  <select value={form.operation_id}
-                    onChange={e => setForm({ ...form, operation_id: e.target.value })}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
-                    <option value="">— None —</option>
-                    {operations.map(o => (
-                      <option key={o.id} value={o.id}>
-                        {o.operation_number}{o.customer_name || o.supplier_name ? ` — ${o.customer_name || o.supplier_name}` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Supplier (optional)</label>
+                <input
+                  list="wc-supplier-names"
+                  type="text"
+                  value={form.supplier_name}
+                  onChange={e => setForm({ ...form, supplier_name: e.target.value })}
+                  placeholder="Type or pick a supplier"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                />
+                <datalist id="wc-supplier-names">
+                  {supplierNames.map(name => <option key={name} value={name} />)}
+                </datalist>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  Linked operations (optional)
+                  {form.operation_ids.length > 0 && <span className="text-gray-400 font-normal ml-1">· {form.operation_ids.length} selected</span>}
+                </label>
+                <OperationMultiPicker
+                  operations={operations}
+                  selectedIds={form.operation_ids}
+                  onChange={ids => setForm({ ...form, operation_ids: ids })}
+                />
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">Notes</label>
