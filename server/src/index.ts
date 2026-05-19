@@ -34,6 +34,7 @@ import notificationRoutes from './routes/notifications.js';
 import demoExpenseRoutes, { backfillDemoInvoicesFx } from './routes/demo-expenses.js';
 import employeeExpenseRoutes from './routes/employee-expenses.js';
 import workingCapitalRoutes from './routes/working-capital.js';
+import healthRoutes from './routes/health.js';
 import cron from 'node-cron';
 import { checkEmailForStockUpdates } from './lib/email-stock.js';
 import { startBackupScheduler, buildCronExpr } from './lib/backup-scheduler.js';
@@ -169,6 +170,7 @@ app.use('/api/notifications', authenticateToken, notificationRoutes);
 app.use('/api/demo-expenses', authenticateToken, demoExpenseRoutes);
 app.use('/api/employee-expenses', authenticateToken, employeeExpenseRoutes);
 app.use('/api/working-capital', authenticateToken, workingCapitalRoutes);
+app.use('/api/health', authenticateToken, healthRoutes);
 
 // ── Serve built client in production ─────────────────────────────────────────
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');
@@ -196,7 +198,7 @@ app.get('*', (_req, res) => {
   res.sendFile(path.join(clientDist, 'index.html'));
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
   // Fire-and-forget: normalize any non-EUR demo invoices that still
   // lack an eur_amount (e.g. uploaded before the multi-currency fix).
@@ -208,3 +210,23 @@ app.listen(PORT, () => {
     })
     .catch((err) => console.warn('[startup-fx-backfill] error:', err));
 });
+
+// Flush the in-memory SQLite to disk on shutdown — Railway sends SIGTERM before
+// each redeploy. Without this, any write within the 100ms debounce window is lost.
+function gracefulShutdown(signal: string) {
+  console.log(`[shutdown] Received ${signal} — flushing DB to disk...`);
+  try {
+    db.flushSync();
+    console.log('[shutdown] DB flushed.');
+  } catch (err: any) {
+    console.error('[shutdown] DB flush failed:', err?.message ?? err);
+  }
+  server.close(() => {
+    console.log('[shutdown] HTTP server closed. Exiting.');
+    process.exit(0);
+  });
+  // Hard timeout in case server.close hangs
+  setTimeout(() => process.exit(0), 5_000).unref();
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT',  () => gracefulShutdown('SIGINT'));

@@ -6,7 +6,64 @@ import bcrypt from 'bcryptjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dbPath = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'erp.db');
+const uploadsPathResolved = process.env.UPLOADS_PATH || path.join(__dirname, '..', 'uploads');
+const backupsPathResolved  = process.env.BACKUPS_PATH || path.join(__dirname, '..', 'backups');
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+
+// Heuristic: a Railway/Fly/Render persistent volume is mounted at an absolute path
+// like /data, /mnt/data, /var/lib/data — i.e. NOT inside the app source tree. If
+// DB_PATH wasn't set, our fallback writes to server/data which is inside the
+// container's app dir and therefore wiped on every redeploy.
+function looksEphemeral(p: string): boolean {
+  if (process.env.DB_PATH) return false; // user explicitly chose this path
+  // Default fallback (server/data) — almost certainly inside the app build dir
+  return true;
+}
+
+export function logStorageBanner(): void {
+  const ephemeral = looksEphemeral(dbPath);
+  const lines: string[] = [];
+  lines.push('═══════════════════════════════════════════════════════════════════');
+  lines.push('[storage] Persistence paths:');
+  lines.push(`[storage]   DB_PATH      = ${dbPath}${process.env.DB_PATH ? '' : ' (default, no env override)'}`);
+  lines.push(`[storage]   UPLOADS_PATH = ${uploadsPathResolved}${process.env.UPLOADS_PATH ? '' : ' (default, no env override)'}`);
+  lines.push(`[storage]   BACKUPS_PATH = ${backupsPathResolved}${process.env.BACKUPS_PATH ? '' : ' (default, no env override)'}`);
+  try {
+    if (fs.existsSync(dbPath)) {
+      const stat = fs.statSync(dbPath);
+      lines.push(`[storage]   DB file size = ${stat.size} bytes, last modified ${stat.mtime.toISOString()}`);
+    } else {
+      lines.push(`[storage]   DB file does NOT exist yet at ${dbPath}`);
+    }
+  } catch {}
+  if (ephemeral) {
+    lines.push('[storage] ⚠️  WARNING: DB_PATH is not set. Falling back to a path inside the app');
+    lines.push('[storage]    directory, which is EPHEMERAL on Railway/Fly/Render and will be wiped');
+    lines.push('[storage]    on every redeploy. Attach a persistent volume and set:');
+    lines.push('[storage]       DB_PATH=/data/erp.db');
+    lines.push('[storage]       UPLOADS_PATH=/data/uploads');
+    lines.push('[storage]       BACKUPS_PATH=/data/backups');
+  }
+  lines.push('═══════════════════════════════════════════════════════════════════');
+  for (const l of lines) console.log(l);
+}
+
+export function getStorageInfo() {
+  const dbExists = fs.existsSync(dbPath);
+  const dbStat = dbExists ? fs.statSync(dbPath) : null;
+  return {
+    db_path: dbPath,
+    db_path_from_env: !!process.env.DB_PATH,
+    db_file_exists: dbExists,
+    db_file_size: dbStat?.size ?? 0,
+    db_file_modified: dbStat?.mtime?.toISOString() ?? null,
+    uploads_path: uploadsPathResolved,
+    uploads_path_from_env: !!process.env.UPLOADS_PATH,
+    backups_path: backupsPathResolved,
+    backups_path_from_env: !!process.env.BACKUPS_PATH,
+    looks_ephemeral: looksEphemeral(dbPath),
+  };
+}
 
 // Wrapper to provide better-sqlite3-like API over sql.js
 class DatabaseWrapper {
@@ -46,7 +103,22 @@ class DatabaseWrapper {
         this.sqlDb = testDb;
         loaded = true;
         if (candidate !== dbPath) {
-          console.warn(`[db] Main DB corrupted — restored from backup: ${candidate}`);
+          // Restoring from a backup means the main DB was unreadable. Move the bad
+          // main file aside (don't delete it) so it can be inspected later — and
+          // surface a loud warning that data may have been rolled back.
+          console.warn('═══════════════════════════════════════════════════════════════════');
+          console.warn(`[db] ⚠️  MAIN DB UNREADABLE — restored from backup: ${candidate}`);
+          console.warn(`[db] ⚠️  Any data added since that backup was taken is NOT in the restored DB.`);
+          try {
+            if (fs.existsSync(dbPath)) {
+              const quarantinePath = dbPath + '.unreadable.' + Date.now();
+              fs.renameSync(dbPath, quarantinePath);
+              console.warn(`[db] ⚠️  Preserved the unreadable file at ${quarantinePath} for inspection.`);
+            }
+          } catch (e: any) {
+            console.warn(`[db] ⚠️  Could not preserve the unreadable file: ${e?.message ?? e}`);
+          }
+          console.warn('═══════════════════════════════════════════════════════════════════');
           // Save restored DB as the main file
           this.saveToDisk();
         }
@@ -74,6 +146,19 @@ class DatabaseWrapper {
     }, 100);
   }
 
+  /** Start a periodic forced save as a defense-in-depth backstop to the 100ms debounce. */
+  startPeriodicSave(intervalMs = 30_000) {
+    setInterval(() => {
+      try { this.saveToDisk(); } catch { /* errors already logged by saveToDisk */ }
+    }, intervalMs).unref();
+  }
+
+  /** Synchronous save for shutdown handlers. */
+  flushSync(): boolean {
+    if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
+    return this.saveToDisk();
+  }
+
   /** Clean up old backups and temp files to free disk space */
   cleanupDiskSpace() {
     try {
@@ -81,12 +166,13 @@ class DatabaseWrapper {
       const base = path.basename(dbPath, '.db');
       // Remove temp files
       try { fs.unlinkSync(dbPath + '.tmp'); } catch {}
-      // Keep only 1 backup
+      // Keep the 7 most recent backups so we have a rollback window
       const backups = fs.readdirSync(dir)
         .filter((f: string) => f.startsWith(base + '_backup_') && f.endsWith('.db'))
         .sort()
         .reverse();
-      for (const old of backups.slice(1)) {
+      const KEEP = 7;
+      for (const old of backups.slice(KEEP)) {
         try { fs.unlinkSync(path.join(dir, old)); console.log(`[db] Deleted old backup: ${old}`); } catch {}
       }
     } catch {}
@@ -211,6 +297,7 @@ class DatabaseWrapper {
 const db = new DatabaseWrapper();
 
 export async function initializeDatabase() {
+  logStorageBanner();
   await db.init();
 
   // Free disk space before doing anything else
@@ -218,6 +305,21 @@ export async function initializeDatabase() {
 
   // Create a backup before running any migrations (protects against data loss)
   db.backupToDisk();
+
+  // Log key row counts so a missing-volume regression is visible in logs immediately
+  try {
+    const counts = ['operations', 'invoices', 'orders', 'customers', 'suppliers', 'operation_documents', 'wire_transfers', 'payments']
+      .map(t => {
+        try {
+          const r = db.prepare(`SELECT COUNT(*) as c FROM ${t}`).get() as any;
+          return `${t}=${r?.c ?? 0}`;
+        } catch { return `${t}=?`; }
+      });
+    console.log(`[storage] Row counts on load: ${counts.join(', ')}`);
+  } catch { /* tables may not exist yet on first boot */ }
+
+  // Periodic forced save (defense in depth alongside the 100ms write debounce)
+  db.startPeriodicSave(30_000);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
