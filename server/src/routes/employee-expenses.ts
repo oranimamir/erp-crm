@@ -14,27 +14,31 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsDir = path.join(__dirname, '..', '..', 'uploads', 'employee-expenses');
 fs.mkdirSync(uploadsDir, { recursive: true });
 
-// One-time backfill: compute file_hash for legacy rows missing it
-try {
-  const rows = db.prepare(
-    `SELECT id, stored_filename FROM employee_expenses WHERE file_hash IS NULL`
-  ).all() as any[];
-  let updated = 0;
-  for (const r of rows) {
-    const full = path.join(uploadsDir, r.stored_filename);
-    if (!fs.existsSync(full)) continue;
-    const hash = crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
-    try {
-      db.prepare(`UPDATE employee_expenses SET file_hash = ? WHERE id = ?`).run(hash, r.id);
-      updated++;
-    } catch { /* duplicate hash on legacy row — leave null */ }
+// One-time backfill: compute file_hash for legacy rows missing it.
+// Must be invoked AFTER initializeDatabase(); running at module-import time
+// hits the uninitialized DB and produces a misleading stack trace at startup.
+export function backfillEmployeeExpensesHash(): void {
+  try {
+    const rows = db.prepare(
+      `SELECT id, stored_filename FROM employee_expenses WHERE file_hash IS NULL`
+    ).all() as any[];
+    let updated = 0;
+    for (const r of rows) {
+      const full = path.join(uploadsDir, r.stored_filename);
+      if (!fs.existsSync(full)) continue;
+      const hash = crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
+      try {
+        db.prepare(`UPDATE employee_expenses SET file_hash = ? WHERE id = ?`).run(hash, r.id);
+        updated++;
+      } catch { /* duplicate hash on legacy row — leave null */ }
+    }
+    if (updated > 0) {
+      db.saveToDisk();
+      console.log(`[employee-expenses] Backfilled file_hash for ${updated} rows`);
+    }
+  } catch (err) {
+    console.warn('[employee-expenses] hash backfill failed:', err);
   }
-  if (updated > 0) {
-    db.saveToDisk();
-    console.log(`[employee-expenses] Backfilled file_hash for ${updated} rows`);
-  }
-} catch (err) {
-  console.warn('[employee-expenses] hash backfill failed:', err);
 }
 
 const storage = multer.diskStorage({

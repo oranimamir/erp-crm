@@ -31,8 +31,8 @@ import packagingRoutes from './routes/packaging.js';
 import backupRoutes from './routes/backup.js';
 import warehouseStockRoutes from './routes/warehouse-stock.js';
 import notificationRoutes from './routes/notifications.js';
-import demoExpenseRoutes, { backfillDemoInvoicesFx } from './routes/demo-expenses.js';
-import employeeExpenseRoutes from './routes/employee-expenses.js';
+import demoExpenseRoutes, { backfillDemoInvoicesFx, backfillDemoInvoicesHash } from './routes/demo-expenses.js';
+import employeeExpenseRoutes, { backfillEmployeeExpensesHash } from './routes/employee-expenses.js';
 import workingCapitalRoutes from './routes/working-capital.js';
 import healthRoutes from './routes/health.js';
 import cron from 'node-cron';
@@ -105,6 +105,12 @@ const apiLimiter = rateLimit({
 
 // Initialize database
 await initializeDatabase();
+
+// Run the legacy hash backfills now that the DB is ready. These used to live
+// at module-import time and threw "Cannot read properties of undefined (reading
+// 'prepare')" because db.sqlDb didn't exist yet — see deploy logs from 2026-05.
+backfillDemoInvoicesHash();
+backfillEmployeeExpensesHash();
 
 // Backfill eur_amount for non-EUR invoices that are missing it
 try {

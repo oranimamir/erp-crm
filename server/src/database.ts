@@ -159,23 +159,60 @@ class DatabaseWrapper {
     return this.saveToDisk();
   }
 
-  /** Clean up old backups and temp files to free disk space */
+  /** Clean up old backups and temp files to free disk space.
+   *  Retention is intentionally aggressive: a 128 MB DB plus N backups plus a
+   *  128 MB temp file during atomic save can easily blow a 1 GB Railway volume,
+   *  and an over-quota volume returns ENOSPC on every save — silently losing
+   *  every write until manual cleanup. Default to keeping just 1 backup. */
   cleanupDiskSpace() {
     try {
       const dir = path.dirname(dbPath);
       const base = path.basename(dbPath, '.db');
-      // Remove temp files
+      // Remove temp files from interrupted saves
       try { fs.unlinkSync(dbPath + '.tmp'); } catch {}
-      // Keep the 7 most recent backups so we have a rollback window
+      // Remove any quarantined-corrupt files older than 1 day
+      try {
+        for (const f of fs.readdirSync(dir)) {
+          if (f.includes('.unreadable.')) {
+            const full = path.join(dir, f);
+            const age = Date.now() - fs.statSync(full).mtimeMs;
+            if (age > 24 * 3600 * 1000) {
+              try { fs.unlinkSync(full); console.log(`[db] Deleted old quarantined file: ${f}`); } catch {}
+            }
+          }
+        }
+      } catch {}
+      // Keep only the most recent backup. Even one backup doubles the DB
+      // footprint on disk; if the volume is small, more is hostile.
+      const KEEP = Number(process.env.DB_BACKUP_RETENTION) > 0 ? Number(process.env.DB_BACKUP_RETENTION) : 1;
       const backups = fs.readdirSync(dir)
         .filter((f: string) => f.startsWith(base + '_backup_') && f.endsWith('.db'))
         .sort()
         .reverse();
-      const KEEP = 7;
       for (const old of backups.slice(KEEP)) {
         try { fs.unlinkSync(path.join(dir, old)); console.log(`[db] Deleted old backup: ${old}`); } catch {}
       }
     } catch {}
+  }
+
+  /** Nuke every backup and temp file in the data dir. Last-resort space recovery. */
+  private purgeAllBackups(): number {
+    let removed = 0;
+    try {
+      const dir = path.dirname(dbPath);
+      const base = path.basename(dbPath, '.db');
+      for (const f of fs.readdirSync(dir)) {
+        if (f === path.basename(dbPath)) continue; // never delete the live DB
+        if (
+          (f.startsWith(base + '_backup_') && f.endsWith('.db')) ||
+          f.endsWith('.tmp') ||
+          f.includes('.unreadable.')
+        ) {
+          try { fs.unlinkSync(path.join(dir, f)); removed++; } catch {}
+        }
+      }
+    } catch {}
+    return removed;
   }
 
   saveToDisk(): boolean {
@@ -191,20 +228,21 @@ class DatabaseWrapper {
       console.error(`[db] Save to disk failed (${err.code || err.message})`);
       // Clean up partial temp file if it exists
       try { fs.unlinkSync(dbPath + '.tmp'); } catch {}
-      // If disk is full, try cleaning up space and retry once
       if (err.code === 'ENOSPC') {
-        console.warn('[db] Disk full — cleaning up and retrying save...');
-        this.cleanupDiskSpace();
+        // Aggressive: nuke ALL backups + tmp files + quarantined files, then retry.
+        // We'd rather have no rollback option than silently lose every write.
+        const removed = this.purgeAllBackups();
+        console.warn(`[db] Disk full — purged ${removed} backup/temp file(s) and retrying save...`);
         try {
           const data = this.sqlDb.export();
           const buffer = Buffer.from(data);
           const tmpPath = dbPath + '.tmp';
           fs.writeFileSync(tmpPath, buffer);
           fs.renameSync(tmpPath, dbPath);
-          console.log('[db] Save succeeded after cleanup');
+          console.log('[db] Save succeeded after purging backups');
           return true;
         } catch (retryErr: any) {
-          console.error(`[db] Save still failed after cleanup (${retryErr.code || retryErr.message})`);
+          console.error(`[db] Save STILL failed after purge (${retryErr.code || retryErr.message}) — volume is too small. RESIZE THE RAILWAY VOLUME.`);
           try { fs.unlinkSync(dbPath + '.tmp'); } catch {}
         }
       }
@@ -212,19 +250,52 @@ class DatabaseWrapper {
     }
   }
 
-  /** Create a timestamped backup of the database file before risky operations */
+  /** Create a timestamped backup of the database file before risky operations.
+   *  Skipped if the volume doesn't have at least 2x the DB size free, since a
+   *  backup attempt that ENOSPCs would just leak a partial file. */
   backupToDisk() {
     try {
-      if (fs.existsSync(dbPath)) {
-        // Clean up old backup files first — keep only 1
-        this.cleanupDiskSpace();
+      if (!fs.existsSync(dbPath)) return;
 
-        const backupPath = dbPath.replace(/\.db$/, '') + '_backup_' + Date.now() + '.db';
-        fs.copyFileSync(dbPath, backupPath);
-        console.log(`[db] Backup created: ${backupPath}`);
-      }
+      // Clean up old backup files first — keep only the most recent
+      this.cleanupDiskSpace();
+
+      // Refuse to create a new backup if it would push the volume to ENOSPC.
+      // statfs gives us actual free bytes on the volume; if it's not available,
+      // fall back to attempting the backup (worst case we just log a failure).
+      const dbSize = fs.statSync(dbPath).size;
+      try {
+        // Node's fs.statfsSync (added in v18.15) — available on Railway's Node 20.
+        const statfs = (fs as any).statfsSync?.(path.dirname(dbPath));
+        if (statfs) {
+          const freeBytes = statfs.bavail * statfs.bsize;
+          if (freeBytes < dbSize * 2) {
+            console.warn(`[db] Skipping startup backup — only ${freeBytes} bytes free, need at least ${dbSize * 2} (DB is ${dbSize}). Resize the volume.`);
+            return;
+          }
+        }
+      } catch { /* statfs not available; proceed and let copyFileSync error if it must */ }
+
+      const backupPath = dbPath.replace(/\.db$/, '') + '_backup_' + Date.now() + '.db';
+      fs.copyFileSync(dbPath, backupPath);
+      console.log(`[db] Backup created: ${backupPath}`);
     } catch (err: any) {
       console.error(`[db] Backup failed (${err.code || err.message}) — continuing without backup`);
+      // Clean up any partial backup file from a half-written copyFileSync
+      try {
+        const dir = path.dirname(dbPath);
+        const base = path.basename(dbPath, '.db');
+        for (const f of fs.readdirSync(dir)) {
+          if (f.startsWith(base + '_backup_') && f.endsWith('.db')) {
+            const full = path.join(dir, f);
+            const stat = fs.statSync(full);
+            // A backup smaller than 1 KB is almost certainly a failed write
+            if (stat.size < 1024) {
+              try { fs.unlinkSync(full); console.log(`[db] Removed partial backup file: ${f}`); } catch {}
+            }
+          }
+        }
+      } catch {}
     }
   }
 

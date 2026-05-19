@@ -16,28 +16,32 @@ const sha256 = (buf: Buffer | Uint8Array | string) =>
   crypto.createHash('sha256').update(buf).digest('hex');
 
 // One-time backfill: compute file_hash for legacy demo_invoices rows that have an embedded PDF.
-try {
-  const rows = db.prepare(
-    `SELECT id, embedded_pdf FROM demo_invoices WHERE file_hash IS NULL AND embedded_pdf IS NOT NULL AND embedded_pdf != ''`
-  ).all() as any[];
-  let updated = 0;
-  for (const r of rows) {
-    try {
-      const buf = Buffer.from(r.embedded_pdf as string, 'base64');
-      if (buf.length === 0) continue;
-      const hash = sha256(buf);
+// Must be called AFTER initializeDatabase() — running at import time hits the
+// uninitialized db.sqlDb and crashes the startup banner with a confusing trace.
+export function backfillDemoInvoicesHash(): void {
+  try {
+    const rows = db.prepare(
+      `SELECT id, embedded_pdf FROM demo_invoices WHERE file_hash IS NULL AND embedded_pdf IS NOT NULL AND embedded_pdf != ''`
+    ).all() as any[];
+    let updated = 0;
+    for (const r of rows) {
       try {
-        db.prepare(`UPDATE demo_invoices SET file_hash = ? WHERE id = ?`).run(hash, r.id);
-        updated++;
-      } catch { /* duplicate hash on legacy row — leave null */ }
-    } catch { /* malformed base64 — skip */ }
+        const buf = Buffer.from(r.embedded_pdf as string, 'base64');
+        if (buf.length === 0) continue;
+        const hash = sha256(buf);
+        try {
+          db.prepare(`UPDATE demo_invoices SET file_hash = ? WHERE id = ?`).run(hash, r.id);
+          updated++;
+        } catch { /* duplicate hash on legacy row — leave null */ }
+      } catch { /* malformed base64 — skip */ }
+    }
+    if (updated > 0) {
+      db.saveToDisk();
+      console.log(`[demo-expenses] Backfilled file_hash for ${updated} rows`);
+    }
+  } catch (err) {
+    console.warn('[demo-expenses] hash backfill failed:', err);
   }
-  if (updated > 0) {
-    db.saveToDisk();
-    console.log(`[demo-expenses] Backfilled file_hash for ${updated} rows`);
-  }
-} catch (err) {
-  console.warn('[demo-expenses] hash backfill failed:', err);
 }
 
 export async function backfillDemoInvoicesFx(): Promise<{ scanned: number; updated: number; failed: number }> {
