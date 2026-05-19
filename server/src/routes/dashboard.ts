@@ -67,7 +67,8 @@ router.get('/stats', async (_req: Request, res: Response) => {
       FROM wire_transfers wt JOIN invoices i ON wt.invoice_id = i.id
       WHERE i.type = 'customer' AND strftime('%Y', wt.transfer_date) = strftime('%Y', 'now')
       UNION ALL
-      SELECT p.amount FROM payments p JOIN invoices i ON p.invoice_id = i.id
+      SELECT COALESCE(p.eur_amount, p.amount * COALESCE(i.fx_rate, 1.0)) as eur_val
+      FROM payments p JOIN invoices i ON p.invoice_id = i.id
       WHERE i.type = 'customer' AND strftime('%Y', p.payment_date) = strftime('%Y', 'now')
       UNION ALL
       SELECT COALESCE(i.eur_amount, i.amount) FROM invoices i
@@ -77,7 +78,10 @@ router.get('/stats', async (_req: Request, res: Response) => {
         AND i.payment_date IS NOT NULL AND strftime('%Y', i.payment_date) = strftime('%Y', 'now')
     )
   `).get() as any).total;
-  const totalPayments = (db.prepare('SELECT COALESCE(SUM(amount), 0) as total FROM payments').get() as any).total;
+  const totalPayments = (db.prepare(`
+    SELECT COALESCE(SUM(COALESCE(p.eur_amount, p.amount * COALESCE(i.fx_rate, 1.0))), 0) as total
+    FROM payments p JOIN invoices i ON p.invoice_id = i.id
+  `).get() as any).total;
   const activeShipments = (db.prepare("SELECT COUNT(*) as count FROM shipments WHERE status NOT IN ('delivered', 'returned', 'failed')").get() as any).count;
 
   res.json({
@@ -143,7 +147,8 @@ router.get('/monthly-payments', (_req: Request, res: Response) => {
             WHERE i.type = 'customer'
               AND strftime('%Y-%m', wt.transfer_date) = months.m
             UNION ALL
-            SELECT p.amount FROM payments p
+            SELECT COALESCE(p.eur_amount, p.amount * COALESCE(i.fx_rate, 1.0)) as eur_val
+            FROM payments p
             JOIN invoices i ON p.invoice_id = i.id
             WHERE i.type = 'customer'
               AND strftime('%Y-%m', p.payment_date) = months.m
@@ -296,7 +301,8 @@ router.get('/forecast', async (_req: Request, res: Response) => {
         FROM wire_transfers wt JOIN invoices i ON wt.invoice_id = i.id
         WHERE i.type = 'customer' AND strftime('%Y-%m', wt.transfer_date) = ?
         UNION ALL
-        SELECT p.amount FROM payments p JOIN invoices i ON p.invoice_id = i.id
+        SELECT COALESCE(p.eur_amount, p.amount * COALESCE(i.fx_rate, 1.0)) as eur_val
+        FROM payments p JOIN invoices i ON p.invoice_id = i.id
         WHERE i.type = 'customer' AND strftime('%Y-%m', p.payment_date) = ?
         UNION ALL
         SELECT COALESCE(i.eur_amount, i.amount) FROM invoices i
@@ -382,11 +388,12 @@ router.get('/paid-invoices', (_req: Request, res: Response) => {
 });
 
 router.get('/supplier-payments', (_req: Request, res: Response) => {
+  // EUR totals: prefer stored p.eur_amount; fall back to p.amount * invoice fx_rate (or 1.0 for EUR invoices)
   const data = db.prepare(`
     SELECT
       strftime('%Y-%m', p.payment_date) as month,
       s.name as supplier_name,
-      SUM(p.amount) as total
+      SUM(COALESCE(p.eur_amount, p.amount * COALESCE(i.fx_rate, 1.0))) as total
     FROM payments p
     JOIN invoices i ON p.invoice_id = i.id AND i.type = 'supplier'
     JOIN suppliers s ON i.supplier_id = s.id
@@ -402,7 +409,7 @@ router.get('/customer-payments', (_req: Request, res: Response) => {
     SELECT
       strftime('%Y-%m', p.payment_date) as month,
       c.name as customer_name,
-      SUM(p.amount) as total
+      SUM(COALESCE(p.eur_amount, p.amount * COALESCE(i.fx_rate, 1.0))) as total
     FROM payments p
     JOIN invoices i ON p.invoice_id = i.id AND i.type = 'customer'
     JOIN customers c ON i.customer_id = c.id
@@ -435,7 +442,8 @@ router.get('/customer-forecast', async (_req: Request, res: Response) => {
     LEFT JOIN customers c ON i.customer_id = c.id
     WHERE i.type = 'customer' AND strftime('%Y', wt.transfer_date) = ?
     UNION ALL
-    SELECT c.id as customer_id, c.name as customer_name, p.amount, 'EUR' as currency
+    SELECT c.id as customer_id, c.name as customer_name,
+      COALESCE(p.eur_amount, p.amount * COALESCE(i.fx_rate, 1.0)) as amount, 'EUR' as currency
     FROM payments p
     JOIN invoices i ON p.invoice_id = i.id
     LEFT JOIN customers c ON i.customer_id = c.id

@@ -718,7 +718,7 @@ export default function SuppliersPage() {
                   return (
                     <div key={m} className="flex-1 flex flex-col items-center gap-1 h-full justify-end">
                       <span className="text-xs text-gray-500 font-medium mb-1">
-                        ${monthTotal > 0 ? (monthTotal >= 1000 ? `${(monthTotal/1000).toFixed(0)}k` : monthTotal.toFixed(0)) : ''}
+                        {monthTotal > 0 ? (monthTotal >= 1000 ? `€${(monthTotal/1000).toFixed(0)}k` : `€${monthTotal.toFixed(0)}`) : ''}
                       </span>
                       <div
                         className="w-full flex flex-col-reverse rounded-t overflow-hidden"
@@ -732,7 +732,7 @@ export default function SuppliersPage() {
                               key={name}
                               className={`w-full ${CHART_COLORS[i % CHART_COLORS.length]}`}
                               style={{ height: `${pct}%` }}
-                              title={`${name}: $${val.toLocaleString()}`}
+                              title={`${name}: €${val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                             />
                           ) : null;
                         })}

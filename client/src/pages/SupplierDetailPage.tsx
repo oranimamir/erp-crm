@@ -38,6 +38,13 @@ export default function SupplierDetailPage() {
   if (loading) return <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" /></div>;
   if (!supplier) return <p className="text-center py-20 text-gray-500">Supplier not found</p>;
 
+  const fmtMoney = (amount: number | undefined | null, currency: string | undefined | null) => {
+    const cur = (currency || 'EUR').toUpperCase();
+    const sym = cur === 'USD' ? '$' : cur === 'GBP' ? '£' : cur === 'EUR' ? '€' : '';
+    const body = Number(amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return sym ? `${sym}${body}` : `${body} ${cur}`;
+  };
+
   return (
     <div className="space-y-6">
       <Link to="/suppliers" className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700"><ArrowLeft size={16} /> Back to Suppliers</Link>
@@ -57,10 +64,12 @@ export default function SupplierDetailPage() {
 
       {/* Financial Summary */}
       {invoices.length > 0 && (() => {
+        const eurOf = (inv: any) => Number(inv.eur_amount ?? inv.amount) || 0;
         const totalCount = invoices.length;
-        const totalAmount = invoices.reduce((sum: number, inv: any) => sum + (inv.amount || 0), 0);
-        const paidAmount = invoices.filter((inv: any) => inv.status === 'paid').reduce((sum: number, inv: any) => sum + (inv.amount || 0), 0);
+        const totalAmount = invoices.reduce((sum: number, inv: any) => sum + eurOf(inv), 0);
+        const paidAmount = invoices.filter((inv: any) => inv.status === 'paid').reduce((sum: number, inv: any) => sum + eurOf(inv), 0);
         const outstanding = totalAmount - paidAmount;
+        const fmtEur = (n: number) => `€${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
         return (
           <Card className="p-5">
             <div className="flex items-center gap-2 mb-4">
@@ -74,15 +83,15 @@ export default function SupplierDetailPage() {
               </div>
               <div className="bg-gray-50 rounded-lg p-3 text-center">
                 <p className="text-xs text-gray-600 font-medium">Total Amount</p>
-                <p className="text-xl font-bold text-gray-700">${totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                <p className="text-xl font-bold text-gray-700">{fmtEur(totalAmount)}</p>
               </div>
               <div className="bg-green-50 rounded-lg p-3 text-center">
                 <p className="text-xs text-green-600 font-medium">Paid</p>
-                <p className="text-xl font-bold text-green-700">${paidAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                <p className="text-xl font-bold text-green-700">{fmtEur(paidAmount)}</p>
               </div>
               <div className="bg-yellow-50 rounded-lg p-3 text-center">
                 <p className="text-xs text-yellow-600 font-medium">Outstanding</p>
-                <p className="text-xl font-bold text-yellow-700">${outstanding.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                <p className="text-xl font-bold text-yellow-700">{fmtEur(outstanding)}</p>
               </div>
             </div>
           </Card>
@@ -95,7 +104,7 @@ export default function SupplierDetailPage() {
           <div className="divide-y divide-gray-100">
             {invoices.length === 0 ? <p className="px-5 py-6 text-center text-sm text-gray-500">No invoices</p> : invoices.map(inv => (
               <Link key={inv.id} to={`/invoices/${inv.id}`} className="flex items-center justify-between px-5 py-3 hover:bg-gray-50">
-                <div><p className="text-sm font-medium">{inv.invoice_number}</p><p className="text-xs text-gray-500">${inv.amount?.toLocaleString()}</p></div>
+                <div><p className="text-sm font-medium">{inv.invoice_number}</p><p className="text-xs text-gray-500">{fmtMoney(inv.amount, inv.currency)}</p></div>
                 <StatusBadge status={inv.status} />
               </Link>
             ))}
@@ -106,7 +115,7 @@ export default function SupplierDetailPage() {
           <div className="divide-y divide-gray-100">
             {orders.length === 0 ? <p className="px-5 py-6 text-center text-sm text-gray-500">No orders</p> : orders.map(o => (
               <Link key={o.id} to={`/orders/${o.id}`} className="flex items-center justify-between px-5 py-3 hover:bg-gray-50">
-                <div><p className="text-sm font-medium">{o.order_number}</p><p className="text-xs text-gray-500">${o.total_amount?.toLocaleString()}</p></div>
+                <div><p className="text-sm font-medium">{o.order_number}</p><p className="text-xs text-gray-500">{fmtMoney(o.total_amount, o.currency)}</p></div>
                 <StatusBadge status={o.status} />
               </Link>
             ))}

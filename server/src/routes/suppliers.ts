@@ -109,7 +109,13 @@ router.get('/:id/invoices', (req: Request, res: Response) => {
 });
 
 router.get('/:id/orders', (req: Request, res: Response) => {
-  const orders = db.prepare('SELECT * FROM orders WHERE supplier_id = ? ORDER BY created_at DESC').all(req.params.id);
+  const orders = db.prepare(`
+    SELECT o.*,
+      (SELECT UPPER(COALESCE(oi.currency, 'USD')) FROM order_items oi WHERE oi.order_id = o.id ORDER BY oi.id LIMIT 1) as currency
+    FROM orders o
+    WHERE o.supplier_id = ?
+    ORDER BY o.created_at DESC
+  `).all(req.params.id);
   res.json(orders);
 });
 

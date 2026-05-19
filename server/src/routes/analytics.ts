@@ -97,7 +97,8 @@ router.get('/summary', async (req: Request, res: Response) => {
       FROM wire_transfers wt JOIN invoices i ON wt.invoice_id = i.id
       WHERE i.type = 'customer' AND wt.transfer_date BETWEEN ? AND ? ${custWhere}
       UNION ALL
-      SELECT strftime('%Y-%m', p.payment_date) as month, p.amount as amt
+      SELECT strftime('%Y-%m', p.payment_date) as month,
+             COALESCE(p.eur_amount, p.amount * COALESCE(i.fx_rate, 1.0)) as amt
       FROM payments p JOIN invoices i ON p.invoice_id = i.id
       WHERE i.type = 'customer' AND p.payment_date BETWEEN ? AND ? ${custWhere}
       UNION ALL

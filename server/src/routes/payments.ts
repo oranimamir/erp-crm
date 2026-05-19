@@ -55,16 +55,22 @@ router.post('/', uploadPayment.single('file'), (req: Request, res: Response) => 
     return;
   }
 
-  const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice_id);
+  const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice_id) as any;
   if (!invoice) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
   const file_path = req.file ? req.file.filename : null;
   const file_name = req.file ? req.file.originalname : null;
 
+  // Reuse the invoice's stored fx_rate so payment EUR value matches book value.
+  // fx_rate is null on EUR invoices — fall back to 1.0 in that case.
+  const amt = parseFloat(amount);
+  const fx_rate = invoice.fx_rate ?? null;
+  const eur_amount = amt * (invoice.fx_rate ?? 1.0);
+
   const result = db.prepare(`
-    INSERT INTO payments (invoice_id, amount, payment_date, payment_method, reference, notes, file_path, file_name)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(invoice_id, parseFloat(amount), payment_date, payment_method, reference || null, notes || null, file_path, file_name);
+    INSERT INTO payments (invoice_id, amount, payment_date, payment_method, reference, notes, file_path, file_name, fx_rate, eur_amount)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(invoice_id, amt, payment_date, payment_method, reference || null, notes || null, file_path, file_name, fx_rate, eur_amount);
 
   const payment = db.prepare('SELECT * FROM payments WHERE id = ?').get(result.lastInsertRowid) as any;
   const inv = db.prepare('SELECT invoice_number FROM invoices WHERE id = ?').get(invoice_id) as any;
@@ -89,13 +95,22 @@ router.put('/:id', uploadPayment.single('file'), (req: Request, res: Response) =
     file_name = req.file.originalname;
   }
 
+  // Recompute eur_amount using the (possibly new) invoice's fx_rate
+  const finalAmount = parseFloat(amount) || existing.amount;
+  const finalInvoiceId = invoice_id || existing.invoice_id;
+  const finalInvoice = db.prepare('SELECT fx_rate FROM invoices WHERE id = ?').get(finalInvoiceId) as any;
+  const finalFxRate = finalInvoice?.fx_rate ?? null;
+  const finalEurAmount = finalAmount * (finalInvoice?.fx_rate ?? 1.0);
+
   db.prepare(`
-    UPDATE payments SET invoice_id=?, amount=?, payment_date=?, payment_method=?, reference=?, notes=?, file_path=?, file_name=?, updated_at=datetime('now')
+    UPDATE payments SET invoice_id=?, amount=?, payment_date=?, payment_method=?, reference=?, notes=?, file_path=?, file_name=?, fx_rate=?, eur_amount=?, updated_at=datetime('now')
     WHERE id=?
   `).run(
-    invoice_id || existing.invoice_id, parseFloat(amount) || existing.amount,
+    finalInvoiceId, finalAmount,
     payment_date || existing.payment_date, payment_method || existing.payment_method,
-    reference ?? existing.reference, notes ?? existing.notes, file_path, file_name, req.params.id
+    reference ?? existing.reference, notes ?? existing.notes, file_path, file_name,
+    finalFxRate, finalEurAmount,
+    req.params.id
   );
 
   const payment = db.prepare('SELECT * FROM payments WHERE id = ?').get(req.params.id);

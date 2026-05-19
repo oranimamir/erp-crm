@@ -1160,6 +1160,23 @@ export async function initializeDatabase() {
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_net_salaries_month ON net_salaries(month)`); } catch (_) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_net_salaries_upload ON net_salaries(upload_id)`); } catch (_) {}
 
+  // payments: add eur_amount + fx_rate so we can aggregate in EUR without re-deriving
+  // FX every time. Backfill by reusing the invoice's stored fx_rate so payment EUR
+  // values line up with the invoice's book value (same convention as wire_transfers).
+  try { db.exec(`ALTER TABLE payments ADD COLUMN fx_rate REAL`); } catch (_) {}
+  try { db.exec(`ALTER TABLE payments ADD COLUMN eur_amount REAL`); } catch (_) {}
+  try {
+    db.prepare(`
+      UPDATE payments
+      SET fx_rate = (SELECT i.fx_rate FROM invoices i WHERE i.id = payments.invoice_id),
+          eur_amount = payments.amount * COALESCE(
+            (SELECT i.fx_rate FROM invoices i WHERE i.id = payments.invoice_id),
+            1.0
+          )
+      WHERE eur_amount IS NULL
+    `).run();
+  } catch { /* ignore */ }
+
   // Switch working_capital_forecasts: supplier_id -> supplier_name (free text from XML invoices),
   // order_id -> operation_id (link to operations instead of orders).
   try { db.exec(`ALTER TABLE working_capital_forecasts ADD COLUMN supplier_name TEXT`); } catch (_) {}
