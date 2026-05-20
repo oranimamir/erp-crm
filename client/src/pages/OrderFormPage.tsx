@@ -207,6 +207,11 @@ export default function OrderFormPage() {
 
   const itemTotal  = (item: OrderItem) => (Number(item.quantity) || 0) * (Number(item.unit_price) || 0);
   const grandTotal = useMemo(() => items.reduce((sum, item) => sum + itemTotal(item), 0), [items]);
+  const grandTotalSymbol = useMemo(() => {
+    const currencies = new Set(items.map(i => i.currency || 'USD'));
+    if (currencies.size === 1) return [...currencies][0] === 'EUR' ? '€' : '$';
+    return ''; // mixed currencies — no single symbol applies
+  }, [items]);
 
   // ── AI Scan ──────────────────────────────────────────────────────────
   const handleScanFile = async (file: File | null) => {
@@ -596,7 +601,7 @@ export default function OrderFormPage() {
           <div className="mt-4 pt-4 border-t border-gray-200 flex items-center justify-end gap-4">
             <span className="text-sm font-medium text-gray-600">Grand Total:</span>
             <span className="text-lg font-bold text-gray-900">
-              ${grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {grandTotalSymbol}{grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
           </div>
         </Card>
