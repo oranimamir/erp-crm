@@ -1354,6 +1354,9 @@ export async function initializeDatabase() {
   // order_id -> operation_id (link to operations instead of orders).
   try { db.exec(`ALTER TABLE working_capital_forecasts ADD COLUMN supplier_name TEXT`); } catch (_) {}
   try { db.exec(`ALTER TABLE working_capital_forecasts ADD COLUMN operation_id INTEGER REFERENCES operations(id) ON DELETE SET NULL`); } catch (_) {}
+  // archived: once a planned outflow has actually been paid, the user archives the
+  // row so it drops out of the active list/chart/totals but stays on record.
+  try { db.exec(`ALTER TABLE working_capital_forecasts ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
   try {
     db.prepare(`
       UPDATE working_capital_forecasts

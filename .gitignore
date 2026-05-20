@@ -4,3 +4,4 @@ server/data/
 server/uploads/
 *.db
 .env
+erp-backup-*.zip

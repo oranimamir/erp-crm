@@ -424,36 +424,43 @@ router.get('/customer-forecast', async (_req: Request, res: Response) => {
   const year = new Date().getFullYear().toString();
 
   function groupByCustomer(rows: any[]) {
-    const map = new Map<number, { customer_id: number; customer_name: string; total: number }>();
+    const map = new Map<number, { customer_id: number; customer_name: string; total: number; operations: Set<string> }>();
     for (const row of rows) {
       const key = row.customer_id ?? 0;
-      if (!map.has(key)) map.set(key, { customer_id: key, customer_name: row.customer_name || 'Unknown', total: 0 });
-      map.get(key)!.total += row.live_eur_amount ?? 0;
+      if (!map.has(key)) map.set(key, { customer_id: key, customer_name: row.customer_name || 'Unknown', total: 0, operations: new Set() });
+      const entry = map.get(key)!;
+      entry.total += row.live_eur_amount ?? 0;
+      if (row.operation_number) entry.operations.add(row.operation_number);
     }
-    return [...map.values()].sort((a, b) => b.total - a.total);
+    return [...map.values()]
+      .map(e => ({ customer_id: e.customer_id, customer_name: e.customer_name, total: e.total, operations: [...e.operations].sort() }))
+      .sort((a, b) => b.total - a.total);
   }
 
   // 1. Received YTD — payments actually received this calendar year, by customer
   const receivedRows = db.prepare(`
-    SELECT c.id as customer_id, c.name as customer_name,
+    SELECT c.id as customer_id, c.name as customer_name, op.operation_number as operation_number,
       COALESCE(wt.eur_amount, wt.amount) as amount, 'EUR' as currency
     FROM wire_transfers wt
     JOIN invoices i ON wt.invoice_id = i.id
     LEFT JOIN customers c ON i.customer_id = c.id
+    LEFT JOIN operations op ON op.id = i.operation_id
     WHERE i.type = 'customer' AND strftime('%Y', wt.transfer_date) = ?
     UNION ALL
-    SELECT c.id as customer_id, c.name as customer_name,
+    SELECT c.id as customer_id, c.name as customer_name, op.operation_number as operation_number,
       COALESCE(p.eur_amount, p.amount * COALESCE(i.fx_rate, 1.0)) as amount, 'EUR' as currency
     FROM payments p
     JOIN invoices i ON p.invoice_id = i.id
     LEFT JOIN customers c ON i.customer_id = c.id
+    LEFT JOIN operations op ON op.id = i.operation_id
     WHERE i.type = 'customer' AND strftime('%Y', p.payment_date) = ?
     UNION ALL
-    SELECT c.id as customer_id, c.name as customer_name,
+    SELECT c.id as customer_id, c.name as customer_name, op.operation_number as operation_number,
       COALESCE(i.eur_amount, i.amount) as amount,
       CASE WHEN i.eur_amount IS NOT NULL THEN 'EUR' ELSE COALESCE(i.currency, 'USD') END as currency
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
+    LEFT JOIN operations op ON op.id = i.operation_id
     WHERE i.type = 'customer' AND i.status = 'paid'
       AND NOT EXISTS (SELECT 1 FROM wire_transfers wt WHERE wt.invoice_id = i.id)
       AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.invoice_id = i.id)
@@ -466,9 +473,10 @@ router.get('/customer-forecast', async (_req: Request, res: Response) => {
   // 2. Pending (sent/overdue with due date, including late payments from prior periods) — live FX
   const pendingRows = db.prepare(`
     SELECT i.id, i.amount, i.currency, i.status, i.due_date,
-      c.id as customer_id, c.name as customer_name
+      c.id as customer_id, c.name as customer_name, op.operation_number as operation_number
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
+    LEFT JOIN operations op ON op.id = i.operation_id
     WHERE i.type = 'customer' AND i.status IN ('sent', 'overdue') AND i.due_date IS NOT NULL
     ORDER BY i.due_date
   `).all() as any[];
@@ -477,9 +485,10 @@ router.get('/customer-forecast', async (_req: Request, res: Response) => {
   // 3. Expected (sent with no due date) — live FX
   const expectedInvRows = db.prepare(`
     SELECT i.id, i.amount, i.currency,
-      c.id as customer_id, c.name as customer_name
+      c.id as customer_id, c.name as customer_name, op.operation_number as operation_number
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
+    LEFT JOIN operations op ON op.id = i.operation_id
     WHERE i.type = 'customer' AND i.status = 'sent' AND i.due_date IS NULL
   `).all() as any[];
   await attachLiveEur(expectedInvRows);
@@ -487,7 +496,7 @@ router.get('/customer-forecast', async (_req: Request, res: Response) => {
   // 3b. Expected from orders without invoices — live FX
   const expectedOrdRows = db.prepare(`
     SELECT o.total_amount as amount, UPPER(COALESCE(oi_cur.currency, 'USD')) as currency,
-      c.id as customer_id, c.name as customer_name
+      c.id as customer_id, c.name as customer_name, op.operation_number as operation_number
     FROM operations op
     JOIN orders o ON op.order_id = o.id
     LEFT JOIN customers c ON o.customer_id = c.id
@@ -527,7 +536,36 @@ router.get('/tons-ytd', (_req: Request, res: Response) => {
     WHERE o.type = 'customer'
       AND strftime('%Y', COALESCE(o.order_date, date(o.created_at))) = ?
   `).get(year) as any;
-  res.json({ total_tons: Number(result.total_tons), year: parseInt(year) });
+
+  // Same conversion, broken down per customer (for the dashboard tonnage breakdown).
+  const byCustomer = db.prepare(`
+    SELECT c.id as customer_id, COALESCE(c.name, 'Unknown') as customer_name,
+      COALESCE(SUM(
+        CASE
+          WHEN LOWER(oi.unit) IN ('mt', 'metric ton', 'metric tons', 'tonne', 'tonnes', 'tons', 'ton', 't')
+            THEN oi.quantity
+          WHEN LOWER(oi.unit) IN ('kg', 'kgs', 'kilogram', 'kilograms')
+            THEN oi.quantity / 1000.0
+          WHEN LOWER(oi.unit) IN ('lbs', 'lb', 'pound', 'pounds')
+            THEN oi.quantity / 2204.6226218
+          ELSE NULL
+        END
+      ), 0) as tons
+    FROM order_items oi
+    JOIN orders o ON oi.order_id = o.id
+    LEFT JOIN customers c ON o.customer_id = c.id
+    WHERE o.type = 'customer'
+      AND strftime('%Y', COALESCE(o.order_date, date(o.created_at))) = ?
+    GROUP BY c.id
+    HAVING tons > 0
+    ORDER BY tons DESC
+  `).all(year) as any[];
+
+  res.json({
+    total_tons: Number(result.total_tons),
+    year: parseInt(year),
+    by_customer: byCustomer.map(r => ({ customer_id: r.customer_id, customer_name: r.customer_name, tons: Number(r.tons) })),
+  });
 });
 
 router.get('/demo-expenses-monthly', (_req: Request, res: Response) => {

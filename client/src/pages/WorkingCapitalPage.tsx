@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, FormEvent } from 'react';
 import api from '../lib/api';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
-import { Plus, Pencil, Trash2, X, Wallet, Filter, Search } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, Wallet, Filter, Search, Archive, ArchiveRestore } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 
 type Status = 'planned' | 'actualized' | 'cancelled';
@@ -24,6 +24,7 @@ interface Forecast {
   expected_date: string;
   status: Status;
   notes: string | null;
+  archived?: number;
   operations: ForecastOperation[];
 }
 
@@ -187,6 +188,7 @@ export default function WorkingCapitalPage() {
   const [filterMonth, setFilterMonth] = useState<string>('');
   const [filterStatus, setFilterStatus] = useState<string>('');
   const [filterSupplierName, setFilterSupplierName] = useState<string>('');
+  const [showArchived, setShowArchived] = useState(false);
 
   // Modal
   const [modalOpen, setModalOpen] = useState(false);
@@ -202,6 +204,7 @@ export default function WorkingCapitalPage() {
     if (filterMonth)        params.month = filterMonth;
     if (filterStatus)       params.status = filterStatus;
     if (filterSupplierName) params.supplier_name = filterSupplierName;
+    if (showArchived)       params.archived = '1';
     api.get('/working-capital', { params })
       .then(r => setItems(r.data))
       .catch(err => { console.error('[working-capital] load failed', err); setItems([]); })
@@ -218,7 +221,7 @@ export default function WorkingCapitalPage() {
     }).catch(err => console.warn('[working-capital] supplier-names/operations load failed', err));
   }, []);
 
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [filterYear, filterMonth, filterStatus, filterSupplierName]);
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [filterYear, filterMonth, filterStatus, filterSupplierName, showArchived]);
 
   const totalEur = useMemo(
     () => items.filter(i => i.status !== 'cancelled').reduce((s, i) => s + eurValue(i), 0),
@@ -312,6 +315,15 @@ export default function WorkingCapitalPage() {
     }
   }
 
+  async function handleArchive(id: number, archived: boolean) {
+    try {
+      await api.patch(`/working-capital/${id}/archive`, { archived });
+      load();
+    } catch (err: any) {
+      alert(err?.response?.data?.error || err?.message || 'Archive failed');
+    }
+  }
+
   async function handleDelete(id: number) {
     if (!confirm('Delete this forecast entry?')) return;
     try {
@@ -395,6 +407,13 @@ export default function WorkingCapitalPage() {
               Clear
             </button>
           )}
+          <button
+            onClick={() => setShowArchived(v => !v)}
+            className={`ml-auto inline-flex items-center gap-1.5 text-sm rounded-lg px-2.5 py-1.5 border transition-colors ${
+              showArchived ? 'bg-primary-50 text-primary-700 border-primary-200' : 'text-gray-500 border-gray-300 hover:bg-gray-50'
+            }`}>
+            <Archive size={14} /> {showArchived ? 'Viewing archived' : 'Show archived'}
+          </button>
         </div>
       </Card>
 
@@ -456,6 +475,15 @@ export default function WorkingCapitalPage() {
                       <button onClick={() => openEdit(it)} className="text-gray-400 hover:text-primary-600 p-1" title="Edit">
                         <Pencil size={15} />
                       </button>
+                      {showArchived ? (
+                        <button onClick={() => handleArchive(it.id, false)} className="text-gray-400 hover:text-primary-600 p-1 ml-1" title="Unarchive">
+                          <ArchiveRestore size={15} />
+                        </button>
+                      ) : (
+                        <button onClick={() => handleArchive(it.id, true)} className="text-gray-400 hover:text-amber-600 p-1 ml-1" title="Archive (paid / done)">
+                          <Archive size={15} />
+                        </button>
+                      )}
                       <button onClick={() => handleDelete(it.id)} className="text-gray-400 hover:text-red-600 p-1 ml-1" title="Delete">
                         <Trash2 size={15} />
                       </button>

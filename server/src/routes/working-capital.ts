@@ -69,9 +69,12 @@ router.get('/', (req: Request, res: Response) => {
   const month  = (req.query.month  as string) || '';
   const supplier_name = (req.query.supplier_name as string) || '';
   const operation_id  = (req.query.operation_id  as string) || '';
+  const archived      = (req.query.archived       as string) || '';
 
   const conditions: string[] = [];
   const params: any[] = [];
+  // Default view shows only active (non-archived) entries; pass archived=1 to list archived ones.
+  conditions.push(archived === '1' || archived === 'true' ? 'w.archived = 1' : 'w.archived = 0');
   if (status) { conditions.push('w.status = ?'); params.push(status); }
   if (year)   { conditions.push("strftime('%Y', w.expected_date) = ?"); params.push(year); }
   if (month)  { conditions.push("strftime('%m', w.expected_date) = ?"); params.push(month.padStart(2, '0')); }
@@ -219,6 +222,17 @@ router.put('/:id', async (req: Request, res: Response) => {
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
+});
+
+router.patch('/:id/archive', (req: Request, res: Response) => {
+  const existing = db.prepare('SELECT id FROM working_capital_forecasts WHERE id = ?').get(req.params.id);
+  if (!existing) { res.status(404).json({ error: 'Forecast entry not found' }); return; }
+  const archived = req.body?.archived === false ? 0 : 1;
+  db.prepare(`UPDATE working_capital_forecasts SET archived = ?, updated_at = datetime('now') WHERE id = ?`)
+    .run(archived, req.params.id);
+  db.saveToDisk();
+  const row = db.prepare(`${FORECAST_BASE_SQL} WHERE w.id = ?`).get(req.params.id) as any;
+  res.json(attachOperations([row])[0]);
 });
 
 router.delete('/:id', (req: Request, res: Response) => {

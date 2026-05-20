@@ -38,6 +38,8 @@ export default function DashboardPage() {
   const [forecastExpected, setForecastExpected] = useState(0);
   const [wcForecast, setWcForecast] = useState<any[]>([]);
   const [tonsYTD, setTonsYTD] = useState(0);
+  const [tonsByCustomer, setTonsByCustomer] = useState<any[]>([]);
+  const [tonsBreakdownOpen, setTonsBreakdownOpen] = useState(false);
   const [priorYearOverdue, setPriorYearOverdue] = useState<{ invoices: any[]; total: number }>({ invoices: [], total: 0 });
   const [demoExpensesMonthly, setDemoExpensesMonthly] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -66,6 +68,7 @@ export default function DashboardPage() {
       setForecast(fcData.months ?? fcData); // fallback if old format
       setForecastExpected(fcData.expected ?? 0);
       setTonsYTD(ty.data.total_tons ?? 0);
+      setTonsByCustomer(ty.data.by_customer ?? []);
       setPriorYearOverdue(pyo.data);
       setCustomerForecast(cf.data);
       setDemoExpensesMonthly(dem.data);
@@ -217,8 +220,8 @@ export default function DashboardPage() {
             <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Average monthly expenses ({monthsElapsed} mo)</p>
           </Card>
         </Link>
-        <Link to="/orders" className="col-span-2 sm:col-span-1">
-          <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
+        <button onClick={() => setTonsBreakdownOpen(true)} className="col-span-2 sm:col-span-1 text-left">
+          <Card className="p-3 sm:p-5 hover:shadow-md hover:ring-1 hover:ring-indigo-200 transition-all h-full">
             <div className="flex items-center gap-2 mb-1">
               <Scale size={14} className="text-indigo-500" />
               <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide">
@@ -231,9 +234,9 @@ export default function DashboardPage() {
                 ? `${(tonsYTD / 1000).toFixed(2)}k MT`
                 : `${tonsYTD.toFixed(2)} MT`}
             </p>
-            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Total quantity from customer orders</p>
+            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:flex items-center gap-1"><Users size={11} /> By customer →</p>
           </Card>
-        </Link>
+        </button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -605,13 +608,16 @@ export default function DashboardPage() {
       {breakdown && (() => {
         const fmt2 = (n: number) => `€${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
         const mergeByCustomer = (...lists: any[][]) => {
-          const map = new Map<number, { customer_id: number; customer_name: string; total: number }>();
+          const map = new Map<number, { customer_id: number; customer_name: string; total: number; operations: Set<string> }>();
           for (const list of lists) for (const c of list ?? []) {
-            const cur = map.get(c.customer_id) ?? { customer_id: c.customer_id, customer_name: c.customer_name, total: 0 };
+            const cur = map.get(c.customer_id) ?? { customer_id: c.customer_id, customer_name: c.customer_name, total: 0, operations: new Set<string>() };
             cur.total += c.total;
+            for (const op of c.operations ?? []) cur.operations.add(op);
             map.set(c.customer_id, cur);
           }
-          return [...map.values()].sort((a, b) => b.total - a.total);
+          return [...map.values()]
+            .map(c => ({ customer_id: c.customer_id, customer_name: c.customer_name, total: c.total, operations: [...c.operations].sort() }))
+            .sort((a, b) => b.total - a.total);
         };
         const CONFIG = {
           paid:     { title: `Paid YTD ${year}`,        accent: 'text-green-600',  bar: '#22c55e', rows: customerForecast.received ?? [] },
@@ -659,6 +665,15 @@ export default function DashboardPage() {
                       <div className="w-full bg-gray-100 rounded-full h-1.5">
                         <div className="h-1.5 rounded-full" style={{ width: `${Math.round((c.total / maxRow) * 100)}%`, background: cfg.bar }} />
                       </div>
+                      {c.operations && c.operations.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {c.operations.map((opNum: string) => (
+                            <span key={opNum} className="inline-block bg-gray-100 text-gray-600 rounded px-1.5 py-0.5 text-[10px]">
+                              {opNum}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </Link>
                   ))}
                 </div>
@@ -667,6 +682,57 @@ export default function DashboardPage() {
                 <p className="px-5 py-2.5 text-[11px] text-gray-400 border-t border-gray-100">
                   Total = received YTD + pending (with due date) + expected (no due date), per customer.
                 </p>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Tonnage breakdown-by-customer modal (opened from the Tons Sold card) */}
+      {tonsBreakdownOpen && (() => {
+        const fmtTons = (n: number) => `${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MT`;
+        const rows = tonsByCustomer ?? [];
+        const total = rows.reduce((s: number, c: any) => s + c.tons, 0);
+        const maxRow = rows[0]?.tons || 1;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setTonsBreakdownOpen(false)}>
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 flex flex-col max-h-[85vh]" onClick={e => e.stopPropagation()}>
+              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                <div>
+                  <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                    <Scale size={16} className="text-gray-400" />
+                    Tons Sold {year} — by customer
+                  </h2>
+                  <p className="text-sm font-bold mt-0.5 text-indigo-600">{fmtTons(total)} <span className="text-gray-400 font-normal">· {rows.length} customer{rows.length !== 1 ? 's' : ''}</span></p>
+                </div>
+                <button onClick={() => setTonsBreakdownOpen(false)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
+                  <X size={18} />
+                </button>
+              </div>
+              {rows.length === 0 ? (
+                <p className="px-5 py-10 text-center text-sm text-gray-400">No tonnage recorded this year.</p>
+              ) : (
+                <div className="overflow-y-auto divide-y divide-gray-100">
+                  {rows.map((c: any) => (
+                    <Link
+                      key={c.customer_id ?? c.customer_name}
+                      to={c.customer_id ? `/customers/${c.customer_id}` : '#'}
+                      onClick={() => setTonsBreakdownOpen(false)}
+                      className="block px-5 py-3 hover:bg-gray-50 transition-colors"
+                    >
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-sm font-medium text-gray-900">{c.customer_name || 'Unknown'}</span>
+                        <span className="text-sm font-bold text-gray-700 tabular-nums">
+                          {fmtTons(c.tons)}
+                          <span className="text-gray-400 font-normal ml-1.5">{total > 0 ? Math.round((c.tons / total) * 100) : 0}%</span>
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-100 rounded-full h-1.5">
+                        <div className="h-1.5 rounded-full bg-indigo-500" style={{ width: `${Math.round((c.tons / maxRow) * 100)}%` }} />
+                      </div>
+                    </Link>
+                  ))}
+                </div>
               )}
             </div>
           </div>
