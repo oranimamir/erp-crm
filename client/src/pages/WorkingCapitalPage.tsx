@@ -48,6 +48,12 @@ function fmtEur(n: number | null | undefined) {
   return `€${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function fmtAxis(n: number) {
+  if (n >= 1_000_000) return `€${(n / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 1 })}M`;
+  if (n >= 1_000)     return `€${(n / 1_000).toLocaleString(undefined, { maximumFractionDigits: 1 })}k`;
+  return `€${Math.round(n)}`;
+}
+
 function fmtAmount(n: number, currency: string) {
   const symbol = currency === 'USD' ? '$' : currency === 'GBP' ? '£' : currency === 'EUR' ? '€' : '';
   const body = n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -226,6 +232,28 @@ export default function WorkingCapitalPage() {
     () => items.filter(i => i.status === 'actualized').reduce((s, i) => s + eurValue(i), 0),
     [items],
   );
+
+  // Working capital per month (EUR, excl. cancelled), keyed by YYYY-MM.
+  const monthly = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const it of items) {
+      if (it.status === 'cancelled') continue;
+      const month = (it.expected_date || '').slice(0, 7); // YYYY-MM
+      if (month.length !== 7) continue;
+      totals.set(month, (totals.get(month) ?? 0) + eurValue(it));
+    }
+    // If a single year is selected (and no month filter), show all 12 months
+    // so the timeline reads continuously even where there's no outflow.
+    if (filterYear && !filterMonth) {
+      return Array.from({ length: 12 }, (_, i) => {
+        const month = `${filterYear}-${String(i + 1).padStart(2, '0')}`;
+        return { month, total: totals.get(month) ?? 0 };
+      });
+    }
+    return Array.from(totals.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([month, total]) => ({ month, total }));
+  }, [items, filterYear, filterMonth]);
 
   function openCreate() {
     setEditingId(null);
@@ -446,6 +474,66 @@ export default function WorkingCapitalPage() {
           </div>
         )}
       </Card>
+
+      {/* Per-month chart */}
+      {!loading && monthly.some(m => m.total > 0) && (() => {
+        const maxVal = Math.max(...monthly.map(m => m.total), 1);
+        const chartH = 180;
+        return (
+          <Card>
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Wallet size={16} className="text-gray-400" />
+                <h2 className="font-semibold text-gray-900">Working Capital — Per Month (EUR, excl. cancelled)</h2>
+              </div>
+              <span className="text-xs text-gray-500">Total: <strong className="text-gray-900">{fmtEur(totalEur)}</strong></span>
+            </div>
+            <div className="p-5">
+              <div className="flex gap-2">
+                {/* Y-axis */}
+                <div className="flex flex-col justify-between items-end shrink-0 w-14" style={{ height: chartH }}>
+                  {[maxVal, maxVal * 0.75, maxVal * 0.5, maxVal * 0.25, 0].map((v, i) => (
+                    <span key={i} className="text-[10px] text-gray-400 leading-none tabular-nums">{fmtAxis(v)}</span>
+                  ))}
+                </div>
+                {/* Chart */}
+                <div className="flex-1 min-w-0 flex flex-col">
+                  <div className="relative" style={{ height: chartH }}>
+                    {[0, 25, 50, 75, 100].map(pct => (
+                      <div key={pct} className={`absolute left-0 right-0 pointer-events-none ${pct === 0 ? 'border-t border-gray-300' : 'border-t border-gray-100'}`}
+                        style={{ bottom: `${(pct / 100) * chartH}px` }} />
+                    ))}
+                    <div className="flex items-end gap-1.5 h-full">
+                      {monthly.map(m => {
+                        const barH = m.total > 0 ? Math.max((m.total / maxVal) * (chartH - 20), 3) : 0;
+                        return (
+                          <div key={m.month} className="flex-1 h-full flex flex-col items-center justify-end group relative">
+                            {m.total > 0 && <span className="text-[10px] text-primary-700 font-semibold tabular-nums whitespace-nowrap mb-0.5">{fmtAxis(m.total)}</span>}
+                            <div className="w-full max-w-[32px] bg-primary-500 rounded-t transition-all hover:bg-primary-600 cursor-pointer"
+                              style={{ height: `${barH}px` }} />
+                            {/* Tooltip on hover */}
+                            <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap z-10 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity shadow-lg">
+                              <div className="font-semibold">{new Date(m.month + '-01').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}</div>
+                              <div>{fmtEur(m.total)}</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div className="flex gap-1.5 mt-1">
+                    {monthly.map(m => (
+                      <div key={m.month} className="flex-1 text-center text-[10px] text-gray-400 truncate">
+                        {new Date(m.month + '-01').toLocaleDateString(undefined, { month: 'short' })}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </Card>
+        );
+      })()}
 
       {/* Modal */}
       {modalOpen && (
