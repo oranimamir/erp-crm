@@ -42,6 +42,7 @@ export default function DashboardPage() {
   const [demoExpensesMonthly, setDemoExpensesMonthly] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeInfo, setActiveInfo] = useState<string | null>(null);
+  const [breakdown, setBreakdown] = useState<null | 'paid' | 'pending' | 'expected' | 'total'>(null);
 
   useEffect(() => {
     Promise.all([
@@ -152,46 +153,46 @@ export default function DashboardPage() {
 
       {/* ── Financial summary ─────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        <Link to="/invoices">
-          <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
-            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
+        <button onClick={() => setBreakdown('paid')} className="text-left">
+          <Card className="p-3 sm:p-5 hover:shadow-md hover:ring-1 hover:ring-green-200 transition-all h-full">
+            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 flex items-center">
               Paid YTD {year}
               <InfoBadge id="paid-ytd" text="Sum of all payments received from customers this calendar year, including wire transfers and direct payments. Converted to EUR at current exchange rates." />
             </p>
             <p className="text-lg sm:text-2xl font-bold text-green-600 truncate">{fmt(paidYTD)}</p>
-            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Payments received this year</p>
+            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:flex items-center gap-1"><Users size={11} /> By customer →</p>
           </Card>
-        </Link>
-        <Link to="/invoices">
-          <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
-            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
+        </button>
+        <button onClick={() => setBreakdown('pending')} className="text-left">
+          <Card className="p-3 sm:p-5 hover:shadow-md hover:ring-1 hover:ring-amber-200 transition-all h-full">
+            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 flex items-center">
               Pending
               <InfoBadge id="pending" text="Total amount from customer invoices that are sent or overdue and have a due date set. Late payments from past months are included here and rolled forward to the current month in the forecast." />
             </p>
             <p className="text-lg sm:text-2xl font-bold text-amber-500 truncate">{fmt(pending)}</p>
-            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Sent invoices with due date</p>
+            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:flex items-center gap-1"><Users size={11} /> By customer →</p>
           </Card>
-        </Link>
-        <Link to="/invoices">
-          <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
-            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
+        </button>
+        <button onClick={() => setBreakdown('expected')} className="text-left">
+          <Card className="p-3 sm:p-5 hover:shadow-md hover:ring-1 hover:ring-blue-200 transition-all h-full">
+            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 flex items-center">
               Expected
               <InfoBadge id="expected" text="Total amount from sent customer invoices without a due date, plus revenue from active operations that don't have invoices yet. Converted to EUR at current exchange rates." />
             </p>
             <p className="text-lg sm:text-2xl font-bold text-blue-500 truncate">{fmt(expected)}</p>
-            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Sent invoices without due date</p>
+            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:flex items-center gap-1"><Users size={11} /> By customer →</p>
           </Card>
-        </Link>
-        <Link to="/invoices">
-          <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full border-2 border-gray-200">
-            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
+        </button>
+        <button onClick={() => setBreakdown('total')} className="text-left">
+          <Card className="p-3 sm:p-5 hover:shadow-md hover:ring-1 hover:ring-gray-300 transition-all h-full border-2 border-gray-200">
+            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 flex items-center">
               Total {year}
               <InfoBadge id="total" text="Sum of Paid YTD + Pending + Expected. Represents the total revenue picture for this calendar year: what's been received, what's owed with a due date, and what's expected without a due date." />
             </p>
             <p className="text-lg sm:text-2xl font-bold text-gray-900 truncate">{fmt(totalYear)}</p>
-            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Paid + pending + expected</p>
+            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:flex items-center gap-1"><Users size={11} /> By customer →</p>
           </Card>
-        </Link>
+        </button>
       </div>
 
       {/* ── Expenses + Tons summary ───────────────────────────────────────── */}
@@ -600,68 +601,74 @@ export default function DashboardPage() {
         );
       })()}
 
-      {/* Per-Customer Revenue Breakdown — 3 panels */}
-      {(customerForecast.received?.length > 0 || customerForecast.pending?.length > 0 || customerForecast.expected?.length > 0) && (() => {
-        const fmt2 = (n: number) => `€${n.toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
-
-        function CustomerPanel({ title, accent, rows, emptyText }: {
-          title: string; accent: string; rows: any[]; emptyText: string;
-        }) {
-          const total = rows.reduce((s: number, c: any) => s + c.total, 0);
-          const maxRow = rows[0]?.total || 1;
-          return (
-            <Card>
+      {/* Revenue breakdown-by-customer modal (opened from the summary cards above) */}
+      {breakdown && (() => {
+        const fmt2 = (n: number) => `€${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        const mergeByCustomer = (...lists: any[][]) => {
+          const map = new Map<number, { customer_id: number; customer_name: string; total: number }>();
+          for (const list of lists) for (const c of list ?? []) {
+            const cur = map.get(c.customer_id) ?? { customer_id: c.customer_id, customer_name: c.customer_name, total: 0 };
+            cur.total += c.total;
+            map.set(c.customer_id, cur);
+          }
+          return [...map.values()].sort((a, b) => b.total - a.total);
+        };
+        const CONFIG = {
+          paid:     { title: `Paid YTD ${year}`,        accent: 'text-green-600',  bar: '#22c55e', rows: customerForecast.received ?? [] },
+          pending:  { title: 'Pending (with due date)', accent: 'text-amber-600',  bar: '#f59e0b', rows: customerForecast.pending ?? [] },
+          expected: { title: 'Expected (no due date)',  accent: 'text-blue-600',   bar: '#3b82f6', rows: customerForecast.expected ?? [] },
+          total:    { title: `Total Revenue ${year}`,   accent: 'text-gray-900',   bar: '#6366f1', rows: mergeByCustomer(customerForecast.received, customerForecast.pending, customerForecast.expected) },
+        } as const;
+        const cfg = CONFIG[breakdown];
+        const rows = cfg.rows;
+        const total = rows.reduce((s: number, c: any) => s + c.total, 0);
+        const maxRow = rows[0]?.total || 1;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setBreakdown(null)}>
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 flex flex-col max-h-[85vh]" onClick={e => e.stopPropagation()}>
               <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                <h2 className="font-semibold text-gray-900 flex items-center gap-2">
-                  <Users size={15} className="text-gray-400" />
-                  {title}
-                </h2>
-                {rows.length > 0 && (
-                  <span className={`text-sm font-bold ${accent}`}>{fmt2(total)}</span>
-                )}
+                <div>
+                  <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                    <Users size={16} className="text-gray-400" />
+                    {cfg.title} — by customer
+                  </h2>
+                  <p className={`text-sm font-bold mt-0.5 ${cfg.accent}`}>{fmt2(total)} <span className="text-gray-400 font-normal">· {rows.length} customer{rows.length !== 1 ? 's' : ''}</span></p>
+                </div>
+                <button onClick={() => setBreakdown(null)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
+                  <X size={18} />
+                </button>
               </div>
               {rows.length === 0 ? (
-                <p className="px-5 py-6 text-center text-sm text-gray-400">{emptyText}</p>
+                <p className="px-5 py-10 text-center text-sm text-gray-400">No data for this metric.</p>
               ) : (
-                <div className="divide-y divide-gray-100">
+                <div className="overflow-y-auto divide-y divide-gray-100">
                   {rows.map((c: any) => (
-                    <div key={c.customer_id} className="px-5 py-3">
+                    <Link
+                      key={c.customer_id}
+                      to={c.customer_id ? `/customers/${c.customer_id}` : '#'}
+                      onClick={() => setBreakdown(null)}
+                      className="block px-5 py-3 hover:bg-gray-50 transition-colors"
+                    >
                       <div className="flex items-center justify-between mb-1.5">
-                        <span className="text-sm font-medium text-gray-900">{c.customer_name}</span>
-                        <span className={`text-sm font-bold ${accent}`}>{fmt2(c.total)}</span>
+                        <span className="text-sm font-medium text-gray-900">{c.customer_name || 'Unknown'}</span>
+                        <span className="text-sm font-bold text-gray-700 tabular-nums">
+                          {fmt2(c.total)}
+                          <span className="text-gray-400 font-normal ml-1.5">{total > 0 ? Math.round((c.total / total) * 100) : 0}%</span>
+                        </span>
                       </div>
                       <div className="w-full bg-gray-100 rounded-full h-1.5">
-                        <div className={`h-1.5 rounded-full`}
-                          style={{ width: `${Math.round((c.total / maxRow) * 100)}%`, background: accent.includes('green') ? '#22c55e' : accent.includes('amber') ? '#f59e0b' : '#3b82f6' }} />
+                        <div className="h-1.5 rounded-full" style={{ width: `${Math.round((c.total / maxRow) * 100)}%`, background: cfg.bar }} />
                       </div>
-                    </div>
+                    </Link>
                   ))}
                 </div>
               )}
-            </Card>
-          );
-        }
-
-        return (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <CustomerPanel
-              title="Received YTD"
-              accent="text-green-600"
-              rows={customerForecast.received ?? []}
-              emptyText="No payments received yet this year"
-            />
-            <CustomerPanel
-              title="Pending (with due date)"
-              accent="text-amber-600"
-              rows={customerForecast.pending ?? []}
-              emptyText="No pending invoices with a due date"
-            />
-            <CustomerPanel
-              title="Expected (no due date)"
-              accent="text-blue-600"
-              rows={customerForecast.expected ?? []}
-              emptyText="No invoices without a due date"
-            />
+              {breakdown === 'total' && (
+                <p className="px-5 py-2.5 text-[11px] text-gray-400 border-t border-gray-100">
+                  Total = received YTD + pending (with due date) + expected (no due date), per customer.
+                </p>
+              )}
+            </div>
           </div>
         );
       })()}
