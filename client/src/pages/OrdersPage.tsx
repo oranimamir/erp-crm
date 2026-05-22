@@ -58,6 +58,53 @@ export default function OrdersPage() {
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewFile, setPreviewFile] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [downloading, setDownloading] = useState(false);
+
+  const toggleSelect = (id: number) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const ordersWithFile = orders.filter(o => o.file_path);
+  const allSelected = ordersWithFile.length > 0 && ordersWithFile.every(o => selected.has(o.id));
+
+  const toggleSelectAll = () => {
+    setSelected(prev => {
+      if (allSelected) {
+        const next = new Set(prev);
+        ordersWithFile.forEach(o => next.delete(o.id));
+        return next;
+      }
+      return new Set([...prev, ...ordersWithFile.map(o => o.id)]);
+    });
+  };
+
+  const downloadSelected = async () => {
+    if (selected.size === 0) return;
+    setDownloading(true);
+    try {
+      const res = await api.get('/orders/bulk-download', { params: { ids: [...selected].join(',') }, responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `orders-${new Date().toISOString().slice(0, 10)}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setSelected(new Set());
+    } catch (err: any) {
+      let msg = 'Failed to download selected orders';
+      try { msg = JSON.parse(await err.response.data.text()).error || msg; } catch {}
+      addToast(msg, 'error');
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const fetchOrders = () => {
     setLoading(true);
@@ -144,6 +191,11 @@ export default function OrdersPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Orders</h1>
         <div className="flex gap-2">
+          {selected.size > 0 && (
+            <Button variant="secondary" onClick={downloadSelected} disabled={downloading}>
+              <Download size={16} /> Download Selected ({selected.size})
+            </Button>
+          )}
           <Button variant="secondary" onClick={async () => {
             const res = await api.get('/orders', { params: { page: 1, limit: 9999, search, status: statusFilter || undefined, type: typeFilter || undefined, year: yearFilter || undefined, month: monthFilter || undefined } });
             downloadExcel('orders', ['Order #', 'Customer / Supplier', 'Type', 'Amount', 'Status', 'Created'],
@@ -211,6 +263,16 @@ export default function OrdersPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
+                  <th className="px-4 py-3 w-10">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      onChange={toggleSelectAll}
+                      disabled={ordersWithFile.length === 0}
+                      className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      title="Select all with a document"
+                    />
+                  </th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Order #</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Customer / Supplier</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Type</th>
@@ -223,6 +285,16 @@ export default function OrdersPage() {
               <tbody className="divide-y divide-gray-100">
                 {orders.map(o => (
                   <tr key={o.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(o.id)}
+                        onChange={() => toggleSelect(o.id)}
+                        disabled={!o.file_path}
+                        className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:opacity-30"
+                        title={o.file_path ? 'Select for bulk download' : 'No document attached'}
+                      />
+                    </td>
                     <td className="px-4 py-3">
                       <p className="font-medium text-gray-900">{o.order_number}</p>
                       {o.operation_number && <p className="text-xs text-gray-400">Op# {o.operation_number}</p>}

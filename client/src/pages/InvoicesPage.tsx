@@ -113,6 +113,69 @@ export default function InvoicesPage() {
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [monthlySummary, setMonthlySummary] = useState<{ invoicesByMonth: { month: string; total_eur: number; count: number }[]; wiresByMonth: { month: string; total_eur: number; count: number }[] } | null>(null);
   const [showSummary, setShowSummary] = useState(true);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [downloading, setDownloading] = useState(false);
+
+  const toggleSelect = (id: number) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const invoicesWithFile = invoices.filter(inv => inv.file_path);
+  const allSelected = invoicesWithFile.length > 0 && invoicesWithFile.every(inv => selected.has(inv.id));
+
+  const toggleSelectAll = () => {
+    setSelected(prev => {
+      if (allSelected) {
+        const next = new Set(prev);
+        invoicesWithFile.forEach(inv => next.delete(inv.id));
+        return next;
+      }
+      return new Set([...prev, ...invoicesWithFile.map(inv => inv.id)]);
+    });
+  };
+
+  const downloadSelected = async () => {
+    if (selected.size === 0) return;
+    setDownloading(true);
+    try {
+      const res = await api.get('/invoices/bulk-download', { params: { ids: [...selected].join(',') }, responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `invoices-${new Date().toISOString().slice(0, 10)}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setSelected(new Set());
+    } catch (err: any) {
+      let msg = 'Failed to download selected invoices';
+      try { msg = JSON.parse(await err.response.data.text()).error || msg; } catch {}
+      addToast(msg, 'error');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const downloadFile = async (apiPath: string, filename: string) => {
+    try {
+      const res = await api.get(apiPath, { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      addToast('Failed to download file', 'error');
+    }
+  };
 
   useEffect(() => {
     api.get('/invoices/monthly-summary').then(res => setMonthlySummary(res.data)).catch(() => {});
@@ -267,6 +330,11 @@ export default function InvoicesPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Customer Invoices</h1>
         <div className="flex gap-2">
+          {selected.size > 0 && (
+            <Button variant="secondary" onClick={downloadSelected} disabled={downloading}>
+              <Download size={16} /> Download Selected ({selected.size})
+            </Button>
+          )}
           <Button variant="secondary" onClick={handleExport}><FileSpreadsheet size={16} /> Export Excel</Button>
           <Link to="/invoices/generate">
             <Button variant="secondary"><FileDown size={16} /> Generate PDF</Button>
@@ -533,6 +601,16 @@ export default function InvoicesPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
+                  <th className="px-4 py-3 w-10">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      onChange={toggleSelectAll}
+                      disabled={invoicesWithFile.length === 0}
+                      className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      title="Select all with a file"
+                    />
+                  </th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Invoice #</th>
                   <th
                     className="text-left px-4 py-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900 select-none"
@@ -566,6 +644,16 @@ export default function InvoicesPage() {
               <tbody className="divide-y divide-gray-100">
                 {invoices.map(inv => (
                   <tr key={inv.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(inv.id)}
+                        onChange={() => toggleSelect(inv.id)}
+                        disabled={!inv.file_path}
+                        className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:opacity-30"
+                        title={inv.file_path ? 'Select for bulk download' : 'No file attached'}
+                      />
+                    </td>
                     <td className="px-4 py-3 font-medium text-gray-900">
                       <div className="flex items-center gap-1.5">
                         {inv.invoice_number}
@@ -629,6 +717,15 @@ export default function InvoicesPage() {
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
                         <Link to={`/invoices/${inv.id}`} className="p-1.5 text-gray-400 hover:text-primary-600 rounded"><Eye size={16} /></Link>
+                        {inv.file_path && (
+                          <button
+                            onClick={() => downloadFile(`/files/invoices/${inv.file_path}`, inv.file_name || inv.file_path)}
+                            className="p-1.5 text-gray-400 hover:text-primary-600 rounded"
+                            title="Download invoice file"
+                          >
+                            <Download size={16} />
+                          </button>
+                        )}
                         <button onClick={() => setDeleteId(inv.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded"><Trash2 size={16} /></button>
                       </div>
                     </td>

@@ -3,6 +3,7 @@ import db from '../database.js';
 import { uploadInvoice, uploadWireTransfer } from '../middleware/upload.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { getEurRate } from '../lib/fx.js';
+import { resolveUpload, streamZip, safeName } from '../lib/zipFiles.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -107,6 +108,34 @@ router.get('/monthly-summary', (_req: Request, res: Response) => {
   `).all() as { month: string; total_eur: number; count: number }[];
 
   res.json({ invoicesByMonth, wiresByMonth });
+});
+
+// Bulk-download the attached files of multiple invoices as a single ZIP.
+// Registered before '/:id' so the literal path isn't captured as an id.
+router.get('/bulk-download', (req: Request, res: Response) => {
+  const ids = String(req.query.ids || '')
+    .split(',')
+    .map(s => parseInt(s.trim(), 10))
+    .filter(n => Number.isInteger(n) && n > 0);
+  if (!ids.length) { res.status(400).json({ error: 'No invoice IDs provided' }); return; }
+
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = db.prepare(
+    `SELECT id, invoice_number, file_path, file_name FROM invoices WHERE id IN (${placeholders}) AND file_path IS NOT NULL`
+  ).all(...ids) as any[];
+
+  const files = rows
+    .map(r => {
+      const absPath = resolveUpload('invoices', r.file_path);
+      if (!absPath) return null;
+      const ext = path.extname(r.file_name || r.file_path) || '';
+      return { absPath, name: `${safeName(r.invoice_number || `invoice-${r.id}`)}${ext}` };
+    })
+    .filter((f): f is { absPath: string; name: string } => f !== null);
+
+  if (!files.length) { res.status(404).json({ error: 'None of the selected invoices have an attached file' }); return; }
+
+  streamZip(res, `invoices-${new Date().toISOString().slice(0, 10)}.zip`, files);
 });
 
 router.get('/:id', (req: Request, res: Response) => {

@@ -1,8 +1,38 @@
 import { Router, Request, Response } from 'express';
+import path from 'path';
 import db from '../database.js';
 import { notifyAdmin } from '../lib/notify.js';
+import { resolveUpload, streamZip, safeName } from '../lib/zipFiles.js';
 
 const router = Router();
+
+// Bulk-download the attached documents of multiple orders as a single ZIP.
+// Registered before '/:id' so the literal path isn't captured as an id.
+router.get('/bulk-download', (req: Request, res: Response) => {
+  const ids = String(req.query.ids || '')
+    .split(',')
+    .map(s => parseInt(s.trim(), 10))
+    .filter(n => Number.isInteger(n) && n > 0);
+  if (!ids.length) { res.status(400).json({ error: 'No order IDs provided' }); return; }
+
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = db.prepare(
+    `SELECT id, order_number, file_path, file_name FROM orders WHERE id IN (${placeholders}) AND file_path IS NOT NULL`
+  ).all(...ids) as any[];
+
+  const files = rows
+    .map(r => {
+      const absPath = resolveUpload('orders', r.file_path);
+      if (!absPath) return null;
+      const ext = path.extname(r.file_name || r.file_path) || '';
+      return { absPath, name: `${safeName(r.order_number || `order-${r.id}`)}${ext}` };
+    })
+    .filter((f): f is { absPath: string; name: string } => f !== null);
+
+  if (!files.length) { res.status(404).json({ error: 'None of the selected orders have an attached document' }); return; }
+
+  streamZip(res, `orders-${new Date().toISOString().slice(0, 10)}.zip`, files);
+});
 
 router.get('/', (req: Request, res: Response) => {
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
