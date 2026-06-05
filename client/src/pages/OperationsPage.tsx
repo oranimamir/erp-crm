@@ -20,6 +20,7 @@ interface Operation {
   order_file_name?: string;
   customer_name?: string;
   supplier_name?: string;
+  country?: string;
   status: string;
   ship_date?: string;
   doc_count: number;
@@ -36,6 +37,7 @@ interface Operation {
   wire_transfer_date?: string;
   etd?: string;
   eta?: string;
+  estimated_payment_date?: string;
   created_at: string;
 }
 
@@ -53,11 +55,12 @@ interface PreviewItem {
   subfolder: string;
 }
 
-const STATUS_OPTIONS = ['pre-ordered', 'ordered', 'shipped', 'in clearance', 'delivered', 'completed'];
+const STATUS_OPTIONS = ['pre-ordered', 'ordered', 'in production', 'shipped', 'in clearance', 'delivered', 'completed'];
 
 const STATUS_COLORS: Record<string, string> = {
   'pre-ordered':   'bg-purple-100 text-purple-800',
   ordered:         'bg-yellow-100 text-yellow-800',
+  'in production': 'bg-pink-100   text-pink-800',
   shipped:         'bg-blue-100   text-blue-800',
   'in clearance':  'bg-orange-100 text-orange-800',
   delivered:       'bg-green-100  text-green-800',
@@ -349,9 +352,10 @@ export default function OperationsPage() {
             onClick={async () => {
               const { data } = await api.get('/operations', { params: { page: 1, limit: 9999, search } });
               downloadExcel('operations',
-                ['Operation #', 'Order #', 'Customer / Supplier', 'Status', 'ETD', 'ETA', 'Docs', 'Invoices', 'Quantity (MT)', 'Invoice Total (EUR)', 'Order Date', 'Invoice Date', 'Wire Transfer Date'],
+                ['Operation #', 'Order #', 'Country', 'Customer / Supplier', 'Status', 'ETD', 'ETA', 'Docs', 'Invoices', 'Quantity (MT)', 'Invoice Total (EUR)', 'Order Date', 'Invoice Date', 'Est. Payment Date', 'Wire Transfer Date'],
                 data.data.map((op: any) => [
                   op.operation_number, op.order_number || '',
+                  op.country || '',
                   op.customer_name || op.supplier_name || '',
                   op.status,
                   formatDate(op.etd) || '',
@@ -361,6 +365,7 @@ export default function OperationsPage() {
                   op.invoice_total > 0 ? Number(op.invoice_total).toFixed(2) : '',
                   formatDate(op.order_date || op.created_at) || '',
                   formatDate(op.invoice_date) || '',
+                  formatDate(op.estimated_payment_date) || '',
                   formatDate(op.wire_transfer_date) || '',
                 ]));
             }}
@@ -491,6 +496,8 @@ export default function OperationsPage() {
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Operation #</th>
+                <th className="text-left px-4 py-3 font-medium text-gray-600">Order #</th>
+                <th className="text-left px-4 py-3 font-medium text-gray-600">Country</th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Preview</th>
                 <th
                   className={thSortable}
@@ -533,6 +540,12 @@ export default function OperationsPage() {
                 >
                   <td className="px-4 py-3">
                     <span className="font-semibold text-primary-700">{op.operation_number}</span>
+                  </td>
+                  <td className="px-4 py-3 text-gray-700">
+                    {op.order_number || <span className="text-gray-400">—</span>}
+                  </td>
+                  <td className="px-4 py-3 text-gray-700">
+                    {op.country || <span className="text-gray-400">—</span>}
                   </td>
                   <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                     <div className="flex items-center gap-1">
@@ -655,12 +668,26 @@ export default function OperationsPage() {
                             : <span className="text-gray-400">—</span>)
                     }
                   </td>
-                  <td className="px-4 py-3">
-                    <div className="leading-tight">
+                  <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                    <div className="leading-tight space-y-0.5">
                       <div className="text-gray-700">{formatDate(op.order_date) || formatDate(op.created_at) || '—'}</div>
                       {op.invoice_date && (
-                        <div className="text-[11px] text-gray-400 mt-0.5">Inv: {formatDate(op.invoice_date)}</div>
+                        <div className="text-[11px] text-gray-400">Inv: {formatDate(op.invoice_date)}</div>
                       )}
+                      <div className="flex items-center gap-1 text-[11px] text-gray-500">
+                        <span>Est. Pay:</span>
+                        <input
+                          type="date"
+                          value={op.estimated_payment_date || ''}
+                          onChange={async e => {
+                            const val = e.target.value;
+                            setOperations(prev => prev.map(o => o.id === op.id ? { ...o, estimated_payment_date: val } : o));
+                            try { await api.patch(`/operations/${op.id}/dates`, { estimated_payment_date: val }); }
+                            catch { addToast('Failed to update estimated payment date', 'error'); }
+                          }}
+                          className="border border-gray-200 rounded px-1 py-0.5 text-[11px] focus:outline-none focus:ring-2 focus:ring-primary-500"
+                        />
+                      </div>
                       {op.wire_transfer_date && (
                         <div className="text-[11px] text-gray-400">WT: {formatDate(op.wire_transfer_date)}</div>
                       )}

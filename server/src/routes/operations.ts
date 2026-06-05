@@ -114,6 +114,7 @@ router.get('/', async (req: Request, res: Response) => {
       o.order_date,
       o.type as order_type,
       o.total_amount as order_total,
+      o.destination as country,
       o.file_path as order_file_path,
       o.file_name as order_file_name,
       (SELECT COUNT(*) FROM operation_documents od WHERE od.operation_id = op.id) as doc_count,
@@ -375,13 +376,14 @@ router.post('/:id/ship', (req: Request, res: Response) => {
 router.patch('/:id/dates', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT * FROM operations WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Operation not found' }); return; }
-  const { etd, eta } = req.body;
-  db.prepare(`UPDATE operations SET etd=?, eta=?, updated_at=datetime('now') WHERE id=?`).run(
-    etd !== undefined ? (etd || null) : existing.etd,
-    eta !== undefined ? (eta || null) : existing.eta,
-    req.params.id
+  const { etd, eta, estimated_payment_date } = req.body;
+  const nextEtd = etd !== undefined ? (etd || null) : existing.etd;
+  const nextEta = eta !== undefined ? (eta || null) : existing.eta;
+  const nextEpd = estimated_payment_date !== undefined ? (estimated_payment_date || null) : existing.estimated_payment_date;
+  db.prepare(`UPDATE operations SET etd=?, eta=?, estimated_payment_date=?, updated_at=datetime('now') WHERE id=?`).run(
+    nextEtd, nextEta, nextEpd, req.params.id
   );
-  res.json({ id: existing.id, etd: etd !== undefined ? (etd || null) : existing.etd, eta: eta !== undefined ? (eta || null) : existing.eta });
+  res.json({ id: existing.id, etd: nextEtd, eta: nextEta, estimated_payment_date: nextEpd });
 });
 
 // ── Update operation ──────────────────────────────────────────────────────────
