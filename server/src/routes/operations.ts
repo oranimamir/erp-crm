@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import db from '../database.js';
 import { getEurRate } from '../lib/fx.js';
 import { notifyAdmin } from '../lib/notify.js';
+import { resolveCountry } from '../lib/portCountry.js';
 import { uploadOperationDoc } from '../middleware/upload.js';
 import fs from 'fs';
 import path from 'path';
@@ -198,10 +199,15 @@ router.get('/', async (req: Request, res: Response) => {
     // Order-based EUR amount: convert order_total to EUR using live rates
     const orderCur = (op.order_currency || 'USD').toUpperCase();
     const orderEur = orderCur === 'EUR' ? (op.order_total || 0) : (op.order_total || 0) * (rates[orderCur] ?? 1);
+    // Country suggestion: resolve the order's freeform destination into a country
+    // (handles port names like "Puerto Quetzal" → Guatemala). User can still
+    // override via the inline editor; that override lives on op.country.
+    const country_suggested = resolveCountry(op.order_destination);
     return {
       ...op,
       invoice_total: invoiceTotal,
       order_total_eur: orderEur,
+      country_suggested,
     };
   });
 

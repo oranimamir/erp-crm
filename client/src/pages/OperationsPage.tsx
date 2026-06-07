@@ -21,6 +21,7 @@ interface Operation {
   customer_name?: string;
   supplier_name?: string;
   country?: string;
+  country_suggested?: string;
   order_destination?: string;
   order_payment_terms?: string;
   status: string;
@@ -43,11 +44,14 @@ interface Operation {
   created_at: string;
 }
 
-// Heuristic: extract a country guess from a freeform destination string.
-// Takes the last comma-separated chunk (e.g. "Port of Rotterdam, Netherlands" → "Netherlands").
-function extractCountry(destination?: string): string {
-  if (!destination) return '';
-  const parts = destination.split(',').map(p => p.trim()).filter(Boolean);
+// Resolve a country guess for an operation. The server already runs the
+// freeform destination through a port→country table (e.g. "Puerto Quetzal" →
+// Guatemala), so prefer that. Fall back to the raw last-chunk if the server
+// didn't send a suggestion (older payloads).
+function suggestedCountry(op: { country_suggested?: string; order_destination?: string }): string {
+  if (op.country_suggested) return op.country_suggested;
+  const dest = op.order_destination || '';
+  const parts = dest.split(',').map(p => p.trim()).filter(Boolean);
   return parts[parts.length - 1] || '';
 }
 
@@ -603,11 +607,12 @@ export default function OperationsPage() {
                   <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                     <input
                       type="text"
-                      defaultValue={op.country || extractCountry(op.order_destination)}
+                      defaultValue={op.country || suggestedCountry(op)}
                       placeholder="—"
+                      title={op.order_destination ? `Order destination: ${op.order_destination}` : ''}
                       onBlur={async e => {
                         const val = e.target.value.trim();
-                        const current = op.country || extractCountry(op.order_destination);
+                        const current = op.country || suggestedCountry(op);
                         if (val === current) return;
                         setOperations(prev => prev.map(o => o.id === op.id ? { ...o, country: val } : o));
                         try { await api.patch(`/operations/${op.id}/country`, { country: val }); }
