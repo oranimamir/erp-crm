@@ -114,7 +114,8 @@ router.get('/', async (req: Request, res: Response) => {
       o.order_date,
       o.type as order_type,
       o.total_amount as order_total,
-      o.destination as country,
+      o.destination as order_destination,
+      o.payment_terms as order_payment_terms,
       o.file_path as order_file_path,
       o.file_name as order_file_name,
       (SELECT COUNT(*) FROM operation_documents od WHERE od.operation_id = op.id) as doc_count,
@@ -372,6 +373,15 @@ router.post('/:id/ship', (req: Request, res: Response) => {
 });
 
 // ── Update ETD / ETA ─────────────────────────────────────────────────────────
+
+router.patch('/:id/country', (req: Request, res: Response) => {
+  const existing = db.prepare('SELECT * FROM operations WHERE id = ?').get(req.params.id) as any;
+  if (!existing) { res.status(404).json({ error: 'Operation not found' }); return; }
+  const { country } = req.body;
+  const next = country === undefined ? existing.country : (country?.trim() || null);
+  db.prepare(`UPDATE operations SET country=?, updated_at=datetime('now') WHERE id=?`).run(next, req.params.id);
+  res.json({ id: existing.id, country: next });
+});
 
 router.patch('/:id/dates', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT * FROM operations WHERE id = ?').get(req.params.id) as any;

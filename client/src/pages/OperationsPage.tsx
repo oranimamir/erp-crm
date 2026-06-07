@@ -21,6 +21,8 @@ interface Operation {
   customer_name?: string;
   supplier_name?: string;
   country?: string;
+  order_destination?: string;
+  order_payment_terms?: string;
   status: string;
   ship_date?: string;
   doc_count: number;
@@ -39,6 +41,27 @@ interface Operation {
   eta?: string;
   estimated_payment_date?: string;
   created_at: string;
+}
+
+// Heuristic: extract a country guess from a freeform destination string.
+// Takes the last comma-separated chunk (e.g. "Port of Rotterdam, Netherlands" → "Netherlands").
+function extractCountry(destination?: string): string {
+  if (!destination) return '';
+  const parts = destination.split(',').map(p => p.trim()).filter(Boolean);
+  return parts[parts.length - 1] || '';
+}
+
+// Detect if payment terms reference a BL date (e.g. "60 days from BL", "30d B/L")
+function paymentTermsMentionsBL(terms?: string): boolean {
+  if (!terms) return false;
+  return /\b(bl|b\/l|bill of lading)\b/i.test(terms);
+}
+
+// Extract the day count from a payment-terms string (e.g. "60 days from BL" → 60, "45" → 45)
+function paymentTermsDays(terms?: string): number | null {
+  if (!terms) return null;
+  const m = terms.match(/\d+/);
+  return m ? parseInt(m[0], 10) : null;
 }
 
 function addDays(dateStr: string, days: number): string {
@@ -166,6 +189,36 @@ export default function OperationsPage() {
   const [payDays, setPayDays] = useState(45);
   const [dueDate, setDueDate] = useState('');
   const [savingShip, setSavingShip] = useState(false);
+
+  // BL-date prompt for payment terms like "60 days from BL"
+  const [blPrompt, setBlPrompt] = useState<{ opId: number; opNumber: string; days: number; terms: string } | null>(null);
+  const [blDate, setBlDate] = useState('');
+  const [savingBl, setSavingBl] = useState(false);
+
+  const saveEstimatedPaymentDate = async (opId: number, val: string) => {
+    setOperations(prev => prev.map(o => o.id === opId ? { ...o, estimated_payment_date: val || undefined } : o));
+    try { await api.patch(`/operations/${opId}/dates`, { estimated_payment_date: val }); }
+    catch { addToast('Failed to update estimated payment date', 'error'); }
+  };
+
+  const openBlPrompt = (op: Operation) => {
+    const days = paymentTermsDays(op.order_payment_terms);
+    if (days == null) return;
+    setBlPrompt({ opId: op.id, opNumber: op.operation_number, days, terms: op.order_payment_terms || '' });
+    setBlDate(todayISO());
+  };
+
+  const submitBlPrompt = async () => {
+    if (!blPrompt || !blDate) return;
+    setSavingBl(true);
+    try {
+      const computed = addDays(blDate, blPrompt.days);
+      await saveEstimatedPaymentDate(blPrompt.opId, computed);
+      setBlPrompt(null);
+    } finally {
+      setSavingBl(false);
+    }
+  };
 
   const handleSort = (field: SortField) => {
     if (sortBy === field) {
@@ -496,9 +549,6 @@ export default function OperationsPage() {
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Operation #</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-600">Order #</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-600">Country</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-600">Preview</th>
                 <th
                   className={thSortable}
                   onClick={() => handleSort('name')}
@@ -507,6 +557,9 @@ export default function OperationsPage() {
                     Customer / Supplier <SortIcon field="name" />
                   </span>
                 </th>
+                <th className="text-left px-4 py-3 font-medium text-gray-600">Order #</th>
+                <th className="text-left px-4 py-3 font-medium text-gray-600">Country</th>
+                <th className="text-left px-4 py-3 font-medium text-gray-600">Preview</th>
                 <th
                   className={thSortable}
                   onClick={() => handleSort('status')}
@@ -542,10 +595,26 @@ export default function OperationsPage() {
                     <span className="font-semibold text-primary-700">{op.operation_number}</span>
                   </td>
                   <td className="px-4 py-3 text-gray-700">
-                    {op.order_number || <span className="text-gray-400">—</span>}
+                    {op.customer_name || op.supplier_name || <span className="text-gray-400">—</span>}
                   </td>
                   <td className="px-4 py-3 text-gray-700">
-                    {op.country || <span className="text-gray-400">—</span>}
+                    {op.order_number || <span className="text-gray-400">—</span>}
+                  </td>
+                  <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                    <input
+                      type="text"
+                      defaultValue={op.country || extractCountry(op.order_destination)}
+                      placeholder="—"
+                      onBlur={async e => {
+                        const val = e.target.value.trim();
+                        const current = op.country || extractCountry(op.order_destination);
+                        if (val === current) return;
+                        setOperations(prev => prev.map(o => o.id === op.id ? { ...o, country: val } : o));
+                        try { await api.patch(`/operations/${op.id}/country`, { country: val }); }
+                        catch { addToast('Failed to update country', 'error'); }
+                      }}
+                      className="w-32 border border-gray-200 rounded px-2 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
                   </td>
                   <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                     <div className="flex items-center gap-1">
@@ -597,9 +666,6 @@ export default function OperationsPage() {
                         <span className="text-gray-300">—</span>
                       )}
                     </div>
-                  </td>
-                  <td className="px-4 py-3 text-gray-700">
-                    {op.customer_name || op.supplier_name || <span className="text-gray-400">—</span>}
                   </td>
                   <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                     <select
@@ -674,20 +740,44 @@ export default function OperationsPage() {
                       {op.invoice_date && (
                         <div className="text-[11px] text-gray-400">Inv: {formatDate(op.invoice_date)}</div>
                       )}
-                      <div className="flex items-center gap-1 text-[11px] text-gray-500">
-                        <span>Est. Pay:</span>
-                        <input
-                          type="date"
-                          value={op.estimated_payment_date || ''}
-                          onChange={async e => {
-                            const val = e.target.value;
-                            setOperations(prev => prev.map(o => o.id === op.id ? { ...o, estimated_payment_date: val } : o));
-                            try { await api.patch(`/operations/${op.id}/dates`, { estimated_payment_date: val }); }
-                            catch { addToast('Failed to update estimated payment date', 'error'); }
-                          }}
-                          className="border border-gray-200 rounded px-1 py-0.5 text-[11px] focus:outline-none focus:ring-2 focus:ring-primary-500"
-                        />
-                      </div>
+                      {(() => {
+                        const days = paymentTermsDays(op.order_payment_terms);
+                        const isBL = paymentTermsMentionsBL(op.order_payment_terms);
+                        const hasInvoice = op.invoice_count > 0;
+                        // Auto-compute when invoice exists, terms are numeric, no BL reference, and user hasn't set anything yet
+                        const computed = !op.estimated_payment_date && hasInvoice && op.invoice_date && days != null && !isBL
+                          ? addDays(op.invoice_date, days)
+                          : '';
+                        const value = op.estimated_payment_date || computed;
+                        const needsBL = !op.estimated_payment_date && hasInvoice && isBL && days != null;
+                        const isAuto = !op.estimated_payment_date && !!computed;
+                        return (
+                          <div className="flex items-center gap-1 text-[11px] text-gray-500">
+                            <span>Est. Pay:</span>
+                            <input
+                              type="date"
+                              value={value}
+                              title={
+                                needsBL ? `Terms: "${op.order_payment_terms}". Click to enter BL date.`
+                                : isAuto ? `Auto: Inv date + ${days} days (editable)`
+                                : op.estimated_payment_date ? 'Manually set'
+                                : 'Estimated payment date'
+                              }
+                              onMouseDown={e => {
+                                if (needsBL) {
+                                  e.preventDefault();
+                                  openBlPrompt(op);
+                                }
+                              }}
+                              onChange={e => saveEstimatedPaymentDate(op.id, e.target.value)}
+                              className={`border border-gray-200 rounded px-1 py-0.5 text-[11px] focus:outline-none focus:ring-2 focus:ring-primary-500 ${isAuto ? 'text-gray-400 italic' : ''}`}
+                            />
+                            {needsBL && (
+                              <span className="text-amber-600" title={`Payment terms reference BL: "${op.order_payment_terms}"`}>BL?</span>
+                            )}
+                          </div>
+                        );
+                      })()}
                       {op.wire_transfer_date && (
                         <div className="text-[11px] text-gray-400">WT: {formatDate(op.wire_transfer_date)}</div>
                       )}
@@ -878,6 +968,61 @@ export default function OperationsPage() {
               >
                 {savingShip ? <Loader2 size={15} className="animate-spin" /> : <Truck size={15} />}
                 {savingShip ? 'Saving...' : 'Confirm Shipment'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── BL Date Prompt ─────────────────────────────────────────────────── */}
+      {blPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => !savingBl && setBlPrompt(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+              <h3 className="font-semibold text-gray-900">
+                BL date — {blPrompt.opNumber}
+              </h3>
+              <button onClick={() => !savingBl && setBlPrompt(null)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="px-5 py-5 space-y-4">
+              <p className="text-sm text-gray-600">
+                Payment terms: <span className="font-medium text-gray-900">"{blPrompt.terms}"</span>
+                <br />
+                Enter the Bill of Lading date so the estimated payment date can be calculated
+                (<span className="font-medium">BL + {blPrompt.days} days</span>).
+              </p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">BL Date</label>
+                <input
+                  type="date"
+                  value={blDate}
+                  onChange={e => setBlDate(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+                {blDate && (
+                  <p className="text-xs text-gray-500 mt-1.5">
+                    Estimated payment date: <span className="font-medium text-gray-800">{formatDate(addDays(blDate, blPrompt.days))}</span>
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="px-5 py-4 bg-gray-50 border-t border-gray-200 flex justify-end gap-3">
+              <button
+                onClick={() => setBlPrompt(null)}
+                disabled={savingBl}
+                className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-100 disabled:opacity-60"
+              >
+                Skip — not known yet
+              </button>
+              <button
+                onClick={submitBlPrompt}
+                disabled={savingBl || !blDate}
+                className="px-4 py-2 text-sm font-medium bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-60 flex items-center gap-2"
+              >
+                {savingBl && <Loader2 size={15} className="animate-spin" />}
+                {savingBl ? 'Saving...' : 'Save'}
               </button>
             </div>
           </div>

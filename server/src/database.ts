@@ -865,6 +865,9 @@ export async function initializeDatabase() {
   // Estimated payment date — editable per operation
   try { db.exec(`ALTER TABLE operations ADD COLUMN estimated_payment_date TEXT`); } catch (_) { /* already exists */ }
 
+  // Country override per operation (falls back to order destination if NULL)
+  try { db.exec(`ALTER TABLE operations ADD COLUMN country TEXT`); } catch (_) { /* already exists */ }
+
   // Warehouse stock (from weekly CSV upload)
   db.exec(`
     CREATE TABLE IF NOT EXISTS warehouse_stock (
