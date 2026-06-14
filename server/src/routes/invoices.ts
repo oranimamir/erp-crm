@@ -428,15 +428,21 @@ router.delete('/:id/wire-transfers/:transferId', (req: Request, res: Response) =
 
   db.prepare('DELETE FROM wire_transfers WHERE id = ?').run(transfer.id);
 
-  // Revert invoice to sent and clear payment_date
-  db.prepare(`UPDATE invoices SET status='sent', payment_date=NULL, updated_at=datetime('now') WHERE id=?`).run(req.params.id);
-  db.prepare(`INSERT INTO status_history (entity_type, entity_id, old_status, new_status, changed_by, notes) VALUES ('invoice', ?, 'paid', 'sent', ?, 'Wire transfer deleted — reverted to sent')`)
-    .run(req.params.id, req.user!.userId);
+  // An invoice can be paid by several wire transfers. Only revert to 'sent' once the LAST
+  // wire transfer is removed — otherwise the invoice stays paid (and the operation completed).
+  const remaining = (db.prepare('SELECT COUNT(*) as count FROM wire_transfers WHERE invoice_id = ?').get(req.params.id) as any).count;
 
-  // If the operation was completed, revert to delivered (invoice is no longer paid)
-  if (invoiceForRevert?.operation_id) {
-    db.prepare(`UPDATE operations SET status='delivered', updated_at=datetime('now') WHERE id=? AND status='completed'`)
-      .run(invoiceForRevert.operation_id);
+  if (remaining === 0) {
+    // Revert invoice to sent and clear payment_date
+    db.prepare(`UPDATE invoices SET status='sent', payment_date=NULL, updated_at=datetime('now') WHERE id=?`).run(req.params.id);
+    db.prepare(`INSERT INTO status_history (entity_type, entity_id, old_status, new_status, changed_by, notes) VALUES ('invoice', ?, 'paid', 'sent', ?, 'Wire transfer deleted — reverted to sent')`)
+      .run(req.params.id, req.user!.userId);
+
+    // If the operation was completed, revert to delivered (invoice is no longer paid)
+    if (invoiceForRevert?.operation_id) {
+      db.prepare(`UPDATE operations SET status='delivered', updated_at=datetime('now') WHERE id=? AND status='completed'`)
+        .run(invoiceForRevert.operation_id);
+    }
   }
 
   // Force immediate disk save — critical financial data

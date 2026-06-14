@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import {
   Briefcase, Search, Plus, ChevronLeft, ChevronRight, FileText, Receipt,
-  FileSpreadsheet, ChevronUp, ChevronDown, Download, X, Truck, Loader2, ArrowLeftRight, Landmark, Filter, XCircle, Trash2,
+  FileSpreadsheet, ChevronUp, ChevronDown, Download, X, Truck, Loader2, ArrowLeftRight, Landmark, Filter, XCircle, Trash2, Pencil, Upload,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
@@ -41,6 +41,7 @@ interface Operation {
   etd?: string;
   eta?: string;
   estimated_payment_date?: string;
+  bl_date?: string;
   created_at: string;
 }
 
@@ -194,10 +195,16 @@ export default function OperationsPage() {
   const [dueDate, setDueDate] = useState('');
   const [savingShip, setSavingShip] = useState(false);
 
+  // Inline edit mode for the estimated payment date (must click the edit button — no accidental edits)
+  const [editingEpdId, setEditingEpdId] = useState<number | null>(null);
+
   // BL-date prompt for payment terms like "60 days from BL"
   const [blPrompt, setBlPrompt] = useState<{ opId: number; opNumber: string; days: number; terms: string } | null>(null);
   const [blDate, setBlDate] = useState('');
+  const [blFile, setBlFile] = useState<File | null>(null);
+  const [blScanning, setBlScanning] = useState(false);
   const [savingBl, setSavingBl] = useState(false);
+  const blFileRef = useRef<HTMLInputElement>(null);
 
   const saveEstimatedPaymentDate = async (opId: number, val: string) => {
     setOperations(prev => prev.map(o => o.id === opId ? { ...o, estimated_payment_date: val || undefined } : o));
@@ -209,7 +216,35 @@ export default function OperationsPage() {
     const days = paymentTermsDays(op.order_payment_terms);
     if (days == null) return;
     setBlPrompt({ opId: op.id, opNumber: op.operation_number, days, terms: op.order_payment_terms || '' });
-    setBlDate(todayISO());
+    setBlDate(op.bl_date || todayISO());
+    setBlFile(null);
+  };
+
+  const closeBlPrompt = () => {
+    setBlPrompt(null);
+    setBlFile(null);
+    setBlScanning(false);
+  };
+
+  // Upload a BL document and read its date — the date payment terms count from.
+  const scanBlFile = async (file: File) => {
+    setBlFile(file);
+    setBlScanning(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const { data } = await api.post('/bl-scan', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      if (data.bl_date) {
+        setBlDate(data.bl_date);
+        addToast('BL date detected from document', 'success');
+      } else {
+        addToast('Could not read a date from the BL — enter it manually', 'error');
+      }
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to read BL', 'error');
+    } finally {
+      setBlScanning(false);
+    }
   };
 
   const submitBlPrompt = async () => {
@@ -217,8 +252,20 @@ export default function OperationsPage() {
     setSavingBl(true);
     try {
       const computed = addDays(blDate, blPrompt.days);
-      await saveEstimatedPaymentDate(blPrompt.opId, computed);
-      setBlPrompt(null);
+      // Persist estimated payment date + BL date on the operation
+      setOperations(prev => prev.map(o => o.id === blPrompt.opId ? { ...o, estimated_payment_date: computed, bl_date: blDate } : o));
+      await api.patch(`/operations/${blPrompt.opId}/dates`, { estimated_payment_date: computed, bl_date: blDate });
+      // Store the BL document on the operation (best-effort) so the proof is kept
+      if (blFile) {
+        const fd = new FormData();
+        fd.append('file', blFile);
+        fd.append('notes', `Bill of Lading — BL date ${formatDate(blDate)}`);
+        try { await api.post(`/operations/${blPrompt.opId}/documents`, fd, { headers: { 'Content-Type': 'multipart/form-data' } }); }
+        catch { /* document upload is best-effort */ }
+      }
+      closeBlPrompt();
+    } catch {
+      addToast('Failed to save estimated payment date', 'error');
     } finally {
       setSavingBl(false);
     }
@@ -748,6 +795,7 @@ export default function OperationsPage() {
                       {(() => {
                         const days = paymentTermsDays(op.order_payment_terms);
                         const isBL = paymentTermsMentionsBL(op.order_payment_terms);
+                        const blBased = isBL && days != null;
                         const hasInvoice = op.invoice_count > 0;
                         // Auto-compute when invoice exists, terms are numeric, no BL reference, and user hasn't set anything yet
                         const computed = !op.estimated_payment_date && hasInvoice && op.invoice_date && days != null && !isBL
@@ -756,29 +804,39 @@ export default function OperationsPage() {
                         const value = op.estimated_payment_date || computed;
                         const needsBL = !op.estimated_payment_date && hasInvoice && isBL && days != null;
                         const isAuto = !op.estimated_payment_date && !!computed;
+                        const editing = editingEpdId === op.id;
                         return (
                           <div className="flex items-center gap-1 text-[11px] text-gray-500">
                             <span>Est. Pay:</span>
-                            <input
-                              type="date"
-                              value={value}
-                              title={
-                                needsBL ? `Terms: "${op.order_payment_terms}". Click to enter BL date.`
-                                : isAuto ? `Auto: Inv date + ${days} days (editable)`
-                                : op.estimated_payment_date ? 'Manually set'
-                                : 'Estimated payment date'
-                              }
-                              onMouseDown={e => {
-                                if (needsBL) {
-                                  e.preventDefault();
-                                  openBlPrompt(op);
-                                }
-                              }}
-                              onChange={e => saveEstimatedPaymentDate(op.id, e.target.value)}
-                              className={`border border-gray-200 rounded px-1 py-0.5 text-[11px] focus:outline-none focus:ring-2 focus:ring-primary-500 ${isAuto ? 'text-gray-400 italic' : ''}`}
-                            />
-                            {needsBL && (
-                              <span className="text-amber-600" title={`Payment terms reference BL: "${op.order_payment_terms}"`}>BL?</span>
+                            {editing ? (
+                              <input
+                                type="date"
+                                autoFocus
+                                defaultValue={value}
+                                onBlur={e => { saveEstimatedPaymentDate(op.id, e.target.value); setEditingEpdId(null); }}
+                                onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setEditingEpdId(null); }}
+                                className="border border-gray-300 rounded px-1 py-0.5 text-[11px] focus:outline-none focus:ring-2 focus:ring-primary-500"
+                              />
+                            ) : (
+                              <>
+                                <span className={isAuto ? 'text-gray-400 italic' : value ? 'text-gray-700' : 'text-gray-300'}>
+                                  {value ? formatDate(value) : '—'}
+                                </span>
+                                <button
+                                  onClick={() => blBased ? openBlPrompt(op) : setEditingEpdId(op.id)}
+                                  className={`p-0.5 rounded hover:bg-gray-200 ${needsBL ? 'text-amber-600 hover:text-amber-700' : 'text-gray-400 hover:text-primary-600'}`}
+                                  title={
+                                    needsBL ? `Terms: "${op.order_payment_terms}". Upload the BL or set the BL date to compute the estimated payment date.`
+                                    : blBased ? 'Update from Bill of Lading'
+                                    : isAuto ? `Auto: Inv date + ${days} days. Click to edit.`
+                                    : 'Edit estimated payment date'
+                                  }
+                                >
+                                  {needsBL ? <span className="flex items-center gap-0.5 font-medium">BL<Upload size={10} /></span>
+                                    : blBased ? <Upload size={11} />
+                                    : <Pencil size={11} />}
+                                </button>
+                              </>
                             )}
                           </div>
                         );
@@ -981,13 +1039,13 @@ export default function OperationsPage() {
 
       {/* ── BL Date Prompt ─────────────────────────────────────────────────── */}
       {blPrompt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => !savingBl && setBlPrompt(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => !savingBl && !blScanning && closeBlPrompt()}>
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
               <h3 className="font-semibold text-gray-900">
                 BL date — {blPrompt.opNumber}
               </h3>
-              <button onClick={() => !savingBl && setBlPrompt(null)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
+              <button onClick={() => !savingBl && !blScanning && closeBlPrompt()} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
                 <X size={18} />
               </button>
             </div>
@@ -995,9 +1053,34 @@ export default function OperationsPage() {
               <p className="text-sm text-gray-600">
                 Payment terms: <span className="font-medium text-gray-900">"{blPrompt.terms}"</span>
                 <br />
-                Enter the Bill of Lading date so the estimated payment date can be calculated
-                (<span className="font-medium">BL + {blPrompt.days} days</span>).
+                Upload the Bill of Lading to read its date automatically, or enter the BL date manually.
+                The estimated payment date is <span className="font-medium">BL + {blPrompt.days} days</span>.
               </p>
+
+              {/* Upload BL — auto-detect the date */}
+              <div>
+                <input
+                  ref={blFileRef}
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png,.webp"
+                  className="hidden"
+                  onChange={e => { const f = e.target.files?.[0]; if (f) scanBlFile(f); e.target.value = ''; }}
+                />
+                <button
+                  type="button"
+                  onClick={() => blFileRef.current?.click()}
+                  disabled={blScanning}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2.5 border-2 border-dashed border-gray-300 rounded-lg text-sm text-gray-600 hover:border-primary-400 hover:bg-primary-50 disabled:opacity-60"
+                >
+                  {blScanning
+                    ? <><Loader2 size={15} className="animate-spin" /> Reading BL…</>
+                    : <><Upload size={15} /> {blFile ? blFile.name : 'Upload Bill of Lading (auto-detect date)'}</>}
+                </button>
+                {blFile && !blScanning && (
+                  <p className="text-xs text-green-600 mt-1">BL attached — it will be saved to the operation's documents.</p>
+                )}
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">BL Date</label>
                 <input
@@ -1015,7 +1098,7 @@ export default function OperationsPage() {
             </div>
             <div className="px-5 py-4 bg-gray-50 border-t border-gray-200 flex justify-end gap-3">
               <button
-                onClick={() => setBlPrompt(null)}
+                onClick={closeBlPrompt}
                 disabled={savingBl}
                 className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-100 disabled:opacity-60"
               >

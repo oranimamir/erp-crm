@@ -865,6 +865,9 @@ export async function initializeDatabase() {
   // Estimated payment date — editable per operation
   try { db.exec(`ALTER TABLE operations ADD COLUMN estimated_payment_date TEXT`); } catch (_) { /* already exists */ }
 
+  // Bill of Lading date — read from the uploaded BL; drives estimated_payment_date for BL-based terms
+  try { db.exec(`ALTER TABLE operations ADD COLUMN bl_date TEXT`); } catch (_) { /* already exists */ }
+
   // Country override per operation (falls back to order destination if NULL)
   try { db.exec(`ALTER TABLE operations ADD COLUMN country TEXT`); } catch (_) { /* already exists */ }
 

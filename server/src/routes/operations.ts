@@ -392,14 +392,15 @@ router.patch('/:id/country', (req: Request, res: Response) => {
 router.patch('/:id/dates', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT * FROM operations WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Operation not found' }); return; }
-  const { etd, eta, estimated_payment_date } = req.body;
+  const { etd, eta, estimated_payment_date, bl_date } = req.body;
   const nextEtd = etd !== undefined ? (etd || null) : existing.etd;
   const nextEta = eta !== undefined ? (eta || null) : existing.eta;
   const nextEpd = estimated_payment_date !== undefined ? (estimated_payment_date || null) : existing.estimated_payment_date;
-  db.prepare(`UPDATE operations SET etd=?, eta=?, estimated_payment_date=?, updated_at=datetime('now') WHERE id=?`).run(
-    nextEtd, nextEta, nextEpd, req.params.id
+  const nextBl = bl_date !== undefined ? (bl_date || null) : existing.bl_date;
+  db.prepare(`UPDATE operations SET etd=?, eta=?, estimated_payment_date=?, bl_date=?, updated_at=datetime('now') WHERE id=?`).run(
+    nextEtd, nextEta, nextEpd, nextBl, req.params.id
   );
-  res.json({ id: existing.id, etd: nextEtd, eta: nextEta, estimated_payment_date: nextEpd });
+  res.json({ id: existing.id, etd: nextEtd, eta: nextEta, estimated_payment_date: nextEpd, bl_date: nextBl });
 });
 
 // ── Update operation ──────────────────────────────────────────────────────────

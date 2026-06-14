@@ -220,6 +220,7 @@ export default function OperationDetailPage() {
 
   const handleWireUpload = async (invoiceId: number, file: File) => {
     setWireUploading(true);
+    const alreadyPaid = operation?.invoices.find(i => i.id === invoiceId)?.status === 'paid';
     let paymentDate = wirePaymentDate;
 
     // Auto-detect date from document
@@ -245,7 +246,7 @@ export default function OperationDetailPage() {
       await api.post(`/invoices/${invoiceId}/wire-transfers`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      addToast('Wire transfer uploaded — invoice marked as Paid', 'success');
+      addToast(alreadyPaid ? 'Wire transfer added to invoice' : 'Wire transfer uploaded — invoice marked as Paid', 'success');
       setWireUploadInvoiceId(null);
       setWireBankRef('');
       setWirePaymentDate(new Date().toISOString().split('T')[0]);
@@ -774,7 +775,9 @@ export default function OperationDetailPage() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {operation.invoices.map(inv => {
-                const canUploadWire = inv.status === 'sent' || inv.status === 'overdue';
+                // Allow attaching a wire to sent/overdue invoices, and to already-paid invoices
+                // too — an invoice is sometimes settled with several wire transfers.
+                const canUploadWire = inv.status === 'sent' || inv.status === 'overdue' || inv.status === 'paid';
                 const isWireOpen = wireUploadInvoiceId === inv.id;
                 return [
                 <tr key={inv.id} className="hover:bg-gray-50">
@@ -793,7 +796,7 @@ export default function OperationDetailPage() {
                           onClick={() => { setWireUploadInvoiceId(isWireOpen ? null : inv.id); setWireBankRef(''); setWirePaymentDate(new Date().toISOString().split('T')[0]); }}
                           className={`flex items-center gap-1 text-xs font-medium rounded-lg px-2 py-1 transition-colors ${isWireOpen ? 'bg-primary-100 text-primary-700' : 'text-green-600 hover:bg-green-50 border border-green-200'}`}
                         >
-                          <Landmark size={12} /> {isWireOpen ? 'Cancel' : 'Payment'}
+                          <Landmark size={12} /> {isWireOpen ? 'Cancel' : inv.status === 'paid' ? 'Add Payment' : 'Payment'}
                         </button>
                       )}
                       {inv.file_path && (

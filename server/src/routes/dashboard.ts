@@ -34,17 +34,22 @@ router.get('/stats', async (_req: Request, res: Response) => {
   const totalOrders = (db.prepare('SELECT COUNT(*) as count FROM orders').get() as any).count;
   const activeOrders = (db.prepare("SELECT COUNT(*) as count FROM orders WHERE status NOT IN ('completed', 'cancelled')").get() as any).count;
   const totalInvoices = (db.prepare('SELECT COUNT(*) as count FROM invoices').get() as any).count;
-  // Pending: sent/overdue invoices with due date (including late payments from prior periods)
+  // Pending: sent/overdue invoices with an expected payment date (including late payments from
+  // prior periods). The expected date is the operation's estimated_payment_date when set
+  // (e.g. computed from the Bill of Lading), otherwise the invoice due_date.
   const pendingRows = db.prepare(`
-    SELECT amount, UPPER(COALESCE(currency, 'USD')) as currency FROM invoices
-    WHERE type = 'customer' AND status IN ('sent', 'overdue')
-      AND due_date IS NOT NULL
+    SELECT i.amount, UPPER(COALESCE(i.currency, 'USD')) as currency FROM invoices i
+    LEFT JOIN operations op ON op.id = i.operation_id
+    WHERE i.type = 'customer' AND i.status IN ('sent', 'overdue')
+      AND COALESCE(op.estimated_payment_date, i.due_date) IS NOT NULL
   `).all() as any[];
   const pendingAmount = await sumLiveEur(pendingRows);
-  // Expected: sent invoices with NO due date — live FX conversion
+  // Expected: sent invoices with NO expected payment date (no estimated_payment_date, no due_date)
   const expectedRows = db.prepare(`
-    SELECT amount, UPPER(COALESCE(currency, 'USD')) as currency FROM invoices
-    WHERE type = 'customer' AND status = 'sent' AND due_date IS NULL
+    SELECT i.amount, UPPER(COALESCE(i.currency, 'USD')) as currency FROM invoices i
+    LEFT JOIN operations op ON op.id = i.operation_id
+    WHERE i.type = 'customer' AND i.status = 'sent'
+      AND i.due_date IS NULL AND op.estimated_payment_date IS NULL
   `).all() as any[];
   const expectedInvoiceAmount = await sumLiveEur(expectedRows);
   // Expected from orders: operations with an order but no invoice yet (not completed/cancelled)
@@ -255,12 +260,16 @@ router.get('/forecast', async (_req: Request, res: Response) => {
   const now = new Date();
   const currentMonth = `${year}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
-  // Fetch all pending invoices (including overdue from prior years) so we can apply live FX once
+  // Fetch all pending invoices (including overdue from prior years) so we can apply live FX once.
+  // Bucket by the expected payment date: operation.estimated_payment_date when set, else due_date.
   const pendingInvoices = db.prepare(`
-    SELECT amount, UPPER(COALESCE(currency, 'USD')) as currency,
-      strftime('%Y-%m', due_date) as month, due_date
-    FROM invoices WHERE type = 'customer' AND status IN ('sent', 'overdue')
-      AND due_date IS NOT NULL
+    SELECT i.amount, UPPER(COALESCE(i.currency, 'USD')) as currency,
+      strftime('%Y-%m', COALESCE(op.estimated_payment_date, i.due_date)) as month,
+      COALESCE(op.estimated_payment_date, i.due_date) as due_date
+    FROM invoices i
+    LEFT JOIN operations op ON op.id = i.operation_id
+    WHERE i.type = 'customer' AND i.status IN ('sent', 'overdue')
+      AND COALESCE(op.estimated_payment_date, i.due_date) IS NOT NULL
   `).all() as any[];
   await attachLiveEur(pendingInvoices);
   const pendingByMonth = new Map<string, number>();
@@ -273,10 +282,13 @@ router.get('/forecast', async (_req: Request, res: Response) => {
     }
   }
 
-  // Expected: sent invoices with no due_date — live FX
+  // Expected: sent invoices with no expected payment date (no estimated_payment_date, no due_date) — live FX
   const expectedRows = db.prepare(`
-    SELECT amount, UPPER(COALESCE(currency, 'USD')) as currency
-    FROM invoices WHERE type = 'customer' AND status = 'sent' AND due_date IS NULL
+    SELECT i.amount, UPPER(COALESCE(i.currency, 'USD')) as currency
+    FROM invoices i
+    LEFT JOIN operations op ON op.id = i.operation_id
+    WHERE i.type = 'customer' AND i.status = 'sent'
+      AND i.due_date IS NULL AND op.estimated_payment_date IS NULL
   `).all() as any[];
   const expectedInvoice = await sumLiveEur(expectedRows);
 
@@ -477,7 +489,8 @@ router.get('/customer-forecast', async (_req: Request, res: Response) => {
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
     LEFT JOIN operations op ON op.id = i.operation_id
-    WHERE i.type = 'customer' AND i.status IN ('sent', 'overdue') AND i.due_date IS NOT NULL
+    WHERE i.type = 'customer' AND i.status IN ('sent', 'overdue')
+      AND COALESCE(op.estimated_payment_date, i.due_date) IS NOT NULL
     ORDER BY i.due_date
   `).all() as any[];
   await attachLiveEur(pendingRows);
@@ -489,7 +502,8 @@ router.get('/customer-forecast', async (_req: Request, res: Response) => {
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
     LEFT JOIN operations op ON op.id = i.operation_id
-    WHERE i.type = 'customer' AND i.status = 'sent' AND i.due_date IS NULL
+    WHERE i.type = 'customer' AND i.status = 'sent'
+      AND i.due_date IS NULL AND op.estimated_payment_date IS NULL
   `).all() as any[];
   await attachLiveEur(expectedInvRows);
 
