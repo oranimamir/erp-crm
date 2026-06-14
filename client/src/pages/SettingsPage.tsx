@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Settings, Lock, Monitor, Sun, Moon, Download, DatabaseBackup, Clock } from 'lucide-react';
+import { Settings, Lock, Monitor, Sun, Moon, Download, DatabaseBackup, Clock, HardDrive, CheckCircle, AlertTriangle } from 'lucide-react';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
@@ -8,6 +8,21 @@ import { formatDate } from '../lib/dates';
 
 interface SavedBackup { filename: string; size: number; created_at: string; }
 interface BackupSchedule { frequency: 'daily' | 'weekly' | 'monthly'; day: number; hour: number; minute: number; }
+interface StorageInfo {
+  db_path: string;
+  db_path_from_env: boolean;
+  db_file_exists: boolean;
+  db_file_size: number;
+  db_file_modified: string | null;
+  uploads_path: string;
+  uploads_path_from_env: boolean;
+  backups_path: string;
+  backups_path_from_env: boolean;
+  looks_ephemeral: boolean;
+  row_counts: Record<string, number | null>;
+  uploads_file_count: number;
+  uploads_total_bytes: number;
+}
 
 const DAYS_OF_WEEK = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -23,10 +38,15 @@ export default function SettingsPage() {
   const [schedule, setSchedule] = useState<BackupSchedule>({ frequency: 'weekly', day: 0, hour: 2, minute: 0 });
   const [savingSchedule, setSavingSchedule] = useState(false);
 
+  // Storage / persistence diagnostic
+  const [storage, setStorage] = useState<StorageInfo | null>(null);
+  const [storageError, setStorageError] = useState(false);
+
   useEffect(() => {
     if (user?.role === 'admin') {
       api.get('/backup/list').then(r => setSavedBackups(r.data)).catch(() => {});
       api.get('/backup/schedule').then(r => setSchedule(r.data)).catch(() => {});
+      api.get('/health/storage').then(r => setStorage(r.data)).catch(() => setStorageError(true));
     }
   }, [user]);
 
@@ -179,6 +199,100 @@ export default function SettingsPage() {
           </div>
         </form>
       </div>
+
+      {/* Storage & Persistence — admin only */}
+      {user?.role === 'admin' && (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+              <HardDrive size={16} className="text-gray-500" />
+              Storage &amp; Persistence
+            </h2>
+          </div>
+          <div className="px-6 py-5">
+            {storageError ? (
+              <p className="text-sm text-gray-500">Storage status is unavailable.</p>
+            ) : !storage ? (
+              <p className="text-sm text-gray-400">Loading storage status…</p>
+            ) : (
+              <div className="space-y-4">
+                {/* Persistence verdict */}
+                {storage.looks_ephemeral ? (
+                  <div className="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3">
+                    <AlertTriangle size={18} className="text-amber-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-semibold text-amber-800">Ephemeral storage — data is at risk</p>
+                      <p className="text-xs text-amber-700 mt-0.5">
+                        The database is being written inside the app directory, which is wiped on every redeploy.
+                        Mount a persistent volume and set <code>DB_PATH</code>, <code>UPLOADS_PATH</code> and <code>BACKUPS_PATH</code> to it.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-start gap-2 rounded-lg bg-green-50 border border-green-200 px-4 py-3">
+                    <CheckCircle size={18} className="text-green-600 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-semibold text-green-800">Persistent storage — data survives redeploys</p>
+                      <p className="text-xs text-green-700 mt-0.5">
+                        The database and uploaded files are stored on a persistent volume.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Paths */}
+                <div className="grid grid-cols-1 gap-2 text-sm">
+                  {([
+                    ['Database', storage.db_path, storage.db_path_from_env],
+                    ['Uploads', storage.uploads_path, storage.uploads_path_from_env],
+                    ['Backups', storage.backups_path, storage.backups_path_from_env],
+                  ] as [string, string, boolean][]).map(([label, p, fromEnv]) => (
+                    <div key={label} className="flex items-center justify-between gap-3">
+                      <span className="text-gray-500 shrink-0 w-20">{label}</span>
+                      <code className="text-xs text-gray-700 truncate flex-1 text-right">{p}</code>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 ${fromEnv ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                        {fromEnv ? 'from env' : 'default'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* DB + uploads stats */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 border-t border-gray-100 pt-4">
+                  <div>
+                    <p className="text-xs text-gray-500">DB size</p>
+                    <p className="text-sm font-semibold text-gray-900">{fmtSize(storage.db_file_size)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">DB updated</p>
+                    <p className="text-sm font-semibold text-gray-900">{storage.db_file_modified ? formatDate(storage.db_file_modified) : '—'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">Uploaded files</p>
+                    <p className="text-sm font-semibold text-gray-900">{storage.uploads_file_count.toLocaleString()}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">Uploads size</p>
+                    <p className="text-sm font-semibold text-gray-900">{fmtSize(storage.uploads_total_bytes)}</p>
+                  </div>
+                </div>
+
+                {/* Row counts */}
+                <div className="border-t border-gray-100 pt-4">
+                  <p className="text-xs font-medium text-gray-500 mb-2">Records</p>
+                  <div className="flex flex-wrap gap-2">
+                    {(['operations', 'invoices', 'orders', 'customers', 'suppliers', 'wire_transfers'] as const).map(t => (
+                      <span key={t} className="text-xs bg-gray-100 text-gray-700 rounded-md px-2 py-1">
+                        {t.replace('_', ' ')}: <span className="font-semibold">{storage.row_counts[t] ?? '—'}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Backup — admin only */}
       {user?.role === 'admin' && (

@@ -60,7 +60,8 @@
       "Skill(schedule)",
       "Bash(git apply *)",
       "Bash(git *)",
-      "PowerShell(\\(Get-Content C:\\\\Users\\\\hilao\\\\Desktop\\\\Claude\\\\erp-crm\\\\server\\\\src\\\\database.ts | Measure-Object -Line\\).Lines; \\(Get-Content C:\\\\Users\\\\hilao\\\\Desktop\\\\Claude\\\\erp-crm\\\\server\\\\src\\\\routes\\\\dashboard.ts | Measure-Object -Line\\).Lines; \\(Get-Content C:\\\\Users\\\\hilao\\\\Desktop\\\\Claude\\\\erp-crm\\\\client\\\\src\\\\pages\\\\SupplierInvoicesPage.tsx | Measure-Object -Line\\).Lines; \\(Get-Content C:\\\\Users\\\\hilao\\\\Desktop\\\\Claude\\\\erp-crm\\\\client\\\\src\\\\pages\\\\DashboardPage.tsx | Measure-Object -Line\\).Lines)"
+      "PowerShell(\\(Get-Content C:\\\\Users\\\\hilao\\\\Desktop\\\\Claude\\\\erp-crm\\\\server\\\\src\\\\database.ts | Measure-Object -Line\\).Lines; \\(Get-Content C:\\\\Users\\\\hilao\\\\Desktop\\\\Claude\\\\erp-crm\\\\server\\\\src\\\\routes\\\\dashboard.ts | Measure-Object -Line\\).Lines; \\(Get-Content C:\\\\Users\\\\hilao\\\\Desktop\\\\Claude\\\\erp-crm\\\\client\\\\src\\\\pages\\\\SupplierInvoicesPage.tsx | Measure-Object -Line\\).Lines; \\(Get-Content C:\\\\Users\\\\hilao\\\\Desktop\\\\Claude\\\\erp-crm\\\\client\\\\src\\\\pages\\\\DashboardPage.tsx | Measure-Object -Line\\).Lines)",
+      "Bash(awk -F= '/^ANTHROPIC_API_KEY/{ key=$1; val=$2; gsub\\(/[\" ]/,\"\",val\\); if \\(length\\(val\\)>0\\) printf \"%s is SET locally \\(length %d, starts %s...\\)\\\\n\", key, length\\(val\\), substr\\(val,1,7\\); else print key\" is present but EMPTY\" }' .env)"
     ]
   }
 }
