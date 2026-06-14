@@ -5,3 +5,6 @@ server/uploads/
 *.db
 .env
 erp-backup-*.zip
+
+# Claude Code local (personal) settings
+.claude/settings.local.json
