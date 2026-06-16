@@ -222,9 +222,11 @@ export default function OperationDetailPage() {
     setWireUploading(true);
     const alreadyPaid = operation?.invoices.find(i => i.id === invoiceId)?.status === 'paid';
     let paymentDate = wirePaymentDate;
+    let scannedAmount: number | null = null;
+    let scannedRef: string | null = null;
 
-    // Auto-detect date from document
-    setWireUploadStatus('Reading date from document...');
+    // Auto-detect date + amount from document
+    setWireUploadStatus('Reading details from document...');
     try {
       const scanForm = new FormData();
       scanForm.append('file', file);
@@ -235,14 +237,24 @@ export default function OperationDetailPage() {
         paymentDate = scanRes.data.transfer_date;
         setWirePaymentDate(paymentDate);
       }
-    } catch (err) { console.warn('wire-transfer date scan failed, using current date', err); }
+      if (scanRes.data.amount != null && !Number.isNaN(Number(scanRes.data.amount))) {
+        scannedAmount = Number(scanRes.data.amount);
+      }
+      if (scanRes.data.bank_reference) {
+        scannedRef = scanRes.data.bank_reference;
+      }
+    } catch (err) { console.warn('wire-transfer scan failed, using current date', err); }
 
     setWireUploadStatus('Uploading & converting to EUR...');
     try {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('payment_date', paymentDate);
-      if (wireBankRef) formData.append('bank_reference', wireBankRef);
+      // Use the amount read from the wire transfer document, not the invoice amount —
+      // a single invoice can be settled by a partial/over wire that differs from its face value.
+      if (scannedAmount != null) formData.append('amount', String(scannedAmount));
+      const bankRef = wireBankRef || scannedRef;
+      if (bankRef) formData.append('bank_reference', bankRef);
       await api.post(`/invoices/${invoiceId}/wire-transfers`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
@@ -405,6 +417,17 @@ export default function OperationDetailPage() {
       fetchOperation();
     } catch {
       addToast('Delete failed', 'error');
+    }
+  }
+
+  async function handleDeleteWire(invoiceId: number, transferId: number) {
+    if (!confirm('Remove this wire transfer? The invoice will revert to Sent if no other wires remain.')) return;
+    try {
+      await api.delete(`/invoices/${invoiceId}/wire-transfers/${transferId}`);
+      addToast('Wire transfer removed', 'success');
+      fetchOperation();
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Remove failed', 'error');
     }
   }
 
@@ -922,6 +945,13 @@ export default function OperationDetailPage() {
                           </button>
                         </>
                       )}
+                      <button
+                        onClick={() => handleDeleteWire(wt.invoice_id, wt.id)}
+                        className="p-0.5 text-xs text-gray-400 hover:text-red-600"
+                        title="Remove wire transfer"
+                      >
+                        <Trash2 size={13} />
+                      </button>
                     </div>
                   </td>
                 </tr>

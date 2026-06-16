@@ -111,23 +111,29 @@ export default function InvoiceDetailPage() {
   const handleWireUpload = async (file: File) => {
     setWireUploading(true);
     let paymentDate = wirePaymentDate;
+    let scannedAmount: number | null = null;
+    let scannedRef: string | null = null;
 
-    // Auto-detect date from document unless user typed one manually
-    if (!wireDateManuallySet) {
-      setWireUploadStatus('Reading date from document...');
-      try {
-        const scanForm = new FormData();
-        scanForm.append('file', file);
-        const scanRes = await api.post('/wire-transfers/scan', scanForm, {
-          headers: { 'Content-Type': 'multipart/form-data' },
-        });
-        if (scanRes.data.transfer_date) {
-          paymentDate = scanRes.data.transfer_date;
-          setWirePaymentDate(paymentDate);
-        }
-      } catch {
-        // scan failed — fall back to current date value
+    // Auto-detect amount (always) + date (unless user typed one manually) from document
+    setWireUploadStatus('Reading details from document...');
+    try {
+      const scanForm = new FormData();
+      scanForm.append('file', file);
+      const scanRes = await api.post('/wire-transfers/scan', scanForm, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      if (!wireDateManuallySet && scanRes.data.transfer_date) {
+        paymentDate = scanRes.data.transfer_date;
+        setWirePaymentDate(paymentDate);
       }
+      if (scanRes.data.amount != null && !Number.isNaN(Number(scanRes.data.amount))) {
+        scannedAmount = Number(scanRes.data.amount);
+      }
+      if (scanRes.data.bank_reference) {
+        scannedRef = scanRes.data.bank_reference;
+      }
+    } catch {
+      // scan failed — fall back to current date value and invoice amount
     }
 
     setWireUploadStatus('Uploading & converting to EUR...');
@@ -135,7 +141,11 @@ export default function InvoiceDetailPage() {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('payment_date', paymentDate);
-      if (wireBankRef) formData.append('bank_reference', wireBankRef);
+      // Use the amount read from the wire transfer document, not the invoice amount —
+      // a single invoice can be settled by a partial/over wire that differs from its face value.
+      if (scannedAmount != null) formData.append('amount', String(scannedAmount));
+      const bankRef = wireBankRef || scannedRef;
+      if (bankRef) formData.append('bank_reference', bankRef);
       const wasPaid = invoice.status === 'paid';
       await api.post(`/invoices/${id}/wire-transfers`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
