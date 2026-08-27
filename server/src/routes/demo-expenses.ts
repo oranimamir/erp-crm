@@ -1526,7 +1526,12 @@ router.post('/confirm-import', async (req: Request, res: Response) => {
       const existingIds = new Set(
         (db.prepare('SELECT invoice_id FROM demo_invoices').all() as any[]).map((r: any) => r.invoice_id)
       );
-      const existingHashes = new Set(
+      // Seeded from the DB, then grown as we accept rows. This dedups incoming
+      // invoices against the DB *and* against each other within this batch —
+      // two invoices in the same upload that share a file_hash would otherwise
+      // both pass the DB check and the 2nd INSERT would violate the partial
+      // unique index idx_demo_invoices_file_hash, aborting the whole transaction.
+      const seenHashes = new Set(
         (db.prepare(`SELECT file_hash FROM demo_invoices WHERE file_hash IS NOT NULL`).all() as any[]).map((r: any) => r.file_hash)
       );
       const existingDbInvoices = db.prepare('SELECT supplier, amount, issue_date FROM demo_invoices').all() as any[];
@@ -1553,15 +1558,20 @@ router.post('/confirm-import', async (req: Request, res: Response) => {
       }
       const nonDuplicate: any[] = [];
       const skippedDetails: { invoiceId: string; supplier: string; reason: string }[] = [];
+      const seenIds = new Set<string>();
       for (const inv of filtered) {
-        if (inv.fileHash && existingHashes.has(inv.fileHash)) {
+        if (inv.fileHash && seenHashes.has(inv.fileHash)) {
           skippedDetails.push({ invoiceId: inv.invoiceId, supplier: inv.supplier, reason: 'duplicate_file_hash' });
           continue;
         }
-        if (inv.invoiceId && existingIds.has(inv.invoiceId)) {
+        if (inv.invoiceId && (existingIds.has(inv.invoiceId) || seenIds.has(inv.invoiceId))) {
           skippedDetails.push({ invoiceId: inv.invoiceId, supplier: inv.supplier, reason: 'duplicate_id' });
           continue;
         }
+        // Accepted so far — reserve this row's hash/id so later rows in the same
+        // batch dedup against it (prevents in-batch UNIQUE violations on insert).
+        if (inv.fileHash) seenHashes.add(inv.fileHash);
+        if (inv.invoiceId) seenIds.add(inv.invoiceId);
         if (inv.amount === 0) { nonDuplicate.push(inv); continue; }
         const originalName = (inv.supplier || '').toLowerCase();
         const correctedName = (nameOverrides?.[inv.supplier] || '').toLowerCase();

@@ -44,23 +44,26 @@ router.get('/stats', async (_req: Request, res: Response) => {
       AND COALESCE(op.estimated_payment_date, i.due_date) IS NOT NULL
   `).all() as any[];
   const pendingAmount = await sumLiveEur(pendingRows);
-  // Expected: sent invoices with NO expected payment date (no estimated_payment_date, no due_date)
+  // Expected: sent/overdue invoices with NO expected payment date (no estimated_payment_date,
+  // no due_date). Includes 'overdue' so an overdue invoice without a date isn't dropped from
+  // both buckets (pending requires a date, so it would otherwise fall through the cracks).
   const expectedRows = db.prepare(`
     SELECT i.amount, UPPER(COALESCE(i.currency, 'USD')) as currency FROM invoices i
     LEFT JOIN operations op ON op.id = i.operation_id
-    WHERE i.type = 'customer' AND i.status = 'sent'
+    WHERE i.type = 'customer' AND i.status IN ('sent', 'overdue')
       AND i.due_date IS NULL AND op.estimated_payment_date IS NULL
   `).all() as any[];
   const expectedInvoiceAmount = await sumLiveEur(expectedRows);
-  // Expected from orders: operations with an order but no invoice yet (not completed/cancelled)
+  // Expected from orders: any customer order not completed/cancelled that has no invoice yet.
+  // Counted from the orders table directly (not via operations) so orders that haven't been
+  // promoted to an operation still contribute to the pipeline.
   const expectedOrderRows = db.prepare(`
     SELECT o.total_amount as amount, UPPER(COALESCE(oi_cur.currency, 'USD')) as currency
-    FROM operations op
-    JOIN orders o ON op.order_id = o.id
+    FROM orders o
     LEFT JOIN (SELECT UPPER(COALESCE(currency, 'USD')) as currency, order_id FROM order_items GROUP BY order_id) oi_cur ON oi_cur.order_id = o.id
-    WHERE op.status NOT IN ('completed')
+    WHERE o.type = 'customer' AND o.status NOT IN ('completed', 'cancelled')
       AND o.total_amount > 0
-      AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.operation_id = op.id)
+      AND NOT EXISTS (SELECT 1 FROM invoices i JOIN operations op ON i.operation_id = op.id WHERE op.order_id = o.id)
   `).all() as any[];
   const expectedOrderAmount = await sumLiveEur(expectedOrderRows);
   const expectedAmount = expectedInvoiceAmount + expectedOrderAmount;
@@ -282,25 +285,25 @@ router.get('/forecast', async (_req: Request, res: Response) => {
     }
   }
 
-  // Expected: sent invoices with no expected payment date (no estimated_payment_date, no due_date) — live FX
+  // Expected: sent/overdue invoices with no expected payment date (no estimated_payment_date,
+  // no due_date) — live FX. Includes 'overdue' so overdue-without-date isn't dropped.
   const expectedRows = db.prepare(`
     SELECT i.amount, UPPER(COALESCE(i.currency, 'USD')) as currency
     FROM invoices i
     LEFT JOIN operations op ON op.id = i.operation_id
-    WHERE i.type = 'customer' AND i.status = 'sent'
+    WHERE i.type = 'customer' AND i.status IN ('sent', 'overdue')
       AND i.due_date IS NULL AND op.estimated_payment_date IS NULL
   `).all() as any[];
   const expectedInvoice = await sumLiveEur(expectedRows);
 
-  // Expected: orders without invoices — live FX
+  // Expected: customer orders without invoices (counted from orders directly) — live FX
   const expectedOrderRows = db.prepare(`
     SELECT o.total_amount as amount, UPPER(COALESCE(oi_cur.currency, 'USD')) as currency
-    FROM operations op
-    JOIN orders o ON op.order_id = o.id
+    FROM orders o
     LEFT JOIN (SELECT UPPER(COALESCE(currency, 'USD')) as currency, order_id FROM order_items GROUP BY order_id) oi_cur ON oi_cur.order_id = o.id
-    WHERE op.status NOT IN ('completed')
+    WHERE o.type = 'customer' AND o.status NOT IN ('completed', 'cancelled')
       AND o.total_amount > 0
-      AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.operation_id = op.id)
+      AND NOT EXISTS (SELECT 1 FROM invoices i JOIN operations op ON i.operation_id = op.id WHERE op.order_id = o.id)
   `).all() as any[];
   const expected = expectedInvoice + await sumLiveEur(expectedOrderRows);
 
@@ -495,29 +498,30 @@ router.get('/customer-forecast', async (_req: Request, res: Response) => {
   `).all() as any[];
   await attachLiveEur(pendingRows);
 
-  // 3. Expected (sent with no due date) — live FX
+  // 3. Expected (sent/overdue with no due date) — live FX
   const expectedInvRows = db.prepare(`
     SELECT i.id, i.amount, i.currency,
       c.id as customer_id, c.name as customer_name, op.operation_number as operation_number
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
     LEFT JOIN operations op ON op.id = i.operation_id
-    WHERE i.type = 'customer' AND i.status = 'sent'
+    WHERE i.type = 'customer' AND i.status IN ('sent', 'overdue')
       AND i.due_date IS NULL AND op.estimated_payment_date IS NULL
   `).all() as any[];
   await attachLiveEur(expectedInvRows);
 
-  // 3b. Expected from orders without invoices — live FX
+  // 3b. Expected from customer orders without invoices (counted from orders directly) — live FX.
+  // The operation_number is the most recent operation for the order, if any.
   const expectedOrdRows = db.prepare(`
     SELECT o.total_amount as amount, UPPER(COALESCE(oi_cur.currency, 'USD')) as currency,
-      c.id as customer_id, c.name as customer_name, op.operation_number as operation_number
-    FROM operations op
-    JOIN orders o ON op.order_id = o.id
+      c.id as customer_id, c.name as customer_name,
+      (SELECT op.operation_number FROM operations op WHERE op.order_id = o.id ORDER BY op.id DESC LIMIT 1) as operation_number
+    FROM orders o
     LEFT JOIN customers c ON o.customer_id = c.id
     LEFT JOIN (SELECT UPPER(COALESCE(currency, 'USD')) as currency, order_id FROM order_items GROUP BY order_id) oi_cur ON oi_cur.order_id = o.id
-    WHERE op.status NOT IN ('completed')
+    WHERE o.type = 'customer' AND o.status NOT IN ('completed', 'cancelled')
       AND o.total_amount > 0
-      AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.operation_id = op.id)
+      AND NOT EXISTS (SELECT 1 FROM invoices i JOIN operations op ON i.operation_id = op.id WHERE op.order_id = o.id)
   `).all() as any[];
   await attachLiveEur(expectedOrdRows);
 

@@ -62,6 +62,7 @@ router.get('/', async (req: Request, res: Response) => {
   // Filters
   const filterCustomer = (req.query.customer as string) || '';
   const filterStatus   = (req.query.status as string) || '';
+  const filterYear     = (req.query.year as string) || '';
   const dateField      = (req.query.date_field as string) || '';
   const dateFrom       = (req.query.date_from as string) || '';
   const dateTo         = (req.query.date_to as string) || '';
@@ -70,6 +71,12 @@ router.get('/', async (req: Request, res: Response) => {
   const params: any[] = [];
   if (tab === 'completed') {
     conditions.push("op.status = 'completed'");
+    // Year sub-tabs: filter completed ops by completion year — the latest wire
+    // transfer date (when payment landed), falling back to the op's updated_at.
+    if (filterYear) {
+      conditions.push("strftime('%Y', COALESCE(wt_dates.latest_wt_date, op.updated_at)) = ?");
+      params.push(filterYear);
+    }
   } else {
     conditions.push("op.status != 'completed'");
   }
@@ -224,6 +231,90 @@ router.get('/', async (req: Request, res: Response) => {
   }, { quantity_mt: 0, invoice_eur: 0, order_eur: 0 });
 
   res.json({ data, total, page, limit, totalPages: Math.ceil(total / limit), totals });
+});
+
+// ── Distinct completion years (for the Completed tab's year sub-tabs) ──────────
+// Registered before '/:id' so the literal path isn't captured as an id.
+router.get('/completed-years', (_req: Request, res: Response) => {
+  const rows = db.prepare(`
+    SELECT DISTINCT strftime('%Y', COALESCE(wt_dates.latest_wt_date, op.updated_at)) as year
+    FROM operations op
+    LEFT JOIN (
+      SELECT i.operation_id, MAX(wt.transfer_date) as latest_wt_date
+      FROM wire_transfers wt JOIN invoices i ON wt.invoice_id = i.id
+      WHERE i.operation_id IS NOT NULL GROUP BY i.operation_id
+    ) wt_dates ON wt_dates.operation_id = op.id
+    WHERE op.status = 'completed'
+    ORDER BY year DESC
+  `).all() as any[];
+  res.json(rows.map(r => r.year).filter(Boolean));
+});
+
+// ── Wire-transfer auto-match ──────────────────────────────────────────────────
+// Given a scanned wire amount (+ optional reference), rank operations that have
+// an open customer invoice by how closely the amount matches. Used by the
+// Operations page drag/drop wire upload → "approve association" popup.
+// Registered before '/:id' so the literal path isn't captured as an id.
+router.get('/wire-match', async (req: Request, res: Response) => {
+  const amount = parseFloat(req.query.amount as string);
+  const reference = ((req.query.reference as string) || '').trim().toLowerCase();
+
+  // All open customer invoices that belong to an operation.
+  const rows = db.prepare(`
+    SELECT i.id as invoice_id, i.invoice_number, i.amount,
+      UPPER(COALESCE(i.currency, 'USD')) as currency, i.eur_amount, i.our_ref, i.po_number,
+      op.id as operation_id, op.operation_number, op.status as operation_status,
+      c.name as customer_name
+    FROM invoices i
+    JOIN operations op ON op.id = i.operation_id
+    LEFT JOIN customers c ON i.customer_id = c.id
+    WHERE i.type = 'customer' AND i.status IN ('sent', 'overdue')
+    ORDER BY op.id DESC
+  `).all() as any[];
+
+  // Resolve live EUR rates for the currencies present, so we can compare in EUR too.
+  const currencies = [...new Set(rows.map(r => r.currency).filter((c: string) => c !== 'EUR'))];
+  const rates: Record<string, number> = {};
+  await Promise.all(currencies.map(async (c: string) => { rates[c] = await getEurRate(c, 'latest'); }));
+
+  const candidates = rows.map(r => {
+    const invoiceEur = r.eur_amount != null
+      ? r.eur_amount
+      : (r.currency === 'EUR' ? r.amount : r.amount * (rates[r.currency] ?? 1));
+    // Compare the scanned amount against BOTH the raw invoice amount and its EUR
+    // value — the wire may be in the invoice currency or already converted.
+    const diff = isNaN(amount)
+      ? Number.POSITIVE_INFINITY
+      : Math.min(Math.abs(amount - r.amount), Math.abs(amount - invoiceEur));
+    // Reference boost: the invoice number / our_ref / PO number appears in the
+    // scanned reference (or vice-versa).
+    const refFields = [r.invoice_number, r.our_ref, r.po_number]
+      .map((v: any) => (v || '').toLowerCase())
+      .filter(Boolean);
+    const refMatch = !!reference && refFields.some((f: string) =>
+      reference.includes(f) || f.includes(reference));
+    return {
+      operation_id: r.operation_id,
+      operation_number: r.operation_number,
+      operation_status: r.operation_status,
+      invoice_id: r.invoice_id,
+      invoice_number: r.invoice_number,
+      customer_name: r.customer_name,
+      currency: r.currency,
+      invoice_amount: r.amount,
+      invoice_eur: invoiceEur,
+      diff,
+      ref_match: refMatch,
+    };
+  });
+
+  // Sort: reference matches first, then smallest amount difference.
+  candidates.sort((a, b) => {
+    if (a.ref_match !== b.ref_match) return a.ref_match ? -1 : 1;
+    return a.diff - b.diff;
+  });
+
+  res.json({ candidates: candidates.slice(0, 10) });
 });
 
 // ── Single operation ──────────────────────────────────────────────────────────

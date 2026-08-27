@@ -104,6 +104,19 @@ export default function OperationsPage() {
   const { addToast } = useToast();
 
   const [activeTab, setActiveTab] = useState<Tab>('active');
+  const [completedYear, setCompletedYear] = useState<string>(''); // '' = all years
+  const [completedYears, setCompletedYears] = useState<string[]>([]);
+
+  // Wire-transfer upload + auto-match ("associate to operation" flow)
+  const [wireModalOpen, setWireModalOpen] = useState(false);
+  const [wireFile, setWireFile] = useState<File | null>(null);
+  const [wireScanning, setWireScanning] = useState(false);
+  const [wireScan, setWireScan] = useState<{ amount: number | null; date: string; reference: string | null }>({ amount: null, date: '', reference: null });
+  const [wireCandidates, setWireCandidates] = useState<any[]>([]);
+  const [wireSelectedInvoice, setWireSelectedInvoice] = useState<number | null>(null);
+  const [wireSubmitting, setWireSubmitting] = useState(false);
+  const [wireDragging, setWireDragging] = useState(false);
+  const wireFileRef = useRef<HTMLInputElement>(null);
   const [operations, setOperations] = useState<Operation[]>([]);
   const [total, setTotal] = useState(0);
   const [tabTotals, setTabTotals] = useState<{ quantity_mt: number; invoice_eur: number; order_eur: number } | null>(null);
@@ -351,6 +364,7 @@ export default function OperationsPage() {
     setLoading(true);
     try {
       const params: any = { page, limit: 20, sort_by: sortBy, sort_dir: sortDir, tab: activeTab };
+      if (activeTab === 'completed' && completedYear) params.year = completedYear;
       if (search) params.search = search;
       if (filterCustomer) params.customer = filterCustomer;
       if (filterStatus) params.status = filterStatus;
@@ -369,10 +383,88 @@ export default function OperationsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, sortBy, sortDir, activeTab, filterCustomer, filterStatus, filterDateField, filterDateFrom, filterDateTo]);
+  }, [page, search, sortBy, sortDir, activeTab, completedYear, filterCustomer, filterStatus, filterDateField, filterDateFrom, filterDateTo]);
 
-  useEffect(() => { setPage(1); }, [activeTab]);
+  useEffect(() => { setPage(1); }, [activeTab, completedYear]);
   useEffect(() => { fetchOperations(); }, [fetchOperations]);
+
+  // Load distinct completion years when the Completed tab is active
+  useEffect(() => {
+    if (activeTab !== 'completed') return;
+    api.get('/operations/completed-years')
+      .then(r => setCompletedYears(r.data || []))
+      .catch(() => setCompletedYears([]));
+  }, [activeTab]);
+
+  // ── Wire-transfer upload → scan → auto-match → approve ──────────────────────
+  const startWireUpload = async (file: File) => {
+    setWireFile(file);
+    setWireModalOpen(true);
+    setWireScanning(true);
+    setWireCandidates([]);
+    setWireSelectedInvoice(null);
+    // 1. Scan the document for amount / date / reference
+    let amount: number | null = null;
+    let date = todayISO();
+    let reference: string | null = null;
+    try {
+      const scanForm = new FormData();
+      scanForm.append('file', file);
+      const scanRes = await api.post('/wire-transfers/scan', scanForm, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      if (scanRes.data.amount != null && !Number.isNaN(Number(scanRes.data.amount))) amount = Number(scanRes.data.amount);
+      if (scanRes.data.transfer_date) date = scanRes.data.transfer_date;
+      if (scanRes.data.bank_reference) reference = scanRes.data.bank_reference;
+    } catch {
+      // scan failed — fall back to manual selection with today's date
+    }
+    setWireScan({ amount, date, reference });
+    // 2. Rank operations with open invoices by amount / reference match
+    try {
+      const { data } = await api.get('/operations/wire-match', {
+        params: { amount: amount ?? undefined, reference: reference ?? undefined },
+      });
+      const candidates = data.candidates || [];
+      setWireCandidates(candidates);
+      setWireSelectedInvoice(candidates[0]?.invoice_id ?? null);
+    } catch {
+      setWireCandidates([]);
+    } finally {
+      setWireScanning(false);
+    }
+  };
+
+  const closeWireModal = () => {
+    setWireModalOpen(false);
+    setWireFile(null);
+    setWireScanning(false);
+    setWireCandidates([]);
+    setWireSelectedInvoice(null);
+    setWireScan({ amount: null, date: '', reference: null });
+  };
+
+  const confirmWireAssociation = async () => {
+    if (!wireFile || !wireSelectedInvoice) return;
+    setWireSubmitting(true);
+    try {
+      const form = new FormData();
+      form.append('file', wireFile);
+      form.append('payment_date', wireScan.date || todayISO());
+      if (wireScan.amount != null) form.append('amount', String(wireScan.amount));
+      if (wireScan.reference) form.append('bank_reference', wireScan.reference);
+      await api.post(`/invoices/${wireSelectedInvoice}/wire-transfers`, form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      addToast('Wire transfer associated — invoice marked as Paid', 'success');
+      closeWireModal();
+      fetchOperations();
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to associate wire transfer', 'error');
+    } finally {
+      setWireSubmitting(false);
+    }
+  };
 
   // Preview
   async function openPreview(item: PreviewItem) {
@@ -478,6 +570,27 @@ export default function OperationsPage() {
             <FileSpreadsheet size={16} />
             Export Excel
           </button>
+          {/* Upload a wire transfer and auto-associate it to the right operation */}
+          <input
+            ref={wireFileRef}
+            type="file"
+            accept=".pdf,.jpg,.jpeg,.png,.webp"
+            className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f) startWireUpload(f); e.target.value = ''; }}
+          />
+          <button
+            onClick={() => wireFileRef.current?.click()}
+            onDragOver={e => { e.preventDefault(); setWireDragging(true); }}
+            onDragLeave={() => setWireDragging(false)}
+            onDrop={e => { e.preventDefault(); setWireDragging(false); const f = e.dataTransfer.files[0]; if (f) startWireUpload(f); }}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
+              wireDragging ? 'border-primary-500 bg-primary-50 text-primary-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+            }`}
+            title="Drag a wire transfer here, or click to upload"
+          >
+            <Landmark size={16} />
+            Upload Wire Transfer
+          </button>
           {activeTab === 'active' && (
             <>
               <button
@@ -582,6 +695,35 @@ export default function OperationsPage() {
           </button>
         ))}
       </div>
+
+      {/* Completed sub-tabs: divide by completion year */}
+      {activeTab === 'completed' && completedYears.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setCompletedYear('')}
+            className={`px-3 py-1 text-xs font-medium rounded-full border transition-colors ${
+              completedYear === ''
+                ? 'bg-primary-600 text-white border-primary-600'
+                : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            All years
+          </button>
+          {completedYears.map(y => (
+            <button
+              key={y}
+              onClick={() => setCompletedYear(y)}
+              className={`px-3 py-1 text-xs font-medium rounded-full border transition-colors ${
+                completedYear === y
+                  ? 'bg-primary-600 text-white border-primary-600'
+                  : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              }`}
+            >
+              {y}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
         {loading ? (
@@ -918,6 +1060,93 @@ export default function OperationsPage() {
             >
               <ChevronRight size={16} />
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Wire-transfer association (approve) modal */}
+      {wireModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={closeWireModal}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg flex flex-col max-h-[88vh]" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                <Landmark size={18} className="text-primary-600" />
+                Associate Wire Transfer
+              </h2>
+              <button onClick={closeWireModal} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><X size={18} /></button>
+            </div>
+
+            <div className="p-5 space-y-4 overflow-y-auto">
+              {/* Scanned details */}
+              <div className="rounded-lg bg-gray-50 border border-gray-200 p-3 text-sm">
+                <p className="text-xs font-medium text-gray-500 mb-1.5">{wireFile?.name}</p>
+                {wireScanning ? (
+                  <p className="flex items-center gap-2 text-gray-500"><Loader2 size={14} className="animate-spin" /> Reading document…</p>
+                ) : (
+                  <div className="flex flex-wrap gap-x-6 gap-y-1">
+                    <span>Amount: <strong className="text-gray-900">{wireScan.amount != null ? wireScan.amount.toLocaleString() : '—'}</strong></span>
+                    <span>Date: <strong className="text-gray-900">{wireScan.date ? formatDate(wireScan.date) : '—'}</strong></span>
+                    {wireScan.reference && <span>Ref: <strong className="text-gray-900">{wireScan.reference}</strong></span>}
+                  </div>
+                )}
+              </div>
+
+              {/* Candidate operations */}
+              {!wireScanning && (
+                wireCandidates.length === 0 ? (
+                  <p className="text-sm text-gray-500 text-center py-6">
+                    No operations with open invoices to match. Close and upload from the invoice page instead.
+                  </p>
+                ) : (
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 mb-2">
+                      Select the operation to associate ({wireCandidates.length} candidate{wireCandidates.length !== 1 ? 's' : ''}, best match first):
+                    </p>
+                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                      {wireCandidates.map((c, i) => {
+                        const selected = wireSelectedInvoice === c.invoice_id;
+                        return (
+                          <button
+                            key={c.invoice_id}
+                            onClick={() => setWireSelectedInvoice(c.invoice_id)}
+                            className={`w-full text-left rounded-lg border p-3 transition-colors ${
+                              selected ? 'border-primary-500 bg-primary-50 ring-1 ring-primary-200' : 'border-gray-200 hover:bg-gray-50'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
+                                {c.operation_number}
+                                {i === 0 && c.ref_match && <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded">ref match</span>}
+                                {i === 0 && !c.ref_match && <span className="text-[10px] bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded">best</span>}
+                              </span>
+                              <span className="text-sm font-bold text-gray-900">
+                                €{Number(c.invoice_eur).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between mt-0.5 text-xs text-gray-500">
+                              <span>{c.customer_name || '—'} · {c.invoice_number}</span>
+                              <span className="capitalize">{c.operation_status}</span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )
+              )}
+            </div>
+
+            <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-end gap-2">
+              <button onClick={closeWireModal} className="px-4 py-2 text-sm font-medium text-gray-600 rounded-lg hover:bg-gray-100">Cancel</button>
+              <button
+                onClick={confirmWireAssociation}
+                disabled={wireScanning || wireSubmitting || !wireSelectedInvoice}
+                className="px-4 py-2 text-sm font-medium text-white bg-primary-600 rounded-lg hover:bg-primary-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                {wireSubmitting && <Loader2 size={14} className="animate-spin" />}
+                Confirm association
+              </button>
+            </div>
           </div>
         </div>
       )}

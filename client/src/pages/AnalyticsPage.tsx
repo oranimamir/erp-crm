@@ -14,9 +14,11 @@ import ExportReportModal from '../components/ExportReportModal';
 
 interface MonthData { month: string; received: number; paid_out: number; }
 interface CustomerData { customer_id: number; customer_name: string; total: number; invoice_count: number; }
+interface RegionData { region: string; total: number; invoice_count: number; }
 interface Summary {
   monthly: MonthData[];
   by_customer: CustomerData[];
+  by_region: RegionData[];
   by_supplier: any[];
   totals: { received: number; paid_out: number; net: number; outstanding: number; expected: number; outstanding_payable: number; };
 }
@@ -24,6 +26,7 @@ interface QuantityData {
   monthly: { month: string; tons: number }[];
   total_tons: number;
   by_customer: { customer_id: number; customer_name: string; tons: number }[];
+  by_region: { region: string; tons: number }[];
 }
 interface DemoExpensesData {
   monthly: { month: string; demo: number; sales: number; demo_vat: number; sales_vat: number }[];
@@ -84,6 +87,36 @@ function periodLabel(year: string, monthFrom: string, monthTo: string) {
   if (from === 1 && to === 12) return year;
   if (from === to) return `${MONTHS[from - 1]} ${year}`;
   return `${MONTHS[from - 1]}–${MONTHS[to - 1]} ${year}`;
+}
+
+// ── Period rollup (Month / Quarter / Year) ──────────────────────────────────────
+type GroupBy = 'month' | 'quarter' | 'year';
+
+// Bucket a list of monthly rows ({ month: 'YYYY-MM', ...numeric fields }) into the
+// requested period, summing the given numeric keys. Returns rows keyed by `period`.
+function rollupByPeriod<T extends { month: string }>(rows: T[], groupBy: GroupBy, keys: (keyof T)[]): Array<{ period: string } & Record<string, number>> {
+  if (groupBy === 'month') {
+    return rows.map(r => {
+      const out: any = { period: monthLabel(r.month) };
+      for (const k of keys) out[k as string] = Number(r[k]) || 0;
+      return out;
+    });
+  }
+  const buckets = new Map<string, any>();
+  const order: string[] = [];
+  for (const r of rows) {
+    const [y, m] = r.month.split('-');
+    const period = groupBy === 'year' ? y : `Q${Math.floor((parseInt(m) - 1) / 3) + 1} ${y}`;
+    if (!buckets.has(period)) {
+      const init: any = { period };
+      for (const k of keys) init[k as string] = 0;
+      buckets.set(period, init);
+      order.push(period);
+    }
+    const b = buckets.get(period);
+    for (const k of keys) b[k as string] += Number(r[k]) || 0;
+  }
+  return order.map(p => buckets.get(p));
 }
 
 // ── Chart components ──────────────────────────────────────────────────────────
@@ -238,6 +271,11 @@ export default function AnalyticsPage() {
   const [monthFrom, setMonthFrom] = useState('1');
   const [monthTo, setMonthTo] = useState('12');
   const [customerId, setCustomerId] = useState('');
+  const [groupBy, setGroupBy] = useState<GroupBy>('month');
+
+  // ── Revenue sub-tabs (Summary / Orders / Invoices) ────────────────────────
+  const [revenueTab, setRevenueTab] = useState<'summary' | 'orders' | 'invoices'>('summary');
+  const [revenueRows, setRevenueRows] = useState<{ customer_invoices: any[]; confirmed_orders: any[] } | null>(null);
 
   // ── Expenses tab toggles ──────────────────────────────────────────────────
   const [showDemo, setShowDemo] = useState(true);
@@ -306,6 +344,16 @@ export default function AnalyticsPage() {
       .catch(() => { setData(null); setQuantityData(null); setDemoData(null); })
       .finally(() => setLoading(false));
   }, [year, monthFrom, monthTo, customerId, effectiveDomain, demoCategory]);
+
+  // ── Row-level revenue data for the Orders / Invoices sub-tabs ───────────────
+  useEffect(() => {
+    if (view !== 'revenue') return;
+    api.get('/analytics/export-data', {
+      params: { type: 'revenue', year_from: year, year_to: year, month_from: monthFrom, month_to: monthTo, customer_id: customerId || undefined },
+    })
+      .then(res => setRevenueRows({ customer_invoices: res.data.customer_invoices || [], confirmed_orders: res.data.confirmed_orders || [] }))
+      .catch(() => setRevenueRows(null));
+  }, [view, year, monthFrom, monthTo, customerId]);
 
   // ── Misc handlers ─────────────────────────────────────────────────────────
   const handleMonthFromChange = (val: string) => {
@@ -435,6 +483,21 @@ export default function AnalyticsPage() {
               ))}
             </select>
           </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Group by</label>
+            <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm font-medium">
+              {(['month', 'quarter', 'year'] as GroupBy[]).map((g, i) => (
+                <button key={g}
+                  onClick={() => setGroupBy(g)}
+                  className={`px-3 py-2 capitalize transition-colors ${
+                    groupBy === g ? 'bg-primary-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+                  } ${i > 0 ? 'border-l border-gray-300' : ''}`}>
+                  {g}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         {/* Row 2: View-specific filters */}
@@ -561,6 +624,52 @@ export default function AnalyticsPage() {
             </Card>
           </div>
 
+          {/* Revenue sub-tabs */}
+          <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm font-medium w-fit">
+            {(['summary', 'orders', 'invoices'] as const).map((t, i) => (
+              <button key={t}
+                onClick={() => setRevenueTab(t)}
+                className={`px-4 py-2 capitalize transition-colors ${
+                  revenueTab === t ? 'bg-green-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+                } ${i > 0 ? 'border-l border-gray-300' : ''}`}>
+                {t}
+              </button>
+            ))}
+          </div>
+
+          {revenueTab === 'summary' && (<>
+          {/* Revenue Summary table — respects Month / Quarter / Year grouping */}
+          <Card>
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h2 className="font-semibold text-gray-900">Revenue Summary — by {groupBy}</h2>
+              <span className="text-xs text-gray-400">{period}</span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    <th className="text-left text-xs font-medium text-gray-500 px-4 py-2 capitalize">{groupBy}</th>
+                    <th className="text-right text-xs font-medium text-green-600 px-4 py-2">Received (EUR)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rollupByPeriod(data.monthly, groupBy, ['received']).map(r => (
+                    <tr key={r.period} className="border-b border-gray-50 hover:bg-gray-50">
+                      <td className="px-4 py-2 font-medium text-gray-700">{r.period}</td>
+                      <td className="px-4 py-2 text-right tabular-nums text-green-700">{fmt(r.received)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t-2 border-gray-200 bg-gray-50 font-bold">
+                    <td className="px-4 py-2 text-gray-700">Total</td>
+                    <td className="px-4 py-2 text-right tabular-nums text-green-700">{fmt(data.totals.received)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </Card>
+
           {/* Monthly revenue chart */}
           <Card>
             <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
@@ -648,6 +757,133 @@ export default function AnalyticsPage() {
               </div>
             )}
           </Card>
+
+          {/* Revenue by Region */}
+          <Card>
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                <Truck size={16} className="text-green-600" /> Revenue by Region
+              </h2>
+              <span className="text-xs text-gray-400">{period}</span>
+            </div>
+            {(!data.by_region || data.by_region.length === 0) ? (
+              <p className="px-5 py-8 text-center text-sm text-gray-500">No region data (set operation country or order destination)</p>
+            ) : (
+              <div className="divide-y divide-gray-100">
+                {data.by_region.map((r, i) => {
+                  const maxR = data.by_region[0]?.total || 1;
+                  const totalAll = data.by_region.reduce((s, x) => s + x.total, 0);
+                  const pct = totalAll > 0 ? Math.round((r.total / totalAll) * 100) : 0;
+                  return (
+                    <div key={r.region} className="px-5 py-3">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
+                          <span className="text-xs text-gray-400 font-normal w-5">{i + 1}.</span>
+                          {r.region}
+                        </span>
+                        <div className="text-right shrink-0 ml-2">
+                          <span className="text-sm font-bold text-gray-900">{fmt(r.total)}</span>
+                          <span className="text-xs text-gray-400 ml-1">{pct}% · {r.invoice_count} inv</span>
+                        </div>
+                      </div>
+                      <div className="w-full bg-gray-100 rounded-full h-1.5">
+                        <div className="h-1.5 rounded-full bg-green-500" style={{ width: `${Math.round((r.total / maxR) * 100)}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+          </>)}
+
+          {/* Revenue → Invoices list */}
+          {revenueTab === 'invoices' && (
+            <Card>
+              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                <h2 className="font-semibold text-gray-900">Customer Invoices — {period}</h2>
+                <button
+                  onClick={() => downloadExcel(`revenue-invoices-${period}`,
+                    ['Invoice #', 'Customer', 'Quantity (MT)', 'Amount', 'Currency', 'EUR', 'Date'],
+                    (revenueRows?.customer_invoices || []).map(r => [r.invoice_number, r.customer_name, r.quantity_mt, r.amount, r.currency, r.eur_amount, r.invoice_date]))}
+                  className="flex items-center gap-1 text-sm text-gray-600 border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50">
+                  <FileSpreadsheet size={14} /> Export
+                </button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200 text-xs text-gray-500">
+                      <th className="text-left px-4 py-2">Invoice #</th>
+                      <th className="text-left px-4 py-2">Customer</th>
+                      <th className="text-right px-4 py-2">MT</th>
+                      <th className="text-right px-4 py-2">Amount</th>
+                      <th className="text-right px-4 py-2">EUR</th>
+                      <th className="text-left px-4 py-2">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(revenueRows?.customer_invoices || []).length === 0 ? (
+                      <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-500">No invoices in this period</td></tr>
+                    ) : revenueRows!.customer_invoices.map((r, i) => (
+                      <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                        <td className="px-4 py-2 font-medium text-gray-800">{r.invoice_number}</td>
+                        <td className="px-4 py-2 text-gray-600">{r.customer_name || '—'}</td>
+                        <td className="px-4 py-2 text-right tabular-nums">{r.quantity_mt ? Number(r.quantity_mt).toFixed(2) : '—'}</td>
+                        <td className="px-4 py-2 text-right tabular-nums">{Number(r.amount).toLocaleString()} {r.currency}</td>
+                        <td className="px-4 py-2 text-right tabular-nums font-medium">{fmt(r.eur_amount)}</td>
+                        <td className="px-4 py-2 text-gray-600">{r.invoice_date}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+
+          {/* Revenue → Orders list */}
+          {revenueTab === 'orders' && (
+            <Card>
+              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                <h2 className="font-semibold text-gray-900">Confirmed Orders (not yet invoiced) — {period}</h2>
+                <button
+                  onClick={() => downloadExcel(`revenue-orders-${period}`,
+                    ['Order #', 'Party', 'Status', 'Quantity (MT)', 'Total (EUR)', 'Date'],
+                    (revenueRows?.confirmed_orders || []).map(r => [r.order_number, r.party_name, r.status, r.quantity_mt, r.total_eur, r.order_date]))}
+                  className="flex items-center gap-1 text-sm text-gray-600 border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50">
+                  <FileSpreadsheet size={14} /> Export
+                </button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200 text-xs text-gray-500">
+                      <th className="text-left px-4 py-2">Order #</th>
+                      <th className="text-left px-4 py-2">Party</th>
+                      <th className="text-left px-4 py-2">Status</th>
+                      <th className="text-right px-4 py-2">MT</th>
+                      <th className="text-right px-4 py-2">Total (EUR)</th>
+                      <th className="text-left px-4 py-2">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(revenueRows?.confirmed_orders || []).length === 0 ? (
+                      <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-500">No confirmed orders in this period</td></tr>
+                    ) : revenueRows!.confirmed_orders.map((r, i) => (
+                      <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                        <td className="px-4 py-2 font-medium text-gray-800">{r.order_number}</td>
+                        <td className="px-4 py-2 text-gray-600">{r.party_name || '—'}</td>
+                        <td className="px-4 py-2 text-gray-600 capitalize">{r.status}</td>
+                        <td className="px-4 py-2 text-right tabular-nums">{r.quantity_mt ? Number(r.quantity_mt).toFixed(2) : '—'}</td>
+                        <td className="px-4 py-2 text-right tabular-nums font-medium">{fmt(r.total_eur)}</td>
+                        <td className="px-4 py-2 text-gray-600">{r.order_date}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
         </>
       )}
 
@@ -1037,7 +1273,7 @@ export default function AnalyticsPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-200">
-                    <th className="text-left text-xs font-medium text-gray-500 px-4 py-2">Month</th>
+                    <th className="text-left text-xs font-medium text-gray-500 px-4 py-2 capitalize">{groupBy}</th>
                     {showDemo && <th className="text-right text-xs font-medium text-indigo-600 px-4 py-2">Demo</th>}
                     {showSales && <th className="text-right text-xs font-medium text-emerald-600 px-4 py-2">Sales</th>}
                     <th className="text-right text-xs font-medium text-gray-700 px-4 py-2">Total Exp.</th>
@@ -1047,27 +1283,33 @@ export default function AnalyticsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {demoData.monthly.map(m => {
-                    const totalExp = (showDemo ? m.demo : 0) + (showSales ? m.sales : 0);
-                    const totalVat = (showDemo ? m.demo_vat : 0) + (showSales ? m.sales_vat : 0);
-                    const rev = revenueByMonth.find(r => r.month === m.month);
-                    const net = (rev?.received || 0) - totalExp;
-                    return (
-                      <tr key={m.month} className="border-b border-gray-50 hover:bg-gray-50">
-                        <td className="px-4 py-2 font-medium text-gray-700">{monthLabel(m.month)} {m.month.split('-')[0]}</td>
-                        {showDemo && <td className="px-4 py-2 text-right tabular-nums text-indigo-600">{fmt(m.demo)}</td>}
-                        {showSales && <td className="px-4 py-2 text-right tabular-nums text-emerald-600">{fmt(m.sales)}</td>}
-                        <td className="px-4 py-2 text-right tabular-nums font-semibold">{fmt(totalExp)}</td>
-                        <td className="px-4 py-2 text-right tabular-nums text-amber-600">{fmt(totalVat)}</td>
-                        {compareRevenue && <td className="px-4 py-2 text-right tabular-nums text-green-600">{fmt(rev?.received || 0)}</td>}
-                        {compareRevenue && (
-                          <td className={`px-4 py-2 text-right tabular-nums font-semibold ${net >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                            {net >= 0 ? '+' : ''}{fmt(net)}
-                          </td>
-                        )}
-                      </tr>
-                    );
-                  })}
+                  {(() => {
+                    // Merge expenses + revenue per month, then roll up to the chosen period.
+                    const merged = demoData.monthly.map(m => {
+                      const rev = revenueByMonth.find(r => r.month === m.month);
+                      return { month: m.month, demo: m.demo, sales: m.sales, demo_vat: m.demo_vat, sales_vat: m.sales_vat, received: rev?.received || 0 };
+                    });
+                    return rollupByPeriod(merged, groupBy, ['demo', 'sales', 'demo_vat', 'sales_vat', 'received']).map(r => {
+                      const totalExp = (showDemo ? r.demo : 0) + (showSales ? r.sales : 0);
+                      const totalVat = (showDemo ? r.demo_vat : 0) + (showSales ? r.sales_vat : 0);
+                      const net = r.received - totalExp;
+                      return (
+                        <tr key={r.period} className="border-b border-gray-50 hover:bg-gray-50">
+                          <td className="px-4 py-2 font-medium text-gray-700">{r.period}</td>
+                          {showDemo && <td className="px-4 py-2 text-right tabular-nums text-indigo-600">{fmt(r.demo)}</td>}
+                          {showSales && <td className="px-4 py-2 text-right tabular-nums text-emerald-600">{fmt(r.sales)}</td>}
+                          <td className="px-4 py-2 text-right tabular-nums font-semibold">{fmt(totalExp)}</td>
+                          <td className="px-4 py-2 text-right tabular-nums text-amber-600">{fmt(totalVat)}</td>
+                          {compareRevenue && <td className="px-4 py-2 text-right tabular-nums text-green-600">{fmt(r.received)}</td>}
+                          {compareRevenue && (
+                            <td className={`px-4 py-2 text-right tabular-nums font-semibold ${net >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {net >= 0 ? '+' : ''}{fmt(net)}
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    });
+                  })()}
                 </tbody>
                 <tfoot>
                   <tr className="border-t-2 border-gray-200 bg-gray-50 font-bold">
@@ -1205,6 +1447,41 @@ export default function AnalyticsPage() {
                         </div>
                         <div className="w-full bg-gray-100 rounded-full h-1.5">
                           <div className="bg-indigo-500 h-1.5 rounded-full" style={{ width: `${(c.tons / maxC) * 100}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+            )}
+
+            {/* Tonnage by Region */}
+            {quantityData.by_region && quantityData.by_region.length > 0 && (
+              <Card>
+                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                  <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                    <Truck size={16} className="text-indigo-600" /> Tonnage by Region
+                  </h2>
+                  <span className="text-xs text-gray-400">{period}</span>
+                </div>
+                <div className="divide-y divide-gray-100">
+                  {quantityData.by_region.map((r, i) => {
+                    const maxR = quantityData.by_region[0]?.tons || 1;
+                    const pct = quantityData.total_tons > 0 ? Math.round((r.tons / quantityData.total_tons) * 100) : 0;
+                    return (
+                      <div key={r.region} className="px-5 py-3">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
+                            <span className="text-xs text-gray-400 font-normal w-5">{i + 1}.</span>
+                            {r.region}
+                          </span>
+                          <div className="text-right shrink-0 ml-2">
+                            <span className="text-sm font-bold text-indigo-700">{fmtTons(r.tons)}</span>
+                            <span className="text-xs text-gray-400 ml-1">{pct}%</span>
+                          </div>
+                        </div>
+                        <div className="w-full bg-gray-100 rounded-full h-1.5">
+                          <div className="bg-indigo-500 h-1.5 rounded-full" style={{ width: `${(r.tons / maxR) * 100}%` }} />
                         </div>
                       </div>
                     );

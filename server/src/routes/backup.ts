@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
-import { createBackupArchive, listBackups, getBackupsDir } from '../lib/backup.js';
+import { createBackupArchive, createCategorizedInvoiceArchive, listBackups, getBackupsDir } from '../lib/backup.js';
 import { buildCronExpr, startBackupScheduler, BackupSchedule } from '../lib/backup-scheduler.js';
 import db from '../database.js';
 
@@ -21,6 +21,24 @@ router.get('/', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('[Backup] Download error:', err);
     if (!res.headersSent) res.status(500).json({ error: 'Failed to create backup' });
+  }
+});
+
+// GET /api/backup/invoices-by-category — stream a ZIP of invoice files foldered by
+// category (Customer / Supplier / Demo Suppliers / Sales Activities), original filenames
+router.get('/invoices-by-category', async (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ error: 'Admin access required' });
+    return;
+  }
+  try {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="invoices-by-category-${timestamp}.zip"`);
+    await createCategorizedInvoiceArchive(res);
+  } catch (err) {
+    console.error('[Backup] Categorized invoice download error:', err);
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to create invoice backup' });
   }
 });
 

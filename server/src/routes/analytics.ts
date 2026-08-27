@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
 import { getEurRate } from '../lib/fx.js';
+import { resolveCountry } from '../lib/portCountry.js';
 
 const router = Router();
 
@@ -156,6 +157,32 @@ router.get('/summary', async (req: Request, res: Response) => {
     GROUP BY i.customer_id ORDER BY total DESC LIMIT 20
   `).all(dateStart, dateEnd, ...custParams) as any[];
 
+  // ── By region ──────────────────────────────────────────────────────────────
+  // Region is derived from the operation's country, falling back to the order's
+  // freeform destination (resolved to a country in JS via resolveCountry).
+  const regionSrcRows = db.prepare(`
+    SELECT COALESCE(i.eur_amount, i.amount) as total,
+      op.country as op_country, o.destination as destination
+    FROM invoices i
+    LEFT JOIN operations op ON op.id = i.operation_id
+    LEFT JOIN orders o ON op.order_id = o.id
+    WHERE i.type = 'customer' AND i.status = 'paid'
+      AND COALESCE(
+        (SELECT MAX(wt.transfer_date) FROM wire_transfers wt WHERE wt.invoice_id = i.id),
+        i.payment_date, i.invoice_date
+      ) BETWEEN ? AND ?
+      ${custWhere}
+  `).all(dateStart, dateEnd, ...custParams) as any[];
+  const regionMap = new Map<string, { region: string; total: number; invoice_count: number }>();
+  for (const r of regionSrcRows) {
+    const region = resolveCountry(r.op_country || r.destination) || 'Unknown';
+    const entry = regionMap.get(region) ?? { region, total: 0, invoice_count: 0 };
+    entry.total += Number(r.total) || 0;
+    entry.invoice_count += 1;
+    regionMap.set(region, entry);
+  }
+  const byRegion = [...regionMap.values()].sort((a, b) => b.total - a.total);
+
   // ── By supplier ──────────────────────────────────────────────────────────
   const bySupplier = db.prepare(`
     SELECT s.name as supplier_name, s.id as supplier_id, s.category,
@@ -182,22 +209,21 @@ router.get('/summary', async (req: Request, res: Response) => {
   `).all(year, ...custParams) as any[];
   const outstanding = await sumLiveEur(outstandingRows);
 
-  // Expected: sent invoices with NO due_date (unscheduled) — live FX
+  // Expected: sent/overdue invoices with NO due_date (unscheduled) — live FX
   const expectedRows = db.prepare(`
     SELECT amount, UPPER(COALESCE(currency, 'USD')) as currency
     FROM invoices
-    WHERE type = 'customer' AND status = 'sent' AND due_date IS NULL ${custWhereOnly}
+    WHERE type = 'customer' AND status IN ('sent', 'overdue') AND due_date IS NULL ${custWhereOnly}
   `).all(...custParams) as any[];
   const expectedInvoiceReceivable = await sumLiveEur(expectedRows);
-  // Expected from orders: operations with an order but no invoice yet
+  // Expected from orders: customer orders with no invoice yet (counted from orders directly)
   const expectedOrderRows = db.prepare(`
     SELECT o.total_amount as amount, UPPER(COALESCE(oi_cur.currency, 'USD')) as currency
-    FROM operations op
-    JOIN orders o ON op.order_id = o.id
+    FROM orders o
     LEFT JOIN (SELECT UPPER(COALESCE(currency, 'USD')) as currency, order_id FROM order_items GROUP BY order_id) oi_cur ON oi_cur.order_id = o.id
-    WHERE op.status NOT IN ('completed')
+    WHERE o.type = 'customer' AND o.status NOT IN ('completed', 'cancelled')
       AND o.total_amount > 0
-      AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.operation_id = op.id)
+      AND NOT EXISTS (SELECT 1 FROM invoices i JOIN operations op ON i.operation_id = op.id WHERE op.order_id = o.id)
       ${customerId ? 'AND o.customer_id = ?' : ''}
   `).all(...(customerId ? [customerId] : [])) as any[];
   const expectedReceivable = expectedInvoiceReceivable + await sumLiveEur(expectedOrderRows);
@@ -216,6 +242,7 @@ router.get('/summary', async (req: Request, res: Response) => {
   res.json({
     monthly,
     by_customer: byCustomer,
+    by_region: byRegion,
     by_supplier: bySupplier,
     totals: {
       received: totalReceived,
@@ -301,7 +328,29 @@ router.get('/quantity', (req: Request, res: Response) => {
     LIMIT 30
   `).all(dateStart, dateEnd, ...custParams) as any[];
 
-  res.json({ monthly, total_tons: totalTons, by_customer: byCustomer });
+  // Per-region breakdown (region from operation country / order destination)
+  const regionSrc = db.prepare(`
+    SELECT SUM(${MT_EXPR}) as tons,
+      (SELECT op.country FROM operations op WHERE op.order_id = o.id AND op.country IS NOT NULL ORDER BY op.id DESC LIMIT 1) as op_country,
+      o.destination as destination
+    FROM order_items oi
+    JOIN orders o ON oi.order_id = o.id
+    WHERE o.type = 'customer'
+      AND COALESCE(o.order_date, date(o.created_at)) BETWEEN ? AND ?
+      ${custWhere}
+    GROUP BY o.id
+  `).all(dateStart, dateEnd, ...custParams) as any[];
+  const tonsRegionMap = new Map<string, number>();
+  for (const r of regionSrc) {
+    const region = resolveCountry(r.op_country || r.destination) || 'Unknown';
+    tonsRegionMap.set(region, (tonsRegionMap.get(region) ?? 0) + (Number(r.tons) || 0));
+  }
+  const byRegion = [...tonsRegionMap.entries()]
+    .map(([region, tons]) => ({ region, tons }))
+    .filter(r => r.tons > 0)
+    .sort((a, b) => b.tons - a.tons);
+
+  res.json({ monthly, total_tons: totalTons, by_customer: byCustomer, by_region: byRegion });
 });
 
 // Debug: show exactly what data contributes to expenses for a given month

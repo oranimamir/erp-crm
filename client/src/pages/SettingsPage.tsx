@@ -31,6 +31,7 @@ export default function SettingsPage() {
   const { theme, toggleTheme } = useTheme();
   const { user } = useAuth();
   const [downloading, setDownloading] = useState(false);
+  const [downloadingInvoices, setDownloadingInvoices] = useState(false);
   const [savedBackups, setSavedBackups] = useState<SavedBackup[]>([]);
   const [downloadingFile, setDownloadingFile] = useState<string | null>(null);
 
@@ -71,6 +72,25 @@ export default function SettingsPage() {
       addToast('Failed to download backup', 'error');
     } finally {
       setDownloading(false);
+    }
+  };
+
+  const handleDownloadInvoicesByCategory = async () => {
+    setDownloadingInvoices(true);
+    try {
+      const res = await api.get('/backup/invoices-by-category', { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      a.href = url;
+      a.download = `invoices-by-category-${timestamp}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+      addToast('Invoice backup downloaded', 'success');
+    } catch {
+      addToast('Failed to download invoice backup', 'error');
+    } finally {
+      setDownloadingInvoices(false);
     }
   };
 
@@ -319,6 +339,24 @@ export default function SettingsPage() {
               >
                 <Download size={15} />
                 {downloading ? 'Preparing...' : 'Download Backup'}
+              </button>
+            </div>
+
+            {/* On-demand categorized invoice download */}
+            <div className="flex items-center justify-between border-t border-gray-100 pt-4">
+              <div>
+                <p className="text-sm font-medium text-gray-900">Download invoices (by category)</p>
+                <p className="text-sm text-gray-500 mt-0.5">
+                  ZIP with folders (Customer Invoices, Supplier Invoices, Demo Suppliers, Sales Activities Suppliers) — original filenames
+                </p>
+              </div>
+              <button
+                onClick={handleDownloadInvoicesByCategory}
+                disabled={downloadingInvoices}
+                className="flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0 ml-4"
+              >
+                <Download size={15} />
+                {downloadingInvoices ? 'Preparing...' : 'Download Invoices'}
               </button>
             </div>
 
