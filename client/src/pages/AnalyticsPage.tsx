@@ -22,6 +22,13 @@ interface Summary {
   by_supplier: any[];
   totals: { received: number; paid_out: number; net: number; outstanding: number; expected: number; outstanding_payable: number; };
 }
+interface BreakdownSummary {
+  monthly: { month: string; total: number }[];
+  by_customer: { customer_id: number; customer_name: string; total: number; count: number }[];
+  by_region: { region: string; total: number; count: number }[];
+  total: number;
+}
+interface RevenueBreakdown { orders: BreakdownSummary; invoices: BreakdownSummary; }
 interface QuantityData {
   monthly: { month: string; tons: number }[];
   total_tons: number;
@@ -246,6 +253,128 @@ function ToggleBtn({ active, onClick, color, children }: {
   );
 }
 
+// ── Orders / Invoices breakdown block ──────────────────────────────────────────
+// Renders one self-contained summary (period rollup + region pie + per-client
+// table) for either the orders or the invoices side of revenue.
+
+function BreakdownBlock({ title, icon, accentText, summary, groupBy, period }: {
+  title: string;
+  icon: React.ReactNode;
+  accentText: string; // literal tailwind class, e.g. 'text-green-700' (must be literal for JIT)
+  summary: BreakdownSummary;
+  groupBy: GroupBy;
+  period: string;
+}) {
+  const periodRows = rollupByPeriod(summary.monthly, groupBy, ['total']);
+  const regionTotal = summary.by_region.reduce((s, r) => s + r.total, 0);
+  return (
+    <Card>
+      <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+        <h2 className="font-semibold text-gray-900 flex items-center gap-2">{icon}{title}</h2>
+        <div className="text-right">
+          <span className={`text-sm font-bold ${accentText}`}>{fmt(summary.total)}</span>
+          <span className="text-xs text-gray-400 ml-2">{period}</span>
+        </div>
+      </div>
+
+      {/* Period rollup (month / quarter / year) */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-gray-200">
+              <th className="text-left text-xs font-medium text-gray-500 px-4 py-2 capitalize">{groupBy}</th>
+              <th className="text-right text-xs font-medium text-gray-500 px-4 py-2">Total (EUR)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {periodRows.map(r => (
+              <tr key={r.period} className="border-b border-gray-50 hover:bg-gray-50">
+                <td className="px-4 py-2 font-medium text-gray-700">{r.period}</td>
+                <td className={`px-4 py-2 text-right tabular-nums ${accentText}`}>{fmt(r.total)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="border-t-2 border-gray-200 bg-gray-50 font-bold">
+              <td className="px-4 py-2 text-gray-700">Total</td>
+              <td className={`px-4 py-2 text-right tabular-nums ${accentText}`}>{fmt(summary.total)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      {/* By region — pie chart */}
+      <div className="px-5 py-4 border-t border-gray-100">
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">By Region</h3>
+        {summary.by_region.length === 0 ? (
+          <p className="text-sm text-gray-500">No region data</p>
+        ) : (
+          <div className="flex gap-6 items-start">
+            <DonutChart slices={summary.by_region.map(r => ({ label: r.region, value: r.total }))} />
+            <div className="flex-1 min-w-0 space-y-2">
+              {summary.by_region.map((r, i) => {
+                const pct = regionTotal > 0 ? Math.round((r.total / regionTotal) * 100) : 0;
+                return (
+                  <div key={r.region} className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: DONUT_COLORS[i % DONUT_COLORS.length] }} />
+                    <span className="text-sm text-gray-700 truncate flex-1 min-w-0">{r.region}</span>
+                    <span className="text-xs text-gray-400 shrink-0">{pct}%</span>
+                    <span className="text-sm font-semibold text-gray-900 shrink-0 min-w-[80px] text-right">{fmt(r.total)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* By client — summary table */}
+      <div className="px-5 py-4 border-t border-gray-100">
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">By Client</h3>
+        {summary.by_customer.length === 0 ? (
+          <p className="text-sm text-gray-500">No client data for this period</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 text-xs text-gray-500">
+                  <th className="text-left px-4 py-2">Client</th>
+                  <th className="text-right px-4 py-2">Count</th>
+                  <th className="text-right px-4 py-2">Total (EUR)</th>
+                  <th className="text-right px-4 py-2">%</th>
+                </tr>
+              </thead>
+              <tbody>
+                {summary.by_customer.map(c => {
+                  const pct = summary.total > 0 ? Math.round((c.total / summary.total) * 100) : 0;
+                  return (
+                    <tr key={c.customer_id} className="border-b border-gray-50 hover:bg-gray-50">
+                      <td className="px-4 py-2 font-medium text-gray-800">{c.customer_name}</td>
+                      <td className="px-4 py-2 text-right tabular-nums text-gray-500">{c.count}</td>
+                      <td className="px-4 py-2 text-right tabular-nums font-medium text-gray-900">{fmt(c.total)}</td>
+                      <td className="px-4 py-2 text-right tabular-nums text-gray-400">{pct}%</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-gray-200 bg-gray-50 font-bold">
+                  <td className="px-4 py-2 text-gray-700">Total</td>
+                  <td className="px-4 py-2 text-right tabular-nums text-gray-500">
+                    {summary.by_customer.reduce((s, c) => s + c.count, 0)}
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums text-gray-900">{fmt(summary.total)}</td>
+                  <td className="px-4 py-2" />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 // ── Main tabs ─────────────────────────────────────────────────────────────────
 
 type View = 'revenue' | 'expenses' | 'tonnage';
@@ -276,6 +405,7 @@ export default function AnalyticsPage() {
   // ── Revenue sub-tabs (Summary / Orders / Invoices) ────────────────────────
   const [revenueTab, setRevenueTab] = useState<'summary' | 'orders' | 'invoices'>('summary');
   const [revenueRows, setRevenueRows] = useState<{ customer_invoices: any[]; confirmed_orders: any[] } | null>(null);
+  const [breakdown, setBreakdown] = useState<RevenueBreakdown | null>(null);
 
   // ── Expenses tab toggles ──────────────────────────────────────────────────
   const [showDemo, setShowDemo] = useState(true);
@@ -353,6 +483,17 @@ export default function AnalyticsPage() {
     })
       .then(res => setRevenueRows({ customer_invoices: res.data.customer_invoices || [], confirmed_orders: res.data.confirmed_orders || [] }))
       .catch(() => setRevenueRows(null));
+  }, [view, year, monthFrom, monthTo, customerId]);
+
+  // ── Orders vs Invoices breakdown for the Summary sub-tab (kept separate to
+  //    avoid double-counting) ─────────────────────────────────────────────────
+  useEffect(() => {
+    if (view !== 'revenue') return;
+    api.get('/analytics/revenue-breakdown', {
+      params: { year, month_from: monthFrom, month_to: monthTo, customer_id: customerId || undefined },
+    })
+      .then(res => setBreakdown(res.data))
+      .catch(() => setBreakdown(null));
   }, [view, year, monthFrom, monthTo, customerId]);
 
   // ── Misc handlers ─────────────────────────────────────────────────────────
@@ -638,37 +779,33 @@ export default function AnalyticsPage() {
           </div>
 
           {revenueTab === 'summary' && (<>
-          {/* Revenue Summary table — respects Month / Quarter / Year grouping */}
-          <Card>
-            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-              <h2 className="font-semibold text-gray-900">Revenue Summary — by {groupBy}</h2>
-              <span className="text-xs text-gray-400">{period}</span>
+          {/* Orders vs Invoices — kept as two separate summaries. Combining them
+              would double-count, since a confirmed order later becomes an invoice. */}
+          <div className="rounded-lg bg-blue-50 border border-blue-100 px-4 py-2.5 text-xs text-blue-700">
+            Orders and invoices are summarised separately to avoid double-counting — an order becomes an invoice once shipped/billed.
+          </div>
+          {breakdown ? (
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+              <BreakdownBlock
+                title="Orders Summary"
+                icon={<FileSpreadsheet size={16} className="text-indigo-600" />}
+                accentText="text-indigo-700"
+                summary={breakdown.orders}
+                groupBy={groupBy}
+                period={period}
+              />
+              <BreakdownBlock
+                title="Invoices Summary"
+                icon={<FileSpreadsheet size={16} className="text-green-600" />}
+                accentText="text-green-700"
+                summary={breakdown.invoices}
+                groupBy={groupBy}
+                period={period}
+              />
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-200">
-                    <th className="text-left text-xs font-medium text-gray-500 px-4 py-2 capitalize">{groupBy}</th>
-                    <th className="text-right text-xs font-medium text-green-600 px-4 py-2">Received (EUR)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rollupByPeriod(data.monthly, groupBy, ['received']).map(r => (
-                    <tr key={r.period} className="border-b border-gray-50 hover:bg-gray-50">
-                      <td className="px-4 py-2 font-medium text-gray-700">{r.period}</td>
-                      <td className="px-4 py-2 text-right tabular-nums text-green-700">{fmt(r.received)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr className="border-t-2 border-gray-200 bg-gray-50 font-bold">
-                    <td className="px-4 py-2 text-gray-700">Total</td>
-                    <td className="px-4 py-2 text-right tabular-nums text-green-700">{fmt(data.totals.received)}</td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </Card>
+          ) : (
+            <Card className="p-8"><p className="text-center text-sm text-gray-500">Loading orders / invoices breakdown…</p></Card>
+          )}
 
           {/* Monthly revenue chart */}
           <Card>

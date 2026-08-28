@@ -255,6 +255,122 @@ router.get('/summary', async (req: Request, res: Response) => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// GET /analytics/revenue-breakdown — Orders vs Invoices summaries (kept separate
+// to avoid double-counting: an order later becomes an invoice). Each summary is
+// bucketed monthly and broken down by customer and by region, all in live-FX EUR.
+//   ?year= &month_from= &month_to= &customer_id=
+// ═══════════════════════════════════════════════════════════════════════════════
+router.get('/revenue-breakdown', async (req: Request, res: Response) => {
+  const yearNum = parseInt((req.query.year as string) || new Date().getFullYear().toString());
+  if (isNaN(yearNum) || yearNum < 2000 || yearNum > 2100) {
+    res.status(400).json({ error: 'Invalid year' }); return;
+  }
+  const year = String(yearNum);
+
+  const rawFrom = parseInt(req.query.month_from as string || '1');
+  const rawTo = parseInt(req.query.month_to as string || '12');
+  const monthStart = Math.min(Math.max(isNaN(rawFrom) ? 1 : rawFrom, 1), 12);
+  const monthEnd = Math.max(Math.min(isNaN(rawTo) ? 12 : rawTo, 12), monthStart);
+  const dateStart = `${year}-${String(monthStart).padStart(2, '0')}-01`;
+  const dateEnd = `${year}-${String(monthEnd).padStart(2, '0')}-31`;
+
+  const customerId = req.query.customer_id ? parseInt(req.query.customer_id as string) : null;
+  if (req.query.customer_id && (isNaN(customerId!) || customerId! <= 0)) {
+    res.status(400).json({ error: 'Invalid customer_id' }); return;
+  }
+
+  // ── Customer orders (by order_date) ──────────────────────────────────────────
+  const orderRows = db.prepare(`
+    SELECT o.id, o.total_amount as amount,
+      UPPER(COALESCE(oi_cur.currency, 'USD')) as currency,
+      strftime('%Y-%m', COALESCE(o.order_date, date(o.created_at))) as month,
+      c.id as customer_id, c.name as customer_name,
+      o.destination as destination
+    FROM orders o
+    LEFT JOIN customers c ON o.customer_id = c.id
+    LEFT JOIN (SELECT UPPER(COALESCE(currency, 'USD')) as currency, order_id FROM order_items GROUP BY order_id) oi_cur ON oi_cur.order_id = o.id
+    WHERE o.type = 'customer' AND o.status NOT IN ('cancelled')
+      AND COALESCE(o.order_date, date(o.created_at)) BETWEEN ? AND ?
+      ${customerId ? 'AND o.customer_id = ?' : ''}
+  `).all(dateStart, dateEnd, ...(customerId ? [customerId] : [])) as any[];
+
+  // ── Customer invoices (by invoice_date) ──────────────────────────────────────
+  const invoiceRows = db.prepare(`
+    SELECT i.id, i.amount, UPPER(COALESCE(i.currency, 'USD')) as currency,
+      i.eur_amount as stored_eur,
+      strftime('%Y-%m', i.invoice_date) as month,
+      c.id as customer_id, c.name as customer_name,
+      op.country as op_country, o.destination as destination
+    FROM invoices i
+    LEFT JOIN customers c ON i.customer_id = c.id
+    LEFT JOIN operations op ON op.id = i.operation_id
+    LEFT JOIN orders o ON op.order_id = o.id
+    WHERE i.type = 'customer' AND i.status NOT IN ('cancelled', 'draft')
+      AND i.invoice_date IS NOT NULL AND i.invoice_date BETWEEN ? AND ?
+      ${customerId ? 'AND i.customer_id = ?' : ''}
+  `).all(dateStart, dateEnd, ...(customerId ? [customerId] : [])) as any[];
+
+  // ── Fetch every non-EUR rate once (orders always need FX; invoices only when
+  //    no stored eur_amount exists) ───────────────────────────────────────────
+  const needed = new Set<string>();
+  for (const r of orderRows) { const c = (r.currency || 'USD').toUpperCase(); if (c !== 'EUR') needed.add(c); }
+  for (const r of invoiceRows) { if (r.stored_eur == null) { const c = (r.currency || 'USD').toUpperCase(); if (c !== 'EUR') needed.add(c); } }
+  const rates: Record<string, number> = {};
+  await Promise.all([...needed].map(async c => { rates[c] = await getEurRate(c, 'latest'); }));
+
+  const toEur = (amount: number, currency: string) => {
+    const c = (currency || 'USD').toUpperCase();
+    return (Number(amount) || 0) * (c === 'EUR' ? 1 : (rates[c] ?? 1));
+  };
+
+  // ── Aggregate a set of {month, eur, customer_id, customer_name, region} rows ──
+  const buildSummary = (rows: any[]) => {
+    const months: Record<string, { month: string; total: number }> = {};
+    for (let m = monthStart; m <= monthEnd; m++) {
+      const key = `${year}-${String(m).padStart(2, '0')}`;
+      months[key] = { month: key, total: 0 };
+    }
+    const custMap = new Map<number, { customer_id: number; customer_name: string; total: number; count: number }>();
+    const regionMap = new Map<string, { region: string; total: number; count: number }>();
+    let total = 0;
+    for (const r of rows) {
+      const eur = r.eur || 0;
+      total += eur;
+      if (months[r.month]) months[r.month].total += eur;
+      const cid = r.customer_id ?? 0;
+      const cust = custMap.get(cid) ?? { customer_id: cid, customer_name: r.customer_name || 'Unknown', total: 0, count: 0 };
+      cust.total += eur; cust.count += 1; custMap.set(cid, cust);
+      const region = r.region || 'Unknown';
+      const rg = regionMap.get(region) ?? { region, total: 0, count: 0 };
+      rg.total += eur; rg.count += 1; regionMap.set(region, rg);
+    }
+    return {
+      monthly: Object.values(months),
+      by_customer: [...custMap.values()].sort((a, b) => b.total - a.total),
+      by_region: [...regionMap.values()].sort((a, b) => b.total - a.total),
+      total,
+    };
+  };
+
+  const orders = buildSummary(orderRows.map(r => ({
+    month: r.month,
+    eur: toEur(r.amount, r.currency),
+    customer_id: r.customer_id,
+    customer_name: r.customer_name,
+    region: resolveCountry(r.destination) || 'Unknown',
+  })));
+  const invoices = buildSummary(invoiceRows.map(r => ({
+    month: r.month,
+    eur: r.stored_eur != null ? Number(r.stored_eur) : toEur(r.amount, r.currency),
+    customer_id: r.customer_id,
+    customer_name: r.customer_name,
+    region: resolveCountry(r.op_country || r.destination) || 'Unknown',
+  })));
+
+  res.json({ orders, invoices });
+});
+
 // SQL expression that converts any recognised unit to metric tons (MT).
 // 1 MT = 1000 kg = 2204.6226218 lbs
 const MT_EXPR = `
