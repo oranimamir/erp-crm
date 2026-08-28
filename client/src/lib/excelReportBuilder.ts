@@ -15,12 +15,20 @@ export interface ColumnDef {
   format?: 'currency' | 'currency_native' | 'number' | 'date' | 'tons' | 'text';
 }
 
+/**
+ * Which measure a sheet belongs to. The Summary tab totals sheets *within* a
+ * measure and never across measures: an order becomes an invoice once billed,
+ * so adding orders to invoiced revenue would count the same sale twice.
+ */
+export type SheetMeasure = 'revenue' | 'orders' | 'expenses';
+
 export interface SheetData {
   name: string;
   columns: ColumnDef[];
   rows: Record<string, any>[];
   totalsRow?: Record<string, any>;
   // Summary tab metadata
+  measure?: SheetMeasure; // defaults to 'revenue'
   revenueField?: string;
   tonnageField?: string;
   dateField?: string;

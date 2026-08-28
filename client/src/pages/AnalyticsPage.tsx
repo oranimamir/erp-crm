@@ -3,12 +3,13 @@ import api from '../lib/api';
 import Card from '../components/ui/Card';
 import {
   BarChart3, TrendingUp, TrendingDown, DollarSign, Clock,
-  RefreshCw, FileSpreadsheet, Users, Truck, Scale,
-  ChevronDown, ChevronRight, Eye, EyeOff,
+  RefreshCw, FileSpreadsheet, Users, Truck, Scale, ShoppingCart, Receipt, Landmark, Info,
 } from 'lucide-react';
 import { downloadExcel } from '../lib/exportExcel';
 import { useToast } from '../contexts/ToastContext';
 import ExportReportModal from '../components/ExportReportModal';
+import ColumnChart from '../components/charts/ColumnChart';
+import { PanelCard, PeriodPanel, BreakdownPanel, StatTile, VizRow } from '../components/charts/Panels';
 
 // ── Interfaces ────────────────────────────────────────────────────────────────
 
@@ -49,15 +50,14 @@ interface DemoExpensesData {
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-const DEMO_CAT_COLORS: Record<string, string> = {
-  'Salaries': '#6366f1', 'Cars': '#8b5cf6', 'Overhead': '#3b82f6',
-  'Consumables': '#f59e0b', 'Materials': '#10b981', 'Utilities and Maintenance': '#ef4444',
-  'Feedstock': '#14b8a6', 'Subcontractors and Consultants': '#ec4899',
-  'Regulatory': '#f97316', 'Equipment': '#0ea5e9', 'Couriers': '#84cc16', 'Other': '#6b7280',
-  'Raw Materials': '#059669', 'Logistics': '#7c3aed', 'Blenders': '#db2777', 'Shipping': '#0284c7',
-};
-
-const DONUT_COLORS = ['#22c55e', '#3b82f6', '#8b5cf6', '#06b6d4', '#14b8a6', '#f59e0b', '#6366f1', '#ec4899', '#f97316'];
+// Categorical slots, assigned by measure and never by rank, so a filter can
+// never repaint a series. Every combination used together on one chart was run
+// through the palette validator (see components/charts/viz.ts).
+const C_ORDERS   = 'var(--viz-1)'; // blue
+const C_EXPENSE  = 'var(--viz-2)'; // orange
+const C_INVOICES = 'var(--viz-3)'; // aqua
+const C_CASH     = 'var(--viz-6)'; // green
+const C_TONS     = 'var(--viz-7)'; // violet
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -66,9 +66,9 @@ function fmt(n: number) {
 }
 
 function fmtAxis(n: number): string {
-  if (n === 0) return '0';
-  if (n >= 1_000_000) return `€${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `€${Math.round(n / 1_000)}k`;
+  if (!n) return '0';
+  if (Math.abs(n) >= 1_000_000) return `€${(n / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(n) >= 1_000) return `€${Math.round(n / 1_000)}k`;
   return `€${Math.round(n)}`;
 }
 
@@ -78,7 +78,7 @@ function fmtTons(n: number) {
 }
 
 function fmtTonsAxis(n: number): string {
-  if (n === 0) return '0';
+  if (!n) return '0';
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   return n >= 10 ? Math.round(n).toString() : n.toFixed(1);
 }
@@ -96,11 +96,9 @@ function periodLabel(year: string, monthFrom: string, monthTo: string) {
   return `${MONTHS[from - 1]}–${MONTHS[to - 1]} ${year}`;
 }
 
-// ── Period rollup (Month / Quarter / Year) ──────────────────────────────────────
+// ── Period rollup (Month / Quarter / Year) ────────────────────────────────────
 type GroupBy = 'month' | 'quarter' | 'year';
 
-// Bucket a list of monthly rows ({ month: 'YYYY-MM', ...numeric fields }) into the
-// requested period, summing the given numeric keys. Returns rows keyed by `period`.
 function rollupByPeriod<T extends { month: string }>(rows: T[], groupBy: GroupBy, keys: (keyof T)[]): Array<{ period: string } & Record<string, number>> {
   if (groupBy === 'month') {
     return rows.map(r => {
@@ -126,115 +124,21 @@ function rollupByPeriod<T extends { month: string }>(rows: T[], groupBy: GroupBy
   return order.map(p => buckets.get(p));
 }
 
-// ── Chart components ──────────────────────────────────────────────────────────
-
-function BarChartGrid({ height, maxVal, fmtFn, children }: {
-  height: number;
-  maxVal: number;
-  fmtFn: (n: number) => string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex gap-2">
-      <div className="flex flex-col justify-between items-end shrink-0 w-14" style={{ height }}>
-        {[maxVal, maxVal * 0.75, maxVal * 0.5, maxVal * 0.25, 0].map((v, i) => (
-          <span key={i} className="text-[10px] text-gray-400 leading-none tabular-nums">{fmtFn(v)}</span>
-        ))}
-      </div>
-      <div className="flex-1 min-w-0 flex flex-col">
-        <div className="relative" style={{ height }}>
-          {[0, 25, 50, 75, 100].map(pct => (
-            <div key={pct} className={`absolute left-0 right-0 pointer-events-none ${pct === 0 ? 'border-t border-gray-300' : 'border-t border-gray-100'}`}
-              style={{ bottom: `${(pct / 100) * height}px` }} />
-          ))}
-          <div className="flex items-end gap-1 h-full">
-            {children}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+/** Align a rolled-up series onto a shared period axis. */
+function alignTo(periods: string[], rows: Array<{ period: string } & Record<string, number>>, key: string): number[] {
+  const byPeriod = new Map(rows.map(r => [r.period, r[key] || 0]));
+  return periods.map(p => byPeriod.get(p) ?? 0);
 }
 
-function MonthLabels({ months }: { months: string[] }) {
-  return (
-    <div className="flex gap-1 mt-1.5 ml-16">
-      {months.map(m => (
-        <div key={m} className="flex-1 text-center">
-          <span className="text-[10px] text-gray-400">{monthLabel(m)}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
+// ── Main tabs ─────────────────────────────────────────────────────────────────
 
-function DonutChart({ slices }: { slices: { label: string; value: number }[] }) {
-  const total = slices.reduce((s, d) => s + d.value, 0);
-  if (total === 0 || slices.length === 0) return null;
-  const size = 140, r = 56, ir = 34, cx = 70, cy = 70;
-  let angle = -Math.PI / 2;
-  const paths = slices.map((s, i) => {
-    const pct = s.value / total;
-    const sweep = pct * 2 * Math.PI;
-    const end = angle + sweep;
-    const [x1, y1] = [cx + r * Math.cos(angle), cy + r * Math.sin(angle)];
-    const [x2, y2] = [cx + r * Math.cos(end), cy + r * Math.sin(end)];
-    const [ix1, iy1] = [cx + ir * Math.cos(end), cy + ir * Math.sin(end)];
-    const [ix2, iy2] = [cx + ir * Math.cos(angle), cy + ir * Math.sin(angle)];
-    const large = sweep > Math.PI ? 1 : 0;
-    const d = `M${x1.toFixed(2)},${y1.toFixed(2)} A${r},${r},0,${large},1,${x2.toFixed(2)},${y2.toFixed(2)} L${ix1.toFixed(2)},${iy1.toFixed(2)} A${ir},${ir},0,${large},0,${ix2.toFixed(2)},${iy2.toFixed(2)}Z`;
-    angle = end;
-    return { d, color: DONUT_COLORS[i % DONUT_COLORS.length], pct: Math.round(pct * 100), label: s.label };
-  });
-  return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0">
-      {paths.map((p, i) => (
-        <path key={i} d={p.d} fill={p.color} className="hover:opacity-75 transition-opacity cursor-pointer" stroke="white" strokeWidth="1.5">
-          <title>{p.label}: {p.pct}%</title>
-        </path>
-      ))}
-    </svg>
-  );
-}
+type View = 'revenue' | 'expenses' | 'tonnage';
 
-// ── Collapsible section wrapper ───────────────────────────────────────────────
-
-function ChartSection({ id, title, icon, visible, onToggle, children, badge }: {
-  id: string;
-  title: string;
-  icon: React.ReactNode;
-  visible: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
-  badge?: React.ReactNode;
-}) {
-  const [collapsed, setCollapsed] = useState(false);
-  return (
-    <Card>
-      <div
-        className="px-5 py-3 border-b border-gray-100 flex items-center justify-between cursor-pointer select-none hover:bg-gray-50 transition-colors"
-        onClick={() => setCollapsed(c => !c)}
-      >
-        <h2 className="font-semibold text-gray-900 flex items-center gap-2">
-          {collapsed ? <ChevronRight size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
-          {icon}
-          {title}
-          {badge}
-        </h2>
-        <button
-          onClick={e => { e.stopPropagation(); onToggle(); }}
-          className={`p-1 rounded transition-colors ${visible ? 'text-gray-500 hover:text-gray-700' : 'text-gray-300 hover:text-gray-500'}`}
-          title={visible ? 'Hide section' : 'Show section'}
-        >
-          {visible ? <Eye size={14} /> : <EyeOff size={14} />}
-        </button>
-      </div>
-      {!collapsed && visible && <div className="p-5">{children}</div>}
-    </Card>
-  );
-}
-
-// ── Toggle button ─────────────────────────────────────────────────────────────
+const VIEW_OPTIONS: { value: View; label: string; active: string }[] = [
+  { value: 'revenue',  label: 'Revenue',          active: 'bg-green-600 text-white' },
+  { value: 'expenses', label: 'Supplier Expenses', active: 'bg-indigo-600 text-white' },
+  { value: 'tonnage',  label: 'Tonnage Sold',      active: 'bg-gray-700 text-white' },
+];
 
 function ToggleBtn({ active, onClick, color, children }: {
   active: boolean; onClick: () => void; color: string; children: React.ReactNode;
@@ -243,147 +147,13 @@ function ToggleBtn({ active, onClick, color, children }: {
     <button
       onClick={onClick}
       className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
-        active
-          ? `${color} text-white shadow-sm`
-          : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-50'
+        active ? `${color} text-white shadow-sm` : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-50'
       }`}
     >
       {children}
     </button>
   );
 }
-
-// ── Orders / Invoices breakdown block ──────────────────────────────────────────
-// Renders one self-contained summary (period rollup + region pie + per-client
-// table) for either the orders or the invoices side of revenue.
-
-function BreakdownBlock({ title, icon, accentText, summary, groupBy, period }: {
-  title: string;
-  icon: React.ReactNode;
-  accentText: string; // literal tailwind class, e.g. 'text-green-700' (must be literal for JIT)
-  summary: BreakdownSummary;
-  groupBy: GroupBy;
-  period: string;
-}) {
-  const periodRows = rollupByPeriod(summary.monthly, groupBy, ['total']);
-  const regionTotal = summary.by_region.reduce((s, r) => s + r.total, 0);
-  return (
-    <Card>
-      <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-        <h2 className="font-semibold text-gray-900 flex items-center gap-2">{icon}{title}</h2>
-        <div className="text-right">
-          <span className={`text-sm font-bold ${accentText}`}>{fmt(summary.total)}</span>
-          <span className="text-xs text-gray-400 ml-2">{period}</span>
-        </div>
-      </div>
-
-      {/* Period rollup (month / quarter / year) */}
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-200">
-              <th className="text-left text-xs font-medium text-gray-500 px-4 py-2 capitalize">{groupBy}</th>
-              <th className="text-right text-xs font-medium text-gray-500 px-4 py-2">Total (EUR)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {periodRows.map(r => (
-              <tr key={r.period} className="border-b border-gray-50 hover:bg-gray-50">
-                <td className="px-4 py-2 font-medium text-gray-700">{r.period}</td>
-                <td className={`px-4 py-2 text-right tabular-nums ${accentText}`}>{fmt(r.total)}</td>
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr className="border-t-2 border-gray-200 bg-gray-50 font-bold">
-              <td className="px-4 py-2 text-gray-700">Total</td>
-              <td className={`px-4 py-2 text-right tabular-nums ${accentText}`}>{fmt(summary.total)}</td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-
-      {/* By region — pie chart */}
-      <div className="px-5 py-4 border-t border-gray-100">
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">By Region</h3>
-        {summary.by_region.length === 0 ? (
-          <p className="text-sm text-gray-500">No region data</p>
-        ) : (
-          <div className="flex gap-6 items-start">
-            <DonutChart slices={summary.by_region.map(r => ({ label: r.region, value: r.total }))} />
-            <div className="flex-1 min-w-0 space-y-2">
-              {summary.by_region.map((r, i) => {
-                const pct = regionTotal > 0 ? Math.round((r.total / regionTotal) * 100) : 0;
-                return (
-                  <div key={r.region} className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: DONUT_COLORS[i % DONUT_COLORS.length] }} />
-                    <span className="text-sm text-gray-700 truncate flex-1 min-w-0">{r.region}</span>
-                    <span className="text-xs text-gray-400 shrink-0">{pct}%</span>
-                    <span className="text-sm font-semibold text-gray-900 shrink-0 min-w-[80px] text-right">{fmt(r.total)}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* By client — summary table */}
-      <div className="px-5 py-4 border-t border-gray-100">
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">By Client</h3>
-        {summary.by_customer.length === 0 ? (
-          <p className="text-sm text-gray-500">No client data for this period</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-200 text-xs text-gray-500">
-                  <th className="text-left px-4 py-2">Client</th>
-                  <th className="text-right px-4 py-2">Count</th>
-                  <th className="text-right px-4 py-2">Total (EUR)</th>
-                  <th className="text-right px-4 py-2">%</th>
-                </tr>
-              </thead>
-              <tbody>
-                {summary.by_customer.map(c => {
-                  const pct = summary.total > 0 ? Math.round((c.total / summary.total) * 100) : 0;
-                  return (
-                    <tr key={c.customer_id} className="border-b border-gray-50 hover:bg-gray-50">
-                      <td className="px-4 py-2 font-medium text-gray-800">{c.customer_name}</td>
-                      <td className="px-4 py-2 text-right tabular-nums text-gray-500">{c.count}</td>
-                      <td className="px-4 py-2 text-right tabular-nums font-medium text-gray-900">{fmt(c.total)}</td>
-                      <td className="px-4 py-2 text-right tabular-nums text-gray-400">{pct}%</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-              <tfoot>
-                <tr className="border-t-2 border-gray-200 bg-gray-50 font-bold">
-                  <td className="px-4 py-2 text-gray-700">Total</td>
-                  <td className="px-4 py-2 text-right tabular-nums text-gray-500">
-                    {summary.by_customer.reduce((s, c) => s + c.count, 0)}
-                  </td>
-                  <td className="px-4 py-2 text-right tabular-nums text-gray-900">{fmt(summary.total)}</td>
-                  <td className="px-4 py-2" />
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        )}
-      </div>
-    </Card>
-  );
-}
-
-// ── Main tabs ─────────────────────────────────────────────────────────────────
-
-type View = 'revenue' | 'expenses' | 'tonnage';
-
-const VIEW_OPTIONS: { value: View; label: string; active: string }[] = [
-  { value: 'revenue',  label: 'Revenue',           active: 'bg-green-600 text-white' },
-  { value: 'expenses', label: 'Supplier Expenses',  active: 'bg-indigo-600 text-white' },
-  { value: 'tonnage',  label: 'Tonnage Sold',       active: 'bg-gray-700 text-white' },
-];
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN COMPONENT
@@ -395,37 +165,24 @@ export default function AnalyticsPage() {
   const [showExportModal, setShowExportModal] = useState(false);
 
   // ── Global filters ────────────────────────────────────────────────────────
-  const [view, setView] = useState<View>('expenses');
+  const [view, setView] = useState<View>('revenue');
   const [year, setYear] = useState(currentYear);
   const [monthFrom, setMonthFrom] = useState('1');
   const [monthTo, setMonthTo] = useState('12');
   const [customerId, setCustomerId] = useState('');
   const [groupBy, setGroupBy] = useState<GroupBy>('month');
 
-  // ── Revenue sub-tabs (Summary / Orders / Invoices) ────────────────────────
+  // ── Revenue sub-tabs ──────────────────────────────────────────────────────
   const [revenueTab, setRevenueTab] = useState<'summary' | 'orders' | 'invoices'>('summary');
   const [revenueRows, setRevenueRows] = useState<{ customer_invoices: any[]; confirmed_orders: any[] } | null>(null);
   const [breakdown, setBreakdown] = useState<RevenueBreakdown | null>(null);
 
-  // ── Expenses tab toggles ──────────────────────────────────────────────────
+  // ── Expenses tab toggles / filters ────────────────────────────────────────
   const [showDemo, setShowDemo] = useState(true);
   const [showSales, setShowSales] = useState(true);
   const [compareRevenue, setCompareRevenue] = useState(false);
-
-  // ── Expenses tab filters ──────────────────────────────────────────────────
   const [demoCategory, setDemoCategory] = useState('');
   const [demoSupplier, setDemoSupplier] = useState('');
-
-  // ── Section visibility ────────────────────────────────────────────────────
-  const [sections, setSections] = useState({
-    monthlyTrend: true,
-    revenueComparison: true,
-    byCategory: true,
-    bySupplier: true,
-    summaryTable: true,
-  });
-  const toggleSection = (key: keyof typeof sections) =>
-    setSections(s => ({ ...s, [key]: !s[key] }));
 
   // ── Data state ────────────────────────────────────────────────────────────
   const [years, setYears] = useState<string[]>([currentYear]);
@@ -435,7 +192,6 @@ export default function AnalyticsPage() {
   const [demoData, setDemoData] = useState<DemoExpensesData | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // ── Load filter options ───────────────────────────────────────────────────
   useEffect(() => {
     Promise.all([api.get('/analytics/years'), api.get('/analytics/filters')])
       .then(([y, f]) => {
@@ -445,10 +201,8 @@ export default function AnalyticsPage() {
       .catch(() => {});
   }, []);
 
-  // ── Compute effective domain filter based on toggles ──────────────────────
   const effectiveDomain = showDemo && showSales ? '' : showDemo ? 'demo' : showSales ? 'sales' : '';
 
-  // ── Load data ─────────────────────────────────────────────────────────────
   useEffect(() => {
     setLoading(true);
     Promise.all([
@@ -475,7 +229,7 @@ export default function AnalyticsPage() {
       .finally(() => setLoading(false));
   }, [year, monthFrom, monthTo, customerId, effectiveDomain, demoCategory]);
 
-  // ── Row-level revenue data for the Orders / Invoices sub-tabs ───────────────
+  // Row-level revenue data for the Orders / Invoices sub-tabs
   useEffect(() => {
     if (view !== 'revenue') return;
     api.get('/analytics/export-data', {
@@ -485,8 +239,8 @@ export default function AnalyticsPage() {
       .catch(() => setRevenueRows(null));
   }, [view, year, monthFrom, monthTo, customerId]);
 
-  // ── Orders vs Invoices breakdown for the Summary sub-tab (kept separate to
-  //    avoid double-counting) ─────────────────────────────────────────────────
+  // Orders and invoices arrive as two independent summaries and stay that way:
+  // an order becomes an invoice, so adding them would count the same sale twice.
   useEffect(() => {
     if (view !== 'revenue') return;
     api.get('/analytics/revenue-breakdown', {
@@ -507,7 +261,7 @@ export default function AnalyticsPage() {
   };
 
   const resetFilters = () => {
-    setView('expenses');
+    setView('revenue');
     setYear(currentYear);
     setMonthFrom('1');
     setMonthTo('12');
@@ -524,36 +278,119 @@ export default function AnalyticsPage() {
     || demoCategory !== '' || demoSupplier !== '';
 
   const period = periodLabel(year, monthFrom, monthTo);
-  const chartH = 180;
-  const barH = chartH - 16;
+  const groupHeader = groupBy === 'month' ? 'Month' : groupBy === 'quarter' ? 'Quarter' : 'Year';
 
-  // ── Filtered supplier data ────────────────────────────────────────────────
   const filteredBySupplier = demoData?.by_supplier.filter(s =>
     (!demoSupplier || s.supplier.toLowerCase().includes(demoSupplier.toLowerCase()))
   ) || [];
 
-  const filteredByCategory = demoData?.by_category || [];
+  const demoTotal = demoData?.domain_totals.find(d => d.domain === 'demo');
+  const salesTotal = demoData?.domain_totals.find(d => d.domain === 'sales');
 
-  // ── Revenue data for comparison ───────────────────────────────────────────
-  const revenueByMonth = data?.monthly || [];
-
-  // ── Export handler ────────────────────────────────────────────────────────
   const handleExport = () => {
-    if (view === 'revenue' && data) {
-      downloadExcel(`revenue-by-customer-${period}`, ['Customer', 'Total (EUR)', 'Invoices'],
-        data.by_customer.map(c => [c.customer_name, c.total, c.invoice_count]));
+    if (view === 'revenue' && breakdown) {
+      downloadExcel(`revenue-by-customer-${period}`,
+        ['Customer', 'Orders (EUR)', 'Invoices (EUR)'],
+        mergedCustomerRows.map(r => [r.label, r.values[0], r.values[1]]));
     } else if (view === 'expenses' && demoData) {
-      const rows = filteredBySupplier.map(s => [s.supplier, s.domain, s.category, s.total, s.vat_total, s.count]);
-      downloadExcel(`supplier-expenses-${period}`, ['Supplier', 'Domain', 'Category', 'Amount (excl. BTW)', 'VAT', 'Invoices'], rows);
+      downloadExcel(`supplier-expenses-${period}`,
+        ['Supplier', 'Domain', 'Category', 'Amount (excl. BTW)', 'VAT', 'Invoices'],
+        filteredBySupplier.map(s => [s.supplier, s.domain, s.category, s.total, s.vat_total, s.count]));
     } else if (view === 'tonnage' && quantityData) {
       downloadExcel(`tonnage-by-customer-${period}`, ['Customer', 'Tons'],
         quantityData.by_customer.map(c => [c.customer_name, c.tons]));
     }
   };
 
-  // ── Computed totals for KPI cards ─────────────────────────────────────────
-  const demoTotal = demoData?.domain_totals.find(d => d.domain === 'demo');
-  const salesTotal = demoData?.domain_totals.find(d => d.domain === 'sales');
+  // ── Revenue: shared period axis for orders vs invoices ────────────────────
+  const ordersPeriods = breakdown ? rollupByPeriod(breakdown.orders.monthly, groupBy, ['total']) : [];
+  const invoicePeriods = breakdown ? rollupByPeriod(breakdown.invoices.monthly, groupBy, ['total']) : [];
+  const revPeriodLabels = ordersPeriods.map(r => r.period);
+  const ordersByPeriod = alignTo(revPeriodLabels, ordersPeriods, 'total');
+  const invoicesByPeriod = alignTo(revPeriodLabels, invoicePeriods, 'total');
+
+  const cashPeriods = data ? rollupByPeriod(data.monthly, groupBy, ['received']) : [];
+
+  // Customers and regions unioned across both measures — one row per entity,
+  // one column per measure, never a combined column.
+  const mergedCustomerRows: VizRow[] = (() => {
+    if (!breakdown) return [];
+    const map = new Map<string, VizRow>();
+    for (const c of breakdown.orders.by_customer) {
+      map.set(String(c.customer_id), { key: String(c.customer_id), label: c.customer_name || 'Unknown', values: [c.total, 0], count: c.count });
+    }
+    for (const c of breakdown.invoices.by_customer) {
+      const k = String(c.customer_id);
+      const row = map.get(k) ?? { key: k, label: c.customer_name || 'Unknown', values: [0, 0], count: 0 };
+      row.values[1] = c.total;
+      row.count = (row.count || 0) + c.count;
+      map.set(k, row);
+    }
+    return [...map.values()];
+  })();
+
+  const mergedRegionRows: VizRow[] = (() => {
+    if (!breakdown) return [];
+    const map = new Map<string, VizRow>();
+    for (const r of breakdown.orders.by_region) {
+      map.set(r.region, { key: r.region, label: r.region, values: [r.total, 0], count: r.count });
+    }
+    for (const r of breakdown.invoices.by_region) {
+      const row = map.get(r.region) ?? { key: r.region, label: r.region, values: [0, 0], count: 0 };
+      row.values[1] = r.total;
+      row.count = (row.count || 0) + r.count;
+      map.set(r.region, row);
+    }
+    return [...map.values()];
+  })();
+
+  const ordersSeries = [{ name: 'Orders', color: C_ORDERS }];
+  const invoicesSeries = [{ name: 'Invoices', color: C_INVOICES }];
+  const bothSeries = [{ name: 'Orders', color: C_ORDERS }, { name: 'Invoices', color: C_INVOICES }];
+
+  // Single-measure rows for the Orders / Invoices sub-tabs
+  const singleRows = (summary: BreakdownSummary | undefined, dim: 'by_customer' | 'by_region'): VizRow[] => {
+    if (!summary) return [];
+    return dim === 'by_customer'
+      ? summary.by_customer.map(c => ({ key: String(c.customer_id), label: c.customer_name || 'Unknown', values: [c.total], count: c.count }))
+      : summary.by_region.map(r => ({ key: r.region, label: r.region, values: [r.total], count: r.count }));
+  };
+
+  // ── Expenses monthly series ───────────────────────────────────────────────
+  const expenseRollup = demoData
+    ? rollupByPeriod(
+        demoData.monthly.map(m => {
+          const rev = data?.monthly.find(r => r.month === m.month);
+          return { ...m, received: rev?.received || 0 };
+        }),
+        groupBy,
+        ['demo', 'sales', 'demo_vat', 'sales_vat', 'received'],
+      )
+    : [];
+  const expenseSeries = [
+    ...(showDemo ? [{ name: 'Demo expenses', color: C_ORDERS, values: expenseRollup.map(r => r.demo) }] : []),
+    ...(showSales ? [{ name: 'Sales activities', color: C_EXPENSE, values: expenseRollup.map(r => r.sales) }] : []),
+    ...(compareRevenue ? [{ name: 'Revenue received', color: C_INVOICES, values: expenseRollup.map(r => r.received) }] : []),
+  ];
+
+  const categoryRows: VizRow[] = (() => {
+    if (!demoData) return [];
+    const map = new Map<string, VizRow>();
+    for (const c of demoData.by_category) {
+      const row = map.get(c.category) ?? { key: c.category, label: c.category, values: [0], count: 0 };
+      row.values[0] += c.total;
+      row.count = (row.count || 0) + c.count;
+      map.set(c.category, row);
+    }
+    return [...map.values()];
+  })();
+
+  const supplierRows: VizRow[] = filteredBySupplier.map(s => ({
+    key: `${s.supplier}-${s.domain}`, label: s.supplier, values: [s.total], count: s.count,
+  }));
+
+  // ── Tonnage series ────────────────────────────────────────────────────────
+  const tonsRollup = quantityData ? rollupByPeriod(quantityData.monthly, groupBy, ['tons']) : [];
 
   return (
     <div className="space-y-6">
@@ -580,9 +417,8 @@ export default function AnalyticsPage() {
         </div>
       </div>
 
-      {/* ── Filters ────────────────────────────────────────────────────────── */}
+      {/* ── Filters — one row above everything they scope ───────────────────── */}
       <Card className="p-4 space-y-4">
-        {/* Row 1: View tabs + time filters */}
         <div className="flex flex-wrap items-end gap-4">
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">View</label>
@@ -641,9 +477,7 @@ export default function AnalyticsPage() {
           </div>
         </div>
 
-        {/* Row 2: View-specific filters */}
         <div className="flex flex-wrap items-end gap-4 pt-3 border-t border-gray-100">
-          {/* Revenue / Tonnage: customer filter */}
           {(view === 'revenue' || view === 'tonnage') && (
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1">
@@ -657,7 +491,6 @@ export default function AnalyticsPage() {
             </div>
           )}
 
-          {/* Expenses: data series toggles */}
           {view === 'expenses' && (
             <>
               <div>
@@ -702,942 +535,464 @@ export default function AnalyticsPage() {
         </div>
       </Card>
 
-      {/* ── Loading ────────────────────────────────────────────────────────── */}
-      {loading ? (
-        <div className="flex justify-center py-20">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
-        </div>
-      ) : (
+      {/* Hold the previous render at reduced opacity instead of a skeleton flash */}
+      <div className={loading ? 'opacity-50 transition-opacity pointer-events-none' : 'transition-opacity'}>
+        <div className="space-y-6">
 
-      <>
-      {/* ═══════════════════════════════════════════════════════════════════ */}
-      {/* REVENUE VIEW                                                      */}
-      {/* ═══════════════════════════════════════════════════════════════════ */}
-      {view === 'revenue' && data && (
-        <>
-          {/* KPI cards */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <Card className="p-5">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center shrink-0">
-                  <TrendingUp size={20} className="text-green-600" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-xs text-gray-500">Revenue Received</p>
-                  <p className="text-xl font-bold text-green-700 truncate">{fmt(data.totals.received)}</p>
-                </div>
-              </div>
-            </Card>
-            <Card className="p-5">
-              <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${data.totals.net >= 0 ? 'bg-emerald-100' : 'bg-red-100'}`}>
-                  <DollarSign size={20} className={data.totals.net >= 0 ? 'text-emerald-600' : 'text-red-500'} />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-xs text-gray-500">Net (Revenue − Expenses)</p>
-                  <p className={`text-xl font-bold truncate ${data.totals.net >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
-                    {data.totals.net >= 0 ? '+' : ''}{fmt(data.totals.net)}
-                  </p>
-                </div>
-              </div>
-            </Card>
-            <Card className="p-5">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
-                  <Clock size={20} className="text-amber-600" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-xs text-gray-500">Pending (w/ due date)</p>
-                  <p className="text-xl font-bold text-amber-600 truncate">{fmt(data.totals.outstanding)}</p>
-                </div>
-              </div>
-            </Card>
-            <Card className="p-5">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center shrink-0">
-                  <Clock size={20} className="text-blue-500" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-xs text-gray-500">Expected (no due date)</p>
-                  <p className="text-xl font-bold text-blue-600 truncate">{fmt(data.totals.expected ?? 0)}</p>
-                </div>
-              </div>
-            </Card>
-          </div>
-
-          {/* Revenue sub-tabs */}
-          <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm font-medium w-fit">
-            {(['summary', 'orders', 'invoices'] as const).map((t, i) => (
-              <button key={t}
-                onClick={() => setRevenueTab(t)}
-                className={`px-4 py-2 capitalize transition-colors ${
-                  revenueTab === t ? 'bg-green-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
-                } ${i > 0 ? 'border-l border-gray-300' : ''}`}>
-                {t}
-              </button>
-            ))}
-          </div>
-
-          {revenueTab === 'summary' && (<>
-          {/* Orders vs Invoices — kept as two separate summaries. Combining them
-              would double-count, since a confirmed order later becomes an invoice. */}
-          <div className="rounded-lg bg-blue-50 border border-blue-100 px-4 py-2.5 text-xs text-blue-700">
-            Orders and invoices are summarised separately to avoid double-counting — an order becomes an invoice once shipped/billed.
-          </div>
-          {breakdown ? (
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-              <BreakdownBlock
-                title="Orders Summary"
-                icon={<FileSpreadsheet size={16} className="text-indigo-600" />}
-                accentText="text-indigo-700"
-                summary={breakdown.orders}
-                groupBy={groupBy}
-                period={period}
+        {/* ═══════════════════════════════════════════════════════════════════ */}
+        {/* REVENUE                                                            */}
+        {/* ═══════════════════════════════════════════════════════════════════ */}
+        {view === 'revenue' && data && (
+          <>
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+              <StatTile
+                label="Orders placed" color={C_ORDERS} icon={<ShoppingCart size={18} />}
+                value={fmt(breakdown?.orders.total ?? 0)} hint={period}
               />
-              <BreakdownBlock
-                title="Invoices Summary"
-                icon={<FileSpreadsheet size={16} className="text-green-600" />}
-                accentText="text-green-700"
-                summary={breakdown.invoices}
-                groupBy={groupBy}
-                period={period}
+              <StatTile
+                label="Invoices issued" color={C_INVOICES} icon={<Receipt size={18} />}
+                value={fmt(breakdown?.invoices.total ?? 0)} hint={period}
+              />
+              <StatTile
+                label="Cash received" color={C_CASH} icon={<Landmark size={18} />}
+                value={fmt(data.totals.received)} hint="Wire transfers & payments"
+              />
+              <StatTile
+                label="Pending (w/ due date)" color="var(--viz-4)" icon={<Clock size={18} />}
+                value={fmt(data.totals.outstanding)}
+              />
+              <StatTile
+                label="Expected (no due date)" color="var(--viz-5)" icon={<Clock size={18} />}
+                value={fmt(data.totals.expected ?? 0)}
               />
             </div>
-          ) : (
-            <Card className="p-8"><p className="text-center text-sm text-gray-500">Loading orders / invoices breakdown…</p></Card>
-          )}
 
-          {/* Monthly revenue chart */}
-          <Card>
-            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-              <h2 className="font-semibold text-gray-900">Revenue Received — {period}</h2>
-              <span className="flex items-center gap-1.5 text-xs text-gray-500">
-                <span className="w-3 h-3 rounded bg-green-500 inline-block" /> Received
+            <div className="rounded-lg bg-blue-50 border border-blue-100 px-4 py-2.5 text-xs text-blue-700 flex items-start gap-2">
+              <Info size={14} className="mt-px shrink-0" />
+              <span>
+                Orders and invoices are three separate measures of the same pipeline and are never added together —
+                an order becomes an invoice, and the invoice becomes cash. Each column below totals on its own.
               </span>
             </div>
-            <div className="p-5">
-              {(() => {
-                const maxBar = Math.max(...data.monthly.map(m => m.received), 1);
-                return (
-                  <>
-                    <BarChartGrid height={chartH} maxVal={maxBar} fmtFn={fmtAxis}>
-                      {data.monthly.map(m => (
-                        <div key={m.month} className="flex-1 h-full flex flex-col items-center justify-end">
-                          {m.received > 0 && (
-                            <span className="text-[9px] tabular-nums leading-none mb-0.5 font-medium text-green-600">{fmtAxis(m.received)}</span>
-                          )}
-                          <div className={`w-4/5 rounded-t transition-all ${m.received > 0 ? 'bg-green-500' : 'bg-gray-100'}`}
-                            style={{ height: `${m.received > 0 ? Math.max((m.received / maxBar) * barH, 2) : 2}px` }}
-                            title={`Revenue: ${fmt(m.received)}`} />
-                        </div>
-                      ))}
-                    </BarChartGrid>
-                    <MonthLabels months={data.monthly.map(m => m.month)} />
-                  </>
-                );
-              })()}
-            </div>
-          </Card>
 
-          {/* Revenue by Customer — donut + bars */}
-          <Card>
-            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-              <h2 className="font-semibold text-gray-900 flex items-center gap-2">
-                <Users size={16} className="text-green-600" /> Revenue by Customer
-              </h2>
-              <span className="text-xs text-gray-400">{period}</span>
-            </div>
-            {data.by_customer.length === 0 ? (
-              <p className="px-5 py-8 text-center text-sm text-gray-500">No data for this period</p>
-            ) : (
-              <div className="p-5">
-                <div className="flex gap-6 items-start mb-6">
-                  <DonutChart slices={data.by_customer.map(c => ({ label: c.customer_name, value: c.total }))} />
-                  <div className="flex-1 min-w-0 space-y-2">
-                    {data.by_customer.map((c, i) => {
-                      const totalAll = data.by_customer.reduce((s, x) => s + x.total, 0);
-                      const pct = totalAll > 0 ? Math.round((c.total / totalAll) * 100) : 0;
-                      return (
-                        <div key={c.customer_id} className="flex items-center gap-2">
-                          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: DONUT_COLORS[i % DONUT_COLORS.length] }} />
-                          <span className="text-sm text-gray-700 truncate flex-1 min-w-0">{c.customer_name}</span>
-                          <span className="text-xs text-gray-400 shrink-0">{pct}%</span>
-                          <span className="text-sm font-semibold text-gray-900 shrink-0 min-w-[80px] text-right">{fmt(c.total)}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-                <div className="divide-y divide-gray-100 border-t border-gray-100">
-                  {data.by_customer.map((c, i) => {
-                    const maxC = data.by_customer[0]?.total || 1;
-                    const pct = maxC > 0 ? Math.round((c.total / maxC) * 100) : 0;
-                    return (
-                      <div key={c.customer_id} className="py-2.5">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
-                            <span className="text-xs text-gray-400 font-normal w-5">{i + 1}.</span>
-                            {c.customer_name}
-                          </span>
-                          <div className="text-right shrink-0 ml-2">
-                            <span className="text-sm font-bold text-gray-900">{fmt(c.total)}</span>
-                            <span className="text-xs text-gray-400 ml-1">{c.invoice_count} inv</span>
-                          </div>
-                        </div>
-                        <div className="w-full bg-gray-100 rounded-full h-2">
-                          <div className="h-2 rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: DONUT_COLORS[i % DONUT_COLORS.length] }} />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </Card>
-
-          {/* Revenue by Region */}
-          <Card>
-            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-              <h2 className="font-semibold text-gray-900 flex items-center gap-2">
-                <Truck size={16} className="text-green-600" /> Revenue by Region
-              </h2>
-              <span className="text-xs text-gray-400">{period}</span>
-            </div>
-            {(!data.by_region || data.by_region.length === 0) ? (
-              <p className="px-5 py-8 text-center text-sm text-gray-500">No region data (set operation country or order destination)</p>
-            ) : (
-              <div className="divide-y divide-gray-100">
-                {data.by_region.map((r, i) => {
-                  const maxR = data.by_region[0]?.total || 1;
-                  const totalAll = data.by_region.reduce((s, x) => s + x.total, 0);
-                  const pct = totalAll > 0 ? Math.round((r.total / totalAll) * 100) : 0;
-                  return (
-                    <div key={r.region} className="px-5 py-3">
-                      <div className="flex items-center justify-between mb-1.5">
-                        <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
-                          <span className="text-xs text-gray-400 font-normal w-5">{i + 1}.</span>
-                          {r.region}
-                        </span>
-                        <div className="text-right shrink-0 ml-2">
-                          <span className="text-sm font-bold text-gray-900">{fmt(r.total)}</span>
-                          <span className="text-xs text-gray-400 ml-1">{pct}% · {r.invoice_count} inv</span>
-                        </div>
-                      </div>
-                      <div className="w-full bg-gray-100 rounded-full h-1.5">
-                        <div className="h-1.5 rounded-full bg-green-500" style={{ width: `${Math.round((r.total / maxR) * 100)}%` }} />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </Card>
-          </>)}
-
-          {/* Revenue → Invoices list */}
-          {revenueTab === 'invoices' && (
-            <Card>
-              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                <h2 className="font-semibold text-gray-900">Customer Invoices — {period}</h2>
-                <button
-                  onClick={() => downloadExcel(`revenue-invoices-${period}`,
-                    ['Invoice #', 'Customer', 'Quantity (MT)', 'Amount', 'Currency', 'EUR', 'Date'],
-                    (revenueRows?.customer_invoices || []).map(r => [r.invoice_number, r.customer_name, r.quantity_mt, r.amount, r.currency, r.eur_amount, r.invoice_date]))}
-                  className="flex items-center gap-1 text-sm text-gray-600 border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50">
-                  <FileSpreadsheet size={14} /> Export
+            <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm font-medium w-fit">
+              {(['summary', 'orders', 'invoices'] as const).map((t, i) => (
+                <button key={t}
+                  onClick={() => setRevenueTab(t)}
+                  className={`px-4 py-2 capitalize transition-colors ${
+                    revenueTab === t ? 'bg-green-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+                  } ${i > 0 ? 'border-l border-gray-300' : ''}`}>
+                  {t}
                 </button>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-gray-200 text-xs text-gray-500">
-                      <th className="text-left px-4 py-2">Invoice #</th>
-                      <th className="text-left px-4 py-2">Customer</th>
-                      <th className="text-right px-4 py-2">MT</th>
-                      <th className="text-right px-4 py-2">Amount</th>
-                      <th className="text-right px-4 py-2">EUR</th>
-                      <th className="text-left px-4 py-2">Date</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(revenueRows?.customer_invoices || []).length === 0 ? (
-                      <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-500">No invoices in this period</td></tr>
-                    ) : revenueRows!.customer_invoices.map((r, i) => (
-                      <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
-                        <td className="px-4 py-2 font-medium text-gray-800">{r.invoice_number}</td>
-                        <td className="px-4 py-2 text-gray-600">{r.customer_name || '—'}</td>
-                        <td className="px-4 py-2 text-right tabular-nums">{r.quantity_mt ? Number(r.quantity_mt).toFixed(2) : '—'}</td>
-                        <td className="px-4 py-2 text-right tabular-nums">{Number(r.amount).toLocaleString()} {r.currency}</td>
-                        <td className="px-4 py-2 text-right tabular-nums font-medium">{fmt(r.eur_amount)}</td>
-                        <td className="px-4 py-2 text-gray-600">{r.invoice_date}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          )}
+              ))}
+            </div>
 
-          {/* Revenue → Orders list */}
-          {revenueTab === 'orders' && (
-            <Card>
-              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                <h2 className="font-semibold text-gray-900">Confirmed Orders (not yet invoiced) — {period}</h2>
-                <button
-                  onClick={() => downloadExcel(`revenue-orders-${period}`,
+            {/* ── Summary: orders and invoices side by side ─────────────────── */}
+            {revenueTab === 'summary' && (
+              <div className="space-y-6">
+                <PeriodPanel
+                  title="Orders vs Invoices"
+                  subtitle={`${groupHeader} breakdown — ${period}`}
+                  icon={<BarChart3 size={16} className="text-gray-400" />}
+                  periodHeader={groupHeader}
+                  categories={revPeriodLabels}
+                  series={[
+                    { name: 'Orders', color: C_ORDERS, values: ordersByPeriod },
+                    { name: 'Invoices', color: C_INVOICES, values: invoicesByPeriod },
+                  ]}
+                  format={fmt}
+                  formatAxis={fmtAxis}
+                  onExport={() => downloadExcel(`revenue-${groupBy}-${period}`,
+                    [groupHeader, 'Orders (EUR)', 'Invoices (EUR)'],
+                    revPeriodLabels.map((p, i) => [p, ordersByPeriod[i], invoicesByPeriod[i]]))}
+                />
+
+                <BreakdownPanel
+                  title="By Customer"
+                  subtitle={`Orders and invoices per customer — ${period}`}
+                  icon={<Users size={16} className="text-gray-400" />}
+                  dimensionHeader="Customer"
+                  rows={mergedCustomerRows}
+                  series={bothSeries}
+                  format={fmt}
+                  countLabel="Docs"
+                  onExport={() => downloadExcel(`revenue-by-customer-${period}`,
+                    ['Customer', 'Orders (EUR)', 'Invoices (EUR)'],
+                    mergedCustomerRows.map(r => [r.label, r.values[0], r.values[1]]))}
+                />
+
+                <BreakdownPanel
+                  title="By Region"
+                  subtitle={`Destination country of the operation — ${period}`}
+                  icon={<Truck size={16} className="text-gray-400" />}
+                  dimensionHeader="Region"
+                  rows={mergedRegionRows}
+                  series={bothSeries}
+                  format={fmt}
+                  countLabel="Docs"
+                  onExport={() => downloadExcel(`revenue-by-region-${period}`,
+                    ['Region', 'Orders (EUR)', 'Invoices (EUR)'],
+                    mergedRegionRows.map(r => [r.label, r.values[0], r.values[1]]))}
+                />
+
+                <PeriodPanel
+                  title="Cash Received"
+                  subtitle={`Wire transfers and payments actually banked — ${period}`}
+                  icon={<Landmark size={16} className="text-gray-400" />}
+                  periodHeader={groupHeader}
+                  categories={cashPeriods.map(r => r.period)}
+                  series={[{ name: 'Received', color: C_CASH, values: cashPeriods.map(r => r.received) }]}
+                  format={fmt}
+                  formatAxis={fmtAxis}
+                  onExport={() => downloadExcel(`cash-received-${period}`,
+                    [groupHeader, 'Received (EUR)'],
+                    cashPeriods.map(r => [r.period, r.received]))}
+                />
+              </div>
+            )}
+
+            {/* ── Orders only ───────────────────────────────────────────────── */}
+            {revenueTab === 'orders' && breakdown && (
+              <div className="space-y-6">
+                <PeriodPanel
+                  title="Orders per Period"
+                  subtitle={`Customer orders allocated to an operation — ${period}`}
+                  icon={<ShoppingCart size={16} className="text-gray-400" />}
+                  periodHeader={groupHeader}
+                  categories={revPeriodLabels}
+                  series={[{ name: 'Orders', color: C_ORDERS, values: ordersByPeriod }]}
+                  format={fmt}
+                  formatAxis={fmtAxis}
+                />
+                <BreakdownPanel
+                  title="Orders by Customer" dimensionHeader="Customer"
+                  icon={<Users size={16} className="text-gray-400" />}
+                  subtitle={period}
+                  rows={singleRows(breakdown.orders, 'by_customer')}
+                  series={ordersSeries} format={fmt} countLabel="Orders"
+                />
+                <BreakdownPanel
+                  title="Orders by Region" dimensionHeader="Region"
+                  icon={<Truck size={16} className="text-gray-400" />}
+                  subtitle={period} chart="donut"
+                  rows={singleRows(breakdown.orders, 'by_region')}
+                  series={ordersSeries} format={fmt} countLabel="Orders"
+                />
+                <PanelCard
+                  title="Order Detail"
+                  subtitle={`Confirmed orders not yet invoiced — ${period}`}
+                  icon={<ShoppingCart size={16} className="text-gray-400" />}
+                  onExport={() => downloadExcel(`revenue-orders-${period}`,
                     ['Order #', 'Party', 'Status', 'Quantity (MT)', 'Total (EUR)', 'Date'],
                     (revenueRows?.confirmed_orders || []).map(r => [r.order_number, r.party_name, r.status, r.quantity_mt, r.total_eur, r.order_date]))}
-                  className="flex items-center gap-1 text-sm text-gray-600 border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50">
-                  <FileSpreadsheet size={14} /> Export
-                </button>
+                >
+                  <div className="overflow-x-auto -mx-5">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-200 text-xs text-gray-500">
+                          <th className="text-left px-4 py-2 font-medium">Order #</th>
+                          <th className="text-left px-4 py-2 font-medium">Party</th>
+                          <th className="text-left px-4 py-2 font-medium">Status</th>
+                          <th className="text-right px-4 py-2 font-medium">MT</th>
+                          <th className="text-right px-4 py-2 font-medium">Total (EUR)</th>
+                          <th className="text-left px-4 py-2 font-medium">Date</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(revenueRows?.confirmed_orders || []).length === 0 ? (
+                          <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-500">No orders in this period</td></tr>
+                        ) : revenueRows!.confirmed_orders.map((r, i) => (
+                          <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                            <td className="px-4 py-2 font-medium text-gray-800">{r.order_number}</td>
+                            <td className="px-4 py-2 text-gray-600">{r.party_name || '—'}</td>
+                            <td className="px-4 py-2 text-gray-600 capitalize">{String(r.status || '').replace(/_/g, ' ')}</td>
+                            <td className="px-4 py-2 text-right tabular-nums">{r.quantity_mt ? Number(r.quantity_mt).toFixed(2) : '—'}</td>
+                            <td className="px-4 py-2 text-right tabular-nums font-medium">{fmt(r.total_eur)}</td>
+                            <td className="px-4 py-2 text-gray-600">{r.order_date}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </PanelCard>
               </div>
-              <div className="overflow-x-auto">
+            )}
+
+            {/* ── Invoices only ─────────────────────────────────────────────── */}
+            {revenueTab === 'invoices' && breakdown && (
+              <div className="space-y-6">
+                <PeriodPanel
+                  title="Invoices per Period"
+                  subtitle={`Customer invoices by invoice date — ${period}`}
+                  icon={<Receipt size={16} className="text-gray-400" />}
+                  periodHeader={groupHeader}
+                  categories={revPeriodLabels}
+                  series={[{ name: 'Invoices', color: C_INVOICES, values: invoicesByPeriod }]}
+                  format={fmt}
+                  formatAxis={fmtAxis}
+                />
+                <BreakdownPanel
+                  title="Invoices by Customer" dimensionHeader="Customer"
+                  icon={<Users size={16} className="text-gray-400" />}
+                  subtitle={period}
+                  rows={singleRows(breakdown.invoices, 'by_customer')}
+                  series={invoicesSeries} format={fmt} countLabel="Invoices"
+                />
+                <BreakdownPanel
+                  title="Invoices by Region" dimensionHeader="Region"
+                  icon={<Truck size={16} className="text-gray-400" />}
+                  subtitle={period} chart="donut"
+                  rows={singleRows(breakdown.invoices, 'by_region')}
+                  series={invoicesSeries} format={fmt} countLabel="Invoices"
+                />
+                <PanelCard
+                  title="Invoice Detail"
+                  subtitle={`Customer invoices — ${period}`}
+                  icon={<Receipt size={16} className="text-gray-400" />}
+                  onExport={() => downloadExcel(`revenue-invoices-${period}`,
+                    ['Invoice #', 'Customer', 'Quantity (MT)', 'Amount', 'Currency', 'EUR', 'Date'],
+                    (revenueRows?.customer_invoices || []).map(r => [r.invoice_number, r.customer_name, r.quantity_mt, r.amount, r.currency, r.eur_amount, r.invoice_date]))}
+                >
+                  <div className="overflow-x-auto -mx-5">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-200 text-xs text-gray-500">
+                          <th className="text-left px-4 py-2 font-medium">Invoice #</th>
+                          <th className="text-left px-4 py-2 font-medium">Customer</th>
+                          <th className="text-right px-4 py-2 font-medium">MT</th>
+                          <th className="text-right px-4 py-2 font-medium">Amount</th>
+                          <th className="text-right px-4 py-2 font-medium">EUR</th>
+                          <th className="text-left px-4 py-2 font-medium">Date</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(revenueRows?.customer_invoices || []).length === 0 ? (
+                          <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-500">No invoices in this period</td></tr>
+                        ) : revenueRows!.customer_invoices.map((r, i) => (
+                          <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                            <td className="px-4 py-2 font-medium text-gray-800">{r.invoice_number}</td>
+                            <td className="px-4 py-2 text-gray-600">{r.customer_name || '—'}</td>
+                            <td className="px-4 py-2 text-right tabular-nums">{r.quantity_mt ? Number(r.quantity_mt).toFixed(2) : '—'}</td>
+                            <td className="px-4 py-2 text-right tabular-nums">{Number(r.amount).toLocaleString()} {r.currency}</td>
+                            <td className="px-4 py-2 text-right tabular-nums font-medium">{fmt(r.eur_amount)}</td>
+                            <td className="px-4 py-2 text-gray-600">{r.invoice_date}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </PanelCard>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ═══════════════════════════════════════════════════════════════════ */}
+        {/* SUPPLIER EXPENSES                                                  */}
+        {/* ═══════════════════════════════════════════════════════════════════ */}
+        {view === 'expenses' && demoData && (
+          <>
+            <div className={`grid gap-4 ${compareRevenue ? 'grid-cols-2 lg:grid-cols-5' : 'grid-cols-2 lg:grid-cols-4'}`}>
+              <StatTile label="Total expenses (excl. BTW)" color={C_EXPENSE} icon={<TrendingDown size={18} />}
+                value={fmt(demoData.totals.total_amount)} hint={`${demoData.totals.invoice_count} invoices`} />
+              <StatTile label="VAT total" color="var(--viz-4)" icon={<Clock size={18} />}
+                value={fmt(demoData.totals.total_vat)} />
+              {showDemo && demoTotal && (
+                <StatTile label="Demo expenses" color={C_ORDERS} icon={<Truck size={18} />}
+                  value={fmt(demoTotal.total)} hint={`${demoTotal.count} invoices`} />
+              )}
+              {showSales && salesTotal && (
+                <StatTile label="Sales activities" color={C_EXPENSE} icon={<Truck size={18} />}
+                  value={fmt(salesTotal.total)} hint={`${salesTotal.count} invoices`} />
+              )}
+              {compareRevenue && data && (
+                <StatTile label="Revenue received" color={C_INVOICES} icon={<TrendingUp size={18} />}
+                  value={fmt(data.totals.received)}
+                  hint={`Net ${data.totals.received - demoData.totals.total_amount >= 0 ? '+' : ''}${fmt(data.totals.received - demoData.totals.total_amount)}`} />
+              )}
+            </div>
+
+            {/* Monthly — chart plus its detailed twin (VAT and net live here) */}
+            <PanelCard
+              title="Expenses per Period"
+              subtitle={`${groupHeader} breakdown — ${period}`}
+              icon={<BarChart3 size={16} className="text-gray-400" />}
+              onExport={() => downloadExcel(`expenses-${groupBy}-${period}`,
+                [groupHeader, 'Demo', 'Sales', 'VAT'],
+                expenseRollup.map(r => [r.period, r.demo, r.sales, r.demo_vat + r.sales_vat]))}
+            >
+              {expenseSeries.length === 0 ? (
+                <p className="text-center text-sm text-gray-500 py-6">Select at least one data series</p>
+              ) : (
+                <ColumnChart
+                  categories={expenseRollup.map(r => r.period)}
+                  series={expenseSeries}
+                  format={fmt}
+                  formatAxis={fmtAxis}
+                />
+              )}
+              <div className="overflow-x-auto -mx-5 mt-5 border-t border-gray-100">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-gray-200 text-xs text-gray-500">
-                      <th className="text-left px-4 py-2">Order #</th>
-                      <th className="text-left px-4 py-2">Party</th>
-                      <th className="text-left px-4 py-2">Status</th>
-                      <th className="text-right px-4 py-2">MT</th>
-                      <th className="text-right px-4 py-2">Total (EUR)</th>
-                      <th className="text-left px-4 py-2">Date</th>
+                    <tr className="border-b border-gray-100 text-xs text-gray-500">
+                      <th className="text-left px-5 py-2 font-medium">{groupHeader}</th>
+                      {showDemo && <th className="text-right px-3 py-2 font-medium">Demo</th>}
+                      {showSales && <th className="text-right px-3 py-2 font-medium">Sales</th>}
+                      <th className="text-right px-3 py-2 font-medium">Total exp.</th>
+                      <th className="text-right px-3 py-2 font-medium">VAT</th>
+                      {compareRevenue && <th className="text-right px-3 py-2 font-medium">Revenue</th>}
+                      {compareRevenue && <th className="text-right px-5 py-2 font-medium">Net</th>}
                     </tr>
                   </thead>
                   <tbody>
-                    {(revenueRows?.confirmed_orders || []).length === 0 ? (
-                      <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-500">No confirmed orders in this period</td></tr>
-                    ) : revenueRows!.confirmed_orders.map((r, i) => (
-                      <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
-                        <td className="px-4 py-2 font-medium text-gray-800">{r.order_number}</td>
-                        <td className="px-4 py-2 text-gray-600">{r.party_name || '—'}</td>
-                        <td className="px-4 py-2 text-gray-600 capitalize">{r.status}</td>
-                        <td className="px-4 py-2 text-right tabular-nums">{r.quantity_mt ? Number(r.quantity_mt).toFixed(2) : '—'}</td>
-                        <td className="px-4 py-2 text-right tabular-nums font-medium">{fmt(r.total_eur)}</td>
-                        <td className="px-4 py-2 text-gray-600">{r.order_date}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          )}
-        </>
-      )}
-
-      {/* ═══════════════════════════════════════════════════════════════════ */}
-      {/* SUPPLIER EXPENSES VIEW  (modular)                                 */}
-      {/* ═══════════════════════════════════════════════════════════════════ */}
-      {view === 'expenses' && demoData && (
-        <>
-          {/* ── KPI cards ─────────────────────────────────────────────────── */}
-          <div className={`grid gap-4 ${compareRevenue ? 'grid-cols-2 lg:grid-cols-5' : 'grid-cols-2 lg:grid-cols-4'}`}>
-            <Card className="p-5">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-orange-100 flex items-center justify-center shrink-0">
-                  <TrendingDown size={20} className="text-orange-500" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-xs text-gray-500">Total Expenses (excl. BTW)</p>
-                  <p className="text-xl font-bold text-gray-900 truncate">{fmt(demoData.totals.total_amount)}</p>
-                </div>
-              </div>
-            </Card>
-            <Card className="p-5">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
-                  <Clock size={20} className="text-amber-600" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-xs text-gray-500">VAT Total</p>
-                  <p className="text-xl font-bold text-amber-600 truncate">{fmt(demoData.totals.total_vat)}</p>
-                </div>
-              </div>
-            </Card>
-            {showDemo && demoTotal && (
-              <Card className="p-5">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center shrink-0">
-                    <Truck size={20} className="text-indigo-600" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs text-gray-500">Demo Expenses</p>
-                    <p className="text-xl font-bold text-indigo-700 truncate">{fmt(demoTotal.total)}</p>
-                    <p className="text-xs text-gray-400">{demoTotal.count} invoices</p>
-                  </div>
-                </div>
-              </Card>
-            )}
-            {showSales && salesTotal && (
-              <Card className="p-5">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-emerald-100 flex items-center justify-center shrink-0">
-                    <Truck size={20} className="text-emerald-600" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs text-gray-500">Sales Activities</p>
-                    <p className="text-xl font-bold text-emerald-700 truncate">{fmt(salesTotal.total)}</p>
-                    <p className="text-xs text-gray-400">{salesTotal.count} invoices</p>
-                  </div>
-                </div>
-              </Card>
-            )}
-            {compareRevenue && data && (
-              <Card className="p-5">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center shrink-0">
-                    <TrendingUp size={20} className="text-green-600" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs text-gray-500">Revenue</p>
-                    <p className="text-xl font-bold text-green-700 truncate">{fmt(data.totals.received)}</p>
-                  </div>
-                </div>
-              </Card>
-            )}
-          </div>
-
-          {/* ── Monthly Trend ─────────────────────────────────────────────── */}
-          <ChartSection
-            id="monthlyTrend"
-            title={`Monthly Expenses — ${period}`}
-            icon={<BarChart3 size={16} className="text-indigo-500" />}
-            visible={sections.monthlyTrend}
-            onToggle={() => toggleSection('monthlyTrend')}
-            badge={
-              <div className="flex items-center gap-3 ml-4 text-xs text-gray-500 font-normal">
-                {showDemo && <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-indigo-500 inline-block" /> Demo</span>}
-                {showSales && <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-emerald-500 inline-block" /> Sales</span>}
-                {compareRevenue && <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-green-500 inline-block" /> Revenue</span>}
-              </div>
-            }
-          >
-            {(() => {
-              // Build combined monthly data
-              const months = demoData.monthly;
-              const maxVal = Math.max(
-                ...months.map(m => {
-                  let v = 0;
-                  if (showDemo) v = Math.max(v, m.demo);
-                  if (showSales) v = Math.max(v, m.sales);
-                  if (compareRevenue) {
-                    const rev = revenueByMonth.find(r => r.month === m.month);
-                    if (rev) v = Math.max(v, rev.received);
-                  }
-                  return v;
-                }),
-                1
-              );
-
-              // How many bars per month?
-              const barCount = (showDemo ? 1 : 0) + (showSales ? 1 : 0) + (compareRevenue ? 1 : 0);
-              if (barCount === 0) return <p className="text-center text-sm text-gray-500">Select at least one data series</p>;
-
-              return (
-                <>
-                  <BarChartGrid height={chartH} maxVal={maxVal} fmtFn={fmtAxis}>
-                    {months.map(m => {
-                      const rev = revenueByMonth.find(r => r.month === m.month);
-                      const bars: { val: number; color: string; label: string; textColor: string }[] = [];
-                      if (showDemo) bars.push({ val: m.demo, color: 'bg-indigo-500', label: `Demo: ${fmt(m.demo)}`, textColor: 'text-indigo-600' });
-                      if (showSales) bars.push({ val: m.sales, color: 'bg-emerald-500', label: `Sales: ${fmt(m.sales)}`, textColor: 'text-emerald-600' });
-                      if (compareRevenue) bars.push({ val: rev?.received || 0, color: 'bg-green-500', label: `Revenue: ${fmt(rev?.received || 0)}`, textColor: 'text-green-600' });
-
-                      return (
-                        <div key={m.month} className="flex-1 h-full flex items-end justify-center gap-px group relative">
-                          {bars.map((b, bi) => (
-                            <div key={bi} className="flex-1 h-full flex flex-col items-center justify-end">
-                              {b.val > 0 && barCount <= 2 && (
-                                <span className={`text-[9px] tabular-nums leading-none mb-0.5 font-medium ${b.textColor}`}>
-                                  {fmtAxis(b.val)}
-                                </span>
-                              )}
-                              <div className={`w-full rounded-t transition-all ${b.val > 0 ? b.color : 'bg-gray-100'}`}
-                                style={{ height: `${b.val > 0 ? Math.max((b.val / maxVal) * barH, 2) : 2}px` }}
-                                title={b.label} />
-                            </div>
-                          ))}
-                          {/* Hover tooltip with all values */}
-                          <div className="absolute -top-8 left-1/2 -translate-x-1/2 hidden group-hover:block z-10 whitespace-nowrap">
-                            <div className="bg-gray-800 text-white text-[10px] px-2 py-1 rounded shadow-lg flex gap-2">
-                              {bars.map((b, bi) => (
-                                <span key={bi}>{b.label.split(':')[0]}: {fmtAxis(b.val)}</span>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </BarChartGrid>
-                  <MonthLabels months={months.map(m => m.month)} />
-
-                  {/* Totals summary below chart */}
-                  <div className="mt-4 pt-4 border-t border-gray-100 flex flex-wrap gap-6 justify-center text-center">
-                    {showDemo && (
-                      <div>
-                        <p className="text-xs text-gray-400 mb-0.5">Demo Total</p>
-                        <p className="text-base font-bold text-indigo-600">{fmt(demoTotal?.total || 0)}</p>
-                      </div>
-                    )}
-                    {showSales && (
-                      <div>
-                        <p className="text-xs text-gray-400 mb-0.5">Sales Total</p>
-                        <p className="text-base font-bold text-emerald-600">{fmt(salesTotal?.total || 0)}</p>
-                      </div>
-                    )}
-                    {showDemo && showSales && (
-                      <div>
-                        <p className="text-xs text-gray-400 mb-0.5">Combined</p>
-                        <p className="text-base font-bold text-gray-900">{fmt(demoData.totals.total_amount)}</p>
-                      </div>
-                    )}
-                    {compareRevenue && data && (
-                      <>
-                        <div className="border-l border-gray-200 pl-6">
-                          <p className="text-xs text-gray-400 mb-0.5">Revenue</p>
-                          <p className="text-base font-bold text-green-600">{fmt(data.totals.received)}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-gray-400 mb-0.5">Net (Rev − Exp)</p>
-                          {(() => {
-                            const net = data.totals.received - demoData.totals.total_amount;
-                            return (
-                              <p className={`text-base font-bold ${net >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                {net >= 0 ? '+' : ''}{fmt(net)}
-                              </p>
-                            );
-                          })()}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </>
-              );
-            })()}
-          </ChartSection>
-
-          {/* ── Revenue vs Expenses Comparison (only when compare is on) ── */}
-          {compareRevenue && data && (
-            <ChartSection
-              id="revenueComparison"
-              title={`Revenue vs Supplier Expenses — ${period}`}
-              icon={<DollarSign size={16} className="text-green-600" />}
-              visible={sections.revenueComparison}
-              onToggle={() => toggleSection('revenueComparison')}
-              badge={
-                <div className="flex items-center gap-3 ml-4 text-xs text-gray-500 font-normal">
-                  <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-green-500 inline-block" /> Revenue</span>
-                  <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-orange-400 inline-block" /> Expenses</span>
-                </div>
-              }
-            >
-              {(() => {
-                // Merge revenue + expenses by month
-                const merged = demoData.monthly.map(m => {
-                  const rev = revenueByMonth.find(r => r.month === m.month);
-                  const exp = (showDemo ? m.demo : 0) + (showSales ? m.sales : 0);
-                  return { month: m.month, revenue: rev?.received || 0, expenses: exp };
-                });
-                const maxVal = Math.max(...merged.map(m => Math.max(m.revenue, m.expenses)), 1);
-
-                return (
-                  <>
-                    <BarChartGrid height={chartH} maxVal={maxVal} fmtFn={fmtAxis}>
-                      {merged.map(m => {
-                        const net = m.revenue - m.expenses;
-                        return (
-                          <div key={m.month} className="flex-1 h-full flex items-end justify-center gap-px group relative">
-                            <div className="flex-1 h-full flex flex-col items-center justify-end">
-                              {m.revenue > 0 && (
-                                <span className="text-[9px] tabular-nums leading-none mb-0.5 font-medium text-green-600">{fmtAxis(m.revenue)}</span>
-                              )}
-                              <div className={`w-full rounded-t transition-all ${m.revenue > 0 ? 'bg-green-500' : 'bg-gray-100'}`}
-                                style={{ height: `${m.revenue > 0 ? Math.max((m.revenue / maxVal) * barH, 2) : 2}px` }}
-                                title={`Revenue: ${fmt(m.revenue)}`} />
-                            </div>
-                            <div className="flex-1 h-full flex flex-col items-center justify-end">
-                              {m.expenses > 0 && (
-                                <span className="text-[9px] tabular-nums leading-none mb-0.5 font-medium text-orange-500">{fmtAxis(m.expenses)}</span>
-                              )}
-                              <div className={`w-full rounded-t transition-all ${m.expenses > 0 ? 'bg-orange-400' : 'bg-gray-100'}`}
-                                style={{ height: `${m.expenses > 0 ? Math.max((m.expenses / maxVal) * barH, 2) : 2}px` }}
-                                title={`Expenses: ${fmt(m.expenses)}`} />
-                            </div>
-                            {/* Net hover tooltip */}
-                            <div className="absolute -top-7 left-1/2 -translate-x-1/2 hidden group-hover:block z-10 whitespace-nowrap">
-                              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded shadow ${net >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                                Net: {net >= 0 ? '+' : ''}{fmtAxis(net)}
-                              </span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </BarChartGrid>
-                    <MonthLabels months={merged.map(m => m.month)} />
-
-                    {/* Totals row */}
-                    <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-3 gap-4 text-center">
-                      <div>
-                        <p className="text-xs text-gray-400 mb-0.5">Total Revenue</p>
-                        <p className="text-base font-bold text-green-600">{fmt(data.totals.received)}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-400 mb-0.5">Total Expenses</p>
-                        <p className="text-base font-bold text-orange-500">{fmt(demoData.totals.total_amount)}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-400 mb-0.5">Net</p>
-                        {(() => {
-                          const net = data.totals.received - demoData.totals.total_amount;
-                          return (
-                            <p className={`text-base font-bold ${net >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                              {net >= 0 ? '+' : ''}{fmt(net)}
-                            </p>
-                          );
-                        })()}
-                      </div>
-                    </div>
-                  </>
-                );
-              })()}
-            </ChartSection>
-          )}
-
-          {/* ── By Category ───────────────────────────────────────────────── */}
-          <ChartSection
-            id="byCategory"
-            title="Expenses by Category"
-            icon={<Truck size={16} className="text-orange-500" />}
-            visible={sections.byCategory}
-            onToggle={() => toggleSection('byCategory')}
-            badge={<span className="text-xs text-gray-400 font-normal ml-2">{period}</span>}
-          >
-            {filteredByCategory.length === 0 ? (
-              <p className="text-center text-sm text-gray-500">No data for this period</p>
-            ) : (() => {
-              const maxCat = filteredByCategory[0]?.total || 1;
-              // Group categories: show domain badge when both domains visible
-              return (
-                <div className="divide-y divide-gray-100">
-                  {filteredByCategory.map(cat => (
-                    <div key={`${cat.domain}-${cat.category}`} className="py-3">
-                      <div className="flex items-center justify-between mb-1.5">
-                        <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
-                          <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: DEMO_CAT_COLORS[cat.category] || '#6b7280' }} />
-                          {cat.category}
-                          {showDemo && showSales && (
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-normal ${cat.domain === 'demo' ? 'bg-indigo-50 text-indigo-600' : 'bg-emerald-50 text-emerald-600'}`}>
-                              {cat.domain === 'demo' ? 'Demo' : 'Sales'}
-                            </span>
-                          )}
-                        </span>
-                        <div className="text-right shrink-0 ml-2">
-                          <span className="text-sm font-bold text-gray-900">{fmt(cat.total)}</span>
-                          <span className="text-xs text-gray-400 ml-1">{cat.count} inv</span>
-                          {cat.vat_total > 0 && (
-                            <span className="text-xs text-amber-500 ml-1">(+{fmt(cat.vat_total)} VAT)</span>
-                          )}
-                        </div>
-                      </div>
-                      <div className="w-full bg-gray-100 rounded-full h-2">
-                        <div className="h-2 rounded-full transition-all" style={{
-                          width: `${(cat.total / maxCat) * 100}%`,
-                          background: DEMO_CAT_COLORS[cat.category] || '#6b7280',
-                        }} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              );
-            })()}
-          </ChartSection>
-
-          {/* ── By Supplier ───────────────────────────────────────────────── */}
-          <ChartSection
-            id="bySupplier"
-            title={`Expenses by Supplier${demoSupplier ? ` (filtered: "${demoSupplier}")` : ''}`}
-            icon={<Truck size={16} className="text-red-500" />}
-            visible={sections.bySupplier}
-            onToggle={() => toggleSection('bySupplier')}
-            badge={<span className="text-xs text-gray-400 font-normal ml-2">{period} · {filteredBySupplier.length} suppliers</span>}
-          >
-            {filteredBySupplier.length === 0 ? (
-              <p className="text-center text-sm text-gray-500">No data for this period</p>
-            ) : (
-              <div className="divide-y divide-gray-100">
-                {filteredBySupplier.map((s, i) => {
-                  const maxS = filteredBySupplier[0]?.total || 1;
-                  return (
-                    <div key={`${s.supplier}-${s.domain}`} className="py-3">
-                      <div className="flex items-center justify-between mb-1.5">
-                        <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
-                          <span className="text-xs text-gray-400 font-normal w-5">{i + 1}.</span>
-                          {s.supplier}
-                          {showDemo && showSales && (
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-normal ${s.domain === 'demo' ? 'bg-indigo-50 text-indigo-600' : 'bg-emerald-50 text-emerald-600'}`}>
-                              {s.domain === 'demo' ? 'Demo' : 'Sales'}
-                            </span>
-                          )}
-                          <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded font-normal">{s.category}</span>
-                        </span>
-                        <div className="text-right shrink-0 ml-2">
-                          <span className="text-sm font-bold text-gray-900">{fmt(s.total)}</span>
-                          <span className="text-xs text-gray-400 ml-1">{s.count} inv</span>
-                        </div>
-                      </div>
-                      <div className="w-full bg-gray-100 rounded-full h-1.5">
-                        <div className="h-1.5 rounded-full transition-all" style={{
-                          width: `${(s.total / maxS) * 100}%`,
-                          background: DEMO_CAT_COLORS[s.category] || '#6b7280',
-                        }} />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </ChartSection>
-
-          {/* ── Monthly Summary Table ─────────────────────────────────────── */}
-          <ChartSection
-            id="summaryTable"
-            title="Monthly Summary Table"
-            icon={<BarChart3 size={16} className="text-gray-500" />}
-            visible={sections.summaryTable}
-            onToggle={() => toggleSection('summaryTable')}
-            badge={<span className="text-xs text-gray-400 font-normal ml-2">{period}</span>}
-          >
-            <div className="overflow-x-auto -mx-5">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-200">
-                    <th className="text-left text-xs font-medium text-gray-500 px-4 py-2 capitalize">{groupBy}</th>
-                    {showDemo && <th className="text-right text-xs font-medium text-indigo-600 px-4 py-2">Demo</th>}
-                    {showSales && <th className="text-right text-xs font-medium text-emerald-600 px-4 py-2">Sales</th>}
-                    <th className="text-right text-xs font-medium text-gray-700 px-4 py-2">Total Exp.</th>
-                    <th className="text-right text-xs font-medium text-amber-600 px-4 py-2">VAT</th>
-                    {compareRevenue && <th className="text-right text-xs font-medium text-green-600 px-4 py-2">Revenue</th>}
-                    {compareRevenue && <th className="text-right text-xs font-medium text-gray-700 px-4 py-2">Net</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {(() => {
-                    // Merge expenses + revenue per month, then roll up to the chosen period.
-                    const merged = demoData.monthly.map(m => {
-                      const rev = revenueByMonth.find(r => r.month === m.month);
-                      return { month: m.month, demo: m.demo, sales: m.sales, demo_vat: m.demo_vat, sales_vat: m.sales_vat, received: rev?.received || 0 };
-                    });
-                    return rollupByPeriod(merged, groupBy, ['demo', 'sales', 'demo_vat', 'sales_vat', 'received']).map(r => {
+                    {expenseRollup.map(r => {
                       const totalExp = (showDemo ? r.demo : 0) + (showSales ? r.sales : 0);
                       const totalVat = (showDemo ? r.demo_vat : 0) + (showSales ? r.sales_vat : 0);
                       const net = r.received - totalExp;
                       return (
                         <tr key={r.period} className="border-b border-gray-50 hover:bg-gray-50">
-                          <td className="px-4 py-2 font-medium text-gray-700">{r.period}</td>
-                          {showDemo && <td className="px-4 py-2 text-right tabular-nums text-indigo-600">{fmt(r.demo)}</td>}
-                          {showSales && <td className="px-4 py-2 text-right tabular-nums text-emerald-600">{fmt(r.sales)}</td>}
-                          <td className="px-4 py-2 text-right tabular-nums font-semibold">{fmt(totalExp)}</td>
-                          <td className="px-4 py-2 text-right tabular-nums text-amber-600">{fmt(totalVat)}</td>
-                          {compareRevenue && <td className="px-4 py-2 text-right tabular-nums text-green-600">{fmt(r.received)}</td>}
+                          <td className="px-5 py-2 font-medium text-gray-700">{r.period}</td>
+                          {showDemo && <td className="px-3 py-2 text-right tabular-nums text-gray-900">{fmt(r.demo)}</td>}
+                          {showSales && <td className="px-3 py-2 text-right tabular-nums text-gray-900">{fmt(r.sales)}</td>}
+                          <td className="px-3 py-2 text-right tabular-nums font-semibold text-gray-900">{fmt(totalExp)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums text-gray-500">{fmt(totalVat)}</td>
+                          {compareRevenue && <td className="px-3 py-2 text-right tabular-nums text-gray-900">{fmt(r.received)}</td>}
                           {compareRevenue && (
-                            <td className={`px-4 py-2 text-right tabular-nums font-semibold ${net >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            <td className={`px-5 py-2 text-right tabular-nums font-semibold ${net >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                               {net >= 0 ? '+' : ''}{fmt(net)}
                             </td>
                           )}
                         </tr>
                       );
-                    });
-                  })()}
-                </tbody>
-                <tfoot>
-                  <tr className="border-t-2 border-gray-200 bg-gray-50 font-bold">
-                    <td className="px-4 py-2 text-gray-700">Total</td>
-                    {showDemo && <td className="px-4 py-2 text-right tabular-nums text-indigo-700">{fmt(demoTotal?.total || 0)}</td>}
-                    {showSales && <td className="px-4 py-2 text-right tabular-nums text-emerald-700">{fmt(salesTotal?.total || 0)}</td>}
-                    <td className="px-4 py-2 text-right tabular-nums">{fmt(demoData.totals.total_amount)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums text-amber-700">{fmt(demoData.totals.total_vat)}</td>
-                    {compareRevenue && data && <td className="px-4 py-2 text-right tabular-nums text-green-700">{fmt(data.totals.received)}</td>}
-                    {compareRevenue && data && (() => {
-                      const net = data.totals.received - demoData.totals.total_amount;
-                      return (
-                        <td className={`px-4 py-2 text-right tabular-nums ${net >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                          {net >= 0 ? '+' : ''}{fmt(net)}
-                        </td>
-                      );
-                    })()}
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </ChartSection>
-        </>
-      )}
-
-      {/* ═══════════════════════════════════════════════════════════════════ */}
-      {/* TONNAGE VIEW                                                      */}
-      {/* ═══════════════════════════════════════════════════════════════════ */}
-      {view === 'tonnage' && quantityData && data && (
-        quantityData.total_tons === 0 ? (
-          <Card className="p-10 text-center">
-            <Scale size={36} className="text-gray-300 mx-auto mb-3" />
-            <p className="text-gray-500 font-medium">No tonnage data for this period</p>
-            <p className="text-xs text-gray-400 mt-1">
-              Tonnage is read from customer order line items (unit: tons / t / mt).
-            </p>
-          </Card>
-        ) : (
-          <>
-            <div className="grid grid-cols-3 gap-4">
-              <Card className="p-5">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center shrink-0">
-                    <Scale size={20} className="text-indigo-600" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs text-gray-500">Total Tons Sold</p>
-                    <p className="text-xl font-bold text-indigo-600 truncate">{fmtTons(quantityData.total_tons)}</p>
-                  </div>
-                </div>
-              </Card>
-              <Card className="p-5">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center shrink-0">
-                    <TrendingUp size={20} className="text-green-600" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs text-gray-500">Revenue (Period)</p>
-                    <p className="text-xl font-bold text-green-600 truncate">{fmt(data.totals.received)}</p>
-                  </div>
-                </div>
-              </Card>
-              <Card className="p-5">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center shrink-0">
-                    <DollarSign size={20} className="text-gray-600" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs text-gray-500">EUR / Ton</p>
-                    <p className="text-xl font-bold text-gray-900 truncate">
-                      {data.totals.received > 0 && quantityData.total_tons > 0
-                        ? fmt(data.totals.received / quantityData.total_tons)
-                        : '—'}
-                    </p>
-                  </div>
-                </div>
-              </Card>
-            </div>
-
-            {/* Monthly tons chart */}
-            <Card>
-              <div className="px-5 py-4 border-b border-gray-100">
-                <h2 className="font-semibold text-gray-900 flex items-center gap-2">
-                  <Scale size={16} className="text-indigo-500" /> Tons Sold per Month — {period}
-                </h2>
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t border-gray-200 bg-gray-50 font-semibold">
+                      <td className="px-5 py-2 text-gray-700">Total</td>
+                      {showDemo && <td className="px-3 py-2 text-right tabular-nums">{fmt(demoTotal?.total || 0)}</td>}
+                      {showSales && <td className="px-3 py-2 text-right tabular-nums">{fmt(salesTotal?.total || 0)}</td>}
+                      <td className="px-3 py-2 text-right tabular-nums">{fmt(demoData.totals.total_amount)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-gray-500">{fmt(demoData.totals.total_vat)}</td>
+                      {compareRevenue && data && <td className="px-3 py-2 text-right tabular-nums">{fmt(data.totals.received)}</td>}
+                      {compareRevenue && data && (() => {
+                        const net = data.totals.received - demoData.totals.total_amount;
+                        return (
+                          <td className={`px-5 py-2 text-right tabular-nums ${net >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            {net >= 0 ? '+' : ''}{fmt(net)}
+                          </td>
+                        );
+                      })()}
+                    </tr>
+                  </tfoot>
+                </table>
               </div>
-              <div className="p-5">
-                {(() => {
-                  const maxTons = Math.max(...quantityData.monthly.map(m => m.tons), 1);
-                  return (
-                    <>
-                      <BarChartGrid height={chartH} maxVal={maxTons} fmtFn={fmtTonsAxis}>
-                        {quantityData.monthly.map(m => (
-                          <div key={m.month} className="flex-1 h-full flex flex-col items-center justify-end">
-                            {m.tons > 0 && (
-                              <span className="text-[9px] tabular-nums leading-none mb-0.5 font-medium text-indigo-600">{fmtTons(m.tons)}</span>
-                            )}
-                            <div className={`w-4/5 rounded-t transition-all ${m.tons > 0 ? 'bg-indigo-500' : 'bg-gray-100'}`}
-                              style={{ height: `${m.tons > 0 ? Math.max((m.tons / maxTons) * barH, 2) : 2}px` }}
-                              title={fmtTons(m.tons)} />
-                          </div>
-                        ))}
-                      </BarChartGrid>
-                      <MonthLabels months={quantityData.monthly.map(m => m.month)} />
-                    </>
-                  );
-                })()}
-              </div>
-            </Card>
+            </PanelCard>
 
-            {/* Tonnage by customer */}
-            {quantityData.by_customer.length > 0 && (
-              <Card>
-                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                  <h2 className="font-semibold text-gray-900 flex items-center gap-2">
-                    <Users size={16} className="text-indigo-600" /> Tonnage by Customer
-                  </h2>
-                  <span className="text-xs text-gray-400">{period}</span>
-                </div>
-                <div className="divide-y divide-gray-100">
-                  {quantityData.by_customer.map((c, i) => {
-                    const maxC = quantityData.by_customer[0]?.tons || 1;
-                    const pct = quantityData.total_tons > 0 ? Math.round((c.tons / quantityData.total_tons) * 100) : 0;
-                    return (
-                      <div key={c.customer_id} className="px-5 py-3">
-                        <div className="flex items-center justify-between mb-1.5">
-                          <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
-                            <span className="text-xs text-gray-400 font-normal w-5">{i + 1}.</span>
-                            {c.customer_name}
-                          </span>
-                          <div className="text-right shrink-0 ml-2">
-                            <span className="text-sm font-bold text-indigo-700">{fmtTons(c.tons)}</span>
-                            <span className="text-xs text-gray-400 ml-1">{pct}%</span>
-                          </div>
-                        </div>
-                        <div className="w-full bg-gray-100 rounded-full h-1.5">
-                          <div className="bg-indigo-500 h-1.5 rounded-full" style={{ width: `${(c.tons / maxC) * 100}%` }} />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </Card>
-            )}
+            <BreakdownPanel
+              title="Expenses by Category"
+              subtitle={period}
+              icon={<Truck size={16} className="text-gray-400" />}
+              dimensionHeader="Category"
+              chart="donut"
+              rows={categoryRows}
+              series={[{ name: 'Expenses', color: C_EXPENSE }]}
+              format={fmt}
+              countLabel="Invoices"
+              onExport={() => downloadExcel(`expenses-by-category-${period}`,
+                ['Category', 'Invoices', 'Total (EUR)'],
+                categoryRows.map(r => [r.label, r.count, r.values[0]]))}
+            />
 
-            {/* Tonnage by Region */}
-            {quantityData.by_region && quantityData.by_region.length > 0 && (
-              <Card>
-                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                  <h2 className="font-semibold text-gray-900 flex items-center gap-2">
-                    <Truck size={16} className="text-indigo-600" /> Tonnage by Region
-                  </h2>
-                  <span className="text-xs text-gray-400">{period}</span>
-                </div>
-                <div className="divide-y divide-gray-100">
-                  {quantityData.by_region.map((r, i) => {
-                    const maxR = quantityData.by_region[0]?.tons || 1;
-                    const pct = quantityData.total_tons > 0 ? Math.round((r.tons / quantityData.total_tons) * 100) : 0;
-                    return (
-                      <div key={r.region} className="px-5 py-3">
-                        <div className="flex items-center justify-between mb-1.5">
-                          <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
-                            <span className="text-xs text-gray-400 font-normal w-5">{i + 1}.</span>
-                            {r.region}
-                          </span>
-                          <div className="text-right shrink-0 ml-2">
-                            <span className="text-sm font-bold text-indigo-700">{fmtTons(r.tons)}</span>
-                            <span className="text-xs text-gray-400 ml-1">{pct}%</span>
-                          </div>
-                        </div>
-                        <div className="w-full bg-gray-100 rounded-full h-1.5">
-                          <div className="bg-indigo-500 h-1.5 rounded-full" style={{ width: `${(r.tons / maxR) * 100}%` }} />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </Card>
-            )}
+            <BreakdownPanel
+              title="Expenses by Supplier"
+              subtitle={`${filteredBySupplier.length} suppliers — ${period}${demoSupplier ? ` · filtered: "${demoSupplier}"` : ''}`}
+              icon={<Truck size={16} className="text-gray-400" />}
+              dimensionHeader="Supplier"
+              rows={supplierRows}
+              series={[{ name: 'Expenses', color: C_EXPENSE }]}
+              format={fmt}
+              countLabel="Invoices"
+              onExport={() => downloadExcel(`expenses-by-supplier-${period}`,
+                ['Supplier', 'Invoices', 'Total (EUR)'],
+                supplierRows.map(r => [r.label, r.count, r.values[0]]))}
+            />
           </>
-        )
-      )}
+        )}
 
-      {/* No data fallback */}
-      {!data && !demoData && !quantityData && (
-        <p className="text-center text-gray-500 py-12">Failed to load analytics data.</p>
-      )}
-      </>
-      )}
+        {/* ═══════════════════════════════════════════════════════════════════ */}
+        {/* TONNAGE                                                            */}
+        {/* ═══════════════════════════════════════════════════════════════════ */}
+        {view === 'tonnage' && quantityData && data && (
+          quantityData.total_tons === 0 ? (
+            <Card className="p-10 text-center">
+              <Scale size={36} className="text-gray-300 mx-auto mb-3" />
+              <p className="text-gray-500 font-medium">No tonnage data for this period</p>
+              <p className="text-xs text-gray-400 mt-1">
+                Tonnage is read from customer order line items (unit: tons / t / mt).
+              </p>
+            </Card>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <StatTile label="Total tons sold" color={C_TONS} icon={<Scale size={18} />}
+                  value={fmtTons(quantityData.total_tons)} hint={period} />
+                <StatTile label="Cash received" color={C_CASH} icon={<TrendingUp size={18} />}
+                  value={fmt(data.totals.received)} hint={period} />
+                <StatTile label="EUR per ton" color={C_INVOICES} icon={<DollarSign size={18} />}
+                  value={data.totals.received > 0 && quantityData.total_tons > 0
+                    ? fmt(data.totals.received / quantityData.total_tons)
+                    : '—'} />
+              </div>
 
-      {/* Export Report Modal */}
+              <PeriodPanel
+                title="Tons Sold per Period"
+                subtitle={`${groupHeader} breakdown — ${period}`}
+                icon={<Scale size={16} className="text-gray-400" />}
+                periodHeader={groupHeader}
+                categories={tonsRollup.map(r => r.period)}
+                series={[{ name: 'Tons', color: C_TONS, values: tonsRollup.map(r => r.tons) }]}
+                format={fmtTons}
+                formatAxis={fmtTonsAxis}
+                onExport={() => downloadExcel(`tonnage-${groupBy}-${period}`,
+                  [groupHeader, 'Tons (MT)'], tonsRollup.map(r => [r.period, r.tons]))}
+              />
+
+              <BreakdownPanel
+                title="Tonnage by Customer"
+                subtitle={period}
+                icon={<Users size={16} className="text-gray-400" />}
+                dimensionHeader="Customer"
+                rows={quantityData.by_customer.map(c => ({
+                  key: String(c.customer_id), label: c.customer_name || 'Unknown', values: [c.tons],
+                }))}
+                series={[{ name: 'Tons', color: C_TONS }]}
+                format={fmtTons}
+                onExport={() => downloadExcel(`tonnage-by-customer-${period}`,
+                  ['Customer', 'Tons'], quantityData.by_customer.map(c => [c.customer_name, c.tons]))}
+              />
+
+              <BreakdownPanel
+                title="Tonnage by Region"
+                subtitle={period}
+                icon={<Truck size={16} className="text-gray-400" />}
+                dimensionHeader="Region"
+                chart="donut"
+                rows={(quantityData.by_region || []).map(r => ({ key: r.region, label: r.region, values: [r.tons] }))}
+                series={[{ name: 'Tons', color: C_TONS }]}
+                format={fmtTons}
+                onExport={() => downloadExcel(`tonnage-by-region-${period}`,
+                  ['Region', 'Tons'], (quantityData.by_region || []).map(r => [r.region, r.tons]))}
+              />
+            </>
+          )
+        )}
+
+        {!loading && !data && !demoData && !quantityData && (
+          <p className="text-center text-gray-500 py-12">Failed to load analytics data.</p>
+        )}
+        </div>
+      </div>
+
       <ExportReportModal
         open={showExportModal}
         onClose={() => setShowExportModal(false)}

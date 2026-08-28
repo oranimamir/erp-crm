@@ -69,6 +69,7 @@ export function buildRevenueReport(
         quantity_mt: sumField(invoices, 'quantity_mt'),
         eur_amount: sumField(invoices, 'eur_amount'),
       },
+      measure: 'revenue',
       revenueField: 'eur_amount',
       tonnageField: 'quantity_mt',
       dateField: 'invoice_date',
@@ -87,6 +88,9 @@ export function buildRevenueReport(
         quantity_mt: sumField(data.confirmed_orders, 'quantity_mt'),
         total_eur: sumField(data.confirmed_orders, 'total_eur'),
       },
+      // Orders are their own measure — the Summary tab never adds them to
+      // invoiced revenue, since an order becomes an invoice once billed.
+      measure: 'orders',
       revenueField: 'total_eur',
       tonnageField: 'quantity_mt',
       dateField: 'order_date',

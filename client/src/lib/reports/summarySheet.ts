@@ -1,5 +1,5 @@
 import type ExcelJS from 'exceljs';
-import type { ReportConfig } from '../excelReportBuilder';
+import type { ReportConfig, SheetData, SheetMeasure } from '../excelReportBuilder';
 import {
   TITLE_FONT, SUBTITLE_FONT,
   SECTION_HEADER_FONT, SECTION_HEADER_FILL,
@@ -7,6 +7,23 @@ import {
   TOTAL_FILL, TOTAL_FONT, BORDERS_ALL,
   CURRENCY_FMT, TONS_FMT,
 } from '../excelStyles';
+
+// ── Measures ─────────────────────────────────────────────────────────────────
+// Sheets are totalled *within* their measure and never across measures. An order
+// becomes an invoice once billed, so adding orders to invoiced revenue counts the
+// same sale twice; expenses are a different sign entirely.
+
+const MEASURE_ORDER: SheetMeasure[] = ['revenue', 'orders', 'expenses'];
+
+const MEASURE_LABEL: Record<SheetMeasure, { amount: string; tonnage: string }> = {
+  revenue:  { amount: 'Invoiced revenue (EUR)', tonnage: 'Invoiced tonnage (MT)' },
+  orders:   { amount: 'Orders placed (EUR)',    tonnage: 'Ordered tonnage (MT)' },
+  expenses: { amount: 'Expenses (EUR)',         tonnage: 'Expensed tonnage (MT)' },
+};
+
+function measureOf(sheet: SheetData): SheetMeasure {
+  return sheet.measure || 'revenue';
+}
 
 // ── Quarter helpers ──────────────────────────────────────────────────────────
 
@@ -32,14 +49,9 @@ function quarterSortKey(q: number, year: number): string {
 export function buildSummarySheet(wb: ExcelJS.Workbook, config: ReportConfig): void {
   const ws = wb.addWorksheet('Summary');
 
-  // Generous column widths
   ws.getColumn(1).width = 4;   // spacer
-  ws.getColumn(2).width = 24;  // labels
-  ws.getColumn(3).width = 20;
-  ws.getColumn(4).width = 20;
-  ws.getColumn(5).width = 20;
-  ws.getColumn(6).width = 20;
-  ws.getColumn(7).width = 20;
+  ws.getColumn(2).width = 26;  // labels
+  for (let c = 3; c <= 9; c++) ws.getColumn(c).width = 20;
 
   let row = 1;
 
@@ -59,46 +71,43 @@ export function buildSummarySheet(wb: ExcelJS.Workbook, config: ReportConfig): v
   }
   row += 2;
 
-  // ── Compute per-sheet totals ─────────────────────────────────────────────
+  // ── Per-sheet totals, tagged with their measure ──────────────────────────
 
-  const hasRevenue = config.sheets.some(s => s.revenueField);
-  const hasTonnage = config.sheets.some(s => s.tonnageField);
-
-  interface SheetTotals { label: string; revenue: number; tonnage: number; }
-  const sheetTotals: SheetTotals[] = [];
-
-  for (const sheet of config.sheets) {
+  interface SheetTotals { label: string; measure: SheetMeasure; revenue: number; tonnage: number; hasRevenue: boolean; hasTonnage: boolean; }
+  const sheetTotals: SheetTotals[] = config.sheets.map(sheet => {
     let revenue = 0;
     let tonnage = 0;
     for (const r of sheet.rows) {
       if (sheet.revenueField) revenue += Number(r[sheet.revenueField]) || 0;
       if (sheet.tonnageField) tonnage += Number(r[sheet.tonnageField]) || 0;
     }
-    sheetTotals.push({ label: sheet.sourceLabel || sheet.name, revenue, tonnage });
-  }
+    return {
+      label: sheet.sourceLabel || sheet.name,
+      measure: measureOf(sheet),
+      revenue, tonnage,
+      hasRevenue: !!sheet.revenueField,
+      hasTonnage: !!sheet.tonnageField,
+    };
+  });
 
-  const grandRevenue = sheetTotals.reduce((s, t) => s + t.revenue, 0);
-  const grandTonnage = sheetTotals.reduce((s, t) => s + t.tonnage, 0);
+  const measuresPresent = MEASURE_ORDER.filter(m => sheetTotals.some(t => t.measure === m));
+  const measureTotal = (m: SheetMeasure, field: 'revenue' | 'tonnage') =>
+    sheetTotals.filter(t => t.measure === m).reduce((s, t) => s + t[field], 0);
 
-  // ── Overall Totals Section ───────────────────────────────────────────────
+  // ── Overall Totals ───────────────────────────────────────────────────────
 
-  // Section header
   ws.mergeCells(row, 2, row, 6);
   const secCell = ws.getCell(row, 2);
-  secCell.value = 'OVERALL TOTALS';
+  secCell.value = 'TOTALS BY MEASURE';
   secCell.font = SECTION_HEADER_FONT;
   secCell.fill = SECTION_HEADER_FILL;
   row++;
 
-  // Column headers
-  const overallHeaders: string[] = [''];
-  for (const t of sheetTotals) overallHeaders.push(t.label);
-  overallHeaders.push('GRAND TOTAL');
-
+  const headers = ['', ...sheetTotals.map(t => t.label), 'MEASURE TOTAL'];
   const hdrRow = ws.getRow(row);
-  for (let c = 0; c < overallHeaders.length; c++) {
+  for (let c = 0; c < headers.length; c++) {
     const cell = ws.getCell(row, c + 2);
-    cell.value = overallHeaders[c];
+    cell.value = headers[c];
     cell.fill = HEADER_FILL;
     cell.font = HEADER_FONT;
     cell.alignment = HEADER_ALIGNMENT;
@@ -107,79 +116,106 @@ export function buildSummarySheet(wb: ExcelJS.Workbook, config: ReportConfig): v
   hdrRow.height = 28;
   row++;
 
-  // Revenue row
-  if (hasRevenue) {
-    const revenueRow = ws.getRow(row);
-    ws.getCell(row, 2).value = 'Total Revenue (EUR)';
+  // One row per measure × metric. A cell is only filled for sheets belonging to
+  // that measure, and the final column totals that measure alone.
+  const writeMeasureRow = (
+    label: string,
+    measure: SheetMeasure,
+    field: 'revenue' | 'tonnage',
+    numFmt: string,
+    has: (t: SheetTotals) => boolean,
+  ) => {
+    const r = ws.getRow(row);
+    ws.getCell(row, 2).value = label;
     ws.getCell(row, 2).font = { bold: true };
     ws.getCell(row, 2).border = BORDERS_ALL;
     for (let i = 0; i < sheetTotals.length; i++) {
       const cell = ws.getCell(row, 3 + i);
-      cell.value = sheetTotals[i].revenue;
-      cell.numFmt = CURRENCY_FMT;
+      const t = sheetTotals[i];
+      cell.value = t.measure === measure && has(t) ? t[field] : null;
+      cell.numFmt = numFmt;
       cell.border = BORDERS_ALL;
       cell.alignment = { horizontal: 'right' };
     }
-    const gtCell = ws.getCell(row, 3 + sheetTotals.length);
-    gtCell.value = grandRevenue;
-    gtCell.numFmt = CURRENCY_FMT;
-    gtCell.font = TOTAL_FONT;
-    gtCell.fill = TOTAL_FILL;
-    gtCell.border = BORDERS_ALL;
-    gtCell.alignment = { horizontal: 'right' };
-    revenueRow.height = 22;
+    const totalCell = ws.getCell(row, 3 + sheetTotals.length);
+    totalCell.value = measureTotal(measure, field);
+    totalCell.numFmt = numFmt;
+    totalCell.font = TOTAL_FONT;
+    totalCell.fill = TOTAL_FILL;
+    totalCell.border = BORDERS_ALL;
+    totalCell.alignment = { horizontal: 'right' };
+    r.height = 22;
+    row++;
+  };
+
+  for (const m of measuresPresent) {
+    if (sheetTotals.some(t => t.measure === m && t.hasRevenue)) {
+      writeMeasureRow(MEASURE_LABEL[m].amount, m, 'revenue', CURRENCY_FMT, t => t.hasRevenue);
+    }
+    if (sheetTotals.some(t => t.measure === m && t.hasTonnage)) {
+      writeMeasureRow(MEASURE_LABEL[m].tonnage, m, 'tonnage', TONS_FMT, t => t.hasTonnage);
+    }
+  }
+
+  // Net only makes sense when both sides are in the workbook.
+  if (measuresPresent.includes('revenue') && measuresPresent.includes('expenses')) {
+    const net = measureTotal('revenue', 'revenue') - measureTotal('expenses', 'revenue');
+    ws.getCell(row, 2).value = 'Net (revenue − expenses)';
+    ws.getCell(row, 2).font = { bold: true };
+    ws.getCell(row, 2).border = BORDERS_ALL;
+    for (let i = 0; i < sheetTotals.length; i++) {
+      const cell = ws.getCell(row, 3 + i);
+      cell.border = BORDERS_ALL;
+    }
+    const netCell = ws.getCell(row, 3 + sheetTotals.length);
+    netCell.value = net;
+    netCell.numFmt = CURRENCY_FMT;
+    netCell.font = TOTAL_FONT;
+    netCell.fill = TOTAL_FILL;
+    netCell.border = BORDERS_ALL;
+    netCell.alignment = { horizontal: 'right' };
     row++;
   }
 
-  // Tonnage row
-  if (hasTonnage) {
-    const tonnageRow = ws.getRow(row);
-    ws.getCell(row, 2).value = 'Total Tonnage (MT)';
-    ws.getCell(row, 2).font = { bold: true };
-    ws.getCell(row, 2).border = BORDERS_ALL;
-    for (let i = 0; i < sheetTotals.length; i++) {
-      const cell = ws.getCell(row, 3 + i);
-      cell.value = sheetTotals[i].tonnage;
-      cell.numFmt = TONS_FMT;
-      cell.border = BORDERS_ALL;
-      cell.alignment = { horizontal: 'right' };
-    }
-    const gtCell = ws.getCell(row, 3 + sheetTotals.length);
-    gtCell.value = grandTonnage;
-    gtCell.numFmt = TONS_FMT;
-    gtCell.font = TOTAL_FONT;
-    gtCell.fill = TOTAL_FILL;
-    gtCell.border = BORDERS_ALL;
-    gtCell.alignment = { horizontal: 'right' };
-    tonnageRow.height = 22;
+  // The reason there is no single grand total.
+  if (measuresPresent.length > 1) {
+    ws.mergeCells(row, 2, row, Math.max(6, 3 + sheetTotals.length));
+    const note = ws.getCell(row, 2);
+    note.value = measuresPresent.includes('orders')
+      ? 'Measures are totalled separately and never added: an order becomes an invoice once billed, so combining them would count the same sale twice.'
+      : 'Measures are totalled separately and never added together.';
+    note.font = SUBTITLE_FONT;
+    note.alignment = { wrapText: true, vertical: 'middle' };
+    ws.getRow(row).height = 26;
     row++;
   }
 
   row += 2;
 
-  // ── Quarterly Breakdown Section ──────────────────────────────────────────
+  // ── Quarterly Breakdown ──────────────────────────────────────────────────
 
-  // Gather quarterly data from all sheets
-  interface QuarterData { revenue: number; tonnage: number; label: string; }
+  interface QuarterData { label: string; byMeasure: Record<string, { revenue: number; tonnage: number }>; }
   const quarterMap = new Map<string, QuarterData>();
 
   for (const sheet of config.sheets) {
     if (!sheet.dateField) continue;
+    const measure = measureOf(sheet);
     for (const r of sheet.rows) {
       const dateVal = r[sheet.dateField];
       if (!dateVal) continue;
       const qInfo = dateToQuarter(String(dateVal));
       if (!qInfo) continue;
       const key = quarterSortKey(qInfo.q, qInfo.year);
-      const existing = quarterMap.get(key) || { revenue: 0, tonnage: 0, label: qInfo.label };
-      if (sheet.revenueField) existing.revenue += Number(r[sheet.revenueField]) || 0;
-      if (sheet.tonnageField) existing.tonnage += Number(r[sheet.tonnageField]) || 0;
-      quarterMap.set(key, existing);
+      const entry = quarterMap.get(key) || { label: qInfo.label, byMeasure: {} };
+      const bucket = entry.byMeasure[measure] || { revenue: 0, tonnage: 0 };
+      if (sheet.revenueField) bucket.revenue += Number(r[sheet.revenueField]) || 0;
+      if (sheet.tonnageField) bucket.tonnage += Number(r[sheet.tonnageField]) || 0;
+      entry.byMeasure[measure] = bucket;
+      quarterMap.set(key, entry);
     }
   }
 
   if (quarterMap.size > 0) {
-    // Section header
     ws.mergeCells(row, 2, row, 6);
     const qSecCell = ws.getCell(row, 2);
     qSecCell.value = 'QUARTERLY BREAKDOWN';
@@ -187,12 +223,9 @@ export function buildSummarySheet(wb: ExcelJS.Workbook, config: ReportConfig): v
     qSecCell.fill = SECTION_HEADER_FILL;
     row++;
 
-    // Sort quarters chronologically
-    const sortedKeys = [...quarterMap.keys()].sort();
-    const quarters = sortedKeys.map(k => quarterMap.get(k)!);
+    const quarters = [...quarterMap.keys()].sort().map(k => quarterMap.get(k)!);
 
-    // Headers
-    const qHeaders = ['', ...quarters.map(q => q.label), 'GRAND TOTAL'];
+    const qHeaders = ['', ...quarters.map(q => q.label), 'TOTAL'];
     const qHdrRow = ws.getRow(row);
     for (let c = 0; c < qHeaders.length; c++) {
       const cell = ws.getCell(row, c + 2);
@@ -205,48 +238,34 @@ export function buildSummarySheet(wb: ExcelJS.Workbook, config: ReportConfig): v
     qHdrRow.height = 36;
     row++;
 
-    // Revenue row
-    if (hasRevenue) {
-      ws.getCell(row, 2).value = 'Revenue (EUR)';
+    const writeQuarterRow = (label: string, measure: SheetMeasure, field: 'revenue' | 'tonnage', numFmt: string) => {
+      ws.getCell(row, 2).value = label;
       ws.getCell(row, 2).font = { bold: true };
       ws.getCell(row, 2).border = BORDERS_ALL;
       for (let i = 0; i < quarters.length; i++) {
         const cell = ws.getCell(row, 3 + i);
-        cell.value = quarters[i].revenue;
-        cell.numFmt = CURRENCY_FMT;
+        cell.value = quarters[i].byMeasure[measure]?.[field] ?? 0;
+        cell.numFmt = numFmt;
         cell.border = BORDERS_ALL;
         cell.alignment = { horizontal: 'right' };
       }
-      const gtCell = ws.getCell(row, 3 + quarters.length);
-      gtCell.value = grandRevenue;
-      gtCell.numFmt = CURRENCY_FMT;
-      gtCell.font = TOTAL_FONT;
-      gtCell.fill = TOTAL_FILL;
-      gtCell.border = BORDERS_ALL;
-      gtCell.alignment = { horizontal: 'right' };
+      const totalCell = ws.getCell(row, 3 + quarters.length);
+      totalCell.value = measureTotal(measure, field);
+      totalCell.numFmt = numFmt;
+      totalCell.font = TOTAL_FONT;
+      totalCell.fill = TOTAL_FILL;
+      totalCell.border = BORDERS_ALL;
+      totalCell.alignment = { horizontal: 'right' };
       row++;
-    }
+    };
 
-    // Tonnage row
-    if (hasTonnage) {
-      ws.getCell(row, 2).value = 'Tonnage (MT)';
-      ws.getCell(row, 2).font = { bold: true };
-      ws.getCell(row, 2).border = BORDERS_ALL;
-      for (let i = 0; i < quarters.length; i++) {
-        const cell = ws.getCell(row, 3 + i);
-        cell.value = quarters[i].tonnage;
-        cell.numFmt = TONS_FMT;
-        cell.border = BORDERS_ALL;
-        cell.alignment = { horizontal: 'right' };
+    for (const m of measuresPresent) {
+      if (sheetTotals.some(t => t.measure === m && t.hasRevenue)) {
+        writeQuarterRow(MEASURE_LABEL[m].amount, m, 'revenue', CURRENCY_FMT);
       }
-      const gtCell = ws.getCell(row, 3 + quarters.length);
-      gtCell.value = grandTonnage;
-      gtCell.numFmt = TONS_FMT;
-      gtCell.font = TOTAL_FONT;
-      gtCell.fill = TOTAL_FILL;
-      gtCell.border = BORDERS_ALL;
-      gtCell.alignment = { horizontal: 'right' };
-      row++;
+      if (sheetTotals.some(t => t.measure === m && t.hasTonnage)) {
+        writeQuarterRow(MEASURE_LABEL[m].tonnage, m, 'tonnage', TONS_FMT);
+      }
     }
   }
 }
