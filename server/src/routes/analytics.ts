@@ -281,6 +281,8 @@ router.get('/revenue-breakdown', async (req: Request, res: Response) => {
   }
 
   // ── Customer orders (by order_date) ──────────────────────────────────────────
+  // Count every order that is allocated to an operation (an operation is what an
+  // order kicks off); orders not yet promoted to an operation are excluded.
   const orderRows = db.prepare(`
     SELECT o.id, o.total_amount as amount,
       UPPER(COALESCE(oi_cur.currency, 'USD')) as currency,
@@ -291,6 +293,7 @@ router.get('/revenue-breakdown', async (req: Request, res: Response) => {
     LEFT JOIN customers c ON o.customer_id = c.id
     LEFT JOIN (SELECT UPPER(COALESCE(currency, 'USD')) as currency, order_id FROM order_items GROUP BY order_id) oi_cur ON oi_cur.order_id = o.id
     WHERE o.type = 'customer' AND o.status NOT IN ('cancelled')
+      AND EXISTS (SELECT 1 FROM operations op WHERE op.order_id = o.id)
       AND COALESCE(o.order_date, date(o.created_at)) BETWEEN ? AND ?
       ${customerId ? 'AND o.customer_id = ?' : ''}
   `).all(dateStart, dateEnd, ...(customerId ? [customerId] : [])) as any[];
