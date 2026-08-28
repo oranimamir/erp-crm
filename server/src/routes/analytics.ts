@@ -629,14 +629,17 @@ router.get('/export-data', (req: Request, res: Response) => {
 
     // ── Revenue data: customer invoices + confirmed orders ────────────────
     if (type === 'revenue' || type === 'combined') {
-      result.customer_invoices = db.prepare(`
+      const invoiceRows = db.prepare(`
         SELECT i.invoice_number, c.name as customer_name,
           COALESCE(oi_tons.quantity_mt, 0) as quantity_mt,
           i.amount, UPPER(COALESCE(i.currency, 'USD')) as currency,
           COALESCE(i.eur_amount, i.amount) as eur_amount,
-          i.invoice_date
+          i.invoice_date,
+          op.country as op_country, o_op.destination as destination
         FROM invoices i
         LEFT JOIN customers c ON i.customer_id = c.id
+        LEFT JOIN operations op ON op.id = i.operation_id
+        LEFT JOIN orders o_op ON o_op.id = op.order_id
         LEFT JOIN (
           SELECT op.id as op_id, SUM(${MT_EXPR}) as quantity_mt
           FROM operations op
@@ -649,12 +652,19 @@ router.get('/export-data', (req: Request, res: Response) => {
           ${custWhere}
         ORDER BY i.invoice_date
       `).all(dateStart, dateEnd, ...custParams) as any[];
+      // Region is resolved in JS — the operation's country wins, falling back to
+      // the order's freeform destination (e.g. "Puerto Quetzal" → Guatemala).
+      result.customer_invoices = invoiceRows.map(({ op_country, destination, ...r }) => ({
+        ...r, region: resolveCountry(op_country || destination) || 'Unknown',
+      }));
 
-      result.confirmed_orders = db.prepare(`
+      const orderRows = db.prepare(`
         SELECT o.order_number, COALESCE(c.name, s.name) as party_name,
           o.status,
           COALESCE(oi_tons.quantity_mt, 0) as quantity_mt,
-          o.total_amount as total_eur, o.order_date
+          o.total_amount as total_eur, o.order_date,
+          (SELECT op.country FROM operations op WHERE op.order_id = o.id AND op.country IS NOT NULL ORDER BY op.id DESC LIMIT 1) as op_country,
+          o.destination as destination
         FROM orders o
         LEFT JOIN customers c ON o.customer_id = c.id
         LEFT JOIN suppliers s ON o.supplier_id = s.id
@@ -666,8 +676,12 @@ router.get('/export-data', (req: Request, res: Response) => {
         WHERE o.type = 'customer'
           AND o.status NOT IN ('cancelled', 'delivered', 'completed')
           AND o.order_date BETWEEN ? AND ?
+          ${customerId ? 'AND o.customer_id = ?' : ''}
         ORDER BY o.order_date
-      `).all(dateStart, dateEnd) as any[];
+      `).all(dateStart, dateEnd, ...(customerId ? [customerId] : [])) as any[];
+      result.confirmed_orders = orderRows.map(({ op_country, destination, ...r }) => ({
+        ...r, region: resolveCountry(op_country || destination) || 'Unknown',
+      }));
     }
 
     // ── Expense data: demo_invoices ──────────────────────────────────────

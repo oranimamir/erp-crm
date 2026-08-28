@@ -8,6 +8,7 @@ interface RevenueData {
     amount: number;
     currency: string;
     eur_amount: number;
+    region?: string;
     invoice_date: string;
   }[];
   confirmed_orders: {
@@ -16,6 +17,7 @@ interface RevenueData {
     status: string;
     quantity_mt: number;
     total_eur: number;
+    region?: string;
     order_date: string;
   }[];
 }
@@ -27,6 +29,7 @@ const INVOICE_COLUMNS: ColumnDef[] = [
   { header: 'Amount', key: 'amount', format: 'currency_native', width: 16 },
   { header: 'Currency', key: 'currency', width: 10 },
   { header: 'EUR Amount', key: 'eur_amount', format: 'currency', width: 16 },
+  { header: 'Region', key: 'region', width: 16 },
   { header: 'Invoice Date', key: 'invoice_date', format: 'date', width: 14 },
 ];
 
@@ -35,7 +38,8 @@ const ORDER_COLUMNS: ColumnDef[] = [
   { header: 'Customer / Supplier', key: 'party_name', width: 22 },
   { header: 'Status', key: 'status', width: 14 },
   { header: 'Quantity (MT)', key: 'quantity_mt', format: 'tons' },
-  { header: 'Invoice Total (EUR)', key: 'total_eur', format: 'currency', width: 18 },
+  { header: 'Order Total (EUR)', key: 'total_eur', format: 'currency', width: 18 },
+  { header: 'Region', key: 'region', width: 16 },
   { header: 'Order Date', key: 'order_date', format: 'date', width: 14 },
 ];
 
@@ -73,6 +77,8 @@ export function buildRevenueReport(
       revenueField: 'eur_amount',
       tonnageField: 'quantity_mt',
       dateField: 'invoice_date',
+      customerField: 'customer_name',
+      regionField: 'region',
       sourceLabel: `Invoices ${year}`,
     });
   }
@@ -94,6 +100,8 @@ export function buildRevenueReport(
       revenueField: 'total_eur',
       tonnageField: 'quantity_mt',
       dateField: 'order_date',
+      customerField: 'party_name',
+      regionField: 'region',
       sourceLabel: 'Orders Confirmed',
     });
   }

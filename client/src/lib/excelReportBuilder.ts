@@ -32,6 +32,9 @@ export interface SheetData {
   revenueField?: string;
   tonnageField?: string;
   dateField?: string;
+  // Row fields the Summary tab groups by, when the sheet carries them
+  customerField?: string;
+  regionField?: string;
   sourceLabel?: string;
 }
 
