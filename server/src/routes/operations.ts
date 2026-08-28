@@ -3,6 +3,7 @@ import db from '../database.js';
 import { getEurRate } from '../lib/fx.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { resolveCountry } from '../lib/portCountry.js';
+import { scoreCandidate } from '../lib/wireMatch.js';
 import { uploadOperationDoc } from '../middleware/upload.js';
 import fs from 'fs';
 import path from 'path';
@@ -247,70 +248,159 @@ router.get('/completed-years', (_req: Request, res: Response) => {
 });
 
 // ── Wire-transfer auto-match ──────────────────────────────────────────────────
-// Given a scanned wire amount (+ optional reference), rank operations that have
-// an open customer invoice by how closely the amount matches. Used by the
-// Operations page drag/drop wire upload → "approve association" popup.
+// Rank the operations a scanned wire transfer could belong to, combining payer
+// name, references (invoice / order / operation / PO numbers) and amount.
+// Used by the Operations page drag/drop wire upload → "approve association" popup.
 // Registered before '/:id' so the literal path isn't captured as an id.
-router.get('/wire-match', async (req: Request, res: Response) => {
-  const amount = parseFloat(req.query.amount as string);
-  const reference = ((req.query.reference as string) || '').trim().toLowerCase();
 
-  // All open customer invoices that belong to an operation.
-  const rows = db.prepare(`
-    SELECT i.id as invoice_id, i.invoice_number, i.amount,
-      UPPER(COALESCE(i.currency, 'USD')) as currency, i.eur_amount, i.our_ref, i.po_number,
-      op.id as operation_id, op.operation_number, op.status as operation_status,
-      c.name as customer_name
-    FROM invoices i
-    JOIN operations op ON op.id = i.operation_id
-    LEFT JOIN customers c ON i.customer_id = c.id
-    WHERE i.type = 'customer' AND i.status IN ('sent', 'overdue')
-    ORDER BY op.id DESC
-  `).all() as any[];
+const WIRE_CANDIDATE_SQL = `
+  SELECT i.id as invoice_id, i.invoice_number, i.amount, i.status as invoice_status,
+    UPPER(COALESCE(i.currency, 'USD')) as currency, i.eur_amount, i.our_ref, i.po_number,
+    i.due_date, i.invoice_date,
+    op.id as operation_id, op.operation_number, op.status as operation_status,
+    o.order_number,
+    COALESCE(c.name, oc.name) as customer_name
+  FROM invoices i
+  JOIN operations op ON op.id = i.operation_id
+  LEFT JOIN customers c ON i.customer_id = c.id
+  LEFT JOIN customers oc ON op.customer_id = oc.id
+  LEFT JOIN orders o ON op.order_id = o.id
+  WHERE i.type = 'customer' AND i.status != 'cancelled'
+`;
 
-  // Resolve live EUR rates for the currencies present, so we can compare in EUR too.
-  const currencies = [...new Set(rows.map(r => r.currency).filter((c: string) => c !== 'EUR'))];
+/** Attach an EUR value to each candidate row (stored eur_amount, else live FX). */
+async function withEurAmounts(rows: any[]): Promise<any[]> {
+  const currencies = [...new Set(rows.map(r => r.currency).filter((c: string) => c && c !== 'EUR'))];
   const rates: Record<string, number> = {};
-  await Promise.all(currencies.map(async (c: string) => { rates[c] = await getEurRate(c, 'latest'); }));
-
-  const candidates = rows.map(r => {
-    const invoiceEur = r.eur_amount != null
+  await Promise.all(currencies.map(async (c: string) => {
+    try { rates[c] = await getEurRate(c, 'latest'); } catch { rates[c] = 1; }
+  }));
+  return rows.map(r => ({
+    ...r,
+    invoice_eur: r.eur_amount != null
       ? r.eur_amount
-      : (r.currency === 'EUR' ? r.amount : r.amount * (rates[r.currency] ?? 1));
-    // Compare the scanned amount against BOTH the raw invoice amount and its EUR
-    // value — the wire may be in the invoice currency or already converted.
-    const diff = isNaN(amount)
-      ? Number.POSITIVE_INFINITY
-      : Math.min(Math.abs(amount - r.amount), Math.abs(amount - invoiceEur));
-    // Reference boost: the invoice number / our_ref / PO number appears in the
-    // scanned reference (or vice-versa).
-    const refFields = [r.invoice_number, r.our_ref, r.po_number]
-      .map((v: any) => (v || '').toLowerCase())
-      .filter(Boolean);
-    const refMatch = !!reference && refFields.some((f: string) =>
-      reference.includes(f) || f.includes(reference));
-    return {
-      operation_id: r.operation_id,
-      operation_number: r.operation_number,
-      operation_status: r.operation_status,
-      invoice_id: r.invoice_id,
-      invoice_number: r.invoice_number,
-      customer_name: r.customer_name,
-      currency: r.currency,
-      invoice_amount: r.amount,
-      invoice_eur: invoiceEur,
-      diff,
-      ref_match: refMatch,
-    };
+      : (r.currency === 'EUR' ? r.amount : r.amount * (rates[r.currency] ?? 1)),
+  }));
+}
+
+function toCandidate(r: any, extra: Record<string, any> = {}): Record<string, any> {
+  return {
+    operation_id: r.operation_id,
+    operation_number: r.operation_number,
+    operation_status: r.operation_status,
+    invoice_id: r.invoice_id,
+    invoice_number: r.invoice_number,
+    invoice_status: r.invoice_status,
+    order_number: r.order_number,
+    customer_name: r.customer_name,
+    currency: r.currency,
+    invoice_amount: r.amount,
+    invoice_eur: r.invoice_eur,
+    ...extra,
+  };
+}
+
+router.post('/wire-match', async (req: Request, res: Response) => {
+  const body = req.body || {};
+  const amount = body.amount != null && !Number.isNaN(Number(body.amount)) ? Number(body.amount) : null;
+  const currency = body.currency ? String(body.currency).toUpperCase() : null;
+
+  // The wire may be in a different currency than the invoice — convert it once so
+  // amounts can be compared on an EUR basis too.
+  let amountEur: number | null = amount;
+  if (amount != null && currency && currency !== 'EUR') {
+    try { amountEur = amount * await getEurRate(currency, body.transfer_date || 'latest'); }
+    catch { amountEur = null; }
+  }
+
+  const references: string[] = [
+    body.bank_reference, body.payment_reference, body.reference,
+    ...(Array.isArray(body.references) ? body.references : []),
+  ].filter(Boolean).map((s: any) => String(s));
+
+  const wire = {
+    amount,
+    amountEur,
+    payerName: body.payer_name ? String(body.payer_name) : null,
+    references,
+    text: [body.raw_text, body.notes, body.payment_reference, body.payer_name, ...references]
+      .filter(Boolean).join(' \n '),
+  };
+
+  const rows = await withEurAmounts(db.prepare(WIRE_CANDIDATE_SQL + ' ORDER BY op.id DESC').all() as any[]);
+
+  const scored = rows.map(r => {
+    const m = scoreCandidate(wire, {
+      customerName: r.customer_name,
+      invoiceNumber: r.invoice_number,
+      orderNumber: r.order_number,
+      operationNumber: r.operation_number,
+      ourRef: r.our_ref,
+      poNumber: r.po_number,
+      invoiceAmount: r.amount,
+      invoiceEur: r.invoice_eur,
+      invoiceStatus: r.invoice_status,
+    });
+    return toCandidate(r, {
+      score: m.score,
+      reasons: m.reasons,
+      ref_match: m.refMatch,
+      name_match: m.nameMatch,
+      amount_match: m.amountMatch,
+    });
   });
 
-  // Sort: reference matches first, then smallest amount difference.
-  candidates.sort((a, b) => {
-    if (a.ref_match !== b.ref_match) return a.ref_match ? -1 : 1;
-    return a.diff - b.diff;
-  });
+  scored.sort((a, b) => b.score - a.score);
 
-  res.json({ candidates: candidates.slice(0, 10) });
+  // Anything scoring at or below the status bonus alone carries no real signal.
+  const meaningful = scored.filter(c => c.score > 8);
+  const candidates = (meaningful.length ? meaningful : scored).slice(0, 10);
+  const best = candidates[0];
+  // Auto-select only when the top candidate is both strong and clearly ahead.
+  const confident = !!best && best.score >= 60 && (candidates[1] ? best.score - candidates[1].score >= 15 : true);
+
+  res.json({ candidates, confident });
+});
+
+// Manual fallback: free-text search over every operation invoice, so a wire can
+// always be filed by hand when the automatic ranking misses.
+router.get('/wire-match/search', async (req: Request, res: Response) => {
+  const q = ((req.query.q as string) || '').trim();
+  const like = `%${q}%`;
+  const rows = db.prepare(
+    WIRE_CANDIDATE_SQL +
+    (q
+      ? ` AND (op.operation_number LIKE ? OR i.invoice_number LIKE ? OR COALESCE(c.name, oc.name) LIKE ?
+             OR o.order_number LIKE ? OR COALESCE(i.our_ref,'') LIKE ? OR COALESCE(i.po_number,'') LIKE ?)`
+      : '') +
+    ' ORDER BY op.id DESC LIMIT 30'
+  ).all(...(q ? [like, like, like, like, like, like] : [])) as any[];
+
+  const candidates = (await withEurAmounts(rows)).map(r => toCandidate(r));
+  res.json({ candidates });
+});
+
+// Legacy GET kept for older clients: amount + reference only.
+router.get('/wire-match', async (req: Request, res: Response) => {
+  const rows = await withEurAmounts(db.prepare(WIRE_CANDIDATE_SQL + ` AND i.status IN ('sent','overdue') ORDER BY op.id DESC`).all() as any[]);
+  const amount = parseFloat(req.query.amount as string);
+  const reference = ((req.query.reference as string) || '').trim();
+  const wire = {
+    amount: Number.isNaN(amount) ? null : amount,
+    amountEur: Number.isNaN(amount) ? null : amount,
+    payerName: null,
+    references: reference ? [reference] : [],
+    text: reference,
+  };
+  const candidates = rows.map(r => {
+    const m = scoreCandidate(wire, {
+      customerName: r.customer_name, invoiceNumber: r.invoice_number, orderNumber: r.order_number,
+      operationNumber: r.operation_number, ourRef: r.our_ref, poNumber: r.po_number,
+      invoiceAmount: r.amount, invoiceEur: r.invoice_eur, invoiceStatus: r.invoice_status,
+    });
+    return toCandidate(r, { score: m.score, reasons: m.reasons, ref_match: m.refMatch });
+  }).sort((a, b) => b.score - a.score).slice(0, 10);
+  res.json({ candidates });
 });
 
 // ── Single operation ──────────────────────────────────────────────────────────

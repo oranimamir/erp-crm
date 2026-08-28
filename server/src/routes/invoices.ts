@@ -354,13 +354,30 @@ router.post('/:id/wire-transfers', uploadWireTransfer.single('file'), async (req
   const file_path = req.file ? req.file.filename : null;
   const file_name = req.file ? req.file.originalname : null;
 
+  const invoiceCurrency = (invoice.currency || 'USD').toUpperCase();
+  const wireCurrency = (req.body.currency ? String(req.body.currency).toUpperCase() : invoiceCurrency);
+
   try {
     let fx_rate = 1;
     let eur_amount = amount;
+    if (wireCurrency !== invoiceCurrency) {
+      // The wire was settled in a different currency than the invoice was issued in —
+      // convert from the currency actually transferred, not the invoice's.
+      if (wireCurrency === 'EUR') {
+        fx_rate = 1;
+        eur_amount = amount;
+      } else {
+        try {
+          fx_rate = await getEurRate(wireCurrency, payment_date);
+          eur_amount = amount * fx_rate;
+        } catch (fxErr) {
+          console.warn(`[wire-transfer] FX lookup failed for ${wireCurrency}/${payment_date}, proceeding without conversion:`, fxErr);
+        }
+      }
     // Reuse the invoice's stored fx_rate when present so the wire's EUR value lines up
     // with the invoice's book value. Otherwise the dashboard's Paid YTD shifts whenever
     // FX moves between invoice_date and payment_date.
-    if (invoice.fx_rate != null) {
+    } else if (invoice.fx_rate != null) {
       fx_rate = invoice.fx_rate;
       eur_amount = amount * fx_rate;
     } else if ((invoice.currency || 'USD').toUpperCase() === 'EUR') {

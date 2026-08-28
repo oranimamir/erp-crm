@@ -111,10 +111,15 @@ export default function OperationsPage() {
   const [wireModalOpen, setWireModalOpen] = useState(false);
   const [wireFile, setWireFile] = useState<File | null>(null);
   const [wireScanning, setWireScanning] = useState(false);
-  const [wireScan, setWireScan] = useState<{ amount: number | null; date: string; reference: string | null }>({ amount: null, date: '', reference: null });
+  const [wireScan, setWireScan] = useState<{ amount: number | null; date: string; reference: string | null; payer: string | null; currency: string | null }>({ amount: null, date: '', reference: null, payer: null, currency: null });
   const [wireCandidates, setWireCandidates] = useState<any[]>([]);
   const [wireSelectedInvoice, setWireSelectedInvoice] = useState<number | null>(null);
   const [wireSubmitting, setWireSubmitting] = useState(false);
+  // Manual fallback: search every operation invoice when the ranking misses
+  const [wireManual, setWireManual] = useState(false);
+  const [wireSearch, setWireSearch] = useState('');
+  const [wireSearchResults, setWireSearchResults] = useState<any[]>([]);
+  const [wireSearching, setWireSearching] = useState(false);
   const [wireDragging, setWireDragging] = useState(false);
   const wireFileRef = useRef<HTMLInputElement>(null);
   const [operations, setOperations] = useState<Operation[]>([]);
@@ -403,37 +408,69 @@ export default function OperationsPage() {
     setWireScanning(true);
     setWireCandidates([]);
     setWireSelectedInvoice(null);
-    // 1. Scan the document for amount / date / reference
-    let amount: number | null = null;
-    let date = todayISO();
-    let reference: string | null = null;
+    setWireManual(false);
+    setWireSearch('');
+    setWireSearchResults([]);
+    // 1. Scan the document — payer, amount, currency, date and every reference
+    let scan: any = {};
     try {
       const scanForm = new FormData();
       scanForm.append('file', file);
       const scanRes = await api.post('/wire-transfers/scan', scanForm, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      if (scanRes.data.amount != null && !Number.isNaN(Number(scanRes.data.amount))) amount = Number(scanRes.data.amount);
-      if (scanRes.data.transfer_date) date = scanRes.data.transfer_date;
-      if (scanRes.data.bank_reference) reference = scanRes.data.bank_reference;
+      scan = scanRes.data || {};
     } catch {
       // scan failed — fall back to manual selection with today's date
     }
-    setWireScan({ amount, date, reference });
-    // 2. Rank operations with open invoices by amount / reference match
+    const amount = scan.amount != null && !Number.isNaN(Number(scan.amount)) ? Number(scan.amount) : null;
+    const date = scan.transfer_date || todayISO();
+    const reference = scan.payment_reference || scan.bank_reference || null;
+    setWireScan({ amount, date, reference, payer: scan.payer_name || null, currency: scan.currency || null });
+    // 2. Rank operations on payer name + references + amount together
     try {
-      const { data } = await api.get('/operations/wire-match', {
-        params: { amount: amount ?? undefined, reference: reference ?? undefined },
+      const { data } = await api.post('/operations/wire-match', {
+        amount,
+        currency: scan.currency ?? null,
+        transfer_date: scan.transfer_date ?? null,
+        payer_name: scan.payer_name ?? null,
+        bank_reference: scan.bank_reference ?? null,
+        payment_reference: scan.payment_reference ?? null,
+        references: scan.references ?? [],
+        notes: scan.notes ?? null,
+        raw_text: scan.raw_text ?? null,
       });
       const candidates = data.candidates || [];
       setWireCandidates(candidates);
-      setWireSelectedInvoice(candidates[0]?.invoice_id ?? null);
+      // Only preselect when the match is unambiguous — otherwise make the user choose.
+      setWireSelectedInvoice(data.confident ? candidates[0]?.invoice_id ?? null : null);
+      if (!candidates.length) setWireManual(true);
     } catch {
       setWireCandidates([]);
+      setWireManual(true);
     } finally {
       setWireScanning(false);
     }
   };
+
+  const runWireSearch = async (q: string) => {
+    setWireSearching(true);
+    try {
+      const { data } = await api.get('/operations/wire-match/search', { params: { q } });
+      setWireSearchResults(data.candidates || []);
+    } catch {
+      setWireSearchResults([]);
+    } finally {
+      setWireSearching(false);
+    }
+  };
+
+  // Debounced manual search over all operations
+  useEffect(() => {
+    if (!wireModalOpen || !wireManual) return;
+    const t = setTimeout(() => runWireSearch(wireSearch), 250);
+    return () => clearTimeout(t);
+  }, [wireModalOpen, wireManual, wireSearch]);
 
   const closeWireModal = () => {
     setWireModalOpen(false);
@@ -441,7 +478,10 @@ export default function OperationsPage() {
     setWireScanning(false);
     setWireCandidates([]);
     setWireSelectedInvoice(null);
-    setWireScan({ amount: null, date: '', reference: null });
+    setWireScan({ amount: null, date: '', reference: null, payer: null, currency: null });
+    setWireManual(false);
+    setWireSearch('');
+    setWireSearchResults([]);
   };
 
   const confirmWireAssociation = async () => {
@@ -452,6 +492,7 @@ export default function OperationsPage() {
       form.append('file', wireFile);
       form.append('payment_date', wireScan.date || todayISO());
       if (wireScan.amount != null) form.append('amount', String(wireScan.amount));
+      if (wireScan.currency) form.append('currency', wireScan.currency);
       if (wireScan.reference) form.append('bank_reference', wireScan.reference);
       await api.post(`/invoices/${wireSelectedInvoice}/wire-transfers`, form, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -1077,25 +1118,47 @@ export default function OperationsPage() {
             </div>
 
             <div className="p-5 space-y-4 overflow-y-auto">
-              {/* Scanned details */}
+              {/* Scanned details — editable, the scan is a suggestion not a verdict */}
               <div className="rounded-lg bg-gray-50 border border-gray-200 p-3 text-sm">
                 <p className="text-xs font-medium text-gray-500 mb-1.5">{wireFile?.name}</p>
                 {wireScanning ? (
                   <p className="flex items-center gap-2 text-gray-500"><Loader2 size={14} className="animate-spin" /> Reading document…</p>
                 ) : (
-                  <div className="flex flex-wrap gap-x-6 gap-y-1">
-                    <span>Amount: <strong className="text-gray-900">{wireScan.amount != null ? wireScan.amount.toLocaleString() : '—'}</strong></span>
-                    <span>Date: <strong className="text-gray-900">{wireScan.date ? formatDate(wireScan.date) : '—'}</strong></span>
-                    {wireScan.reference && <span>Ref: <strong className="text-gray-900">{wireScan.reference}</strong></span>}
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="block">
+                        <span className="text-[11px] text-gray-500">Amount {wireScan.currency ? `(${wireScan.currency})` : ''}</span>
+                        <input
+                          type="number" step="0.01"
+                          value={wireScan.amount ?? ''}
+                          onChange={e => setWireScan(s => ({ ...s, amount: e.target.value === '' ? null : Number(e.target.value) }))}
+                          className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                          placeholder="Amount"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[11px] text-gray-500">Payment date</span>
+                        <input
+                          type="date"
+                          value={wireScan.date}
+                          onChange={e => setWireScan(s => ({ ...s, date: e.target.value }))}
+                          className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                        />
+                      </label>
+                    </div>
+                    <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-gray-600">
+                      <span>Payer: <strong className="text-gray-900">{wireScan.payer || '—'}</strong></span>
+                      {wireScan.reference && <span className="truncate max-w-full">Ref: <strong className="text-gray-900">{wireScan.reference}</strong></span>}
+                    </div>
                   </div>
                 )}
               </div>
 
               {/* Candidate operations */}
-              {!wireScanning && (
+              {!wireScanning && !wireManual && (
                 wireCandidates.length === 0 ? (
                   <p className="text-sm text-gray-500 text-center py-6">
-                    No operations with open invoices to match. Close and upload from the invoice page instead.
+                    No matching operation found — search manually below.
                   </p>
                 ) : (
                   <div>
@@ -1116,8 +1179,8 @@ export default function OperationsPage() {
                             <div className="flex items-center justify-between">
                               <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
                                 {c.operation_number}
-                                {i === 0 && c.ref_match && <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded">ref match</span>}
-                                {i === 0 && !c.ref_match && <span className="text-[10px] bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded">best</span>}
+                                {i === 0 && <span className="text-[10px] bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded">best</span>}
+                                {c.invoice_status === 'paid' && <span className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">invoice paid</span>}
                               </span>
                               <span className="text-sm font-bold text-gray-900">
                                 €{Number(c.invoice_eur).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -1127,12 +1190,76 @@ export default function OperationsPage() {
                               <span>{c.customer_name || '—'} · {c.invoice_number}</span>
                               <span className="capitalize">{c.operation_status}</span>
                             </div>
+                            {c.reasons?.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mt-1.5">
+                                {c.reasons.map((r: string) => (
+                                  <span key={r} className="text-[10px] bg-green-50 text-green-700 border border-green-200 px-1.5 py-0.5 rounded">{r}</span>
+                                ))}
+                              </div>
+                            )}
                           </button>
                         );
                       })}
                     </div>
                   </div>
                 )
+              )}
+
+              {/* Manual selection over every operation */}
+              {!wireScanning && wireManual && (
+                <div>
+                  <div className="relative mb-2">
+                    <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input
+                      autoFocus
+                      value={wireSearch}
+                      onChange={e => setWireSearch(e.target.value)}
+                      placeholder="Search operation, customer, invoice or order number…"
+                      className="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
+                  </div>
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {wireSearching && <p className="text-xs text-gray-500 py-2 flex items-center gap-2"><Loader2 size={12} className="animate-spin" /> Searching…</p>}
+                    {!wireSearching && wireSearchResults.length === 0 && (
+                      <p className="text-sm text-gray-500 text-center py-4">No operation invoices found.</p>
+                    )}
+                    {wireSearchResults.map(c => {
+                      const selected = wireSelectedInvoice === c.invoice_id;
+                      return (
+                        <button
+                          key={c.invoice_id}
+                          onClick={() => setWireSelectedInvoice(c.invoice_id)}
+                          className={`w-full text-left rounded-lg border p-3 transition-colors ${
+                            selected ? 'border-primary-500 bg-primary-50 ring-1 ring-primary-200' : 'border-gray-200 hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium text-gray-900 flex items-center gap-2">
+                              {c.operation_number}
+                              {c.invoice_status === 'paid' && <span className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">invoice paid</span>}
+                            </span>
+                            <span className="text-sm font-bold text-gray-900">
+                              €{Number(c.invoice_eur).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between mt-0.5 text-xs text-gray-500">
+                            <span>{c.customer_name || '—'} · {c.invoice_number}</span>
+                            <span className="capitalize">{c.operation_status}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {!wireScanning && (
+                <button
+                  onClick={() => { setWireManual(m => !m); setWireSelectedInvoice(null); }}
+                  className="text-xs font-medium text-primary-600 hover:text-primary-700"
+                >
+                  {wireManual ? '← Back to suggested matches' : 'Choose the operation manually instead'}
+                </button>
               )}
             </div>
 
