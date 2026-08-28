@@ -71,10 +71,10 @@ router.get('/', async (req: Request, res: Response) => {
   const params: any[] = [];
   if (tab === 'completed') {
     conditions.push("op.status = 'completed'");
-    // Year sub-tabs: filter completed ops by completion year — the latest wire
-    // transfer date (when payment landed), falling back to the op's updated_at.
+    // Year sub-tabs: an order starts the operation, so bucket completed ops by the
+    // order date (falling back to the op's created_at when no order date exists).
     if (filterYear) {
-      conditions.push("strftime('%Y', COALESCE(wt_dates.latest_wt_date, op.updated_at)) = ?");
+      conditions.push("strftime('%Y', COALESCE(o.order_date, date(op.created_at))) = ?");
       params.push(filterYear);
     }
   } else {
@@ -237,13 +237,9 @@ router.get('/', async (req: Request, res: Response) => {
 // Registered before '/:id' so the literal path isn't captured as an id.
 router.get('/completed-years', (_req: Request, res: Response) => {
   const rows = db.prepare(`
-    SELECT DISTINCT strftime('%Y', COALESCE(wt_dates.latest_wt_date, op.updated_at)) as year
+    SELECT DISTINCT strftime('%Y', COALESCE(o.order_date, date(op.created_at))) as year
     FROM operations op
-    LEFT JOIN (
-      SELECT i.operation_id, MAX(wt.transfer_date) as latest_wt_date
-      FROM wire_transfers wt JOIN invoices i ON wt.invoice_id = i.id
-      WHERE i.operation_id IS NOT NULL GROUP BY i.operation_id
-    ) wt_dates ON wt_dates.operation_id = op.id
+    LEFT JOIN orders o ON op.order_id = o.id
     WHERE op.status = 'completed'
     ORDER BY year DESC
   `).all() as any[];
