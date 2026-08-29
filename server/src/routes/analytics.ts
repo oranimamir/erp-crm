@@ -635,6 +635,7 @@ router.get('/export-data', (req: Request, res: Response) => {
           i.amount, UPPER(COALESCE(i.currency, 'USD')) as currency,
           COALESCE(i.eur_amount, i.amount) as eur_amount,
           i.invoice_date,
+          op.operation_number as operation_number,
           op.country as op_country, o_op.destination as destination
         FROM invoices i
         LEFT JOIN customers c ON i.customer_id = c.id
@@ -658,11 +659,18 @@ router.get('/export-data', (req: Request, res: Response) => {
         ...r, region: resolveCountry(op_country || destination) || 'Unknown',
       }));
 
+      // Same "allocated to an operation, not cancelled" definition as
+      // /revenue-breakdown's orders-placed measure — this list must reconcile
+      // with the on-screen "Orders placed" total and the Summary tab, and must
+      // include every order regardless of downstream status (an order that has
+      // already been delivered/completed is still an order that was placed).
       const orderRows = db.prepare(`
         SELECT o.order_number, COALESCE(c.name, s.name) as party_name,
           o.status,
           COALESCE(oi_tons.quantity_mt, 0) as quantity_mt,
-          o.total_amount as total_eur, o.order_date,
+          o.total_amount as total_eur,
+          COALESCE(o.order_date, date(o.created_at)) as order_date,
+          (SELECT op.operation_number FROM operations op WHERE op.order_id = o.id ORDER BY op.id DESC LIMIT 1) as operation_number,
           (SELECT op.country FROM operations op WHERE op.order_id = o.id AND op.country IS NOT NULL ORDER BY op.id DESC LIMIT 1) as op_country,
           o.destination as destination
         FROM orders o
@@ -674,12 +682,13 @@ router.get('/export-data', (req: Request, res: Response) => {
           GROUP BY oi.order_id
         ) oi_tons ON oi_tons.order_id = o.id
         WHERE o.type = 'customer'
-          AND o.status NOT IN ('cancelled', 'delivered', 'completed')
-          AND o.order_date BETWEEN ? AND ?
+          AND o.status NOT IN ('cancelled')
+          AND EXISTS (SELECT 1 FROM operations op WHERE op.order_id = o.id)
+          AND COALESCE(o.order_date, date(o.created_at)) BETWEEN ? AND ?
           ${customerId ? 'AND o.customer_id = ?' : ''}
-        ORDER BY o.order_date
+        ORDER BY COALESCE(o.order_date, date(o.created_at))
       `).all(dateStart, dateEnd, ...(customerId ? [customerId] : [])) as any[];
-      result.confirmed_orders = orderRows.map(({ op_country, destination, ...r }) => ({
+      result.orders = orderRows.map(({ op_country, destination, ...r }) => ({
         ...r, region: resolveCountry(op_country || destination) || 'Unknown',
       }));
     }

@@ -7,6 +7,7 @@ import {
   TOTAL_FILL, TOTAL_FONT, BORDERS_ALL,
   CURRENCY_FMT, TONS_FMT,
 } from '../excelStyles';
+import { CHART_HEX, renderBarChartPng, chartEurAxis } from './chartImage';
 
 // ── Measures ─────────────────────────────────────────────────────────────────
 // Sheets are totalled *within* their measure and never across measures. An order
@@ -20,6 +21,14 @@ const MEASURE_LABEL: Record<SheetMeasure, { amount: string; tonnage: string }> =
   revenue:  { amount: 'Invoiced revenue (EUR)', tonnage: 'Invoiced tonnage (MT)' },
   orders:   { amount: 'Orders placed (EUR)',    tonnage: 'Ordered tonnage (MT)' },
   expenses: { amount: 'Expenses (EUR)',         tonnage: 'Expensed tonnage (MT)' },
+};
+
+// Same colors as each measure's own sheet chart, so a reader flipping between
+// tabs sees one consistent color per measure throughout the workbook.
+const MEASURE_COLOR: Record<SheetMeasure, string> = {
+  revenue: CHART_HEX.aqua,
+  orders: CHART_HEX.blue,
+  expenses: CHART_HEX.orange,
 };
 
 function measureOf(sheet: SheetData): SheetMeasure {
@@ -135,6 +144,7 @@ export function buildSummarySheet(wb: ExcelJS.Workbook, config: ReportConfig): v
     firstHeader: string,
     keyOf: (sheet: SheetData, dataRow: Record<string, any>) => { key: string; label: string } | null,
     sortBy: 'key' | 'value',
+    withChart = false,
   ): boolean => {
     interface Bucket { label: string; values: Map<string, number>; }
     const buckets = new Map<string, Bucket>();
@@ -176,6 +186,7 @@ export function buildSummarySheet(wb: ExcelJS.Workbook, config: ReportConfig): v
       entries.sort((a, b) => val(b[1]) - val(a[1]));
     }
 
+    const blockStartRow = row;
     writeSectionHeader(title);
     writeHeaderRow([firstHeader, ...cols.map(c => c.label)]);
 
@@ -207,6 +218,31 @@ export function buildSummarySheet(wb: ExcelJS.Workbook, config: ReportConfig): v
       cell.border = BORDERS_ALL;
       cell.alignment = { horizontal: 'right' };
     });
+
+    // Chart — the monetary columns only (EUR and MT never share one axis),
+    // placed to the right of the table, anchored at the block's own header row.
+    if (withChart) {
+      const moneyCols = cols.filter(c => c.field === 'revenue');
+      if (moneyCols.length > 0) {
+        const img = renderBarChartPng(
+          entries.map(([, b]) => b.label),
+          moneyCols.map(col => ({
+            label: col.label,
+            color: MEASURE_COLOR[col.measure],
+            values: entries.map(([, b]) => b.values.get(`${col.measure}:revenue`) || 0),
+          })),
+          { title, valueFormatter: chartEurAxis },
+        );
+        if (img) {
+          const imageId = wb.addImage({ base64: img.base64, extension: 'png' });
+          ws.addImage(imageId, {
+            tl: { col: 2 + cols.length + 1, row: blockStartRow - 1 },
+            ext: { width: img.width, height: img.height },
+          });
+        }
+      }
+    }
+
     row += 3;
     return true;
   };
@@ -294,7 +330,7 @@ export function buildSummarySheet(wb: ExcelJS.Workbook, config: ReportConfig): v
     const y = d.getFullYear();
     const m = d.getMonth();
     return { key: `${y}-${String(m + 1).padStart(2, '0')}`, label: `${MONTH_NAMES[m]} ${y}` };
-  }, 'key');
+  }, 'key', true);
 
   // ── 3. Quarterly ─────────────────────────────────────────────────────────
 

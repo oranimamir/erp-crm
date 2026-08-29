@@ -4,7 +4,7 @@ import { buildExpensesReport } from './expensesReport';
 
 interface CombinedData {
   customer_invoices: any[];
-  confirmed_orders: any[];
+  orders: any[];
   supplier_expenses: any[];
 }
 
@@ -14,7 +14,7 @@ export function buildCombinedReport(
   includeOrders: boolean = true,
 ): ReportConfig {
   const revenueConfig = buildRevenueReport(
-    { customer_invoices: data.customer_invoices, confirmed_orders: data.confirmed_orders },
+    { customer_invoices: data.customer_invoices, orders: data.orders },
     period,
     includeOrders,
   );

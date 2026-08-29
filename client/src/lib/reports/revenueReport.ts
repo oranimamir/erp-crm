@@ -1,4 +1,5 @@
 import type { ReportConfig, SheetData, ColumnDef } from '../excelReportBuilder';
+import { CHART_HEX, chartEurAxis, monthlyTotals } from './chartImage';
 
 interface RevenueData {
   customer_invoices: {
@@ -8,15 +9,17 @@ interface RevenueData {
     amount: number;
     currency: string;
     eur_amount: number;
+    operation_number?: string;
     region?: string;
     invoice_date: string;
   }[];
-  confirmed_orders: {
+  orders: {
     order_number: string;
     party_name: string;
     status: string;
     quantity_mt: number;
     total_eur: number;
+    operation_number?: string;
     region?: string;
     order_date: string;
   }[];
@@ -25,6 +28,7 @@ interface RevenueData {
 const INVOICE_COLUMNS: ColumnDef[] = [
   { header: 'Invoice #', key: 'invoice_number', width: 22 },
   { header: 'Customer', key: 'customer_name', width: 22 },
+  { header: 'Operation #', key: 'operation_number', width: 18 },
   { header: 'Quantity (MT)', key: 'quantity_mt', format: 'tons' },
   { header: 'Amount', key: 'amount', format: 'currency_native', width: 16 },
   { header: 'Currency', key: 'currency', width: 10 },
@@ -36,6 +40,7 @@ const INVOICE_COLUMNS: ColumnDef[] = [
 const ORDER_COLUMNS: ColumnDef[] = [
   { header: 'Order #', key: 'order_number', width: 22 },
   { header: 'Customer / Supplier', key: 'party_name', width: 22 },
+  { header: 'Operation #', key: 'operation_number', width: 18 },
   { header: 'Status', key: 'status', width: 14 },
   { header: 'Quantity (MT)', key: 'quantity_mt', format: 'tons' },
   { header: 'Order Total (EUR)', key: 'total_eur', format: 'currency', width: 18 },
@@ -80,19 +85,29 @@ export function buildRevenueReport(
       customerField: 'customer_name',
       regionField: 'region',
       sourceLabel: `Invoices ${year}`,
+      chart: (() => {
+        const { categories, values } = monthlyTotals(invoices, 'invoice_date', 'eur_amount');
+        return categories.length ? {
+          categories, series: [{ label: `Invoices ${year}`, color: CHART_HEX.aqua, values }],
+          title: `Invoices ${year} by month`, valueFormatter: chartEurAxis,
+        } : undefined;
+      })(),
     });
   }
 
-  // Orders sheet
-  if (includeOrders && data.confirmed_orders.length > 0) {
+  // Orders sheet — every customer order allocated to an operation, regardless
+  // of its downstream status (an order already delivered/invoiced was still
+  // placed). Same definition as the on-screen "Orders placed" measure, so this
+  // sheet's total reconciles with the Summary tab.
+  if (includeOrders && data.orders.length > 0) {
     sheets.push({
-      name: 'Orders Confirmed',
+      name: 'Orders Placed',
       columns: ORDER_COLUMNS,
-      rows: data.confirmed_orders,
+      rows: data.orders,
       totalsRow: {
         order_number: 'TOTAL',
-        quantity_mt: sumField(data.confirmed_orders, 'quantity_mt'),
-        total_eur: sumField(data.confirmed_orders, 'total_eur'),
+        quantity_mt: sumField(data.orders, 'quantity_mt'),
+        total_eur: sumField(data.orders, 'total_eur'),
       },
       // Orders are their own measure — the Summary tab never adds them to
       // invoiced revenue, since an order becomes an invoice once billed.
@@ -102,7 +117,14 @@ export function buildRevenueReport(
       dateField: 'order_date',
       customerField: 'party_name',
       regionField: 'region',
-      sourceLabel: 'Orders Confirmed',
+      sourceLabel: 'Orders Placed',
+      chart: (() => {
+        const { categories, values } = monthlyTotals(data.orders, 'order_date', 'total_eur');
+        return categories.length ? {
+          categories, series: [{ label: 'Orders Placed', color: CHART_HEX.blue, values }],
+          title: 'Orders Placed by month', valueFormatter: chartEurAxis,
+        } : undefined;
+      })(),
     });
   }
 

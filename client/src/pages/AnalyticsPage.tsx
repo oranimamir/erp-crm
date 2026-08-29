@@ -10,6 +10,7 @@ import { useToast } from '../contexts/ToastContext';
 import ExportReportModal from '../components/ExportReportModal';
 import ColumnChart from '../components/charts/ColumnChart';
 import { PanelCard, PeriodPanel, BreakdownPanel, StatTile, VizRow } from '../components/charts/Panels';
+import TimelineScatter from '../components/charts/TimelineScatter';
 
 // ── Interfaces ────────────────────────────────────────────────────────────────
 
@@ -174,7 +175,7 @@ export default function AnalyticsPage() {
 
   // ── Revenue sub-tabs ──────────────────────────────────────────────────────
   const [revenueTab, setRevenueTab] = useState<'summary' | 'orders' | 'invoices'>('summary');
-  const [revenueRows, setRevenueRows] = useState<{ customer_invoices: any[]; confirmed_orders: any[] } | null>(null);
+  const [revenueRows, setRevenueRows] = useState<{ customer_invoices: any[]; orders: any[] } | null>(null);
   const [breakdown, setBreakdown] = useState<RevenueBreakdown | null>(null);
 
   // ── Expenses tab toggles / filters ────────────────────────────────────────
@@ -235,7 +236,7 @@ export default function AnalyticsPage() {
     api.get('/analytics/export-data', {
       params: { type: 'revenue', year_from: year, year_to: year, month_from: monthFrom, month_to: monthTo, customer_id: customerId || undefined },
     })
-      .then(res => setRevenueRows({ customer_invoices: res.data.customer_invoices || [], confirmed_orders: res.data.confirmed_orders || [] }))
+      .then(res => setRevenueRows({ customer_invoices: res.data.customer_invoices || [], orders: res.data.orders || [] }))
       .catch(() => setRevenueRows(null));
   }, [view, year, monthFrom, monthTo, customerId]);
 
@@ -680,18 +681,27 @@ export default function AnalyticsPage() {
                 />
                 <PanelCard
                   title="Order Detail"
-                  subtitle={`Confirmed orders not yet invoiced — ${period}`}
+                  subtitle={`Every customer order allocated to an operation — ${period}`}
                   icon={<ShoppingCart size={16} className="text-gray-400" />}
                   onExport={() => downloadExcel(`revenue-orders-${period}`,
-                    ['Order #', 'Party', 'Status', 'Quantity (MT)', 'Total (EUR)', 'Date'],
-                    (revenueRows?.confirmed_orders || []).map(r => [r.order_number, r.party_name, r.status, r.quantity_mt, r.total_eur, r.order_date]))}
+                    ['Order #', 'Party', 'Operation #', 'Status', 'Quantity (MT)', 'Total (EUR)', 'Date'],
+                    (revenueRows?.orders || []).map(r => [r.order_number, r.party_name, r.operation_number, r.status, r.quantity_mt, r.total_eur, r.order_date]))}
                 >
-                  <div className="overflow-x-auto -mx-5">
+                  <TimelineScatter
+                    points={(revenueRows?.orders || []).map(r => ({
+                      key: r.order_number, date: r.order_date, value: Number(r.total_eur) || 0,
+                      label: r.order_number, sublabel: r.party_name, tag: r.operation_number,
+                    }))}
+                    color={C_ORDERS}
+                    format={fmt}
+                  />
+                  <div className="overflow-x-auto -mx-5 mt-5 border-t border-gray-100">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b border-gray-200 text-xs text-gray-500">
                           <th className="text-left px-4 py-2 font-medium">Order #</th>
                           <th className="text-left px-4 py-2 font-medium">Party</th>
+                          <th className="text-left px-4 py-2 font-medium">Operation #</th>
                           <th className="text-left px-4 py-2 font-medium">Status</th>
                           <th className="text-right px-4 py-2 font-medium">MT</th>
                           <th className="text-right px-4 py-2 font-medium">Total (EUR)</th>
@@ -699,12 +709,13 @@ export default function AnalyticsPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {(revenueRows?.confirmed_orders || []).length === 0 ? (
-                          <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-500">No orders in this period</td></tr>
-                        ) : revenueRows!.confirmed_orders.map((r, i) => (
+                        {(revenueRows?.orders || []).length === 0 ? (
+                          <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-500">No orders in this period</td></tr>
+                        ) : revenueRows!.orders.map((r, i) => (
                           <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
                             <td className="px-4 py-2 font-medium text-gray-800">{r.order_number}</td>
                             <td className="px-4 py-2 text-gray-600">{r.party_name || '—'}</td>
+                            <td className="px-4 py-2 text-gray-600">{r.operation_number || '—'}</td>
                             <td className="px-4 py-2 text-gray-600 capitalize">{String(r.status || '').replace(/_/g, ' ')}</td>
                             <td className="px-4 py-2 text-right tabular-nums">{r.quantity_mt ? Number(r.quantity_mt).toFixed(2) : '—'}</td>
                             <td className="px-4 py-2 text-right tabular-nums font-medium">{fmt(r.total_eur)}</td>
@@ -750,15 +761,24 @@ export default function AnalyticsPage() {
                   subtitle={`Customer invoices — ${period}`}
                   icon={<Receipt size={16} className="text-gray-400" />}
                   onExport={() => downloadExcel(`revenue-invoices-${period}`,
-                    ['Invoice #', 'Customer', 'Quantity (MT)', 'Amount', 'Currency', 'EUR', 'Date'],
-                    (revenueRows?.customer_invoices || []).map(r => [r.invoice_number, r.customer_name, r.quantity_mt, r.amount, r.currency, r.eur_amount, r.invoice_date]))}
+                    ['Invoice #', 'Customer', 'Operation #', 'Quantity (MT)', 'Amount', 'Currency', 'EUR', 'Date'],
+                    (revenueRows?.customer_invoices || []).map(r => [r.invoice_number, r.customer_name, r.operation_number, r.quantity_mt, r.amount, r.currency, r.eur_amount, r.invoice_date]))}
                 >
-                  <div className="overflow-x-auto -mx-5">
+                  <TimelineScatter
+                    points={(revenueRows?.customer_invoices || []).map(r => ({
+                      key: r.invoice_number, date: r.invoice_date, value: Number(r.eur_amount) || 0,
+                      label: r.invoice_number, sublabel: r.customer_name, tag: r.operation_number,
+                    }))}
+                    color={C_INVOICES}
+                    format={fmt}
+                  />
+                  <div className="overflow-x-auto -mx-5 mt-5 border-t border-gray-100">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b border-gray-200 text-xs text-gray-500">
                           <th className="text-left px-4 py-2 font-medium">Invoice #</th>
                           <th className="text-left px-4 py-2 font-medium">Customer</th>
+                          <th className="text-left px-4 py-2 font-medium">Operation #</th>
                           <th className="text-right px-4 py-2 font-medium">MT</th>
                           <th className="text-right px-4 py-2 font-medium">Amount</th>
                           <th className="text-right px-4 py-2 font-medium">EUR</th>
@@ -767,11 +787,12 @@ export default function AnalyticsPage() {
                       </thead>
                       <tbody>
                         {(revenueRows?.customer_invoices || []).length === 0 ? (
-                          <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-500">No invoices in this period</td></tr>
+                          <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-500">No invoices in this period</td></tr>
                         ) : revenueRows!.customer_invoices.map((r, i) => (
                           <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
                             <td className="px-4 py-2 font-medium text-gray-800">{r.invoice_number}</td>
                             <td className="px-4 py-2 text-gray-600">{r.customer_name || '—'}</td>
+                            <td className="px-4 py-2 text-gray-600">{r.operation_number || '—'}</td>
                             <td className="px-4 py-2 text-right tabular-nums">{r.quantity_mt ? Number(r.quantity_mt).toFixed(2) : '—'}</td>
                             <td className="px-4 py-2 text-right tabular-nums">{Number(r.amount).toLocaleString()} {r.currency}</td>
                             <td className="px-4 py-2 text-right tabular-nums font-medium">{fmt(r.eur_amount)}</td>

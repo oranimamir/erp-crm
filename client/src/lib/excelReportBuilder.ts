@@ -5,6 +5,7 @@ import {
   CURRENCY_FMT, NUMBER_FMT, TONS_FMT, DATE_FMT, currencyFmt,
 } from './excelStyles';
 import { buildSummarySheet } from './reports/summarySheet';
+import { renderBarChartPng } from './reports/chartImage';
 
 // ── Public Interfaces ────────────────────────────────────────────────────────
 
@@ -36,6 +37,14 @@ export interface SheetData {
   customerField?: string;
   regionField?: string;
   sourceLabel?: string;
+  // Optional monthly chart rendered as a PNG and placed beside the table —
+  // ExcelJS has no native chart-object API, only addImage.
+  chart?: {
+    categories: string[];
+    series: { label: string; color: string; values: number[] }[];
+    title?: string;
+    valueFormatter?: (n: number) => string;
+  };
 }
 
 export interface ReportConfig {
@@ -53,31 +62,13 @@ export async function buildReport(config: ReportConfig): Promise<void> {
   wb.creator = 'TripleW ERP';
   wb.created = new Date();
 
-  // Add data sheets
-  for (const sheet of config.sheets) {
-    addDataSheet(wb, sheet);
-  }
-
-  // Add summary tab as first sheet
+  // Summary must be added first so it lands as the workbook's first tab —
+  // ExcelJS has no sheet-reorder API, only insertion order.
   if (config.includeSummary !== false && config.sheets.length > 0) {
     buildSummarySheet(wb, config);
-    // Move summary to front
-    const summaryWs = wb.getWorksheet('Summary');
-    if (summaryWs) {
-      wb.removeWorksheet(summaryWs.id);
-      const newSummary = wb.addWorksheet('Summary', {});
-      // Re-build in new sheet (simplest approach since exceljs doesn't support reordering)
-      wb.removeWorksheet(newSummary.id);
-    }
-    // Rebuild: create workbook with summary first
-    const wb2 = new ExcelJS.Workbook();
-    wb2.creator = 'TripleW ERP';
-    wb2.created = new Date();
-    buildSummarySheet(wb2, config);
-    for (const sheet of config.sheets) {
-      addDataSheet(wb2, sheet);
-    }
-    return downloadWorkbook(wb2, config.filename);
+  }
+  for (const sheet of config.sheets) {
+    addDataSheet(wb, sheet);
   }
 
   return downloadWorkbook(wb, config.filename);
@@ -136,6 +127,23 @@ function addDataSheet(wb: ExcelJS.Workbook, sheet: SheetData): void {
       from: { row: 1, column: 1 },
       to: { row: 1, column: sheet.columns.length },
     };
+  }
+
+  // Chart — placed two columns to the right of the table so it never
+  // overlaps the data, anchored near the top of the sheet.
+  if (sheet.chart) {
+    const img = renderBarChartPng(sheet.chart.categories, sheet.chart.series, {
+      title: sheet.chart.title,
+      valueFormatter: sheet.chart.valueFormatter,
+    });
+    if (img) {
+      const imageId = wb.addImage({ base64: img.base64, extension: 'png' });
+      const anchorCol = sheet.columns.length + 1; // 0-indexed, one blank column gap
+      ws.addImage(imageId, {
+        tl: { col: anchorCol, row: 0 },
+        ext: { width: img.width, height: img.height },
+      });
+    }
   }
 }
 

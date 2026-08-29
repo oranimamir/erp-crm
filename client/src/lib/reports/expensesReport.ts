@@ -1,4 +1,5 @@
 import type { ReportConfig, SheetData, ColumnDef } from '../excelReportBuilder';
+import { CHART_HEX, chartEurAxis, monthlyTotals } from './chartImage';
 
 interface ExpenseRow {
   invoice_id: string;
@@ -29,6 +30,12 @@ function sumField(rows: Record<string, any>[], key: string): number {
   return rows.reduce((s, r) => s + (Number(r[key]) || 0), 0);
 }
 
+function monthlyChart(rows: ExpenseRow[], label: string, color: string): SheetData['chart'] {
+  const { categories, values } = monthlyTotals(rows, 'issue_date', 'amount');
+  if (categories.length === 0) return undefined;
+  return { categories, series: [{ label, color, values }], title: `${label} by month`, valueFormatter: chartEurAxis };
+}
+
 export function buildExpensesReport(
   data: ExpensesData,
   period: string,
@@ -53,6 +60,7 @@ export function buildExpensesReport(
       revenueField: 'amount',
       dateField: 'issue_date',
       sourceLabel: 'Demo Expenses',
+      chart: monthlyChart(demo, 'Demo Expenses', CHART_HEX.blue),
     });
   }
 
@@ -70,6 +78,7 @@ export function buildExpensesReport(
       revenueField: 'amount',
       dateField: 'issue_date',
       sourceLabel: 'Sales Activities',
+      chart: monthlyChart(sales, 'Sales Activities', CHART_HEX.orange),
     });
   }
 
@@ -88,6 +97,7 @@ export function buildExpensesReport(
       revenueField: 'amount',
       dateField: 'issue_date',
       sourceLabel: 'Supplier Expenses',
+      chart: monthlyChart(data.supplier_expenses, 'Supplier Expenses', CHART_HEX.orange),
     });
   }
 

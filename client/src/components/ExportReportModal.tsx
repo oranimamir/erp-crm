@@ -188,7 +188,7 @@ export default function ExportReportModal({ open, onClose, years, addToast }: Pr
               <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
                 <input type="checkbox" checked={includeOrders} onChange={e => setIncludeOrders(e.target.checked)}
                   className="rounded border-gray-300" />
-                Include confirmed orders
+                Include orders placed
               </label>
             )}
           </div>
