@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
+import { refreshEstimatedPaymentDate } from '../lib/paymentTerms.js';
 import { getEurRate } from '../lib/fx.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { resolveCountry } from '../lib/portCountry.js';
@@ -566,18 +567,47 @@ router.patch('/:id/country', (req: Request, res: Response) => {
   res.json({ id: existing.id, country: next });
 });
 
+/**
+ * Operation dates. `estimated_payment_date` behaves differently from the others:
+ *
+ *   a date        → stored as a manual override; auto-refresh leaves it alone
+ *   '' or null    → clears the override and falls back to the derived date
+ *
+ * so clearing the field is how the user says "go back to computing it for me"
+ * rather than "leave this permanently blank".
+ */
 router.patch('/:id/dates', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT * FROM operations WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Operation not found' }); return; }
   const { etd, eta, estimated_payment_date, bl_date } = req.body;
   const nextEtd = etd !== undefined ? (etd || null) : existing.etd;
   const nextEta = eta !== undefined ? (eta || null) : existing.eta;
-  const nextEpd = estimated_payment_date !== undefined ? (estimated_payment_date || null) : existing.estimated_payment_date;
   const nextBl = bl_date !== undefined ? (bl_date || null) : existing.bl_date;
-  db.prepare(`UPDATE operations SET etd=?, eta=?, estimated_payment_date=?, bl_date=?, updated_at=datetime('now') WHERE id=?`).run(
-    nextEtd, nextEta, nextEpd, nextBl, req.params.id
-  );
-  res.json({ id: existing.id, etd: nextEtd, eta: nextEta, estimated_payment_date: nextEpd, bl_date: nextBl });
+
+  const epdTouched = estimated_payment_date !== undefined;
+  const manualDate = epdTouched ? (estimated_payment_date || null) : null;
+  const nextEpd = epdTouched ? manualDate : existing.estimated_payment_date;
+  const nextSource = epdTouched
+    ? (manualDate ? 'manual' : null)   // cleared → drop back to auto below
+    : existing.estimated_payment_date_source;
+
+  db.prepare(`
+    UPDATE operations
+    SET etd=?, eta=?, estimated_payment_date=?, estimated_payment_date_source=?, bl_date=?, updated_at=datetime('now')
+    WHERE id=?
+  `).run(nextEtd, nextEta, nextEpd, nextSource, nextBl, req.params.id);
+
+  // Recompute when the override was cleared, or when a new BL date just made a
+  // BL-based estimate resolvable. Skips itself if the date is still manual.
+  if ((epdTouched && !manualDate) || (bl_date !== undefined && nextBl !== existing.bl_date)) {
+    refreshEstimatedPaymentDate(db, existing.id);
+  }
+  db.saveToDisk();
+
+  const updated = db.prepare(
+    'SELECT etd, eta, estimated_payment_date, estimated_payment_date_source, bl_date FROM operations WHERE id = ?'
+  ).get(req.params.id) as any;
+  res.json({ id: existing.id, ...updated });
 });
 
 // ── Update operation ──────────────────────────────────────────────────────────

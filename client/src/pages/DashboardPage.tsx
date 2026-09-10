@@ -20,6 +20,8 @@ interface Stats {
   activeShipments: number;
 }
 
+const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 const OP_STATUS_COLORS: Record<string, string> = {
   'pre-ordered':   'bg-purple-100 text-purple-800',
   ordered:         'bg-yellow-100 text-yellow-800',
@@ -37,6 +39,8 @@ export default function DashboardPage() {
   const [forecast, setForecast] = useState<any[]>([]);
   const [forecastExpected, setForecastExpected] = useState(0);
   const [wcForecast, setWcForecast] = useState<any[]>([]);
+  // Planned outflows dated before this month that were never actualized.
+  const [wcStalePlanned, setWcStalePlanned] = useState(0);
   const [tonsYTD, setTonsYTD] = useState(0);
   const [tonsByCustomer, setTonsByCustomer] = useState<any[]>([]);
   const [tonsBreakdownOpen, setTonsBreakdownOpen] = useState(false);
@@ -73,6 +77,7 @@ export default function DashboardPage() {
       setCustomerForecast(cf.data);
       setDemoExpensesMonthly(dem.data);
       setWcForecast(wc.data?.months ?? []);
+      setWcStalePlanned(wc.data?.stale_planned ?? 0);
     }).catch((err) => console.error('[Dashboard] load failed:', err))
       .finally(() => setLoading(false));
   }, []);
@@ -204,7 +209,7 @@ export default function DashboardPage() {
           <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
             <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
               Expenses YTD {year}
-              <InfoBadge id="expenses-ytd" text="Total amount paid to suppliers this calendar year, sourced from the monthly cash flow data (paid_out column from demo invoices / sales activities)." />
+              <InfoBadge id="expenses-ytd" text="Total paid to suppliers this calendar year — every supplier invoice recorded, operating costs and sales activities alike. Matches the Analytics → Supplier Expenses total for the same period." />
             </p>
             <p className="text-lg sm:text-2xl font-bold text-red-600 truncate">{fmt(expensesYTD)}</p>
             <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Total paid to suppliers this year</p>
@@ -394,16 +399,35 @@ export default function DashboardPage() {
                     <p className="text-lg font-bold text-emerald-400">€{totalExpectedIncome.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                   </div>
                   <div className="text-center">
-                    <p className="text-xs text-gray-500 mb-0.5">Expected Expense (planned)</p>
+                    <p className="text-xs text-gray-500 mb-0.5">
+                      Expected Expense ({MONTH_LABELS[nowMonth - 1]} onward)
+                    </p>
                     <p className="text-lg font-bold text-rose-300">€{totalExpectedExpense.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                   </div>
                 </div>
+                {/* Planned outflows whose month has passed without being actualized.
+                    They are excluded from the forecast above — past months are
+                    reported from supplier invoices — but they are still open
+                    commitments, so they are called out rather than dropped. */}
+                {wcStalePlanned > 0 && (
+                  <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+                    <span>
+                      €{wcStalePlanned.toLocaleString(undefined, { minimumFractionDigits: 2 })} of working-capital
+                      entries are still marked planned for months that have already passed. Past months here are
+                      reported from supplier invoices only, so these are excluded from the forecast —{' '}
+                      <Link to="/working-capital" className="underline font-medium">review them</Link> and mark
+                      them actualized or cancelled.
+                    </span>
+                  </div>
+                )}
+
                 {/* Legend */}
                 <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-gray-500">
                   <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-green-500 inline-block" /> Received from clients</span>
                   <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-emerald-300 inline-block" /> Expected income (next quarter, split equally)</span>
                   <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-400 inline-block" /> Paid out (suppliers + actualized WC)</span>
-                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-rose-200 inline-block" /> Expected expense (planned WC)</span>
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-rose-200 inline-block" /> Expected expense (planned WC, this month onward)</span>
                 </div>
                 {/* Bar chart with Y-axis */}
                 <div className="flex gap-2">

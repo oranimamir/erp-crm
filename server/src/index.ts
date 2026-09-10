@@ -6,6 +6,7 @@ import { rateLimit } from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import db, { initializeDatabase } from './database.js';
+import { backfillEstimatedPaymentDates } from './lib/paymentTerms.js';
 import { authenticateToken } from './middleware/auth.js';
 import authRoutes from './routes/auth.js';
 import customerRoutes from './routes/customers.js';
@@ -106,6 +107,18 @@ const apiLimiter = rateLimit({
 
 // Initialize database
 await initializeDatabase();
+
+// Operations invoiced before estimates were derived automatically still have an
+// empty payment date; fill those in once so the cash-flow forecasts see them.
+try {
+  const filled = backfillEstimatedPaymentDates(db);
+  if (filled > 0) {
+    console.log(`[startup] Derived estimated payment date for ${filled} operation(s)`);
+    db.saveToDisk();
+  }
+} catch (err: any) {
+  console.warn('[startup] Estimated payment date backfill skipped:', err?.message || err);
+}
 
 // Run the legacy hash backfills now that the DB is ready. These used to live
 // at module-import time and threw "Cannot read properties of undefined (reading

@@ -172,23 +172,38 @@ router.get('/monthly-payments', (_req: Request, res: Response) => {
       FROM months ORDER BY months.m
     `).all() as any[];
 
-    // Fetch sales activities totals separately (demo_invoices table)
-    let salesByMonth: Record<string, number> = {};
+    // Supplier spend per month, across every domain. This used to filter
+    // domain = 'sales', which left out operating costs entirely ('demo' —
+    // salaries, rent, services) and reported an Expenses YTD far below what the
+    // Analytics expenses view showed for the same period. The split is still
+    // returned so the two domains can be told apart where that matters.
+    const spendByMonth = new Map<string, { total: number; operating: number; sales: number }>();
     try {
-      const salesRows = db.prepare(`
-        SELECT month, SUM(COALESCE(eur_amount, amount)) as total
+      const spendRows = db.prepare(`
+        SELECT month, domain, SUM(COALESCE(eur_amount, amount)) as total
         FROM demo_invoices
-        WHERE domain = 'sales'
-        GROUP BY month
+        GROUP BY month, domain
       `).all() as any[];
-      for (const r of salesRows) salesByMonth[r.month] = r.total;
+      for (const r of spendRows) {
+        const bucket = spendByMonth.get(r.month) ?? { total: 0, operating: 0, sales: 0 };
+        const amount = Number(r.total) || 0;
+        bucket.total += amount;
+        if (r.domain === 'sales') bucket.sales += amount;
+        else bucket.operating += amount;
+        spendByMonth.set(r.month, bucket);
+      }
     } catch (_) { /* table may not exist yet */ }
 
-    const result = monthRows.map((m: any) => ({
-      month: m.month,
-      received: m.received,
-      paid_out: salesByMonth[m.month] || 0,
-    }));
+    const result = monthRows.map((m: any) => {
+      const spend = spendByMonth.get(m.month) ?? { total: 0, operating: 0, sales: 0 };
+      return {
+        month: m.month,
+        received: m.received,
+        paid_out: spend.total,
+        paid_out_operating: spend.operating,
+        paid_out_sales: spend.sales,
+      };
+    });
 
     res.json(result);
   } catch (err: any) {
@@ -362,22 +377,36 @@ router.get('/working-capital-forecast', async (_req: Request, res: Response) => 
     }
   }
 
+  // A working-capital estimate is a forecast, and a forecast about a month that
+  // has already happened has been overtaken by the facts: for past months the
+  // supplier invoices are in, so those months are reported from actuals alone.
+  // Planned amounts therefore start at the current month and look forward.
+  // Actualized entries are real cash that already left the account, so they
+  // still count in past months.
+  const currentMonth = `${year}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+
   const months: { month: string; planned: number; actualized: number }[] = [];
+  let stale_planned = 0;
   for (let m = 1; m <= 12; m++) {
     const monthStr = `${year}-${String(m).padStart(2, '0')}`;
+    const isPast = monthStr < currentMonth;
     let planned = 0, actualized = 0;
     for (const r of rows) {
       if (r.month !== monthStr) continue;
       const eur = r.eur_amount != null ? r.eur_amount : r.amount;
-      if (r.status === 'planned') planned += eur;
-      else if (r.status === 'actualized') actualized += eur;
+      if (r.status === 'planned') {
+        // Still planned but dated in the past — never actualized. Reported
+        // separately so it can be chased, not folded into the forecast.
+        if (isPast) stale_planned += eur;
+        else planned += eur;
+      } else if (r.status === 'actualized') actualized += eur;
     }
     months.push({ month: monthStr, planned, actualized });
   }
 
   const total_planned = months.reduce((s, m) => s + m.planned, 0);
   const total_actualized = months.reduce((s, m) => s + m.actualized, 0);
-  res.json({ months, total_planned, total_actualized });
+  res.json({ months, total_planned, total_actualized, forecast_from: currentMonth, stale_planned });
 });
 
 router.get('/paid-invoices', (_req: Request, res: Response) => {

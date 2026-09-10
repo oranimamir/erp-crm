@@ -3,6 +3,7 @@ import db from '../database.js';
 import { uploadInvoice, uploadWireTransfer } from '../middleware/upload.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { getEurRate } from '../lib/fx.js';
+import { refreshEstimatedPaymentDate } from '../lib/paymentTerms.js';
 import { resolveUpload, streamZip, safeName } from '../lib/zipFiles.js';
 import fs from 'fs';
 import path from 'path';
@@ -213,6 +214,11 @@ router.post('/', uploadInvoice.single('file'), async (req: Request, res: Respons
     db.prepare(`INSERT INTO status_history (entity_type, entity_id, new_status, changed_by) VALUES ('invoice', ?, ?, ?)`)
       .run(invoiceId, status || 'draft', req.user!.userId);
 
+    // Billing the customer starts the payment-terms clock, so the operation's
+    // estimated payment date is derived now rather than left for someone to
+    // work out by hand.
+    refreshEstimatedPaymentDate(db, operation_id ? Number(operation_id) : null);
+
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId) as any;
     notifyAdmin({ action: 'created', entity: 'Invoice', label: invoice.invoice_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
     res.status(201).json(invoice);
@@ -282,6 +288,10 @@ router.put('/:id', uploadInvoice.single('file'), async (req: Request, res: Respo
     );
 
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id) as any;
+    // Both operations: the one the invoice moved away from loses its estimate,
+    // the one it moved to (or stayed on, with a new date) gains a fresh one.
+    refreshEstimatedPaymentDate(db, existing.operation_id);
+    refreshEstimatedPaymentDate(db, invoice.operation_id);
     notifyAdmin({ action: 'updated', entity: 'Invoice', label: invoice.invoice_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
     res.json(invoice);
   } catch (err: any) {
@@ -337,6 +347,7 @@ router.delete('/:id', (req: Request, res: Response) => {
   }
 
   db.prepare('DELETE FROM invoices WHERE id = ?').run(req.params.id);
+  refreshEstimatedPaymentDate(db, existing.operation_id);
   notifyAdmin({ action: 'deleted', entity: 'Invoice', label: existing.invoice_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.json({ message: 'Invoice deleted' });
 });

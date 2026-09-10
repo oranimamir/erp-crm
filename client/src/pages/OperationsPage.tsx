@@ -4,9 +4,10 @@ import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import {
   Briefcase, Search, Plus, ChevronLeft, ChevronRight, FileText, Receipt,
-  FileSpreadsheet, ChevronUp, ChevronDown, Download, X, Truck, Loader2, ArrowLeftRight, Landmark, Filter, XCircle, Trash2, Pencil, Upload,
+  FileSpreadsheet, ChevronUp, ChevronDown, Download, X, Truck, Loader2, ArrowLeftRight, Landmark, Filter, XCircle, Trash2, Pencil, Upload, RotateCcw,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
+import { paymentTermsDays, paymentTermsMentionsBL, paymentTermsEndOfMonth, computeEstimatedPaymentDate } from '../lib/paymentTerms';
 import { downloadExcel } from '../lib/exportExcel';
 
 interface Operation {
@@ -41,6 +42,8 @@ interface Operation {
   etd?: string;
   eta?: string;
   estimated_payment_date?: string;
+  /** 'auto' = derived from payment terms, 'manual' = typed by the user. */
+  estimated_payment_date_source?: 'auto' | 'manual' | null;
   bl_date?: string;
   created_at: string;
 }
@@ -57,18 +60,7 @@ function suggestedCountry(op: { country_suggested?: string; order_destination?: 
 }
 
 // Detect if payment terms reference a BL date (e.g. "60 days from BL", "30d B/L")
-function paymentTermsMentionsBL(terms?: string): boolean {
-  if (!terms) return false;
-  return /\b(bl|b\/l|bill of lading)\b/i.test(terms);
-}
-
-// Extract the day count from a payment-terms string (e.g. "60 days from BL" → 60, "45" → 45)
-function paymentTermsDays(terms?: string): number | null {
-  if (!terms) return null;
-  const m = terms.match(/\d+/);
-  return m ? parseInt(m[0], 10) : null;
-}
-
+/** Local helper for the shipment form's due-date field — plain calendar maths. */
 function addDays(dateStr: string, days: number): string {
   if (!dateStr) return '';
   const d = new Date(dateStr + 'T12:00:00');
@@ -224,10 +216,27 @@ export default function OperationsPage() {
   const [savingBl, setSavingBl] = useState(false);
   const blFileRef = useRef<HTMLInputElement>(null);
 
+  /**
+   * Stores a manual estimated payment date, or clears the override when `val` is
+   * empty — the server then re-derives the date from the payment terms, so the
+   * response is what gets applied rather than the value typed here.
+   */
   const saveEstimatedPaymentDate = async (opId: number, val: string) => {
-    setOperations(prev => prev.map(o => o.id === opId ? { ...o, estimated_payment_date: val || undefined } : o));
-    try { await api.patch(`/operations/${opId}/dates`, { estimated_payment_date: val }); }
-    catch { addToast('Failed to update estimated payment date', 'error'); }
+    try {
+      const { data } = await api.patch(`/operations/${opId}/dates`, { estimated_payment_date: val });
+      setOperations(prev => prev.map(o => o.id === opId ? {
+        ...o,
+        estimated_payment_date: data.estimated_payment_date || undefined,
+        estimated_payment_date_source: data.estimated_payment_date_source ?? null,
+      } : o));
+      if (!val) {
+        addToast(data.estimated_payment_date
+          ? 'Reset to the date derived from the payment terms'
+          : 'Override cleared — payment terms do not yet give a date', 'info');
+      }
+    } catch {
+      addToast('Failed to update estimated payment date', 'error');
+    }
   };
 
   const openBlPrompt = (op: Operation) => {
@@ -269,10 +278,16 @@ export default function OperationsPage() {
     if (!blPrompt || !blDate) return;
     setSavingBl(true);
     try {
-      const computed = addDays(blDate, blPrompt.days);
-      // Persist estimated payment date + BL date on the operation
-      setOperations(prev => prev.map(o => o.id === blPrompt.opId ? { ...o, estimated_payment_date: computed, bl_date: blDate } : o));
-      await api.patch(`/operations/${blPrompt.opId}/dates`, { estimated_payment_date: computed, bl_date: blDate });
+      // Send only the BL date: the terms say how many days follow it, so the
+      // server derives the estimate and keeps it auto — a later correction to
+      // the BL date or the terms then flows through on its own.
+      const { data } = await api.patch(`/operations/${blPrompt.opId}/dates`, { bl_date: blDate });
+      setOperations(prev => prev.map(o => o.id === blPrompt.opId ? {
+        ...o,
+        estimated_payment_date: data.estimated_payment_date || undefined,
+        estimated_payment_date_source: data.estimated_payment_date_source ?? null,
+        bl_date: blDate,
+      } : o));
       // Store the BL document on the operation (best-effort) so the proof is kept
       if (blFile) {
         const fd = new FormData();
@@ -976,48 +991,81 @@ export default function OperationsPage() {
                         <div className="text-[11px] text-gray-400">Inv: {formatDate(op.invoice_date)}</div>
                       )}
                       {(() => {
+                        // The date is derived and stored server-side when the
+                        // invoice lands, so this only displays what is on record
+                        // — no browser-only value the dashboard cannot see.
                         const days = paymentTermsDays(op.order_payment_terms);
                         const isBL = paymentTermsMentionsBL(op.order_payment_terms);
                         const blBased = isBL && days != null;
                         const hasInvoice = op.invoice_count > 0;
-                        // Auto-compute when invoice exists, terms are numeric, no BL reference, and user hasn't set anything yet
-                        const computed = !op.estimated_payment_date && hasInvoice && op.invoice_date && days != null && !isBL
-                          ? addDays(op.invoice_date, days)
-                          : '';
-                        const value = op.estimated_payment_date || computed;
-                        const needsBL = !op.estimated_payment_date && hasInvoice && isBL && days != null;
-                        const isAuto = !op.estimated_payment_date && !!computed;
+                        const value = op.estimated_payment_date || '';
+                        const isManual = op.estimated_payment_date_source === 'manual';
+                        const isAuto = !!value && !isManual;
+                        // BL-based terms cannot resolve until the BL date is known.
+                        const needsBL = !value && hasInvoice && blBased && !op.bl_date;
                         const editing = editingEpdId === op.id;
                         return (
                           <div className="flex items-center gap-1 text-[11px] text-gray-500">
                             <span>Est. Pay:</span>
                             {editing ? (
-                              <input
-                                type="date"
-                                autoFocus
-                                defaultValue={value}
-                                onBlur={e => { saveEstimatedPaymentDate(op.id, e.target.value); setEditingEpdId(null); }}
-                                onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setEditingEpdId(null); }}
-                                className="border border-gray-300 rounded px-1 py-0.5 text-[11px] focus:outline-none focus:ring-2 focus:ring-primary-500"
-                              />
+                              <>
+                                <input
+                                  type="date"
+                                  autoFocus
+                                  defaultValue={value}
+                                  onBlur={e => { saveEstimatedPaymentDate(op.id, e.target.value); setEditingEpdId(null); }}
+                                  onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setEditingEpdId(null); }}
+                                  className="border border-gray-300 rounded px-1 py-0.5 text-[11px] focus:outline-none focus:ring-2 focus:ring-primary-500"
+                                />
+                                {isManual && (
+                                  // Clearing the field is what hands the date back
+                                  // to the payment-terms calculation.
+                                  <button
+                                    onMouseDown={e => { e.preventDefault(); saveEstimatedPaymentDate(op.id, ''); setEditingEpdId(null); }}
+                                    className="p-0.5 rounded text-gray-400 hover:bg-gray-200 hover:text-primary-600"
+                                    title="Reset to the date derived from the payment terms"
+                                  >
+                                    <RotateCcw size={11} />
+                                  </button>
+                                )}
+                              </>
                             ) : (
                               <>
                                 <span className={isAuto ? 'text-gray-400 italic' : value ? 'text-gray-700' : 'text-gray-300'}>
                                   {value ? formatDate(value) : '—'}
                                 </span>
+                                {isManual && (
+                                  <span className="px-1 rounded bg-gray-100 text-gray-500 text-[9px] uppercase tracking-wide">set</span>
+                                )}
+                                {/* BL-based terms get their own action for
+                                    recording the BL the terms count from; the
+                                    pencil beside it always allows a manual
+                                    override, whatever the terms say. */}
+                                {blBased && (
+                                  <button
+                                    onClick={() => openBlPrompt(op)}
+                                    className={`p-0.5 rounded hover:bg-gray-200 ${needsBL ? 'text-amber-600 hover:text-amber-700' : 'text-gray-400 hover:text-primary-600'}`}
+                                    title={needsBL
+                                      ? `Terms: "${op.order_payment_terms}". Upload the BL or set the BL date to compute the estimated payment date.`
+                                      : `Terms: "${op.order_payment_terms}". Update the Bill of Lading date.`}
+                                  >
+                                    {needsBL
+                                      ? <span className="flex items-center gap-0.5 font-medium">BL<Upload size={10} /></span>
+                                      : <Upload size={11} />}
+                                  </button>
+                                )}
                                 <button
-                                  onClick={() => blBased ? openBlPrompt(op) : setEditingEpdId(op.id)}
-                                  className={`p-0.5 rounded hover:bg-gray-200 ${needsBL ? 'text-amber-600 hover:text-amber-700' : 'text-gray-400 hover:text-primary-600'}`}
+                                  onClick={() => setEditingEpdId(op.id)}
+                                  className="p-0.5 rounded text-gray-400 hover:bg-gray-200 hover:text-primary-600"
                                   title={
-                                    needsBL ? `Terms: "${op.order_payment_terms}". Upload the BL or set the BL date to compute the estimated payment date.`
-                                    : blBased ? 'Update from Bill of Lading'
-                                    : isAuto ? `Auto: Inv date + ${days} days. Click to edit.`
-                                    : 'Edit estimated payment date'
+                                    isManual ? 'Set by hand — click to change, or reset to the payment-terms date'
+                                    : isAuto ? `Auto: ${blBased ? 'BL' : 'invoice'} date + ${days} days. Click to override.`
+                                    : days == null ? 'No day count in the order payment terms — set a date by hand'
+                                    : !hasInvoice ? 'Estimated once the invoice is entered — or set a date by hand'
+                                    : 'Set the estimated payment date by hand'
                                   }
                                 >
-                                  {needsBL ? <span className="flex items-center gap-0.5 font-medium">BL<Upload size={10} /></span>
-                                    : blBased ? <Upload size={11} />
-                                    : <Pencil size={11} />}
+                                  <Pencil size={11} />
                                 </button>
                               </>
                             )}
@@ -1410,7 +1458,7 @@ export default function OperationsPage() {
                 Payment terms: <span className="font-medium text-gray-900">"{blPrompt.terms}"</span>
                 <br />
                 Upload the Bill of Lading to read its date automatically, or enter the BL date manually.
-                The estimated payment date is <span className="font-medium">BL + {blPrompt.days} days</span>.
+                The estimated payment date is <span className="font-medium">BL + {blPrompt.days} days{paymentTermsEndOfMonth(blPrompt.terms) ? ", then the end of that month" : ""}</span>.
               </p>
 
               {/* Upload BL — auto-detect the date */}
@@ -1447,7 +1495,7 @@ export default function OperationsPage() {
                 />
                 {blDate && (
                   <p className="text-xs text-gray-500 mt-1.5">
-                    Estimated payment date: <span className="font-medium text-gray-800">{formatDate(addDays(blDate, blPrompt.days))}</span>
+                    Estimated payment date: <span className="font-medium text-gray-800">{formatDate(computeEstimatedPaymentDate({ payment_terms: blPrompt.terms, bl_date: blDate })?.date || '')}</span>
                   </p>
                 )}
               </div>

@@ -871,6 +871,19 @@ export async function initializeDatabase() {
 
   // Estimated payment date — editable per operation
   try { db.exec(`ALTER TABLE operations ADD COLUMN estimated_payment_date TEXT`); } catch (_) { /* already exists */ }
+  // Whether estimated_payment_date was derived from the order's payment terms
+  // ('auto') or typed by the user ('manual'). A manual date is never recomputed;
+  // an auto one is refreshed whenever an invoice or BL date changes.
+  try { db.exec(`ALTER TABLE operations ADD COLUMN estimated_payment_date_source TEXT`); } catch (_) { /* already exists */ }
+  // Before this column existed the only way a date got stored was the user
+  // typing it (or confirming a BL date), so every pre-existing value is a manual
+  // one and must not be overwritten by the first auto-refresh.
+  try {
+    db.exec(`
+      UPDATE operations SET estimated_payment_date_source = 'manual'
+      WHERE estimated_payment_date IS NOT NULL AND estimated_payment_date_source IS NULL
+    `);
+  } catch (_) { /* column may not exist on very old schemas */ }
 
   // Bill of Lading date — read from the uploaded BL; drives estimated_payment_date for BL-based terms
   try { db.exec(`ALTER TABLE operations ADD COLUMN bl_date TEXT`); } catch (_) { /* already exists */ }
