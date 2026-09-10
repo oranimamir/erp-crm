@@ -728,6 +728,13 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE wire_transfers ADD COLUMN fx_rate REAL`); } catch (_) { /* column may already exist */ }
   try { db.exec(`ALTER TABLE wire_transfers ADD COLUMN eur_amount REAL`); } catch (_) { /* column may already exist */ }
 
+  // Tonnage recorded on the invoice itself, in metric tons. An invoice is the
+  // billing document for a quantity actually shipped, so it carries its own
+  // figure rather than borrowing one from the order behind its operation —
+  // orders get split, revised and part-shipped, and invoices with no operation
+  // link had no tonnage at all. NULL means "not recorded", never zero.
+  try { db.exec(`ALTER TABLE invoices ADD COLUMN quantity_mt REAL`); } catch (_) { /* column may already exist */ }
+
   // Migrate operations statuses: old values → new (only legacy statuses, never touch 'completed')
   try {
     db.exec(`UPDATE operations SET status = 'ordered' WHERE status IN ('active', 'on_hold', 'cancelled')`);

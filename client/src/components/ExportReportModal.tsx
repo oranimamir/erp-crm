@@ -3,13 +3,13 @@ import { FileSpreadsheet, Loader2 } from 'lucide-react';
 import Modal from './ui/Modal';
 import api from '../lib/api';
 import { buildReport } from '../lib/excelReportBuilder';
-import { buildRevenueReport } from '../lib/reports/revenueReport';
+import { buildRevenueReport, buildOrdersReport } from '../lib/reports/revenueReport';
 import { buildExpensesReport } from '../lib/reports/expensesReport';
 import { buildCombinedReport } from '../lib/reports/combinedReport';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-type ReportType = 'revenue' | 'expenses' | 'combined';
+type ReportType = 'revenue' | 'orders' | 'expenses' | 'combined';
 
 interface Props {
   open: boolean;
@@ -46,12 +46,17 @@ export default function ExportReportModal({ open, onClose, years, addToast }: Pr
   const [filename, setFilename] = useState('');
 
   const period = periodLabel(yearFrom, yearTo, monthFrom, monthTo);
-  const autoFilename = `TripleW ${reportType === 'revenue' ? 'Revenues' : reportType === 'expenses' ? 'Expenses' : 'Full Report'} Summary ${period}`;
+  const REPORT_NOUN: Record<ReportType, string> = {
+    revenue: 'Revenues', orders: 'Orders', expenses: 'Expenses', combined: 'Full Report',
+  };
+  const autoFilename = `TripleW ${REPORT_NOUN[reportType]} Summary ${period}`;
 
   const handleGenerate = async () => {
     setGenerating(true);
     try {
-      const apiType = reportType === 'revenue' ? 'revenue' : reportType === 'expenses' ? 'expenses' : 'combined';
+      const apiType = reportType === 'expenses' ? 'expenses'
+        : reportType === 'combined' ? 'combined'
+        : 'revenue'; // 'orders' reads the same payload and reports its orders half
       const res = await api.get('/analytics/export-data', {
         params: {
           type: apiType,
@@ -67,12 +72,22 @@ export default function ExportReportModal({ open, onClose, years, addToast }: Pr
         case 'revenue':
           config = buildRevenueReport(res.data, period, includeOrders);
           break;
+        case 'orders':
+          config = buildOrdersReport(res.data, period);
+          break;
         case 'expenses':
           config = buildExpensesReport(res.data, period);
           break;
         case 'combined':
           config = buildCombinedReport(res.data, period, includeOrders);
           break;
+      }
+
+      // A workbook with no worksheets is not a valid .xlsx — say so plainly
+      // rather than downloading a file Excel refuses to open.
+      if (config.sheets.length === 0) {
+        addToast(`No ${reportType === 'orders' ? 'orders' : 'data'} found for ${period}`, 'info');
+        return;
       }
 
       config.includeSummary = includeSummary;
@@ -114,6 +129,7 @@ export default function ExportReportModal({ open, onClose, years, addToast }: Pr
           <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm font-medium">
             {([
               { value: 'revenue', label: 'Revenue', color: 'bg-green-600 text-white' },
+              { value: 'orders', label: 'Orders', color: 'bg-blue-600 text-white' },
               { value: 'expenses', label: 'Expenses', color: 'bg-indigo-600 text-white' },
               { value: 'combined', label: 'Combined', color: 'bg-gray-700 text-white' },
             ] as { value: ReportType; label: string; color: string }[]).map((opt, i) => (

@@ -37,6 +37,7 @@ interface InvoiceForm {
   supplier_id: string;
   amount: string;
   currency: string;
+  quantity_mt: string;
   status: string;
   invoice_date: string;
   due_date: string;
@@ -54,6 +55,7 @@ const emptyForm: InvoiceForm = {
   supplier_id: '',
   amount: '',
   currency: 'USD',
+  quantity_mt: '',
   status: 'draft',
   invoice_date: '',
   due_date: '',
@@ -203,6 +205,7 @@ export default function InvoiceFormPage() {
             supplier_id: inv.supplier_id ? String(inv.supplier_id) : '',
             amount: inv.amount != null ? String(inv.amount) : '',
             currency: inv.currency || 'USD',
+            quantity_mt: inv.quantity_mt != null ? String(inv.quantity_mt) : '',
             status: inv.status || 'draft',
             invoice_date: inv.invoice_date ? inv.invoice_date.slice(0, 10) : '',
             due_date: inv.due_date ? inv.due_date.slice(0, 10) : '',
@@ -243,6 +246,17 @@ export default function InvoiceFormPage() {
     if (selectedOp?.ship_date) {
       const days = parseInt(paymentTerms, 10);
       setForm(prev => ({ ...prev, due_date: addDays(selectedOp.ship_date, isNaN(days) ? 45 : days) }));
+    }
+  }, [form.operation_id, operations]);
+
+  // Seed tonnage from the linked operation's order items, but only into an empty
+  // box — a figure typed here is what was actually billed and always wins.
+  useEffect(() => {
+    if (form.quantity_mt.trim()) return;
+    const selectedOp = operations.find((op: any) => String(op.id) === form.operation_id);
+    const opTons = Number(selectedOp?.quantity_mt);
+    if (Number.isFinite(opTons) && opTons > 0) {
+      setForm(prev => (prev.quantity_mt.trim() ? prev : { ...prev, quantity_mt: String(Number(opTons.toFixed(3))) }));
     }
   }, [form.operation_id, operations]);
 
@@ -334,6 +348,8 @@ export default function InvoiceFormPage() {
       }
       formData.append('amount', form.amount);
       formData.append('currency', form.currency);
+      // Always sent, blank included — clearing the box must clear the stored value.
+      formData.append('quantity_mt', form.quantity_mt.trim());
       formData.append('status', form.status);
       if (form.invoice_date) formData.append('invoice_date', form.invoice_date);
       if (form.due_date) formData.append('due_date', form.due_date);
@@ -445,7 +461,7 @@ export default function InvoiceFormPage() {
             />
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Input
               label="Amount *"
               type="number"
@@ -460,6 +476,15 @@ export default function InvoiceFormPage() {
               value={form.currency}
               onChange={e => updateField('currency', e.target.value)}
               options={currencyOptions}
+            />
+            <Input
+              label="Quantity (MT)"
+              type="number"
+              step="0.001"
+              min="0"
+              value={form.quantity_mt}
+              onChange={e => updateField('quantity_mt', e.target.value)}
+              placeholder="e.g. 24.5"
             />
           </div>
 

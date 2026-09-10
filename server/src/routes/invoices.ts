@@ -12,6 +12,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
 const router = Router();
 
+/**
+ * Invoice tonnage in metric tons. Blank, whitespace or a non-number stores NULL
+ * — "not recorded" and zero are different answers, and collapsing them is what
+ * made the analytics tonnage totals understate reality.
+ */
+function parseTonnage(value: any): number | null {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 router.get('/', (req: Request, res: Response) => {
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
   const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
@@ -165,7 +176,7 @@ router.get('/:id', (req: Request, res: Response) => {
 });
 
 router.post('/', uploadInvoice.single('file'), async (req: Request, res: Response) => {
-  const { invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, invoice_date, payment_date, notes, our_ref, po_number, operation_id } = req.body;
+  const { invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, invoice_date, payment_date, notes, our_ref, po_number, operation_id, quantity_mt } = req.body;
   if (!invoice_number || !type || !amount) {
     res.status(400).json({ error: 'invoice_number, type, and amount are required' });
     return;
@@ -186,15 +197,15 @@ router.post('/', uploadInvoice.single('file'), async (req: Request, res: Respons
     }
 
     const result = db.prepare(`
-      INSERT INTO invoices (invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, invoice_date, payment_date, notes, file_path, file_name, our_ref, po_number, operation_id, fx_rate, eur_amount)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO invoices (invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, invoice_date, payment_date, notes, file_path, file_name, our_ref, po_number, operation_id, fx_rate, eur_amount, quantity_mt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       invoice_number,
       type === 'customer' ? (customer_id || null) : null,
       type === 'supplier' ? (supplier_id || null) : null,
       type, parseFloat(amount), invCurrency, status || 'draft', due_date || null, invoice_date || null, payment_date || null, notes || null,
       file_path, file_name, our_ref || null, po_number || null, operation_id ? Number(operation_id) : null,
-      fx_rate, eur_amount
+      fx_rate, eur_amount, parseTonnage(quantity_mt)
     );
     const invoiceId = result.lastInsertRowid;
 
@@ -218,7 +229,7 @@ router.put('/:id', uploadInvoice.single('file'), async (req: Request, res: Respo
   const existing = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
-  const { invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, invoice_date, payment_date, notes, our_ref, po_number, operation_id } = req.body;
+  const { invoice_number, customer_id, supplier_id, type, amount, currency, status, due_date, invoice_date, payment_date, notes, our_ref, po_number, operation_id, quantity_mt } = req.body;
 
   // Delete old file if new one uploaded
   let file_path = existing.file_path;
@@ -252,7 +263,7 @@ router.put('/:id', uploadInvoice.single('file'), async (req: Request, res: Respo
 
   try {
     db.prepare(`
-      UPDATE invoices SET invoice_number=?, customer_id=?, supplier_id=?, type=?, amount=?, currency=?, status=?, due_date=?, invoice_date=?, payment_date=?, notes=?, file_path=?, file_name=?, our_ref=?, po_number=?, operation_id=?, fx_rate=?, eur_amount=?, updated_at=datetime('now')
+      UPDATE invoices SET invoice_number=?, customer_id=?, supplier_id=?, type=?, amount=?, currency=?, status=?, due_date=?, invoice_date=?, payment_date=?, notes=?, file_path=?, file_name=?, our_ref=?, po_number=?, operation_id=?, fx_rate=?, eur_amount=?, quantity_mt=?, updated_at=datetime('now')
       WHERE id=?
     `).run(
       invoice_number || existing.invoice_number,
@@ -266,6 +277,7 @@ router.put('/:id', uploadInvoice.single('file'), async (req: Request, res: Respo
       file_path, file_name, our_ref ?? existing.our_ref, po_number ?? existing.po_number,
       operation_id !== undefined ? (operation_id ? Number(operation_id) : null) : existing.operation_id,
       fx_rate, eur_amount,
+      quantity_mt !== undefined ? parseTonnage(quantity_mt) : existing.quantity_mt,
       req.params.id
     );
 

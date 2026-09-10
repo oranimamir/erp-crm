@@ -3,17 +3,18 @@ import type { ReportConfig, SheetData, SheetMeasure } from '../excelReportBuilde
 import {
   TITLE_FONT, SUBTITLE_FONT,
   SECTION_HEADER_FONT, SECTION_HEADER_FILL,
+  GROUP_HEADER_FONT, GROUP_HEADER_FILL,
   HEADER_FILL, HEADER_FONT, HEADER_ALIGNMENT,
   TOTAL_FILL, TOTAL_FONT, BORDERS_ALL,
-  CURRENCY_FMT, TONS_FMT,
+  CURRENCY_FMT, TONS_FMT, PERCENT_FMT,
 } from '../excelStyles';
 import { CHART_HEX, renderBarChartPng, chartEurAxis } from './chartImage';
 
 // ── Measures ─────────────────────────────────────────────────────────────────
 // Sheets are totalled *within* their measure and never across measures. An order
 // becomes an invoice once billed, so adding orders to invoiced revenue counts the
-// same sale twice; expenses are the other side of the ledger entirely. Every
-// section below therefore gives each measure its own column.
+// same sale twice; expenses are the other side of the ledger entirely. Each
+// measure therefore gets its own breakdown section below, not a shared table.
 
 const MEASURE_ORDER: SheetMeasure[] = ['revenue', 'orders', 'expenses'];
 
@@ -21,6 +22,14 @@ const MEASURE_LABEL: Record<SheetMeasure, { amount: string; tonnage: string }> =
   revenue:  { amount: 'Invoiced revenue (EUR)', tonnage: 'Invoiced tonnage (MT)' },
   orders:   { amount: 'Orders placed (EUR)',    tonnage: 'Ordered tonnage (MT)' },
   expenses: { amount: 'Expenses (EUR)',         tonnage: 'Expensed tonnage (MT)' },
+};
+
+// Banner over each measure's four breakdown blocks, plus the noun used when
+// reporting how many of that measure's rows carry a tonnage figure.
+const MEASURE_GROUP: Record<SheetMeasure, { banner: string; one: string; many: string }> = {
+  revenue:  { banner: 'INVOICES — BREAKDOWN',      one: 'invoice',         many: 'invoices' },
+  orders:   { banner: 'ORDERS PLACED — BREAKDOWN', one: 'order',           many: 'orders' },
+  expenses: { banner: 'EXPENSES — BREAKDOWN',      one: 'expense invoice', many: 'expense invoices' },
 };
 
 // Same colors as each measure's own sheet chart, so a reader flipping between
@@ -35,6 +44,15 @@ function measureOf(sheet: SheetData): SheetMeasure {
   return sheet.measure || 'revenue';
 }
 
+/** A recorded quantity. Blank/null means "not recorded" and must never read as 0. */
+function tonnageOf(row: Record<string, any>, field: string | undefined): number | null {
+  if (!field) return null;
+  const raw = row[field];
+  if (raw === null || raw === undefined || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
 // ── Date helpers ─────────────────────────────────────────────────────────────
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -47,6 +65,59 @@ function parseDate(value: any): Date | null {
   const d = value instanceof Date ? value : new Date(String(value));
   return isNaN(d.getTime()) ? null : d;
 }
+
+// ── Breakdown definitions, applied identically to every measure ──────────────
+
+type KeyFn = (sheet: SheetData, dataRow: Record<string, any>) => { key: string; label: string } | null;
+
+interface BlockDef {
+  title: string;
+  firstHeader: string;
+  keyOf: KeyFn;
+  sortBy: 'key' | 'value';
+  chart?: boolean;
+}
+
+const BLOCKS: BlockDef[] = [
+  {
+    title: 'MONTHLY BREAKDOWN', firstHeader: 'Month', sortBy: 'key', chart: true,
+    keyOf: (sheet, dataRow) => {
+      if (!sheet.dateField) return null;
+      const d = parseDate(dataRow[sheet.dateField]);
+      if (!d) return null;
+      const y = d.getFullYear();
+      const m = d.getMonth();
+      return { key: `${y}-${String(m + 1).padStart(2, '0')}`, label: `${MONTH_NAMES[m]} ${y}` };
+    },
+  },
+  {
+    title: 'QUARTERLY BREAKDOWN', firstHeader: 'Quarter', sortBy: 'key',
+    keyOf: (sheet, dataRow) => {
+      if (!sheet.dateField) return null;
+      const d = parseDate(dataRow[sheet.dateField]);
+      if (!d) return null;
+      const y = d.getFullYear();
+      const q = Math.ceil((d.getMonth() + 1) / 3);
+      return { key: `${y}-${q}`, label: `Q${q} ${y} (${QUARTER_MONTHS[q]})` };
+    },
+  },
+  {
+    title: 'BY CUSTOMER', firstHeader: 'Customer', sortBy: 'value',
+    keyOf: (sheet, dataRow) => {
+      if (!sheet.customerField) return null;
+      const name = String(dataRow[sheet.customerField] ?? '').trim() || 'Unknown';
+      return { key: name.toLowerCase(), label: name };
+    },
+  },
+  {
+    title: 'BY REGION', firstHeader: 'Region', sortBy: 'value',
+    keyOf: (sheet, dataRow) => {
+      if (!sheet.regionField) return null;
+      const name = String(dataRow[sheet.regionField] ?? '').trim() || 'Unknown';
+      return { key: name.toLowerCase(), label: name };
+    },
+  },
+];
 
 // ── Build Summary Sheet ──────────────────────────────────────────────────────
 
@@ -77,13 +148,21 @@ export function buildSummarySheet(wb: ExcelJS.Workbook, config: ReportConfig): v
 
   // ── Per-sheet totals, tagged with their measure ──────────────────────────
 
-  interface SheetTotals { label: string; measure: SheetMeasure; revenue: number; tonnage: number; hasRevenue: boolean; hasTonnage: boolean; }
+  interface SheetTotals {
+    label: string; measure: SheetMeasure;
+    revenue: number; tonnage: number;
+    hasRevenue: boolean; hasTonnage: boolean;
+    // Tonnage coverage: how many of this sheet's rows actually carry a figure.
+    tonnageRows: number; rowCount: number;
+  }
   const sheetTotals: SheetTotals[] = config.sheets.map(sheet => {
     let revenue = 0;
     let tonnage = 0;
+    let tonnageRows = 0;
     for (const r of sheet.rows) {
       if (sheet.revenueField) revenue += Number(r[sheet.revenueField]) || 0;
-      if (sheet.tonnageField) tonnage += Number(r[sheet.tonnageField]) || 0;
+      const t = tonnageOf(r, sheet.tonnageField);
+      if (t !== null) { tonnage += t; tonnageRows++; }
     }
     return {
       label: sheet.sourceLabel || sheet.name,
@@ -91,6 +170,7 @@ export function buildSummarySheet(wb: ExcelJS.Workbook, config: ReportConfig): v
       revenue, tonnage,
       hasRevenue: !!sheet.revenueField,
       hasTonnage: !!sheet.tonnageField,
+      tonnageRows, rowCount: sheet.rows.length,
     };
   });
 
@@ -98,22 +178,33 @@ export function buildSummarySheet(wb: ExcelJS.Workbook, config: ReportConfig): v
   const measureTotal = (m: SheetMeasure, field: 'revenue' | 'tonnage') =>
     sheetTotals.filter(t => t.measure === m).reduce((s, t) => s + t[field], 0);
 
-  // The column set shared by every breakdown below: one per measure × metric.
   interface MetricCol { label: string; measure: SheetMeasure; field: 'revenue' | 'tonnage'; numFmt: string; }
-  const metricCols: MetricCol[] = [];
-  for (const m of measuresPresent) {
+  const metricColsFor = (m: SheetMeasure): MetricCol[] => {
+    const cols: MetricCol[] = [];
     if (sheetTotals.some(t => t.measure === m && t.hasRevenue)) {
-      metricCols.push({ label: MEASURE_LABEL[m].amount, measure: m, field: 'revenue', numFmt: CURRENCY_FMT });
+      cols.push({ label: MEASURE_LABEL[m].amount, measure: m, field: 'revenue', numFmt: CURRENCY_FMT });
     }
     if (sheetTotals.some(t => t.measure === m && t.hasTonnage)) {
-      metricCols.push({ label: MEASURE_LABEL[m].tonnage, measure: m, field: 'tonnage', numFmt: TONS_FMT });
+      cols.push({ label: MEASURE_LABEL[m].tonnage, measure: m, field: 'tonnage', numFmt: TONS_FMT });
     }
-  }
+    return cols;
+  };
 
   // ── Shared writers ───────────────────────────────────────────────────────
 
-  const writeSectionHeader = (label: string) => {
-    ws.mergeCells(row, 2, row, Math.max(6, 2 + metricCols.length));
+  const writeGroupBanner = (label: string, span: number) => {
+    ws.mergeCells(row, 2, row, Math.max(6, 1 + span));
+    const cell = ws.getCell(row, 2);
+    cell.value = label;
+    cell.font = GROUP_HEADER_FONT;
+    cell.fill = GROUP_HEADER_FILL;
+    cell.alignment = { vertical: 'middle' };
+    ws.getRow(row).height = 26;
+    row += 2;
+  };
+
+  const writeSectionHeader = (label: string, span: number) => {
+    ws.mergeCells(row, 2, row, Math.max(6, 1 + span));
     const cell = ws.getCell(row, 2);
     cell.value = label;
     cell.font = SECTION_HEADER_FONT;
@@ -135,121 +226,129 @@ export function buildSummarySheet(wb: ExcelJS.Workbook, config: ReportConfig): v
     row++;
   };
 
+  const writeNote = (text: string, span: number) => {
+    ws.mergeCells(row, 2, row, Math.max(6, 1 + span));
+    const note = ws.getCell(row, 2);
+    note.value = text;
+    note.font = SUBTITLE_FONT;
+    note.alignment = { wrapText: true, vertical: 'middle' };
+    ws.getRow(row).height = 26;
+    row++;
+  };
+
   /**
-   * A breakdown block: one row per entity, one column per measure × metric.
-   * `keyOf` returns the grouping key for a row, or null to skip it.
+   * One breakdown block for a single measure: a row per entity, and for each
+   * metric a value column followed by its share of the block total. Only the
+   * named measure's sheets contribute, so every column totals to the figure
+   * shown for that measure in TOTALS BY MEASURE.
    */
-  const writeBlock = (
-    title: string,
-    firstHeader: string,
-    keyOf: (sheet: SheetData, dataRow: Record<string, any>) => { key: string; label: string } | null,
-    sortBy: 'key' | 'value',
-    withChart = false,
-  ): boolean => {
+  const writeBlock = (def: BlockDef, measure: SheetMeasure, cols: MetricCol[]): void => {
     interface Bucket { label: string; values: Map<string, number>; }
     const buckets = new Map<string, Bucket>();
-    // Only the measures that actually contributed rows get a column, so a block's
-    // column total always equals the rows printed above it.
     const contributed = new Set<string>();
 
     for (const sheet of config.sheets) {
-      const measure = measureOf(sheet);
+      if (measureOf(sheet) !== measure) continue;
       for (const dataRow of sheet.rows) {
-        const k = keyOf(sheet, dataRow);
+        const k = def.keyOf(sheet, dataRow);
         if (!k) continue;
         const bucket = buckets.get(k.key) ?? { label: k.label, values: new Map() };
         if (sheet.revenueField) {
-          const key = `${measure}:revenue`;
-          contributed.add(key);
-          bucket.values.set(key, (bucket.values.get(key) || 0) + (Number(dataRow[sheet.revenueField]) || 0));
+          contributed.add('revenue');
+          bucket.values.set('revenue', (bucket.values.get('revenue') || 0) + (Number(dataRow[sheet.revenueField]) || 0));
         }
-        if (sheet.tonnageField) {
-          const key = `${measure}:tonnage`;
-          contributed.add(key);
-          bucket.values.set(key, (bucket.values.get(key) || 0) + (Number(dataRow[sheet.tonnageField]) || 0));
+        const tons = tonnageOf(dataRow, sheet.tonnageField);
+        if (tons !== null) {
+          contributed.add('tonnage');
+          bucket.values.set('tonnage', (bucket.values.get('tonnage') || 0) + tons);
         }
         buckets.set(k.key, bucket);
       }
     }
 
-    if (buckets.size === 0) return false;
+    if (buckets.size === 0) return;
 
-    const cols = metricCols.filter(c => contributed.has(`${c.measure}:${c.field}`));
-    if (cols.length === 0) return false;
+    const active = cols.filter(c => contributed.has(c.field));
+    if (active.length === 0) return;
 
     const entries = [...buckets.entries()];
-    if (sortBy === 'key') {
+    if (def.sortBy === 'key') {
       entries.sort((a, b) => a[0].localeCompare(b[0]));
     } else {
-      const first = cols[0];
-      const val = (b: Bucket) => b.values.get(`${first.measure}:${first.field}`) || 0;
-      entries.sort((a, b) => val(b[1]) - val(a[1]));
+      const first = active[0].field;
+      entries.sort((a, b) => (b[1].values.get(first) ?? 0) - (a[1].values.get(first) ?? 0));
     }
 
-    const blockStartRow = row;
-    writeSectionHeader(title);
-    writeHeaderRow([firstHeader, ...cols.map(c => c.label)]);
+    // Column totals, needed up front so each row can show its share.
+    const totals = new Map<string, number>(
+      active.map(c => [c.field, entries.reduce((s, [, b]) => s + (b.values.get(c.field) || 0), 0)]),
+    );
 
-    for (const [, bucket] of entries) {
-      ws.getCell(row, 2).value = bucket.label;
-      ws.getCell(row, 2).border = BORDERS_ALL;
-      cols.forEach((col, i) => {
-        const cell = ws.getCell(row, 3 + i);
-        cell.value = bucket.values.get(`${col.measure}:${col.field}`) || 0;
-        cell.numFmt = col.numFmt;
-        cell.border = BORDERS_ALL;
-        cell.alignment = { horizontal: 'right' };
+    // Each metric occupies two columns: the value, then its % of the total.
+    const span = 1 + active.length * 2;
+    const blockStartRow = row;
+    writeSectionHeader(def.title, span);
+    writeHeaderRow([def.firstHeader, ...active.flatMap(c => [c.label, '% of Total'])]);
+
+    // `null` from `get` means the bucket recorded nothing for that metric, which
+    // is left blank — a month whose invoices carry no quantity has an unknown
+    // tonnage, and printing 0.00 MT would assert that nothing shipped.
+    const writeRow = (label: string, get: (field: string) => number | null, emphasise: boolean) => {
+      const labelCell = ws.getCell(row, 2);
+      labelCell.value = label;
+      labelCell.border = BORDERS_ALL;
+      if (emphasise) { labelCell.font = TOTAL_FONT; labelCell.fill = TOTAL_FILL; }
+      active.forEach((col, i) => {
+        const value = get(col.field);
+        const total = totals.get(col.field) || 0;
+        const valueCell = ws.getCell(row, 3 + i * 2);
+        valueCell.value = value;
+        valueCell.numFmt = col.numFmt;
+        const pctCell = ws.getCell(row, 4 + i * 2);
+        pctCell.value = value === null ? null : (total ? value / total : 0);
+        pctCell.numFmt = PERCENT_FMT;
+        for (const cell of [valueCell, pctCell]) {
+          cell.border = BORDERS_ALL;
+          cell.alignment = { horizontal: 'right' };
+          if (emphasise) { cell.font = TOTAL_FONT; cell.fill = TOTAL_FILL; }
+        }
       });
       row++;
+    };
+
+    for (const [, bucket] of entries) {
+      writeRow(bucket.label, field => (bucket.values.has(field) ? bucket.values.get(field)! : null), false);
     }
+    writeRow('TOTAL', field => totals.get(field) || 0, true);
 
-    // Totals stay inside their own column — never across measures.
-    ws.getCell(row, 2).value = 'TOTAL';
-    ws.getCell(row, 2).font = TOTAL_FONT;
-    ws.getCell(row, 2).fill = TOTAL_FILL;
-    ws.getCell(row, 2).border = BORDERS_ALL;
-    cols.forEach((col, i) => {
-      const cell = ws.getCell(row, 3 + i);
-      const key = `${col.measure}:${col.field}`;
-      cell.value = entries.reduce((s, [, b]) => s + (b.values.get(key) || 0), 0);
-      cell.numFmt = col.numFmt;
-      cell.font = TOTAL_FONT;
-      cell.fill = TOTAL_FILL;
-      cell.border = BORDERS_ALL;
-      cell.alignment = { horizontal: 'right' };
-    });
-
-    // Chart — the monetary columns only (EUR and MT never share one axis),
+    // Chart — the monetary column only (EUR and MT never share one axis),
     // placed to the right of the table, anchored at the block's own header row.
-    if (withChart) {
-      const moneyCols = cols.filter(c => c.field === 'revenue');
-      if (moneyCols.length > 0) {
-        const img = renderBarChartPng(
-          entries.map(([, b]) => b.label),
-          moneyCols.map(col => ({
-            label: col.label,
-            color: MEASURE_COLOR[col.measure],
-            values: entries.map(([, b]) => b.values.get(`${col.measure}:revenue`) || 0),
-          })),
-          { title, valueFormatter: chartEurAxis },
-        );
-        if (img) {
-          const imageId = wb.addImage({ base64: img.base64, extension: 'png' });
-          ws.addImage(imageId, {
-            tl: { col: 2 + cols.length + 1, row: blockStartRow - 1 },
-            ext: { width: img.width, height: img.height },
-          });
-        }
+    if (def.chart && active.some(c => c.field === 'revenue')) {
+      const img = renderBarChartPng(
+        entries.map(([, b]) => b.label),
+        [{
+          label: MEASURE_LABEL[measure].amount,
+          color: MEASURE_COLOR[measure],
+          values: entries.map(([, b]) => b.values.get('revenue') || 0),
+        }],
+        { title: `${MEASURE_GROUP[measure].many} — ${def.title.toLowerCase()}`, valueFormatter: chartEurAxis },
+      );
+      if (img) {
+        const imageId = wb.addImage({ base64: img.base64, extension: 'png' });
+        ws.addImage(imageId, {
+          tl: { col: 1 + span + 1, row: blockStartRow - 1 },
+          ext: { width: img.width, height: img.height },
+        });
       }
     }
 
     row += 3;
-    return true;
   };
 
   // ── 1. Totals by measure (per source sheet) ──────────────────────────────
 
-  writeSectionHeader('TOTALS BY MEASURE');
+  const totalsSpan = 2 + sheetTotals.length;
+  writeSectionHeader('TOTALS BY MEASURE', totalsSpan);
   writeHeaderRow(['', ...sheetTotals.map(t => t.label), 'MEASURE TOTAL']);
 
   const writeMeasureRow = (
@@ -288,6 +387,23 @@ export function buildSummarySheet(wb: ExcelJS.Workbook, config: ReportConfig): v
     }
     if (sheetTotals.some(t => t.measure === m && t.hasTonnage)) {
       writeMeasureRow(MEASURE_LABEL[m].tonnage, m, 'tonnage', TONS_FMT, t => t.hasTonnage);
+      // A tonnage total is only as complete as the rows behind it. Say so on the
+      // face of the report rather than letting a partial figure read as final.
+      const mine = sheetTotals.filter(t => t.measure === m && t.hasTonnage);
+      const known = mine.reduce((s, t) => s + t.tonnageRows, 0);
+      const all = mine.reduce((s, t) => s + t.rowCount, 0);
+      const missing = all - known;
+      if (all > 0 && missing > 0) {
+        const g = MEASURE_GROUP[m];
+        writeNote(
+          `Tonnage is recorded on ${known} of ${all} ${g.many}; ` +
+          (missing === 1
+            ? `one ${g.one} carries no quantity and is excluded`
+            : `the other ${missing} carry no quantity and are excluded`) +
+          ' from every MT figure in this report. Revenue totals are unaffected.',
+          totalsSpan,
+        );
+      }
     }
   }
 
@@ -308,54 +424,25 @@ export function buildSummarySheet(wb: ExcelJS.Workbook, config: ReportConfig): v
   }
 
   if (measuresPresent.length > 1) {
-    ws.mergeCells(row, 2, row, Math.max(6, 3 + sheetTotals.length));
-    const note = ws.getCell(row, 2);
-    note.value = measuresPresent.includes('orders')
-      ? 'There is no single grand total on purpose: an order becomes an invoice once billed, so adding the columns would count the same sale twice. Each measure totals on its own.'
-      : 'Each measure totals on its own — the columns are never added together.';
-    note.font = SUBTITLE_FONT;
-    note.alignment = { wrapText: true, vertical: 'middle' };
-    ws.getRow(row).height = 26;
-    row++;
+    writeNote(
+      measuresPresent.includes('orders')
+        ? 'There is no single grand total on purpose: an order becomes an invoice once billed, so adding the columns would count the same sale twice. Each measure totals on its own.'
+        : 'Each measure totals on its own — the columns are never added together.',
+      totalsSpan,
+    );
   }
 
   row += 2;
 
-  // ── 2. Monthly ───────────────────────────────────────────────────────────
+  // ── 2. One full breakdown section per measure ────────────────────────────
+  // Invoices and orders each get the same four blocks, so either can be read as
+  // a standalone report without the reader having to pick columns out of a
+  // shared table.
 
-  writeBlock('MONTHLY BREAKDOWN', 'Month', (sheet, dataRow) => {
-    if (!sheet.dateField) return null;
-    const d = parseDate(dataRow[sheet.dateField]);
-    if (!d) return null;
-    const y = d.getFullYear();
-    const m = d.getMonth();
-    return { key: `${y}-${String(m + 1).padStart(2, '0')}`, label: `${MONTH_NAMES[m]} ${y}` };
-  }, 'key', true);
-
-  // ── 3. Quarterly ─────────────────────────────────────────────────────────
-
-  writeBlock('QUARTERLY BREAKDOWN', 'Quarter', (sheet, dataRow) => {
-    if (!sheet.dateField) return null;
-    const d = parseDate(dataRow[sheet.dateField]);
-    if (!d) return null;
-    const y = d.getFullYear();
-    const q = Math.ceil((d.getMonth() + 1) / 3);
-    return { key: `${y}-${q}`, label: `Q${q} ${y} (${QUARTER_MONTHS[q]})` };
-  }, 'key');
-
-  // ── 4. By customer ───────────────────────────────────────────────────────
-
-  writeBlock('BY CUSTOMER', 'Customer', (sheet, dataRow) => {
-    if (!sheet.customerField) return null;
-    const name = String(dataRow[sheet.customerField] ?? '').trim() || 'Unknown';
-    return { key: name.toLowerCase(), label: name };
-  }, 'value');
-
-  // ── 5. By region ─────────────────────────────────────────────────────────
-
-  writeBlock('BY REGION', 'Region', (sheet, dataRow) => {
-    if (!sheet.regionField) return null;
-    const name = String(dataRow[sheet.regionField] ?? '').trim() || 'Unknown';
-    return { key: name.toLowerCase(), label: name };
-  }, 'value');
+  for (const m of measuresPresent) {
+    const cols = metricColsFor(m);
+    if (cols.length === 0) continue;
+    writeGroupBanner(MEASURE_GROUP[m].banner, 1 + cols.length * 2);
+    for (const def of BLOCKS) writeBlock(def, m, cols);
+  }
 }

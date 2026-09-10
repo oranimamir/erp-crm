@@ -57,7 +57,12 @@ export interface ReportConfig {
 
 // ── Report Builder ───────────────────────────────────────────────────────────
 
-export async function buildReport(config: ReportConfig): Promise<void> {
+/**
+ * Assembles the workbook. Separate from `buildReport` so the sheet layout can be
+ * built and inspected without a browser — `downloadWorkbook` needs Blob and a
+ * DOM anchor, this needs neither.
+ */
+export function buildWorkbook(config: ReportConfig): ExcelJS.Workbook {
   const wb = new ExcelJS.Workbook();
   wb.creator = 'TripleW ERP';
   wb.created = new Date();
@@ -71,7 +76,11 @@ export async function buildReport(config: ReportConfig): Promise<void> {
     addDataSheet(wb, sheet);
   }
 
-  return downloadWorkbook(wb, config.filename);
+  return wb;
+}
+
+export async function buildReport(config: ReportConfig): Promise<void> {
+  return downloadWorkbook(buildWorkbook(config), config.filename);
 }
 
 // ── Data Sheet ───────────────────────────────────────────────────────────────

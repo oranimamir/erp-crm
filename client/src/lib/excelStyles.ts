@@ -64,6 +64,19 @@ export const SECTION_HEADER_FILL: Fill = {
   type: 'pattern', pattern: 'solid', fgColor: { argb: 'EEF2FF' },
 };
 
+// ── Summary Tab — Measure Group Banner ───────────────────────────────────────
+// Sits one level above SECTION_HEADER: it names the measure whose breakdown
+// blocks follow, so a reader can tell an invoice table from an order table at
+// a glance instead of reading the column captions.
+
+export const GROUP_HEADER_FONT: Partial<Font> = {
+  bold: true, size: 13, color: { argb: WHITE },
+};
+
+export const GROUP_HEADER_FILL: Fill = {
+  type: 'pattern', pattern: 'solid', fgColor: { argb: PRIMARY },
+};
+
 // ── Number Formats ───────────────────────────────────────────────────────────
 
 export const CURRENCY_FMT = '€#,##0.00';

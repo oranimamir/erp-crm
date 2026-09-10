@@ -629,9 +629,14 @@ router.get('/export-data', (req: Request, res: Response) => {
 
     // ── Revenue data: customer invoices + confirmed orders ────────────────
     if (type === 'revenue' || type === 'combined') {
+      // Tonnage comes off the invoice itself first — that is the document the
+      // quantity was actually billed on. The operation's order items are only a
+      // fallback for invoices predating the invoice-level field, and an invoice
+      // with neither stays NULL so the report can say the figure is unknown
+      // instead of silently adding a zero to the total.
       const invoiceRows = db.prepare(`
         SELECT i.invoice_number, c.name as customer_name,
-          COALESCE(oi_tons.quantity_mt, 0) as quantity_mt,
+          COALESCE(i.quantity_mt, oi_tons.quantity_mt) as quantity_mt,
           i.amount, UPPER(COALESCE(i.currency, 'USD')) as currency,
           COALESCE(i.eur_amount, i.amount) as eur_amount,
           i.invoice_date,
@@ -667,7 +672,7 @@ router.get('/export-data', (req: Request, res: Response) => {
       const orderRows = db.prepare(`
         SELECT o.order_number, COALESCE(c.name, s.name) as party_name,
           o.status,
-          COALESCE(oi_tons.quantity_mt, 0) as quantity_mt,
+          oi_tons.quantity_mt as quantity_mt,
           o.total_amount as total_eur,
           COALESCE(o.order_date, date(o.created_at)) as order_date,
           (SELECT op.operation_number FROM operations op WHERE op.order_id = o.id ORDER BY op.id DESC LIMIT 1) as operation_number,

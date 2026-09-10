@@ -5,7 +5,8 @@ interface RevenueData {
   customer_invoices: {
     invoice_number: string;
     customer_name: string;
-    quantity_mt: number;
+    // null when no quantity was recorded on the invoice — distinct from 0.
+    quantity_mt: number | null;
     amount: number;
     currency: string;
     eur_amount: number;
@@ -17,7 +18,7 @@ interface RevenueData {
     order_number: string;
     party_name: string;
     status: string;
-    quantity_mt: number;
+    quantity_mt: number | null;
     total_eur: number;
     operation_number?: string;
     region?: string;
@@ -52,6 +53,96 @@ function sumField(rows: Record<string, any>[], key: string): number {
   return rows.reduce((s, r) => s + (Number(r[key]) || 0), 0);
 }
 
+/**
+ * Totals only the rows that actually carry a quantity, and returns null when
+ * none do — a tonnage column of blanks must foot to a blank, not to 0.00, or
+ * the total reads as "nothing shipped" instead of "nothing recorded".
+ */
+function sumTonnage(rows: Record<string, any>[], key: string): number | null {
+  let total = 0;
+  let seen = 0;
+  for (const r of rows) {
+    const raw = r[key];
+    if (raw === null || raw === undefined || raw === '') continue;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) continue;
+    total += n;
+    seen++;
+  }
+  return seen > 0 ? total : null;
+}
+
+/** Groups rows into one bucket per calendar year of `dateField`, oldest first. */
+function byYear<T extends Record<string, any>>(rows: T[], dateField: string): [string, T[]][] {
+  const groups = new Map<string, T[]>();
+  for (const r of rows) {
+    const year = String(r[dateField] ?? '').substring(0, 4) || 'Unknown';
+    if (!groups.has(year)) groups.set(year, []);
+    groups.get(year)!.push(r);
+  }
+  return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+/**
+ * One sheet of customer orders — every order allocated to an operation,
+ * regardless of its downstream status (an order already delivered or invoiced
+ * was still placed). Same definition as the on-screen "Orders placed" measure,
+ * so the sheet total reconciles with the Summary tab.
+ *
+ * Shared by the Revenue report's single orders tab and the standalone Orders
+ * report's per-year tabs, so both carry identical columns and totals.
+ */
+function ordersSheet(orders: RevenueData['orders'], name: string): SheetData {
+  return {
+    name,
+    columns: ORDER_COLUMNS,
+    rows: orders,
+    totalsRow: {
+      order_number: 'TOTAL',
+      quantity_mt: sumTonnage(orders, 'quantity_mt'),
+      total_eur: sumField(orders, 'total_eur'),
+    },
+    // Orders are their own measure — the Summary tab never adds them to
+    // invoiced revenue, since an order becomes an invoice once billed.
+    measure: 'orders',
+    revenueField: 'total_eur',
+    tonnageField: 'quantity_mt',
+    dateField: 'order_date',
+    customerField: 'party_name',
+    regionField: 'region',
+    sourceLabel: name,
+    chart: (() => {
+      const { categories, values } = monthlyTotals(orders, 'order_date', 'total_eur');
+      return categories.length ? {
+        categories, series: [{ label: name, color: CHART_HEX.blue, values }],
+        title: `${name} by month`, valueFormatter: chartEurAxis,
+      } : undefined;
+    })(),
+  };
+}
+
+/**
+ * Orders reported the same way invoices are: a sheet per year, then a Summary
+ * tab whose monthly, quarterly, customer and region blocks are built from the
+ * orders alone. Use it to answer "what did we sell" from the order book rather
+ * than from what has been billed so far.
+ */
+export function buildOrdersReport(
+  data: { orders: RevenueData['orders'] },
+  period: string,
+): ReportConfig {
+  const sheets: SheetData[] = byYear(data.orders, 'order_date')
+    .map(([year, orders]) => ordersSheet(orders, `Orders ${year}`));
+
+  return {
+    filename: `TripleW Orders Summary ${period}`,
+    title: 'Orders Placed Summary',
+    subtitle: `Order value & Tonnage — ${sheets.map(s => s.name).join(' · ') || 'no orders in period'}`,
+    sheets,
+    includeSummary: true,
+  };
+}
+
 export function buildRevenueReport(
   data: RevenueData,
   period: string,
@@ -59,23 +150,15 @@ export function buildRevenueReport(
 ): ReportConfig {
   const sheets: SheetData[] = [];
 
-  // Group invoices by year
-  const byYear = new Map<string, typeof data.customer_invoices>();
-  for (const inv of data.customer_invoices) {
-    const year = inv.invoice_date?.substring(0, 4) || 'Unknown';
-    if (!byYear.has(year)) byYear.set(year, []);
-    byYear.get(year)!.push(inv);
-  }
-
-  // One sheet per year, sorted
-  for (const [year, invoices] of [...byYear.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+  // One sheet per year, oldest first
+  for (const [year, invoices] of byYear(data.customer_invoices, 'invoice_date')) {
     sheets.push({
       name: `Invoices ${year}`,
       columns: INVOICE_COLUMNS,
       rows: invoices,
       totalsRow: {
         invoice_number: 'TOTAL',
-        quantity_mt: sumField(invoices, 'quantity_mt'),
+        quantity_mt: sumTonnage(invoices, 'quantity_mt'),
         eur_amount: sumField(invoices, 'eur_amount'),
       },
       measure: 'revenue',
@@ -95,37 +178,8 @@ export function buildRevenueReport(
     });
   }
 
-  // Orders sheet — every customer order allocated to an operation, regardless
-  // of its downstream status (an order already delivered/invoiced was still
-  // placed). Same definition as the on-screen "Orders placed" measure, so this
-  // sheet's total reconciles with the Summary tab.
   if (includeOrders && data.orders.length > 0) {
-    sheets.push({
-      name: 'Orders Placed',
-      columns: ORDER_COLUMNS,
-      rows: data.orders,
-      totalsRow: {
-        order_number: 'TOTAL',
-        quantity_mt: sumField(data.orders, 'quantity_mt'),
-        total_eur: sumField(data.orders, 'total_eur'),
-      },
-      // Orders are their own measure — the Summary tab never adds them to
-      // invoiced revenue, since an order becomes an invoice once billed.
-      measure: 'orders',
-      revenueField: 'total_eur',
-      tonnageField: 'quantity_mt',
-      dateField: 'order_date',
-      customerField: 'party_name',
-      regionField: 'region',
-      sourceLabel: 'Orders Placed',
-      chart: (() => {
-        const { categories, values } = monthlyTotals(data.orders, 'order_date', 'total_eur');
-        return categories.length ? {
-          categories, series: [{ label: 'Orders Placed', color: CHART_HEX.blue, values }],
-          title: 'Orders Placed by month', valueFormatter: chartEurAxis,
-        } : undefined;
-      })(),
-    });
+    sheets.push(ordersSheet(data.orders, 'Orders Placed'));
   }
 
   const sheetLabels = sheets.map(s => s.name).join(' · ');
