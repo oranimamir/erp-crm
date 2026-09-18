@@ -38,7 +38,7 @@ export default function OrderDetailPage() {
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewFile, setPreviewFile] = useState<string | null>(null);
-  const [confirmation, setConfirmation] = useState<{ id: number; oc_number: string } | null>(null);
+  const [confirmation, setConfirmation] = useState<{ id: number; file_name: string | null } | null>(null);
 
   const fetchOrder = () => {
     setLoading(true);
@@ -183,7 +183,7 @@ export default function OrderDetailPage() {
                   : `/order-confirmations/new?order_id=${id}`
               )}
             >
-              <FileCheck2 size={14} /> {confirmation ? confirmation.oc_number : 'Order Confirmation'}
+              <FileCheck2 size={14} /> Order Confirmation{confirmation ? ' ✓' : ''}
             </Button>
             <Link to={`/orders/${id}/edit`}>
               <Button variant="secondary" size="sm"><Pencil size={14} /> Edit Order</Button>

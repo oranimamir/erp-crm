@@ -1455,19 +1455,24 @@ export async function initializeDatabase() {
     db.prepare(`INSERT OR IGNORE INTO document_categories (name) VALUES ('Order Confirmation')`).run();
   } catch { /* ignore */ }
 
-  // Issuer details for the confirmation template — editable per document, these
-  // are only the defaults the form starts from.
+  // Company constants for the confirmation template (issuer, bank, dispatch
+  // contact). These never vary per document, so they stay out of the form.
   try {
-    db.prepare(`INSERT OR IGNORE INTO app_settings (key, value) VALUES ('order_confirmation_company', ?)`).run(
+    db.prepare(`DELETE FROM app_settings WHERE key = 'order_confirmation_company'`).run();
+    db.prepare(`INSERT OR IGNORE INTO app_settings (key, value) VALUES ('order_confirmation_defaults', ?)`).run(
       JSON.stringify({
-        company_name: 'TripleW NL BV',
-        company_address1: 'Blokstallen 2-B.',
-        company_address2: '4611WB Bergen Op Zoom',
-        company_country: 'The Netherlands',
+        company_name: 'TripleW BV',
+        company_address1: 'Innovatiestraat 1',
+        company_address2: '2030 Antwerpen, Belgium',
         company_tel: '+1 414 467 7341',
         company_email: 'denis@triplew.co',
-        company_vat: '866836974B01',
-        company_kvk: '94614342',
+        company_vat: 'BE0725717772',
+        bank_name: 'ING Belgium NV/SA',
+        iban: 'BE53 3631 9783 2853',
+        bic: 'BBRUBEBB',
+        bank_address: 'Marnixlaan 25, 1000 Brussels, Belgium',
+        delivery_address: 'TRIPLEW, Innovatiestraat 1, 2030 Antwerp, Belgium',
+        delivery_contact: 'Robin Geys  robin@triplew.co  +32 494 908890',
       })
     );
   } catch { /* ignore */ }

@@ -8,10 +8,9 @@ import db from '../database.js';
 import { notifyAdmin } from '../lib/notify.js';
 import {
   buildOrderConfirmationPdf,
+  computeTotals,
   formatLongDate,
-  lineAmount,
   type OrderConfirmationData,
-  type OcLine,
 } from '../lib/order-confirmation-pdf.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -22,33 +21,32 @@ const router = Router();
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
+/** Issuer, bank and dispatch details — company constants, not per-document. */
 function companyDefaults(): Record<string, string> {
   try {
-    const row = db.prepare(`SELECT value FROM app_settings WHERE key = 'order_confirmation_company'`).get() as any;
+    const row = db.prepare(`SELECT value FROM app_settings WHERE key = 'order_confirmation_defaults'`).get() as any;
     if (row?.value) return JSON.parse(row.value);
   } catch { /* fall through to built-in defaults */ }
   return {
-    company_name: 'TripleW NL BV',
-    company_address1: 'Blokstallen 2-B.',
-    company_address2: '4611WB Bergen Op Zoom',
-    company_country: 'The Netherlands',
+    company_name: 'TripleW BV',
+    company_address1: 'Innovatiestraat 1',
+    company_address2: '2030 Antwerpen, Belgium',
   };
 }
 
-/** Next free `SONL<year><seq>OC` number, e.g. SONL20260107OC. */
-function nextOcNumber(dateIso: string): string {
-  const year = (dateIso || new Date().toISOString()).slice(0, 4);
-  const prefix = `SONL${year}`;
-  const rows = db.prepare(
-    `SELECT oc_number FROM order_confirmations WHERE oc_number LIKE ?`
-  ).all(`${prefix}%OC`) as Array<{ oc_number: string }>;
+/**
+ * Confirmations are filed as `<operation number>OC.pdf`. Without an operation
+ * the confirmation number stands in, so the name is never just "OC.pdf".
+ */
+function confirmationFileName(operationNumber: string | null, ocNumber: string | null): string {
+  const stem = (operationNumber || ocNumber || 'order-confirmation').trim();
+  return `${stem.replace(/[^A-Za-z0-9._-]+/g, '-')}OC.pdf`;
+}
 
-  let max = 0;
-  for (const row of rows) {
-    const m = row.oc_number.match(new RegExp(`^${prefix}(\\d+)OC$`));
-    if (m) max = Math.max(max, parseInt(m[1], 10));
-  }
-  return `${prefix}${String(max + 1).padStart(2, '0')}OC`;
+function operationNumberFor(operationId: number | null): string | null {
+  if (!operationId) return null;
+  const row = db.prepare('SELECT operation_number FROM operations WHERE id = ?').get(operationId) as any;
+  return row?.operation_number ?? null;
 }
 
 function orderConfirmationCategoryId(): number | null {
@@ -61,16 +59,6 @@ function parseRecord(row: any) {
   let data: OrderConfirmationData = {};
   try { data = JSON.parse(row.data); } catch { /* corrupt rows surface as empty */ }
   return { ...row, data };
-}
-
-/** Amounts grouped by currency — a confirmation may mix currencies per line. */
-function totalsByCurrency(items: OcLine[]): Array<{ currency: string; amount: number }> {
-  const totals: Record<string, number> = {};
-  for (const item of items) {
-    const cur = (item.currency || 'USD').toUpperCase();
-    totals[cur] = (totals[cur] || 0) + lineAmount(item);
-  }
-  return Object.entries(totals).map(([currency, amount]) => ({ currency, amount }));
 }
 
 /**
@@ -88,7 +76,7 @@ async function renderAndFile(
   const storedName = `oc-${Date.now()}-${crypto.randomBytes(6).toString('hex')}.pdf`;
   fs.writeFileSync(path.join(docsDir, storedName), pdf);
 
-  const displayName = `${(data.oc_number || 'order-confirmation').replace(/[^A-Za-z0-9._-]/g, '_')}.pdf`;
+  const displayName = confirmationFileName(operationNumberFor(opts.operationId), data.oc_number ?? null);
 
   // Drop the superseded file once the new one is safely on disk
   if (opts.existing?.file_path) {
@@ -167,8 +155,8 @@ router.get('/prepare', (req: Request, res: Response) => {
 
   const items = db.prepare('SELECT * FROM order_items WHERE order_id = ? ORDER BY id').all(orderId) as any[];
 
-  // Reuse HS code / description last confirmed for the same product, so repeat
-  // business doesn't retype the catalog text every time.
+  // Reuse HS code / description / reference last confirmed for the same
+  // product, so repeat business doesn't retype the catalog text every time.
   const previous = db.prepare(
     'SELECT data FROM order_confirmations ORDER BY id DESC LIMIT 50'
   ).all() as Array<{ data: string }>;
@@ -191,23 +179,21 @@ router.get('/prepare', (req: Request, res: Response) => {
 
   const today = new Date().toISOString().slice(0, 10);
   const isSupplier = order.type === 'supplier';
-  const clientName = isSupplier ? order.supplier_name : order.customer_name;
 
   const draft: OrderConfirmationData = {
     ...companyDefaults(),
-    oc_number: nextOcNumber(order.order_date || today),
-    client_name: clientName || '',
-    contact_person: '',
-    contact_phone: '',
-    contact_email: (isSupplier ? order.supplier_email : order.customer_email) || '',
-    client_phone: (isSupplier ? order.supplier_phone : order.customer_phone) || '',
-    billing_address: (isSupplier ? order.supplier_address : order.customer_address) || '',
-    tax_id: '',
-    client_code: '',
+    // The operation number is the document's reference, per the master template
+    oc_number: operation?.operation_number || order.order_number || '',
     oc_date: today,
     sq_number: '',
     our_ref: items[0]?.description || order.description || '',
     po_number: order.order_number || '',
+    client_code: '',
+    client_name: (isSupplier ? order.supplier_name : order.customer_name) || '',
+    billing_address: (isSupplier ? order.supplier_address : order.customer_address) || '',
+    client_phone: (isSupplier ? order.supplier_phone : order.customer_phone) || '',
+    tax_id: '',
+    contact_email: (isSupplier ? order.supplier_email : order.customer_email) || '',
     items: items.map((item, index) => {
       const known = knownByName[(item.description || '').trim().toLowerCase()] || {};
       return {
@@ -216,17 +202,17 @@ router.get('/prepare', (req: Request, res: Response) => {
         commercial_name: item.description || '',
         packaging: item.packaging || '',
         quantity: Number(item.quantity) || 0,
-        quantity_unit: (item.unit || 'tons').toUpperCase(),
+        quantity_unit: (item.unit || 'KG').toUpperCase(),
         unit_price: Number(item.unit_price) || 0,
-        price_unit: (item.unit || 'tons').toUpperCase(),
-        currency: (item.currency || 'USD').toUpperCase(),
+        currency: (item.currency || 'EUR').toUpperCase(),
         hs_code: known.hs_code || '',
         description: known.description || '',
       };
     }),
     delivery: [order.inco_terms, order.destination].filter(Boolean).join(' ') || '',
     delivery_date_text: order.delivery_date ? formatLongDate(order.delivery_date) : '',
-    note: order.notes || '',
+    freight: 0,
+    vat: 0,
     terms: order.payment_terms || '',
   };
 
@@ -283,25 +269,29 @@ router.post('/', async (req: Request, res: Response) => {
   if (!order_id) { res.status(400).json({ error: 'order_id is required' }); return; }
   if (!data || typeof data !== 'object') { res.status(400).json({ error: 'data is required' }); return; }
 
-  const order = db.prepare('SELECT id FROM orders WHERE id = ?').get(order_id);
+  const order = db.prepare('SELECT id, order_number FROM orders WHERE id = ?').get(order_id) as any;
   if (!order) { res.status(404).json({ error: 'Order not found' }); return; }
-
-  const payload: OrderConfirmationData = {
-    ...data,
-    oc_number: (data.oc_number || '').trim() || nextOcNumber(data.oc_date || ''),
-  };
-
-  // Reject before rendering, so a clash never leaves a stray PDF behind
-  if (ocNumberTaken(payload.oc_number!)) {
-    res.status(409).json({ error: `Order confirmation ${payload.oc_number} already exists` });
-    return;
-  }
 
   // Fall back to the operation already linked to the order
   let operationId: number | null = operation_id ?? null;
   if (operationId == null) {
     const linked = db.prepare('SELECT id FROM operations WHERE order_id = ? ORDER BY id DESC LIMIT 1').get(order_id) as any;
     operationId = linked?.id ?? null;
+  }
+
+  const payload: OrderConfirmationData = {
+    ...data,
+    oc_number: (data.oc_number || '').trim()
+      || operationNumberFor(operationId)
+      || (order as any).order_number
+      || '',
+  };
+  if (!payload.oc_number) { res.status(400).json({ error: 'A confirmation number is required' }); return; }
+
+  // Reject before rendering, so a clash never leaves a stray PDF behind
+  if (ocNumberTaken(payload.oc_number)) {
+    res.status(409).json({ error: `Order confirmation ${payload.oc_number} already exists` });
+    return;
   }
 
   let filed: { filePath: string; fileName: string; documentId: number | null } | null = null;
@@ -419,13 +409,12 @@ router.post('/:id/email', async (req: Request, res: Response) => {
     || `Order Confirmation ${row.oc_number}${data.client_name ? ` — ${data.client_name}` : ''}`;
   const bodyText = String(req.body?.message || '').trim();
 
-  const totals = totalsByCurrency(data.items || [])
-    .map(t => `${t.amount.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${t.currency}`)
-    .join(' + ');
+  const { total, currency } = computeTotals(data);
+  const totals = `${total.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${currency}`;
 
   const html = `
 <div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#111827;">
-  <p style="font-size:15px;">Dear ${escapeHtml(data.contact_person || data.client_name || 'Sir/Madam')},</p>
+  <p style="font-size:15px;">Dear ${escapeHtml(data.client_name || 'Sir/Madam')},</p>
   ${bodyText
       ? `<p style="font-size:14px;white-space:pre-wrap;">${escapeHtml(bodyText)}</p>`
       : `<p style="font-size:14px;">Please find attached our order confirmation <strong>${escapeHtml(row.oc_number)}</strong>.</p>`}
@@ -435,7 +424,7 @@ router.post('/:id/email', async (req: Request, res: Response) => {
     ${data.po_number ? `<tr style="background:#f9fafb;"><td style="padding:8px 12px;color:#6b7280;">PO number</td><td style="padding:8px 12px;">${escapeHtml(data.po_number)}</td></tr>` : ''}
     ${totals ? `<tr><td style="padding:8px 12px;color:#6b7280;">Total</td><td style="padding:8px 12px;font-weight:600;">${escapeHtml(totals)}</td></tr>` : ''}
   </table>
-  <p style="font-size:14px;margin-top:20px;">Kind regards,<br/>${escapeHtml(data.company_name || 'TripleW NL BV')}</p>
+  <p style="font-size:14px;margin-top:20px;">Kind regards,<br/>${escapeHtml(data.company_name || 'TripleW BV')}</p>
 </div>`;
 
   try {
