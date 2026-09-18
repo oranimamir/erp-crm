@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import StatusBadge from '../components/ui/StatusBadge';
-import { ArrowLeft, Package, Truck, Clock, ArrowRight, Pencil, Download, Eye, X } from 'lucide-react';
+import { ArrowLeft, Package, Truck, Clock, ArrowRight, Pencil, Download, Eye, X, FileCheck2 } from 'lucide-react';
 
 const statusOptions = [
   { value: 'order_placed', label: 'Order Placed' },
@@ -30,6 +30,7 @@ const typeLabels: Record<string, string> = {
 
 export default function OrderDetailPage() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const { addToast } = useToast();
   const [order, setOrder] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -37,6 +38,7 @@ export default function OrderDetailPage() {
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewFile, setPreviewFile] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState<{ id: number; oc_number: string } | null>(null);
 
   const fetchOrder = () => {
     setLoading(true);
@@ -49,6 +51,12 @@ export default function OrderDetailPage() {
   };
 
   useEffect(() => { fetchOrder(); }, [id]);
+
+  useEffect(() => {
+    api.get(`/order-confirmations/by-order/${id}`)
+      .then(res => setConfirmation(res.data?.[0] || null))
+      .catch(() => setConfirmation(null));
+  }, [id]);
 
   const handleStatusUpdate = async () => {
     if (!newStatus || newStatus === order.status) {
@@ -165,9 +173,22 @@ export default function OrderDetailPage() {
             </div>
             <StatusBadge status={order.status} />
           </div>
-          <Link to={`/orders/${id}/edit`}>
-            <Button variant="secondary" size="sm"><Pencil size={14} /> Edit Order</Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => navigate(
+                confirmation
+                  ? `/order-confirmations/${confirmation.id}`
+                  : `/order-confirmations/new?order_id=${id}`
+              )}
+            >
+              <FileCheck2 size={14} /> {confirmation ? confirmation.oc_number : 'Order Confirmation'}
+            </Button>
+            <Link to={`/orders/${id}/edit`}>
+              <Button variant="secondary" size="sm"><Pencil size={14} /> Edit Order</Button>
+            </Link>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 text-sm">

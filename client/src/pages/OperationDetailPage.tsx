@@ -6,6 +6,7 @@ import {
   ArrowLeft, Briefcase, ShoppingCart, FileText, Upload, Trash2,
   Download, Eye, X, Plus, Receipt, ExternalLink, CheckCircle,
   AlertCircle, Loader2, Edit2, Link2, Search, Truck, Landmark,
+  FileCheck2,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 
@@ -190,6 +191,9 @@ export default function OperationDetailPage() {
   const [dueDate, setDueDate] = useState('');
   const [savingShip, setSavingShip] = useState(false);
 
+  // Order confirmation issued for the linked order, if any
+  const [orderConfirmation, setOrderConfirmation] = useState<{ id: number; oc_number: string } | null>(null);
+
   // Link Order modal
   const [showLinkOrder, setShowLinkOrder] = useState(false);
   const [orderSearch, setOrderSearch] = useState('');
@@ -275,6 +279,14 @@ export default function OperationDetailPage() {
     fetchOperation();
     fetchCategories();
   }, [id]);
+
+  // The confirmation lives on the order, so re-check whenever the link changes
+  useEffect(() => {
+    if (!operation?.order_id) { setOrderConfirmation(null); return; }
+    api.get(`/order-confirmations/by-order/${operation.order_id}`)
+      .then(({ data }) => setOrderConfirmation(data?.[0] || null))
+      .catch(() => setOrderConfirmation(null));
+  }, [operation?.order_id, operation?.documents.length]);
 
   // ── Preview ─────────────────────────────────────────────────────────────────
 
@@ -646,6 +658,17 @@ export default function OperationDetailPage() {
               Linked Order
             </h2>
             <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+              <button
+                onClick={() => navigate(
+                  orderConfirmation
+                    ? `/order-confirmations/${orderConfirmation.id}`
+                    : `/order-confirmations/new?order_id=${operation.order_id}&operation_id=${operation.id}`
+                )}
+                className="flex items-center gap-1 text-xs sm:text-sm text-primary-600 hover:text-primary-700 border border-primary-200 bg-primary-50 rounded-lg px-2 py-1"
+                title={orderConfirmation ? `Edit ${orderConfirmation.oc_number}` : 'Generate an order confirmation from this order'}
+              >
+                <FileCheck2 size={13} /> {orderConfirmation ? orderConfirmation.oc_number : 'Order Confirmation'}
+              </button>
               <button
                 onClick={() => navigate(`/orders/${operation.order_id}/edit`)}
                 className="flex items-center gap-1 text-xs sm:text-sm text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2 py-1"

@@ -16,6 +16,7 @@ import InvoiceDetailPage from './pages/InvoiceDetailPage';
 import OrdersPage from './pages/OrdersPage';
 import OrderFormPage from './pages/OrderFormPage';
 import OrderDetailPage from './pages/OrderDetailPage';
+import OrderConfirmationPage from './pages/OrderConfirmationPage';
 import ShipmentsPage from './pages/ShipmentsPage';
 import ShipmentFormPage from './pages/ShipmentFormPage';
 import ShipmentDetailPage from './pages/ShipmentDetailPage';
@@ -58,6 +59,8 @@ export default function App() {
               <Route path="/orders/new" element={<OrderFormPage />} />
               <Route path="/orders/:id" element={<OrderDetailPage />} />
               <Route path="/orders/:id/edit" element={<OrderFormPage />} />
+              <Route path="/order-confirmations/new" element={<OrderConfirmationPage />} />
+              <Route path="/order-confirmations/:id" element={<OrderConfirmationPage />} />
               <Route path="/shipments" element={<ShipmentsPage />} />
               <Route path="/shipments/new" element={<ShipmentFormPage />} />
               <Route path="/shipments/:id" element={<ShipmentDetailPage />} />

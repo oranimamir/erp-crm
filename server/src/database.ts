@@ -1423,6 +1423,55 @@ export async function initializeDatabase() {
     `).run();
   } catch { /* ignore */ }
 
+  // ── Order confirmations ─────────────────────────────────────────────────
+  // One confirmation per issued document; `data` holds the full confirmed field
+  // set so the PDF can be regenerated and the form re-opened for editing.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS order_confirmations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      oc_number TEXT NOT NULL UNIQUE,
+      order_id INTEGER,
+      operation_id INTEGER,
+      data TEXT NOT NULL,
+      file_path TEXT,
+      file_name TEXT,
+      document_id INTEGER,
+      sent_to TEXT,
+      sent_at TEXT,
+      created_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (order_id)     REFERENCES orders(id)               ON DELETE CASCADE,
+      FOREIGN KEY (operation_id) REFERENCES operations(id)           ON DELETE SET NULL,
+      FOREIGN KEY (document_id)  REFERENCES operation_documents(id)  ON DELETE SET NULL,
+      FOREIGN KEY (created_by)   REFERENCES users(id)                ON DELETE SET NULL
+    )
+  `);
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_oc_order ON order_confirmations(order_id)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_oc_operation ON order_confirmations(operation_id)`); } catch (_) {}
+
+  // Confirmations file themselves under this document category
+  try {
+    db.prepare(`INSERT OR IGNORE INTO document_categories (name) VALUES ('Order Confirmation')`).run();
+  } catch { /* ignore */ }
+
+  // Issuer details for the confirmation template — editable per document, these
+  // are only the defaults the form starts from.
+  try {
+    db.prepare(`INSERT OR IGNORE INTO app_settings (key, value) VALUES ('order_confirmation_company', ?)`).run(
+      JSON.stringify({
+        company_name: 'TripleW NL BV',
+        company_address1: 'Blokstallen 2-B.',
+        company_address2: '4611WB Bergen Op Zoom',
+        company_country: 'The Netherlands',
+        company_tel: '+1 414 467 7341',
+        company_email: 'denis@triplew.co',
+        company_vat: '866836974B01',
+        company_kvk: '94614342',
+      })
+    );
+  } catch { /* ignore */ }
+
   // Keep old demo_expenses table for backward compat (won't be used by new code)
 
   // Backfill: derive month from issue_date for invoices that have a date but no month
