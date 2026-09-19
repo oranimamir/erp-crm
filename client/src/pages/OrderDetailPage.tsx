@@ -7,6 +7,7 @@ import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import StatusBadge from '../components/ui/StatusBadge';
 import { ArrowLeft, Package, Truck, Clock, ArrowRight, Pencil, Download, Eye, X, FileCheck2 } from 'lucide-react';
+import FilePreviewModal from '../components/ui/FilePreviewModal';
 
 const statusOptions = [
   { value: 'order_placed', label: 'Order Placed' },
@@ -374,31 +375,12 @@ export default function OrderDetailPage() {
 
       {/* File Preview Modal */}
       {previewUrl && previewFile && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={closePreview}>
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl mx-4 flex flex-col overflow-hidden" style={{ maxHeight: '90vh' }} onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
-              <p className="font-medium text-gray-900 truncate">{previewFile}</p>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => downloadFile(`/files/orders/${order.file_path}`, previewFile)}
-                  className="flex items-center gap-1 px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
-                >
-                  <Download size={14} /> Download
-                </button>
-                <button onClick={closePreview} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
-                  <X size={18} />
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 overflow-auto bg-gray-100 flex items-center justify-center p-4" style={{ minHeight: 0 }}>
-              {isImage(previewFile) ? (
-                <img src={previewUrl} alt={previewFile} className="max-w-full max-h-full object-contain rounded-lg shadow" />
-              ) : (
-                <iframe src={previewUrl} title={previewFile} className="w-full rounded-lg shadow bg-white" style={{ height: '70vh' }} />
-              )}
-            </div>
-          </div>
-        </div>
+        <FilePreviewModal
+          fileName={previewFile}
+          url={previewUrl}
+          onClose={closePreview}
+          onDownload={() => downloadFile(`/files/orders/${order.file_path}`, previewFile)}
+        />
       )}
 
       {/* Status History */}

@@ -9,6 +9,7 @@ import {
   FileCheck2,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
+import FilePreviewModal from '../components/ui/FilePreviewModal';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -658,6 +659,20 @@ export default function OperationDetailPage() {
               Linked Order
             </h2>
             <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+              {operation.order_file_path && (
+                <button
+                  onClick={() => openPreview({
+                    fileName: operation.order_file_name || operation.order_file_path!,
+                    filePath: operation.order_file_path!,
+                    subfolder: 'orders',
+                    label: 'Order document',
+                  })}
+                  className="flex items-center gap-1 text-xs sm:text-sm text-gray-600 hover:text-gray-800 border border-gray-200 rounded-lg px-2 py-1"
+                  title="Quick preview of the order document"
+                >
+                  <Eye size={13} /> Preview
+                </button>
+              )}
               <button
                 onClick={() => navigate(
                   orderConfirmation
@@ -688,8 +703,8 @@ export default function OperationDetailPage() {
               >
                 <Trash2 size={13} /> Delete
               </button>
-              <Link to={`/orders/${operation.order_id}`} className="flex items-center gap-1 text-xs sm:text-sm text-primary-600 hover:underline ml-1">
-                View <ExternalLink size={13} />
+              <Link to={`/orders/${operation.order_id}`} className="flex items-center gap-1 text-xs sm:text-sm text-primary-600 hover:underline ml-1" title="Go to the order page">
+                Open order <ExternalLink size={13} />
               </Link>
             </div>
           </div>
@@ -1138,40 +1153,14 @@ export default function OperationDetailPage() {
 
       {/* ── Preview Modal ──────────────────────────────────────────────────── */}
       {previewItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={closePreview}>
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl mx-4 flex flex-col overflow-hidden" style={{ maxHeight: '90vh' }} onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
-              <div className="min-w-0">
-                <p className="font-medium text-gray-900 truncate">{previewItem.fileName}</p>
-                {previewItem.label && (
-                  <span className="text-xs bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded font-medium">{previewItem.label}</span>
-                )}
-              </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <button onClick={() => downloadFile(previewItem.filePath, previewItem.fileName, previewItem.subfolder)}
-                  className="flex items-center gap-1 px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">
-                  <Download size={14} /> Download
-                </button>
-                <button onClick={closePreview} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
-                  <X size={18} />
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 overflow-auto min-h-0 bg-gray-100 flex items-center justify-center p-4">
-              {previewLoading ? (
-                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600" />
-              ) : previewUrl ? (
-                isImage(previewItem.fileName) ? (
-                  <img src={previewUrl} alt={previewItem.fileName} className="max-w-full max-h-full object-contain rounded-lg shadow" />
-                ) : (
-                  <iframe src={previewUrl} title={previewItem.fileName} className="w-full rounded-lg shadow bg-white" style={{ height: '70vh' }} />
-                )
-              ) : (
-                <p className="text-gray-500">Unable to preview this file.</p>
-              )}
-            </div>
-          </div>
-        </div>
+        <FilePreviewModal
+          fileName={previewItem.fileName}
+          url={previewUrl}
+          loading={previewLoading}
+          label={previewItem.label}
+          onClose={closePreview}
+          onDownload={() => downloadFile(previewItem.filePath, previewItem.fileName, previewItem.subfolder)}
+        />
       )}
 
       {/* ── Ship Modal ─────────────────────────────────────────────────────── */}

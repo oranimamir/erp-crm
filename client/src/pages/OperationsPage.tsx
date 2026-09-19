@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
+import FilePreviewModal from '../components/ui/FilePreviewModal';
 import {
   Briefcase, Search, Plus, ChevronLeft, ChevronRight, FileText, Receipt,
   FileSpreadsheet, ChevronUp, ChevronDown, Download, X, Truck, Loader2, ArrowLeftRight, Landmark, Filter, XCircle, Trash2, Pencil, Upload, RotateCcw,
@@ -1328,44 +1329,13 @@ export default function OperationsPage() {
 
       {/* Preview Modal */}
       {previewItem && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
-          onClick={closePreview}
-        >
-          <div
-            className="bg-white rounded-xl shadow-2xl w-full max-w-4xl mx-4 flex flex-col overflow-hidden"
-            style={{ maxHeight: '90vh' }}
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
-              <p className="font-medium text-gray-900 truncate">{previewItem.fileName}</p>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <button
-                  onClick={() => downloadFile(previewItem.filePath, previewItem.fileName, previewItem.subfolder)}
-                  className="flex items-center gap-1 px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
-                >
-                  <Download size={14} /> Download
-                </button>
-                <button onClick={closePreview} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
-                  <X size={18} />
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 overflow-auto min-h-0 bg-gray-100 flex items-center justify-center p-4">
-              {previewLoading ? (
-                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600" />
-              ) : previewUrl ? (
-                isImage(previewItem.fileName) ? (
-                  <img src={previewUrl} alt={previewItem.fileName} className="max-w-full max-h-full object-contain rounded-lg shadow" />
-                ) : (
-                  <iframe src={previewUrl} title={previewItem.fileName} className="w-full rounded-lg shadow bg-white" style={{ height: '70vh' }} />
-                )
-              ) : (
-                <p className="text-gray-500">Unable to preview this file.</p>
-              )}
-            </div>
-          </div>
-        </div>
+        <FilePreviewModal
+          fileName={previewItem.fileName}
+          url={previewUrl}
+          loading={previewLoading}
+          onClose={closePreview}
+          onDownload={() => downloadFile(previewItem.filePath, previewItem.fileName, previewItem.subfolder)}
+        />
       )}
 
       {/* ── Ship Modal ─────────────────────────────────────────────────────── */}
