@@ -10,7 +10,7 @@ import SearchBar from '../components/ui/SearchBar';
 import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
-import { Plus, ShoppingCart, Eye, Trash2, Download, FileSpreadsheet, X } from 'lucide-react';
+import { Plus, ShoppingCart, Eye, Pencil, Trash2, Download, FileSpreadsheet, X } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
 
@@ -308,7 +308,7 @@ export default function OrdersPage() {
                     <td className="px-4 py-3 text-gray-500">{formatDateOrDash(o.created_at)}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
-                        <Link to={`/orders/${o.id}`} className="p-1.5 text-gray-400 hover:text-primary-600 rounded" title="View order"><Eye size={16} /></Link>
+                        <Link to={`/orders/${o.id}`} className="p-1.5 text-gray-400 hover:text-primary-600 rounded" title="Open order"><Pencil size={16} /></Link>
                         {o.file_path && (
                           <>
                             <button
