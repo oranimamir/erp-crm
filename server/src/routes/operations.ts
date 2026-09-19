@@ -461,17 +461,23 @@ router.get('/:id', (req: Request, res: Response) => {
 
 // ── Create operation ──────────────────────────────────────────────────────────
 
+const VALID_STATUSES = ['pre-ordered', 'ordered', 'shipped', 'in clearance', 'delivered', 'completed'];
+
 router.post('/', (req: Request, res: Response) => {
-  const { operation_number, order_id, customer_id, supplier_id, notes } = req.body;
+  const { operation_number, order_id, customer_id, supplier_id, notes, status } = req.body;
   if (!operation_number) {
     res.status(400).json({ error: 'operation_number is required' });
     return;
   }
+  if (status && !VALID_STATUSES.includes(status)) {
+    res.status(400).json({ error: `Invalid status. Expected one of: ${VALID_STATUSES.join(', ')}` });
+    return;
+  }
   try {
     const result = db.prepare(`
-      INSERT INTO operations (operation_number, order_id, customer_id, supplier_id, notes)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(operation_number, order_id || null, customer_id || null, supplier_id || null, notes || null);
+      INSERT INTO operations (operation_number, order_id, customer_id, supplier_id, notes, status)
+      VALUES (?, ?, ?, ?, ?, COALESCE(?, 'ordered'))
+    `).run(operation_number, order_id || null, customer_id || null, supplier_id || null, notes || null, status || null);
     const op = db.prepare('SELECT * FROM operations WHERE id = ?').get(result.lastInsertRowid);
     notifyAdmin({ action: 'created', entity: 'Operation', label: operation_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
     res.status(201).json(op);
