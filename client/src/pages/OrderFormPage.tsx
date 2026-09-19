@@ -314,11 +314,13 @@ export default function OrderFormPage() {
       if (isEditing) {
         await api.put(`/orders/${id}`, payload);
         addToast('Order updated', 'success');
+        navigate('/orders');
       } else {
         await api.post('/orders', payload);
         addToast('Order created', 'success');
+        // A new order starts an operation, so that's where the work continues
+        navigate('/operations');
       }
-      navigate('/orders');
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Failed to save order', 'error');
     } finally {
