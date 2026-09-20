@@ -7,7 +7,8 @@ import { Resend } from 'resend';
 import db from '../database.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { entityFromOperationNumber, entityProfile, isEntityCode, type EntityCode } from '../lib/companyEntity.js';
-import { listProfiles, prefillLines, resolveProfile } from '../lib/documentPrefill.js';
+import { listProfiles, prefillLines } from '../lib/documentPrefill.js';
+import { matchProfile } from '../lib/profileMatch.js';
 import {
   buildOrderConfirmationPdf,
   computeTotals,
@@ -139,7 +140,7 @@ router.get('/prepare', (req: Request, res: Response) => {
   if (existing) { res.json({ existing: parseRecord(existing) }); return; }
 
   const operation = db.prepare(
-    'SELECT id, operation_number FROM operations WHERE order_id = ? ORDER BY id DESC LIMIT 1'
+    'SELECT id, operation_number, country FROM operations WHERE order_id = ? ORDER BY id DESC LIMIT 1'
   ).get(orderId) as any;
 
   const items = db.prepare('SELECT * FROM order_items WHERE order_id = ? ORDER BY id').all(orderId) as any[];
@@ -156,11 +157,16 @@ router.get('/prepare', (req: Request, res: Response) => {
   const issuer = entityProfile(entity);
 
   // The customer's saved defaults (client code, tax id, terms, delivery…)
+  // Which of the customer's legal entities this order belongs to. Never applied
+  // silently — the client asks the user to confirm before generating.
   const requestedProfile = parseInt(String(req.query.profile_id || ''), 10);
-  const profile = resolveProfile(
+  const match = matchProfile(
     isSupplier ? null : order.customer_id,
+    order,
+    operation?.country,
     Number.isInteger(requestedProfile) ? requestedProfile : null
   );
+  const profile = match.profile;
   const shared = profile?.data.shared || {};
   const ocDefaults = profile?.data.order_confirmation || {};
 
@@ -195,6 +201,9 @@ router.get('/prepare', (req: Request, res: Response) => {
     entity,
     profiles: listProfiles(isSupplier ? null : order.customer_id),
     profile_id: profile?.id ?? null,
+    profile_name: profile?.name ?? null,
+    matched_by: match.matchedBy,
+    match_confident: match.confident,
     order: {
       id: order.id,
       order_number: order.order_number,
@@ -238,8 +247,8 @@ router.post('/preview', async (req: Request, res: Response) => {
 // ── Create ────────────────────────────────────────────────────────────────
 
 router.post('/', async (req: Request, res: Response) => {
-  const { order_id, operation_id, data } = req.body as {
-    order_id?: number; operation_id?: number | null; data?: OrderConfirmationData;
+  const { order_id, operation_id, profile_id, data } = req.body as {
+    order_id?: number; operation_id?: number | null; profile_id?: number | null; data?: OrderConfirmationData;
   };
 
   if (!order_id) { res.status(400).json({ error: 'order_id is required' }); return; }
@@ -275,10 +284,10 @@ router.post('/', async (req: Request, res: Response) => {
     filed = await renderAndFile(payload, { operationId, userId: req.user?.userId });
 
     const result = db.prepare(`
-      INSERT INTO order_confirmations (oc_number, order_id, operation_id, data, file_path, file_name, document_id, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO order_confirmations (oc_number, order_id, operation_id, profile_id, data, file_path, file_name, document_id, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      payload.oc_number, order_id, operationId,
+      payload.oc_number, order_id, operationId, profile_id ?? null,
       JSON.stringify(payload), filed.filePath, filed.fileName, filed.documentId, req.user?.userId ?? null
     );
 
@@ -305,7 +314,7 @@ router.put('/:id', async (req: Request, res: Response) => {
   const existing = db.prepare('SELECT * FROM order_confirmations WHERE id = ?').get(Number(req.params.id)) as any;
   if (!existing) { res.status(404).json({ error: 'Order confirmation not found' }); return; }
 
-  const { data, operation_id } = req.body as { data?: OrderConfirmationData; operation_id?: number | null };
+  const { data, operation_id, profile_id } = req.body as { data?: OrderConfirmationData; operation_id?: number | null; profile_id?: number | null };
   if (!data || typeof data !== 'object') { res.status(400).json({ error: 'data is required' }); return; }
 
   const payload: OrderConfirmationData = {
@@ -325,9 +334,9 @@ router.put('/:id', async (req: Request, res: Response) => {
 
     db.prepare(`
       UPDATE order_confirmations
-      SET oc_number = ?, operation_id = ?, data = ?, file_path = ?, file_name = ?, document_id = ?, updated_at = datetime('now')
+      SET oc_number = ?, operation_id = ?, profile_id = ?, data = ?, file_path = ?, file_name = ?, document_id = ?, updated_at = datetime('now')
       WHERE id = ?
-    `).run(payload.oc_number, operationId, JSON.stringify(payload), filed.filePath, filed.fileName, filed.documentId, existing.id);
+    `).run(payload.oc_number, operationId, profile_id ?? existing.profile_id ?? null, JSON.stringify(payload), filed.filePath, filed.fileName, filed.documentId, existing.id);
 
     const row = db.prepare('SELECT * FROM order_confirmations WHERE id = ?').get(existing.id);
     notifyAdmin({

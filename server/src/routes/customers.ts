@@ -107,6 +107,8 @@ const EMPTY_PROFILE = {
   order_confirmation: { terms: '', delivery: '', delivery_address: '', sq_suffix: '', note: '' },
   invoice: { terms: '', delivery: '', delivery_address: '', note: '' },
   packing_list: { delivery_address: '', port_of_loading: '', port_of_discharge: '', note: '' },
+  // How an incoming order is recognised as belonging to this entity
+  match: { country: '', keywords: '' },
 };
 
 function parseProfile(row: any) {
@@ -121,6 +123,7 @@ function parseProfile(row: any) {
       order_confirmation: { ...EMPTY_PROFILE.order_confirmation, ...(data.order_confirmation || {}) },
       invoice: { ...EMPTY_PROFILE.invoice, ...(data.invoice || {}) },
       packing_list: { ...EMPTY_PROFILE.packing_list, ...(data.packing_list || {}) },
+      match: { ...EMPTY_PROFILE.match, ...(data.match || {}) },
     },
   };
 }

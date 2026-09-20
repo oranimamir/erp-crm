@@ -3,6 +3,7 @@ import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom'
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import Button from '../components/ui/Button';
+import EntityConfirmStep from '../components/EntityConfirmStep';
 import {
   ArrowLeft, Plus, Trash2, Loader2, Eye, X, FileDown, Mail,
   CheckCircle, FileText, RefreshCw, User, Package, Truck,
@@ -189,6 +190,12 @@ export default function OrderConfirmationPage() {
   const [entity, setEntity] = useState<'NL' | 'BE'>('BE');
   const [profiles, setProfiles] = useState<Array<{ id: number; name: string; is_default: boolean }>>([]);
   const [profileId, setProfileId] = useState<number | null>(null);
+  const [profileName, setProfileName] = useState<string | null>(null);
+  const [matchedBy, setMatchedBy] = useState('');
+  const [matchConfident, setMatchConfident] = useState(false);
+  // The entity must be confirmed before a document can be generated
+  const [entityConfirmed, setEntityConfirmed] = useState(false);
+  const [chooseEntity, setChooseEntity] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -220,6 +227,8 @@ export default function OrderConfirmationPage() {
 
   const adopt = useCallback((record: Confirmation) => {
     setConfirmation(record);
+    setEntityConfirmed(true);
+    setEntityConfirmed(true);
     setForm(toFormData(record.data));
     setOrderId(record.order_id);
     setOperationId(record.operation_id);
@@ -250,6 +259,12 @@ export default function OrderConfirmationPage() {
           setEntity(data.entity);
           setProfiles(data.profiles || []);
           setProfileId(data.profile_id ?? null);
+          setProfileName(data.profile_name ?? null);
+          setMatchedBy(data.matched_by || '');
+          setMatchConfident(!!data.match_confident);
+    setProfileName(data.profile_name ?? null);
+    setMatchedBy(data.matched_by || '');
+    setMatchConfident(!!data.match_confident);
           if (data.operation) {
             setOperationId(data.operation.id);
             setOperationNumber(data.operation.operation_number);
@@ -288,9 +303,33 @@ export default function OrderConfirmationPage() {
         setForm(toFormData(data.draft));
         setEntity(data.entity);
         setProfileId(data.profile_id ?? null);
+    setProfileName(data.profile_name ?? null);
+    setMatchedBy(data.matched_by || '');
+    setMatchConfident(!!data.match_confident);
       }
     } catch {
       addToast('Failed to reload the draft', 'error');
+    }
+  }
+
+  // The entity is never applied silently — see EntityConfirmStep
+  const entityReady = profiles.length < 2 || entityConfirmed;
+
+  async function chooseEntityProfile(nextId: number) {
+    setProfileId(nextId);
+    setChooseEntity(false);
+    try {
+      const { data } = await api.get('/order-confirmations/prepare', {
+        params: { order_id: orderIdParam || orderId, entity, profile_id: nextId },
+      });
+      if (data.draft) {
+        setForm(toFormData(data.draft));
+        setProfileName(data.profile_name ?? null);
+        setMatchedBy(data.matched_by || '');
+        setMatchConfident(!!data.match_confident);
+      }
+    } catch {
+      addToast('Failed to load that entity', 'error');
     }
   }
 
@@ -311,7 +350,7 @@ export default function OrderConfirmationPage() {
     if (!orderId) { addToast('No order linked', 'error'); return; }
     setSaving(true);
     try {
-      const body = { order_id: orderId, operation_id: operationId, data: toPayload(form) };
+      const body = { order_id: orderId, operation_id: operationId, profile_id: profileId, data: toPayload(form) };
       const { data } = confirmation
         ? await api.put(`/order-confirmations/${confirmation.id}`, body)
         : await api.post('/order-confirmations', body);
@@ -383,7 +422,12 @@ export default function OrderConfirmationPage() {
           <Button variant="secondary" size="sm" onClick={handlePreview} disabled={previewing}>
             {previewing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
           </Button>
-          <Button size="sm" onClick={handleSave} disabled={saving}>
+          <Button
+            size="sm"
+            onClick={handleSave}
+            disabled={saving || !entityReady}
+            title={entityReady ? undefined : 'Confirm the customer entity first'}
+          >
             {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
             {confirmation ? 'Confirm & regenerate' : 'Confirm & generate'}
           </Button>
@@ -417,20 +461,21 @@ export default function OrderConfirmationPage() {
           <span className="text-xs text-gray-400">from the operation number</span>
         </div>
 
-        {profiles.length > 1 && (
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-gray-500">Billing profile</span>
-            <select
-              value={profileId ?? ''}
-              onChange={e => { const v = Number(e.target.value); setProfileId(v); reDraft({ entity, profile_id: v }); }}
-              disabled={!!confirmation}
-              className="rounded-lg border border-gray-300 px-2 py-1 text-xs disabled:opacity-60"
-            >
-              {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-          </div>
-        )}
       </div>
+
+      <EntityConfirmStep
+        profiles={profiles}
+        profileId={profileId}
+        profileName={profileName}
+        matchedBy={matchedBy}
+        confident={matchConfident}
+        confirmed={entityConfirmed}
+        chooseMode={chooseEntity}
+        identity={{ client_code: form.client_code, tax_id: form.tax_id, billing_address: form.billing_address }}
+        onConfirm={() => setEntityConfirmed(true)}
+        onChoose={chooseEntityProfile}
+        onReopen={() => { setEntityConfirmed(false); setChooseEntity(true); }}
+      />
 
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Order Confirmation</h1>

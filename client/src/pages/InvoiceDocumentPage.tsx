@@ -3,6 +3,7 @@ import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom'
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import Button from '../components/ui/Button';
+import EntityConfirmStep from '../components/EntityConfirmStep';
 import {
   ArrowLeft, Plus, Trash2, Loader2, Eye, X, FileDown, Mail,
   CheckCircle, FileText, RefreshCw, User, Package, Truck, Factory,
@@ -197,6 +198,12 @@ export default function InvoiceDocumentPage() {
   const [entity, setEntity] = useState<'NL' | 'BE'>('BE');
   const [profiles, setProfiles] = useState<Array<{ id: number; name: string; is_default: boolean }>>([]);
   const [profileId, setProfileId] = useState<number | null>(null);
+  const [profileName, setProfileName] = useState<string | null>(null);
+  const [matchedBy, setMatchedBy] = useState('');
+  const [matchConfident, setMatchConfident] = useState(false);
+  // The entity must be confirmed before a document can be generated
+  const [entityConfirmed, setEntityConfirmed] = useState(false);
+  const [chooseEntity, setChooseEntity] = useState(false);
   const [includeOrigin, setIncludeOrigin] = useState(false);
 
   const [saving, setSaving] = useState(false);
@@ -229,6 +236,7 @@ export default function InvoiceDocumentPage() {
 
   const adopt = useCallback((rec: InvoiceRecord) => {
     setRecord(rec);
+    setEntityConfirmed(true);
     setForm(toFormData(rec.data));
     setOrderId(rec.order_id);
     setOperationId(rec.operation_id);
@@ -245,6 +253,9 @@ export default function InvoiceDocumentPage() {
     setEntity(data.entity);
     setProfiles(data.profiles || []);
     setProfileId(data.profile_id ?? null);
+    setProfileName(data.profile_name ?? null);
+    setMatchedBy(data.matched_by || '');
+    setMatchConfident(!!data.match_confident);
     setIncludeOrigin(false);
     if (data.operation) setOperationId(data.operation.id);
   }, [orderIdParam, orderId, adopt]);
@@ -299,6 +310,27 @@ export default function InvoiceDocumentPage() {
     catch { addToast('Failed to switch profile', 'error'); }
   }
 
+  // The entity is never applied silently — see EntityConfirmStep
+  const entityReady = profiles.length < 2 || entityConfirmed;
+
+  async function chooseEntityProfile(nextId: number) {
+    setProfileId(nextId);
+    setChooseEntity(false);
+    try {
+      const { data } = await api.get('/invoice-documents/prepare', {
+        params: { order_id: orderIdParam || orderId, entity, profile_id: nextId },
+      });
+      if (data.draft) {
+        setForm(toFormData(data.draft));
+        setProfileName(data.profile_name ?? null);
+        setMatchedBy(data.matched_by || '');
+        setMatchConfident(!!data.match_confident);
+      }
+    } catch {
+      addToast('Failed to load that entity', 'error');
+    }
+  }
+
   async function handlePreview() {
     setPreviewing(true);
     try {
@@ -316,7 +348,7 @@ export default function InvoiceDocumentPage() {
     if (!orderId) { addToast('No order linked', 'error'); return; }
     setSaving(true);
     try {
-      const body = { order_id: orderId, operation_id: operationId, data: toPayload(form, includeOrigin) };
+      const body = { order_id: orderId, operation_id: operationId, profile_id: profileId, data: toPayload(form, includeOrigin) };
       const { data } = record
         ? await api.put(`/invoice-documents/${record.id}`, body)
         : await api.post('/invoice-documents', body);
@@ -386,7 +418,12 @@ export default function InvoiceDocumentPage() {
           <Button variant="secondary" size="sm" onClick={handlePreview} disabled={previewing}>
             {previewing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
           </Button>
-          <Button size="sm" onClick={handleSave} disabled={saving}>
+          <Button
+            size="sm"
+            onClick={handleSave}
+            disabled={saving || !entityReady}
+            title={entityReady ? undefined : 'Confirm the customer entity first'}
+          >
             {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
             {record ? 'Confirm & regenerate' : 'Confirm & generate'}
           </Button>
@@ -398,6 +435,20 @@ export default function InvoiceDocumentPage() {
           </Button>
         </div>
       </div>
+
+      <EntityConfirmStep
+        profiles={profiles}
+        profileId={profileId}
+        profileName={profileName}
+        matchedBy={matchedBy}
+        confident={matchConfident}
+        confirmed={entityConfirmed}
+        chooseMode={chooseEntity}
+        identity={{ client_code: form.client_code, tax_id: form.tax_id, billing_address: form.billing_address }}
+        onConfirm={() => setEntityConfirmed(true)}
+        onChoose={chooseEntityProfile}
+        onReopen={() => { setEntityConfirmed(false); setChooseEntity(true); }}
+      />
 
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Commercial Invoice</h1>
@@ -437,19 +488,6 @@ export default function InvoiceDocumentPage() {
           <span className="text-xs text-gray-400">from the operation number</span>
         </div>
 
-        {profiles.length > 1 && (
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-gray-500">Billing profile</span>
-            <select
-              value={profileId ?? ''}
-              onChange={e => switchProfile(Number(e.target.value))}
-              disabled={!!record}
-              className="rounded-lg border border-gray-300 px-2 py-1 text-xs disabled:opacity-60"
-            >
-              {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-          </div>
-        )}
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">

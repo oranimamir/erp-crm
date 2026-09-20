@@ -25,6 +25,7 @@ export interface Profile {
     order_confirmation: Record<string, string>;
     invoice: Record<string, string>;
     packing_list: Record<string, string>;
+    match: Record<string, string>;
   };
 }
 
@@ -79,7 +80,7 @@ export function useCustomerProfiles(customerId: string | number) {
 
   const active = profiles.find(p => p.id === activeId) || null;
 
-  function patch(section: 'shared' | DocType, key: string, value: string) {
+  function patch(section: 'shared' | 'match' | DocType, key: string, value: string) {
     if (!active) return;
     setDirty(true);
     setProfiles(prev => prev.map(p => p.id !== active.id ? p : {
@@ -233,6 +234,24 @@ export default function DocumentDefaults({ docType, state }: { docType: DocType;
               <Field label="Contact phone" value={active.data.shared.contact_phone} onChange={v => patch('shared', 'contact_phone', v)} />
               <Field label="Contact email" value={active.data.shared.contact_email} onChange={v => patch('shared', 'contact_email', v)} />
               <Field label="Attention" value={active.data.shared.attention} onChange={v => patch('shared', 'attention', v)} placeholder="Melina Mamma m.mamma@…" />
+            </div>
+          </Card>
+
+          {/* How an incoming order is recognised as belonging to this entity */}
+          <Card>
+            <div className="px-5 py-3.5 border-b border-gray-100 flex items-center gap-2">
+              <h2 className="font-semibold text-gray-800 text-sm">Match orders to this entity</h2>
+              <span className="text-xs text-gray-400">· how the system recognises it</span>
+            </div>
+            <div className="p-5 space-y-3">
+              <p className="text-xs text-gray-500">
+                When an order ships to this country, its documents are drafted from this profile.
+                You are always asked to confirm before anything is generated.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Field label="Country" value={active.data.match?.country} onChange={v => patch('match', 'country', v)} placeholder="Guatemala" />
+                <Field label="Other match terms (comma separated)" value={active.data.match?.keywords} onChange={v => patch('match', 'keywords', v)} placeholder="Puerto Quetzal, DISCA" />
+              </div>
             </div>
           </Card>
 

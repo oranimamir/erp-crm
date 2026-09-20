@@ -100,6 +100,7 @@ router.post('/', (req: Request, res: Response) => {
     order_number, customer_id, supplier_id, type, status, description, notes, items,
     order_date, inco_terms, destination, transport, delivery_date, payment_terms,
     file_path, file_name, operation_number, link_operation_id,
+    client_entity_name, client_tax_id,
   } = req.body;
 
   if (!order_number || !type) {
@@ -115,8 +116,9 @@ router.post('/', (req: Request, res: Response) => {
 
     const result = db.prepare(`
       INSERT INTO orders (order_number, customer_id, supplier_id, type, status, total_amount, description, notes,
-        order_date, inco_terms, destination, transport, delivery_date, payment_terms, file_path, file_name, operation_number)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        order_date, inco_terms, destination, transport, delivery_date, payment_terms, file_path, file_name, operation_number,
+        client_entity_name, client_tax_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       order_number,
       type === 'customer' ? (customer_id || null) : null,
@@ -124,7 +126,8 @@ router.post('/', (req: Request, res: Response) => {
       type, status || 'order_placed', total_amount, description || null, notes || null,
       order_date || null, inco_terms || null, destination || null,
       transport || null, delivery_date || null, payment_terms || null,
-      file_path || null, file_name || null, operation_number || null
+      file_path || null, file_name || null, operation_number || null,
+      client_entity_name || null, client_tax_id || null
     );
 
     const orderId = result.lastInsertRowid;
@@ -198,6 +201,7 @@ router.put('/:id', (req: Request, res: Response) => {
     order_number, customer_id, supplier_id, type, status, description, notes, items,
     order_date, inco_terms, destination, transport, delivery_date, payment_terms,
     operation_number, file_path, file_name, link_operation_id,
+    client_entity_name, client_tax_id,
   } = req.body;
 
   const updateOrder = db.transaction(() => {
@@ -234,6 +238,7 @@ router.put('/:id', (req: Request, res: Response) => {
       destination ?? existing.destination, transport ?? existing.transport,
       delivery_date ?? existing.delivery_date, payment_terms ?? existing.payment_terms,
       operation_number ?? existing.operation_number,
+      client_entity_name || null, client_tax_id || null,
       file_path || null, file_name || null,
       req.params.id
     );

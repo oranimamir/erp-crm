@@ -30,6 +30,8 @@ const EXTRACTION_PROMPT = `You are an order document extraction assistant. Analy
   "operation_number": "string or null (internal operation or reference number, if present)",
   "order_number": "string or null",
   "customer_or_supplier_name": "string or null (the company name of the buyer or seller)",
+  "customer_entity_name": "string or null (the buyer's FULL legal entity name exactly as written, including the country arm and suffix — e.g. 'Distribuidora del Caribe de Guatemala SA')",
+  "customer_tax_id": "string or null (the buyer's tax ID / VAT / NIT / EORI as written)",
   "order_date": "string or null (YYYY-MM-DD format — the date the order was placed)",
   "inco_terms": "string or null (e.g. FOB, CIF, DAP, DDP, EXW, CFR, FCA — extract the Incoterm if mentioned)",
   "destination": "string or null (delivery destination port, city, or country)",
@@ -179,6 +181,9 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
       payment_terms:            extracted.payment_terms             || null,
       notes:                    extracted.notes                     || null,
       customer_or_supplier_name: extracted.customer_or_supplier_name || null,
+      // Identifies which of a customer's legal arms the order belongs to
+      client_entity_name:       extracted.customer_entity_name      || extracted.customer_or_supplier_name || null,
+      client_tax_id:            extracted.customer_tax_id           || null,
       scan_file_path,
       scan_file_name,
       ...entityMatch,

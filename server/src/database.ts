@@ -1546,6 +1546,15 @@ export async function initializeDatabase() {
   `);
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_cdp_customer ON customer_document_profiles(customer_id)`); } catch (_) {}
 
+  // The buyer entity as written on the scanned order — the surest way to tell
+  // which of a customer's legal arms an order belongs to.
+  try { db.exec(`ALTER TABLE orders ADD COLUMN client_entity_name TEXT`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE orders ADD COLUMN client_tax_id TEXT`); } catch (_) { /* column may already exist */ }
+
+  // Which profile a document was drafted from, so regenerating never switches entity
+  try { db.exec(`ALTER TABLE order_confirmations ADD COLUMN profile_id INTEGER`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE invoice_documents ADD COLUMN profile_id INTEGER`); } catch (_) { /* column may already exist */ }
+
   seedCustomerDocumentProfiles();
 
   // Keep old demo_expenses table for backward compat (won't be used by new code)
@@ -1583,6 +1592,7 @@ function seedCustomerDocumentProfiles() {
   interface SeedProfile {
     match: string;               // LIKE fragment against customers.name
     name: string;                // profile label
+    country: string;             // where this entity's orders ship — used to auto-match
     shared: Record<string, string>;
     order_confirmation?: Record<string, string>;
     invoice?: Record<string, string>;
@@ -1591,6 +1601,7 @@ function seedCustomerDocumentProfiles() {
   const seeds: SeedProfile[] = [
     {
       match: 'La Mesta', name: 'Default',
+      country: 'France',
       shared: {
         legal_name: 'La Mesta Chimie Fine', client_code: '00FR03',
         billing_address: "1336, route de l'Estéron\nFR-06830 Gilette France",
@@ -1607,6 +1618,7 @@ function seedCustomerDocumentProfiles() {
     },
     {
       match: 'Good Food Industry', name: 'Default',
+      country: 'Panama',
       shared: {
         legal_name: 'Good Food Industry SA', client_code: '00PA01',
         billing_address: 'urbanizacion industrial Orillac\nc/81D Oeste local 3\n(al lado de Electrisa)\nCuidad de Panama 0819-04869 Panama',
@@ -1621,6 +1633,7 @@ function seedCustomerDocumentProfiles() {
     },
     {
       match: 'Faravelli', name: 'Default',
+      country: 'Italy',
       shared: {
         legal_name: 'Giusto Faravelli SpA', client_code: '00IT02',
         billing_address: 'Giusto Faravelli SpA Società con Socio Unico\nVia Medardo Rosso 8 - 20159 Milano – Italia',
@@ -1638,6 +1651,7 @@ function seedCustomerDocumentProfiles() {
     },
     {
       match: 'Astron Chemicals', name: 'Default',
+      country: 'Greece',
       shared: {
         legal_name: 'Astron Chemicals SA', client_code: '00GR01',
         billing_address: 'Thessis Kyrillos,\nGR-19300 Aspropyrgos,\nAttica, Greece',
@@ -1653,6 +1667,7 @@ function seedCustomerDocumentProfiles() {
     },
     {
       match: 'Lavollee', name: 'Default',
+      country: 'France',
       shared: {
         legal_name: 'LAVOLLEE SAS', client_code: '00FR02',
         billing_address: '9, Rue Louis Rouquier\n92300 Levallois Perret - France',
@@ -1668,6 +1683,7 @@ function seedCustomerDocumentProfiles() {
     },
     {
       match: 'Distribuidora del Caribe', name: 'Costa Rica',
+      country: 'Costa Rica',
       shared: {
         legal_name: 'Distribuidora del Caribe CR SA', client_code: '00CR02',
         billing_address: 'Cartago, Ochomogo, de la estación de policía 150mts norte,\n50mts suroeste y 125mts oeste, Costa Rica',
@@ -1682,6 +1698,7 @@ function seedCustomerDocumentProfiles() {
     },
     {
       match: 'Distribuidora del Caribe', name: 'Guatemala',
+      country: 'Guatemala',
       shared: {
         legal_name: 'Distribuidora del Caribe de Guatemala SA', client_code: '00GT01',
         billing_address: '13 Avenida 3-26 Zona 1\nGuatemala, Centro America',
@@ -1720,6 +1737,7 @@ function seedCustomerDocumentProfiles() {
       'INSERT INTO customer_document_profiles (customer_id, name, is_default, data) VALUES (?, ?, ?, ?)'
     ).run(customer.id, seed.name, isFirst ? 1 : 0, JSON.stringify({
       shared: seed.shared,
+      match: { country: seed.country, keywords: '' },
       order_confirmation: seed.order_confirmation || {},
       // Invoice inherits the confirmation's commercial terms unless overridden
       invoice: seed.invoice || {
