@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import api from '../lib/api';
 import Card from '../components/ui/Card';
 import StatusBadge from '../components/ui/StatusBadge';
+import CustomerDocumentProfiles from '../components/CustomerDocumentProfiles';
 import { ArrowLeft, Mail, Phone, MapPin, Building, FileText, ShoppingCart, Package, DollarSign } from 'lucide-react';
 
 export default function CustomerDetailPage() {
@@ -52,6 +53,8 @@ export default function CustomerDetailPage() {
         </div>
         {customer.notes && <p className="mt-4 text-sm text-gray-600 bg-gray-50 rounded-lg p-3">{customer.notes}</p>}
       </Card>
+
+      <CustomerDocumentProfiles customerId={id!} />
 
       {/* Financial Summary */}
       {invoices.length > 0 && (() => {

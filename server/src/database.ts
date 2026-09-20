@@ -1455,27 +1455,98 @@ export async function initializeDatabase() {
     db.prepare(`INSERT OR IGNORE INTO document_categories (name) VALUES ('Order Confirmation')`).run();
   } catch { /* ignore */ }
 
-  // Company constants for the confirmation template (issuer, bank, dispatch
-  // contact). These never vary per document, so they stay out of the form.
+  // ── Commercial invoices ─────────────────────────────────────────────────
+  // Same shape as order_confirmations — the two documents share a PDF builder.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS invoice_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      invoice_number TEXT NOT NULL UNIQUE,
+      order_id INTEGER,
+      operation_id INTEGER,
+      data TEXT NOT NULL,
+      file_path TEXT,
+      file_name TEXT,
+      document_id INTEGER,
+      sent_to TEXT,
+      sent_at TEXT,
+      created_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (order_id)     REFERENCES orders(id)               ON DELETE CASCADE,
+      FOREIGN KEY (operation_id) REFERENCES operations(id)           ON DELETE SET NULL,
+      FOREIGN KEY (document_id)  REFERENCES operation_documents(id)  ON DELETE SET NULL,
+      FOREIGN KEY (created_by)   REFERENCES users(id)                ON DELETE SET NULL
+    )
+  `);
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_invdoc_order ON invoice_documents(order_id)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_invdoc_operation ON invoice_documents(operation_id)`); } catch (_) {}
+
   try {
-    db.prepare(`DELETE FROM app_settings WHERE key = 'order_confirmation_company'`).run();
-    db.prepare(`INSERT OR IGNORE INTO app_settings (key, value) VALUES ('order_confirmation_defaults', ?)`).run(
+    db.prepare(`INSERT OR IGNORE INTO document_categories (name) VALUES ('Commercial Invoice')`).run();
+  } catch { /* ignore */ }
+
+  // ── Issuing entities ────────────────────────────────────────────────────
+  // The entity is derived from the operation number (SOBE… / SONL…) and decides
+  // the address, VAT/KVK and bank block printed on every document. Supersedes
+  // the single-entity 'order_confirmation_defaults' key.
+  try {
+    db.prepare(`DELETE FROM app_settings WHERE key IN ('order_confirmation_company', 'order_confirmation_defaults')`).run();
+    db.prepare(`INSERT OR IGNORE INTO app_settings (key, value) VALUES ('company_entity_BE', ?)`).run(
       JSON.stringify({
         company_name: 'TripleW BV',
         company_address1: 'Innovatiestraat 1',
         company_address2: '2030 Antwerpen, Belgium',
+        company_address3: '',
         company_tel: '+1 414 467 7341',
         company_email: 'denis@triplew.co',
         company_vat: 'BE0725717772',
+        company_kvk: '',
         bank_name: 'ING Belgium NV/SA',
         iban: 'BE53 3631 9783 2853',
         bic: 'BBRUBEBB',
         bank_address: 'Marnixlaan 25, 1000 Brussels, Belgium',
         delivery_address: 'TRIPLEW, Innovatiestraat 1, 2030 Antwerp, Belgium',
-        delivery_contact: 'Robin Geys  robin@triplew.co  +32 494 908890',
+        delivery_contact: '',
+      })
+    );
+    db.prepare(`INSERT OR IGNORE INTO app_settings (key, value) VALUES ('company_entity_NL', ?)`).run(
+      JSON.stringify({
+        company_name: 'TripleW NL BV',
+        company_address1: 'Kalmoesberg 3',
+        company_address2: '4708KN Roosendaal',
+        company_address3: 'Netherlands',
+        company_tel: '+1 414 467 7341',
+        company_email: 'denis@triplew.co',
+        company_vat: '866836974B01',
+        company_kvk: '94614342',
+        bank_name: '',
+        iban: '',
+        bic: '',
+        bank_address: '',
+        delivery_address: '',
+        delivery_contact: '',
       })
     );
   } catch { /* ignore */ }
+
+  // ── Per-customer document profiles ──────────────────────────────────────
+  // A customer may trade as several legal entities (Distribuidora del Caribe
+  // has a Costa Rican and a Guatemalan arm), so defaults are held per profile.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS customer_document_profiles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      customer_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      data TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE
+    )
+  `);
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_cdp_customer ON customer_document_profiles(customer_id)`); } catch (_) {}
+
+  seedCustomerDocumentProfiles();
 
   // Keep old demo_expenses table for backward compat (won't be used by new code)
 
@@ -1499,6 +1570,174 @@ export async function initializeDatabase() {
   } catch { /* ignore */ }
 
   db.saveToDisk();
+}
+
+/**
+ * Seeds document defaults for the customers whose order confirmations were
+ * supplied as templates. Matches on a name fragment because the DB holds short
+ * trading names ("Astron Chemicals") while the documents use full legal names
+ * ("Astron Chemicals SA"). Idempotent: a customer that already has a profile is
+ * left untouched, so edits made in the UI are never overwritten.
+ */
+function seedCustomerDocumentProfiles() {
+  interface SeedProfile {
+    match: string;               // LIKE fragment against customers.name
+    name: string;                // profile label
+    shared: Record<string, string>;
+    order_confirmation?: Record<string, string>;
+    invoice?: Record<string, string>;
+  }
+
+  const seeds: SeedProfile[] = [
+    {
+      match: 'La Mesta', name: 'Default',
+      shared: {
+        legal_name: 'La Mesta Chimie Fine', client_code: '00FR03',
+        billing_address: "1336, route de l'Estéron\nFR-06830 Gilette France",
+        tax_id: 'FR62 970 802 724', eori: '',
+        contact_person: 'Achref Aouini', contact_phone: '+33 6 40 28 93 18',
+        contact_email: 'achref.aouini@la-mesta.com', attention: '',
+      },
+      order_confirmation: {
+        terms: '100% payable at 45 days end of month',
+        delivery: 'DDP Gilette FR',
+        delivery_address: "La Mesta Chimie Fine, 1336 route de l'Estéron, FR-06830 Gilette",
+        sq_suffix: 'FR', note: '',
+      },
+    },
+    {
+      match: 'Good Food Industry', name: 'Default',
+      shared: {
+        legal_name: 'Good Food Industry SA', client_code: '00PA01',
+        billing_address: 'urbanizacion industrial Orillac\nc/81D Oeste local 3\n(al lado de Electrisa)\nCuidad de Panama 0819-04869 Panama',
+        tax_id: '1251286-1-593257 DV63', eori: '',
+        contact_person: 'Eduardo Lay', contact_phone: '+(507) 399-9280',
+        contact_email: '', attention: 'Eduardo Lay',
+      },
+      order_confirmation: {
+        terms: '100% payable at 60 days date of B/L',
+        delivery: 'CIF Balboa Panama', delivery_address: '', sq_suffix: 'PA', note: '',
+      },
+    },
+    {
+      match: 'Faravelli', name: 'Default',
+      shared: {
+        legal_name: 'Giusto Faravelli SpA', client_code: '00IT02',
+        billing_address: 'Giusto Faravelli SpA Società con Socio Unico\nVia Medardo Rosso 8 - 20159 Milano – Italia',
+        tax_id: 'IT03224410153', eori: '',
+        contact_person: 'Julia Reigada', contact_phone: '',
+        contact_email: 'julia.reigada@faravelligroup.com',
+        attention: 'Stefania Dicuzzo stefania.dicuzzo@faravelli.it',
+      },
+      order_confirmation: {
+        terms: '100% payable at 60 days date of invoice',
+        delivery: 'DDP Faravelli Pavia',
+        delivery_address: 'SINTECO LOGISTICS SPA\nStrada Bellingera 50\n27100 – Pavia\nItalia',
+        sq_suffix: 'IT', note: '',
+      },
+    },
+    {
+      match: 'Astron Chemicals', name: 'Default',
+      shared: {
+        legal_name: 'Astron Chemicals SA', client_code: '00GR01',
+        billing_address: 'Thessis Kyrillos,\nGR-19300 Aspropyrgos,\nAttica, Greece',
+        tax_id: '004468327', eori: 'GR094468327',
+        contact_person: 'Maria Papadopoulou, Diana Liarmakopoulou',
+        contact_phone: '+30 211 55 53 300', contact_email: '',
+        attention: 'Melina Mamma m.mamma@astronchemicals.gr',
+      },
+      order_confirmation: {
+        terms: '100% payable at 60 days date of B/L',
+        delivery: 'CIF Piraeus Greece', delivery_address: '', sq_suffix: 'GR', note: '',
+      },
+    },
+    {
+      match: 'Lavollee', name: 'Default',
+      shared: {
+        legal_name: 'LAVOLLEE SAS', client_code: '00FR02',
+        billing_address: '9, Rue Louis Rouquier\n92300 Levallois Perret - France',
+        tax_id: 'FR00 442137345', eori: '',
+        contact_person: '', contact_phone: '+33 1 4639 8888',
+        contact_email: '', attention: '',
+      },
+      order_confirmation: {
+        terms: '100% payable at 30 days', delivery: 'EXW TRIPLEW',
+        delivery_address: 'TRIPLEW, Innovatiestraat 1, 2030 Antwerp, Belgium',
+        sq_suffix: 'FR', note: '',
+      },
+    },
+    {
+      match: 'Distribuidora del Caribe', name: 'Costa Rica',
+      shared: {
+        legal_name: 'Distribuidora del Caribe CR SA', client_code: '00CR02',
+        billing_address: 'Cartago, Ochomogo, de la estación de policía 150mts norte,\n50mts suroeste y 125mts oeste, Costa Rica',
+        tax_id: '310157473037', eori: '',
+        contact_person: 'Sra. Estefany Reyna', contact_phone: '+506 4100 2200',
+        contact_email: 'estefany.reyna@distcaribe.com', attention: '',
+      },
+      order_confirmation: {
+        terms: '100% payable at 60 days date of BL',
+        delivery: 'CIF Puerto Moin Costa Rica', delivery_address: '', sq_suffix: 'CR', note: '',
+      },
+    },
+    {
+      match: 'Distribuidora del Caribe', name: 'Guatemala',
+      shared: {
+        legal_name: 'Distribuidora del Caribe de Guatemala SA', client_code: '00GT01',
+        billing_address: '13 Avenida 3-26 Zona 1\nGuatemala, Centro America',
+        tax_id: '636700-3', eori: '',
+        contact_person: 'Sra. Fatima Palacios', contact_phone: '+502 2326 6666',
+        contact_email: 'fatima.palacios@distcaribe.com', attention: '',
+      },
+      order_confirmation: {
+        terms: '100% payable at 60 days date of BL',
+        delivery: 'CIF Puerto Quetzal GT', delivery_address: '', sq_suffix: 'GT', note: '',
+      },
+    },
+  ];
+
+  const matched: string[] = [];
+  const missed: string[] = [];
+
+  for (const seed of seeds) {
+    let customer: any;
+    try {
+      customer = db.prepare('SELECT id, name FROM customers WHERE name LIKE ? ORDER BY id LIMIT 1')
+        .get(`%${seed.match}%`);
+    } catch { continue; }
+
+    if (!customer) { missed.push(seed.match); continue; }
+
+    // Never clobber a profile someone has already edited
+    const exists = db.prepare(
+      'SELECT id FROM customer_document_profiles WHERE customer_id = ? AND name = ?'
+    ).get(customer.id, seed.name);
+    if (exists) continue;
+
+    const isFirst = !db.prepare('SELECT id FROM customer_document_profiles WHERE customer_id = ?').get(customer.id);
+
+    db.prepare(
+      'INSERT INTO customer_document_profiles (customer_id, name, is_default, data) VALUES (?, ?, ?, ?)'
+    ).run(customer.id, seed.name, isFirst ? 1 : 0, JSON.stringify({
+      shared: seed.shared,
+      order_confirmation: seed.order_confirmation || {},
+      // Invoice inherits the confirmation's commercial terms unless overridden
+      invoice: seed.invoice || {
+        terms: seed.order_confirmation?.terms || '',
+        delivery: seed.order_confirmation?.delivery || '',
+        delivery_address: seed.order_confirmation?.delivery_address || '',
+        note: '',
+      },
+      packing_list: {
+        delivery_address: seed.order_confirmation?.delivery_address || '',
+        port_of_loading: '', port_of_discharge: '', note: '',
+      },
+    }));
+    matched.push(`${customer.name} → ${seed.name}`);
+  }
+
+  if (matched.length) console.log(`[seed] Customer document profiles created: ${matched.join(', ')}`);
+  if (missed.length) console.warn(`[seed] No customer matched: ${missed.join(', ')}`);
 }
 
 export default db;

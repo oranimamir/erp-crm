@@ -1,11 +1,15 @@
 /**
- * Order Confirmation PDF — reproduces the TripleW company template.
+ * Order Confirmation / Commercial Invoice PDF — the TripleW company template.
  *
- * Geometry, palette and type sizes are taken from the Word master
- * (SOBE20260124 OC FR LAVOLLEE LACLC90.docx): issuer block top-left with the
- * logo anchored right, green title, meta and client blocks, the line-item
- * table with its merged detail panel, then Terms & Conditions and the bank
- * block. Column widths are the docx `w:gridCol` values converted to points.
+ * Geometry, palette and type sizes are taken from the Word masters
+ * (SOBE20260124 OC FR LAVOLLEE LACLC90.docx and CIBE20260112 GR ASTRON …docx):
+ * issuer block top-left with the logo anchored right, green title, meta and
+ * client blocks, the line-item table with its merged detail panel, then
+ * Terms & Conditions and the bank block. Column widths are the docx
+ * `w:gridCol` values converted to points.
+ *
+ * Both documents share every block; only the title, the meta rows and a few
+ * invoice-only extras (EORI, lot, manufacturer) differ — see `KINDS` below.
  */
 import fs from 'fs';
 import path from 'path';
@@ -42,7 +46,24 @@ const META = 11.5;
 const HEADING = 15;
 const TITLE = 24;
 
-export interface OcLine {
+// A4 height is 841.89pt; the page number sits at 812, so content stops above it.
+const CONTENT_BOTTOM = 796;
+const PAGE_TOP = 40;
+
+/**
+ * Starts a new page when `needed` points won't fit. Without this, pdfkit
+ * silently paginates on every individual text call that lands past the bottom,
+ * turning one overflowing block into a page per line.
+ */
+function ensureRoom(doc: any, y: number, needed: number): number {
+  if (y + needed <= CONTENT_BOTTOM) return y;
+  doc.addPage({ size: 'A4', margin: 0 });
+  return PAGE_TOP;
+}
+
+export type DocumentKind = 'order_confirmation' | 'invoice';
+
+export interface DocLine {
   line?: number | null;
   reference?: string | null;
   commercial_name?: string | null;
@@ -53,32 +74,40 @@ export interface OcLine {
   currency?: string | null;
   hs_code?: string | null;
   description?: string | null;
+  /** Invoice only — printed under the commercial name. */
+  lot?: string | null;
 }
 
-export interface OrderConfirmationData {
-  oc_number?: string | null;
-  // Issuer — company constants, supplied from app settings
+export interface DocumentData {
+  /** Order confirmation number, or invoice number when kind is 'invoice'. */
+  doc_number?: string | null;
+  // Issuer — entity constants, supplied from app settings
   company_name?: string | null;
   company_address1?: string | null;
   company_address2?: string | null;
+  company_address3?: string | null;
   company_tel?: string | null;
   company_email?: string | null;
   company_vat?: string | null;
+  company_kvk?: string | null;
   // Document meta
-  oc_date?: string | null; // YYYY-MM-DD
+  doc_date?: string | null; // YYYY-MM-DD
   sq_number?: string | null;
   our_ref?: string | null;
-  po_number?: string | null;
+  po_number?: string | null; // "PO number" / "Your order#"
+  operation_number?: string | null; // "Our order#" (invoice only)
   client_code?: string | null;
+  attention?: string | null; // invoice only
   // Client
   client_name?: string | null;
   billing_address?: string | null; // one line per row
   client_phone?: string | null;
   tax_id?: string | null;
-  /** Where the confirmation gets emailed — carried on the record, never printed. */
+  eori?: string | null; // invoice only
+  /** Where the document gets emailed — carried on the record, never printed. */
   contact_email?: string | null;
   // Items
-  items?: OcLine[];
+  items?: DocLine[];
   // Delivery
   delivery?: string | null;
   delivery_address?: string | null;
@@ -87,13 +116,42 @@ export interface OrderConfirmationData {
   // Totals
   freight?: number | null;
   vat?: number | null;
-  // Terms and bank — company constants, supplied from app settings
+  // Origin — invoice only, opt-in
+  manufacturer?: string | null;
+  country_of_origin?: string | null;
+  // Terms and bank — entity constants, supplied from app settings
   terms?: string | null;
   bank_name?: string | null;
   iban?: string | null;
   bic?: string | null;
   bank_address?: string | null;
 }
+
+/** What separates the two documents. Everything else is shared. */
+const KINDS: Record<DocumentKind, { title: string; metaRows: (d: DocumentData) => Array<[string, string]> }> = {
+  order_confirmation: {
+    title: 'Order Confirmation',
+    metaRows: d => [
+      ['Date:', formatLongDate(d.doc_date)],
+      ['SQ:', d.sq_number || ''],
+      ['Our ref:', d.our_ref || ''],
+      ['PO number:', d.po_number || ''],
+      ['Client:', d.client_code || ''],
+    ],
+  },
+  invoice: {
+    title: 'Commercial Invoice',
+    metaRows: d => [
+      ['Date :', formatLongDate(d.doc_date)],
+      ['Invoice# :', d.doc_number || ''],
+      ['SQ :', d.sq_number || ''],
+      ['Your order# :', d.po_number || ''],
+      ['Our order# :', d.operation_number || ''],
+      ['Client :', d.client_code || ''],
+      ['Attention :', d.attention || ''],
+    ],
+  },
+};
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -118,16 +176,16 @@ function fmt(value: number): string {
   return rounded.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
 
-export function lineAmount(item: OcLine): number {
+export function lineAmount(item: DocLine): number {
   return num(item.quantity) * num(item.unit_price);
 }
 
-/** Currency of the confirmation — taken from the first priced line. */
-export function docCurrency(items: OcLine[]): string {
+/** Currency of the document — taken from the first priced line. */
+export function docCurrency(items: DocLine[]): string {
   return (items.find(i => i.currency)?.currency || 'EUR').toUpperCase();
 }
 
-export function computeTotals(data: OrderConfirmationData) {
+export function computeTotals(data: DocumentData) {
   const items = Array.isArray(data.items) ? data.items : [];
   const subtotal = items.reduce((sum, item) => sum + lineAmount(item), 0);
   const freight = num(data.freight);
@@ -135,7 +193,7 @@ export function computeTotals(data: OrderConfirmationData) {
   return { subtotal, freight, vat, total: subtotal + freight + vat, currency: docCurrency(items) };
 }
 
-function cellValues(item: OcLine, index: number): Record<string, string> {
+function cellValues(item: DocLine, index: number): Record<string, string> {
   const currency = (item.currency || 'EUR').toUpperCase();
   const unit = (item.quantity_unit || '').toUpperCase();
   const qty = num(item.quantity);
@@ -144,7 +202,8 @@ function cellValues(item: OcLine, index: number): Record<string, string> {
   return {
     line: String(item.line ?? index + 1),
     reference: item.reference || '',
-    commercial_name: item.commercial_name || '',
+    // The masters print the lot beneath the product name, inside the same cell
+    commercial_name: [item.commercial_name || '', item.lot ? `Lot : ${item.lot}` : ''].filter(Boolean).join('\n'),
     packaging: item.packaging || '',
     quantity: qty ? `${fmt(qty)}${unit ? ` ${unit}` : ''}` : '',
     unit_price: price ? `${fmt(price)} ${currency}${unit ? ` /${unit}` : ''}` : '',
@@ -152,8 +211,8 @@ function cellValues(item: OcLine, index: number): Record<string, string> {
   };
 }
 
-/** Renders the confirmation and resolves with the finished PDF bytes. */
-export async function buildOrderConfirmationPdf(data: OrderConfirmationData): Promise<Buffer> {
+/** Renders the document and resolves with the finished PDF bytes. */
+export async function buildDocumentPdf(kind: DocumentKind, data: DocumentData): Promise<Buffer> {
   const PDFDocument = (await import('pdfkit')).default;
   const doc = new PDFDocument({ size: 'A4', margin: 0, bufferPages: true });
 
@@ -162,14 +221,31 @@ export async function buildOrderConfirmationPdf(data: OrderConfirmationData): Pr
   const done = new Promise<Buffer>((resolve) => doc.on('end', () => resolve(Buffer.concat(chunks))));
 
   let y = drawHeader(doc, data);
-  y = drawTitleAndMeta(doc, data, y);
-  y = drawTable(doc, data, y + 14);
+  y = drawTitleAndMeta(doc, kind, data, y);
+  y = drawTable(doc, data, y + 10);
   y = drawDetailPanel(doc, data, y);
-  drawFooterBlocks(doc, data, y + 22);
+  y = drawOriginBlock(doc, data, y);
+  drawFooterBlocks(doc, data, y + 16);
   stampPageNumbers(doc);
 
   doc.end();
   return done;
+}
+
+// ── Order-confirmation compatibility layer ────────────────────────────────
+// Confirmations were stored with `oc_number` / `oc_date` before the invoice
+// shared this builder. Keeping the alias means no data migration.
+
+export type OcLine = DocLine;
+
+export interface OrderConfirmationData extends Omit<DocumentData, 'doc_number' | 'doc_date'> {
+  oc_number?: string | null;
+  oc_date?: string | null;
+}
+
+export function buildOrderConfirmationPdf(data: OrderConfirmationData): Promise<Buffer> {
+  const { oc_number, oc_date, ...rest } = data;
+  return buildDocumentPdf('order_confirmation', { ...rest, doc_number: oc_number, doc_date: oc_date });
 }
 
 /** Bold label with a regular value beside it; returns the height consumed. */
@@ -178,7 +254,7 @@ function labelled(
   opts: { size?: number; boldValue?: boolean; lh?: number } = {}
 ): number {
   const size = opts.size ?? BODY;
-  const lh = opts.lh ?? size * 1.45;
+  const lh = opts.lh ?? size * 1.3;
 
   doc.font('Helvetica-Bold').fontSize(size).fillColor(BLACK);
   const labelW = label ? doc.widthOfString(label) + 4 : 0;
@@ -194,7 +270,7 @@ function labelled(
 }
 
 // ── Issuer block (left) with the logo anchored right ──────────────────────
-function drawHeader(doc: any, data: OrderConfirmationData): number {
+function drawHeader(doc: any, data: DocumentData): number {
   const logoW = 132;
   if (fs.existsSync(LOGO_PATH)) {
     doc.image(LOGO_PATH, R - logoW, 26, { width: logoW });
@@ -204,9 +280,11 @@ function drawHeader(doc: any, data: OrderConfirmationData): number {
     [data.company_name || '', true],
     [data.company_address1 || '', false],
     [data.company_address2 || '', false],
+    [data.company_address3 || '', false],
     [data.company_tel ? `Tel: ${data.company_tel}` : '', false],
     [data.company_email ? `Email: ${data.company_email}` : '', false],
     [data.company_vat ? `VAT: ${data.company_vat}` : '', false],
+    [data.company_kvk ? `KVK: ${data.company_kvk}` : '', false],
   ];
 
   let y = 32;
@@ -222,27 +300,20 @@ function drawHeader(doc: any, data: OrderConfirmationData): number {
 }
 
 // ── Green title, document meta, client block ──────────────────────────────
-function drawTitleAndMeta(doc: any, data: OrderConfirmationData, top: number): number {
+function drawTitleAndMeta(doc: any, kind: DocumentKind, data: DocumentData, top: number): number {
   let y = top + 14;
 
   doc.font('Helvetica-Bold').fontSize(TITLE).fillColor(GREEN_TITLE)
-    .text(`Order Confirmation  ${data.oc_number || ''}`.trimEnd(), L, y, { width: W, lineBreak: false });
+    .text(`${KINDS[kind].title}  ${data.doc_number || ''}`.trimEnd(), L, y, { width: W, lineBreak: false });
   y += TITLE * 1.5;
 
-  const meta: Array<[string, string]> = [
-    ['Date:', formatLongDate(data.oc_date)],
-    ['SQ:', data.sq_number || ''],
-    ['Our ref:', data.our_ref || ''],
-    ['PO number:', data.po_number || ''],
-    ['Client:', data.client_code || ''],
-  ];
-  for (const [label, value] of meta) {
+  for (const [label, value] of KINDS[kind].metaRows(data)) {
     if (!value) continue;
     y += labelled(doc, label, value, L, y, W * 0.6, { size: META });
   }
 
   // Client block — bold throughout, as in the master
-  y += 10;
+  y += 8;
   const clientLines = [
     data.client_name || '',
     ...String(data.billing_address || '').split('\n').map(s => s.trim()).filter(Boolean),
@@ -252,15 +323,16 @@ function drawTitleAndMeta(doc: any, data: OrderConfirmationData, top: number): n
   for (const text of clientLines) {
     doc.font('Helvetica-Bold').fontSize(META).fillColor(BLACK)
       .text(text, L, y, { width: W * 0.6 });
-    y += Math.max(META * 1.45, doc.heightOfString(text, { width: W * 0.6 }));
+    y += Math.max(META * 1.3, doc.heightOfString(text, { width: W * 0.6 }));
   }
   if (data.tax_id) y += labelled(doc, 'Tax Id :', data.tax_id, L, y, W * 0.6, { size: META, boldValue: true });
+  if (data.eori) y += labelled(doc, 'EORI# :', data.eori, L, y, W * 0.6, { size: META, boldValue: true });
 
   return y;
 }
 
 // ── Line-item table ───────────────────────────────────────────────────────
-function drawTable(doc: any, data: OrderConfirmationData, top: number): number {
+function drawTable(doc: any, data: DocumentData, top: number): number {
   const items = Array.isArray(data.items) ? data.items : [];
   const PAD = 5;
   const HEADER_H = 24;
@@ -283,6 +355,7 @@ function drawTable(doc: any, data: OrderConfirmationData, top: number): number {
       contentH = Math.max(contentH, doc.heightOfString(values[col.key] || ' ', { width: col.width - PAD * 2 }));
     }
     const rowH = Math.max(24, contentH + 10);
+    y = ensureRoom(doc, y, rowH);
 
     doc.rect(L, y, W, rowH).fill(GREEN_ROW);
     let cx = L;
@@ -298,11 +371,11 @@ function drawTable(doc: any, data: OrderConfirmationData, top: number): number {
 }
 
 // ── Merged detail cell: HS code, description, delivery, totals ────────────
-function drawDetailPanel(doc: any, data: OrderConfirmationData, top: number): number {
+function drawDetailPanel(doc: any, data: DocumentData, top: number): number {
   const items = Array.isArray(data.items) ? data.items : [];
   const PAD = 7;
   const innerW = W - PAD * 2;
-  const lh = BODY * 1.45;
+  const lh = BODY * 1.32;
   const { subtotal, freight, vat, total, currency } = computeTotals(data);
 
   const detailed = items.filter(i => i.hs_code || i.description);
@@ -333,8 +406,9 @@ function drawDetailPanel(doc: any, data: OrderConfirmationData, top: number): nu
     doc.font('Helvetica').fontSize(BODY);
     height += Math.max(lh, doc.heightOfString(value, { width: innerW - labelW }));
   }
-  height += 8 + totalRows.length * lh + 8;
+  height += 6 + totalRows.length * lh + 6;
 
+  top = ensureRoom(doc, top, height);
   doc.rect(L, top, W, height).fill(GREEN_PANEL);
 
   let y = top + 10;
@@ -359,7 +433,7 @@ function drawDetailPanel(doc: any, data: OrderConfirmationData, top: number): nu
   }
 
   // Totals — labels left, figures right-aligned against the panel edge
-  y += 8;
+  y += 6;
   for (const [label, value] of totalRows) {
     doc.font('Helvetica-Bold').fontSize(BODY).fillColor(BLACK)
       .text(label, L + PAD, y, { width: innerW * 0.6, lineBreak: false });
@@ -371,9 +445,39 @@ function drawDetailPanel(doc: any, data: OrderConfirmationData, top: number): nu
   return top + height;
 }
 
+// ── Manufacturer / country of origin (invoice, opt-in) ────────────────────
+function drawOriginBlock(doc: any, data: DocumentData, top: number): number {
+  if (!data.manufacturer && !data.country_of_origin) return top;
+
+  doc.font('Helvetica').fontSize(BODY);
+  const needed = 10
+    + (data.manufacturer ? BODY * 1.32 + doc.heightOfString(data.manufacturer, { width: W }) + 2 : 0)
+    + (data.country_of_origin ? BODY * 2.64 : 0);
+
+  let y = ensureRoom(doc, top + 10, needed);
+  if (data.manufacturer) {
+    doc.font('Helvetica-Bold').fontSize(BODY).fillColor(BLACK)
+      .text('Manufacturer', L, y, { width: W, lineBreak: false });
+    y += BODY * 1.32;
+    doc.font('Helvetica').fontSize(BODY).fillColor(BLACK).text(data.manufacturer, L, y, { width: W });
+    y += doc.heightOfString(data.manufacturer, { width: W }) + 2;
+  }
+  if (data.country_of_origin) {
+    doc.font('Helvetica-Bold').fontSize(BODY).fillColor(BLACK)
+      .text('Country of origin', L, y, { width: W, lineBreak: false });
+    y += BODY * 1.32;
+    doc.font('Helvetica').fontSize(BODY).fillColor(BLACK)
+      .text(data.country_of_origin, L, y, { width: W, lineBreak: false });
+    y += BODY * 1.32;
+  }
+  return y;
+}
+
 // ── Terms & Conditions, then the bank block ───────────────────────────────
-function drawFooterBlocks(doc: any, data: OrderConfirmationData, top: number) {
-  let y = top;
+function drawFooterBlocks(doc: any, data: DocumentData, top: number) {
+  doc.font('Helvetica').fontSize(BODY);
+  const termsH = HEADING * 1.4 + (data.terms ? doc.heightOfString(data.terms, { width: W }) : 0);
+  let y = ensureRoom(doc, top, termsH);
 
   doc.font('Helvetica-Bold').fontSize(HEADING).fillColor(GREEN_TITLE)
     .text('Terms & Conditions', L, y, { width: W, lineBreak: false });
@@ -384,23 +488,30 @@ function drawFooterBlocks(doc: any, data: OrderConfirmationData, top: number) {
     y += doc.heightOfString(data.terms, { width: W });
   }
 
-  const bankParts = [
-    data.iban ? `IBAN: ${data.iban}` : '',
-    data.bic ? `BIC: ${data.bic}` : '',
-    data.bank_address ? `Address: ${data.bank_address}` : '',
-  ].filter(Boolean);
+  // The master runs IBAN / BIC / Address together on a single line
+  const accountParts: Array<[string, string]> = [
+    ['IBAN: ', data.iban || ''],
+    ['BIC: ', data.bic || ''],
+    ['Address: ', data.bank_address || ''],
+  ].filter(([, v]) => !!v) as Array<[string, string]>;
 
-  if (!data.bank_name && !bankParts.length) return;
+  if (!data.bank_name && !accountParts.length) return;
 
-  y += 18;
+  const bankLines = (data.bank_name ? 1 : 0) + (accountParts.length ? 1 : 0);
+  y = ensureRoom(doc, y + 10, HEADING * 1.4 + bankLines * BODY * 1.32);
   doc.font('Helvetica-Bold').fontSize(HEADING).fillColor(GREEN_TITLE)
     .text('Bank Transfer', L, y, { width: W, lineBreak: false });
   y += HEADING * 1.4;
 
   if (data.bank_name) y += labelled(doc, 'Bank:', data.bank_name, L, y, W, { size: BODY });
-  for (const part of bankParts) {
-    const [label, ...rest] = part.split(': ');
-    y += labelled(doc, `${label}:`, rest.join(': '), L, y, W, { size: BODY });
+
+  if (accountParts.length) {
+    doc.fillColor(BLACK).fontSize(BODY);
+    accountParts.forEach(([label, value], i) => {
+      doc.font('Helvetica-Bold').text(i === 0 ? label : `    ${label}`, i === 0 ? L : undefined, i === 0 ? y : undefined, { continued: true });
+      doc.font('Helvetica').text(value, { continued: i < accountParts.length - 1 });
+    });
+    y += BODY * 1.32;
   }
 }
 
@@ -410,6 +521,6 @@ function stampPageNumbers(doc: any) {
   for (let i = 0; i < range.count; i++) {
     doc.switchToPage(range.start + i);
     doc.font('Helvetica').fontSize(9.5).fillColor(BLACK)
-      .text(`Page ${i + 1} of ${range.count}`, L, 800, { width: W, align: 'right', lineBreak: false });
+      .text(`Page ${i + 1} of ${range.count}`, L, 812, { width: W, align: 'right', lineBreak: false });
   }
 }

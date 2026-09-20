@@ -6,7 +6,7 @@ import {
   ArrowLeft, Briefcase, ShoppingCart, FileText, Upload, Trash2,
   Download, Eye, X, Plus, Receipt, ExternalLink, CheckCircle,
   AlertCircle, Loader2, Edit2, Link2, Search, Truck, Landmark,
-  FileCheck2,
+  FileCheck2, Receipt as ReceiptIcon,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
@@ -194,6 +194,7 @@ export default function OperationDetailPage() {
 
   // Order confirmation issued for the linked order, if any
   const [orderConfirmation, setOrderConfirmation] = useState<{ id: number; file_name: string | null } | null>(null);
+  const [invoiceDoc, setInvoiceDoc] = useState<{ id: number; file_name: string | null } | null>(null);
 
   // Link Order modal
   const [showLinkOrder, setShowLinkOrder] = useState(false);
@@ -287,6 +288,9 @@ export default function OperationDetailPage() {
     api.get(`/order-confirmations/by-order/${operation.order_id}`)
       .then(({ data }) => setOrderConfirmation(data?.[0] || null))
       .catch(() => setOrderConfirmation(null));
+    api.get(`/invoice-documents/by-order/${operation.order_id}`)
+      .then(({ data }) => setInvoiceDoc(data?.[0] || null))
+      .catch(() => setInvoiceDoc(null));
   }, [operation?.order_id, operation?.documents.length]);
 
   // ── Preview ─────────────────────────────────────────────────────────────────
@@ -683,6 +687,17 @@ export default function OperationDetailPage() {
                 title={orderConfirmation ? `Edit ${orderConfirmation.file_name || 'the order confirmation'}` : 'Generate an order confirmation from this order'}
               >
                 <FileCheck2 size={13} /> Order Confirmation{orderConfirmation ? ' ✓' : ''}
+              </button>
+              <button
+                onClick={() => navigate(
+                  invoiceDoc
+                    ? `/invoices/documents/${invoiceDoc.id}`
+                    : `/invoices/documents/new?order_id=${operation.order_id}&operation_id=${operation.id}`
+                )}
+                className="flex items-center gap-1 text-xs sm:text-sm text-primary-600 hover:text-primary-700 border border-primary-200 bg-primary-50 rounded-lg px-2 py-1"
+                title={invoiceDoc ? `Edit ${invoiceDoc.file_name || 'the invoice'}` : 'Generate a commercial invoice from this order'}
+              >
+                <ReceiptIcon size={13} /> Invoice{invoiceDoc ? ' ✓' : ''}
               </button>
               <button
                 onClick={() => navigate(`/orders/${operation.order_id}/edit`)}

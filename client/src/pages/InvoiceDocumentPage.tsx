@@ -5,12 +5,12 @@ import { useToast } from '../contexts/ToastContext';
 import Button from '../components/ui/Button';
 import {
   ArrowLeft, Plus, Trash2, Loader2, Eye, X, FileDown, Mail,
-  CheckCircle, FileText, RefreshCw, User, Package, Truck,
+  CheckCircle, FileText, RefreshCw, User, Package, Truck, Factory,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
-interface OcLine {
+interface InvLine {
   line: number;
   reference: string;
   commercial_name: string;
@@ -21,70 +21,74 @@ interface OcLine {
   currency: string;
   hs_code: string;
   description: string;
+  lot: string;
 }
 
-interface OcData {
-  oc_number: string;
-  oc_date: string;
+interface InvData {
+  doc_number: string;
+  doc_date: string;
   sq_number: string;
   our_ref: string;
   po_number: string;
+  operation_number: string;
   client_code: string;
+  attention: string;
   client_name: string;
   billing_address: string;
   client_phone: string;
   tax_id: string;
+  eori: string;
   contact_email: string;
-  items: OcLine[];
+  items: InvLine[];
   delivery: string;
   delivery_address: string;
-  delivery_contact: string;
   delivery_date_text: string;
   freight: string;
   vat: string;
+  manufacturer: string;
+  country_of_origin: string;
   terms: string;
   [key: string]: unknown; // issuer + bank constants ride along untouched
 }
 
-interface Confirmation {
+interface InvoiceRecord {
   id: number;
-  oc_number: string;
+  invoice_number: string;
   order_id: number;
   operation_id: number | null;
   file_name: string | null;
   sent_to: string | null;
   sent_at: string | null;
-  data: Partial<OcData>;
+  data: Partial<InvData>;
 }
 
 const UNITS = ['KG', 'TONS', 'MT', 'LBS', 'L', 'PAIL', 'DRUM', 'IBC'];
 const CURRENCIES = ['EUR', 'USD', 'GBP'];
 
-/** Fields the form owns. Anything else on the record (issuer, bank) passes through. */
 const FORM_KEYS = [
-  'oc_number', 'oc_date', 'sq_number', 'our_ref', 'po_number', 'client_code',
-  'client_name', 'billing_address', 'client_phone', 'tax_id', 'contact_email',
-  'delivery', 'delivery_address', 'delivery_contact', 'delivery_date_text',
-  'freight', 'vat', 'terms',
+  'doc_number', 'doc_date', 'sq_number', 'our_ref', 'po_number', 'operation_number',
+  'client_code', 'attention', 'client_name', 'billing_address', 'client_phone',
+  'tax_id', 'eori', 'contact_email', 'delivery', 'delivery_address',
+  'delivery_date_text', 'freight', 'vat', 'manufacturer', 'country_of_origin', 'terms',
 ] as const;
 
-const emptyLine = (n: number): OcLine => ({
+const emptyLine = (n: number): InvLine => ({
   line: n, reference: '', commercial_name: '', packaging: '',
   quantity: '', quantity_unit: 'KG', unit_price: '', currency: 'EUR',
-  hs_code: '', description: '',
+  hs_code: '', description: '', lot: '',
 });
 
-const blankData = (): OcData => ({
-  oc_number: '', oc_date: new Date().toISOString().slice(0, 10),
-  sq_number: '', our_ref: '', po_number: '', client_code: '',
-  client_name: '', billing_address: '', client_phone: '', tax_id: '', contact_email: '',
+const blankData = (): InvData => ({
+  doc_number: '', doc_date: new Date().toISOString().slice(0, 10),
+  sq_number: '', our_ref: '', po_number: '', operation_number: '',
+  client_code: '', attention: '', client_name: '', billing_address: '',
+  client_phone: '', tax_id: '', eori: '', contact_email: '',
   items: [emptyLine(1)],
-  delivery: '', delivery_address: '', delivery_contact: '', delivery_date_text: '',
-  freight: '0', vat: '0', terms: '',
+  delivery: '', delivery_address: '', delivery_date_text: '',
+  freight: '0', vat: '0', manufacturer: '', country_of_origin: '', terms: '',
 });
 
-/** Server values arrive loosely typed (numbers, nulls) — normalise for the form. */
-function toFormData(raw: any): OcData {
+function toFormData(raw: any): InvData {
   const merged: any = { ...blankData(), ...(raw || {}) };
   for (const key of FORM_KEYS) {
     merged[key] = merged[key] == null ? (blankData() as any)[key] : String(merged[key]);
@@ -102,16 +106,19 @@ function toFormData(raw: any): OcData {
     currency: item?.currency || 'EUR',
     hs_code: item?.hs_code ?? '',
     description: item?.description ?? '',
+    lot: item?.lot ?? '',
   }));
-  return merged as OcData;
+  return merged as InvData;
 }
 
-/** Form strings back to the numeric shape the PDF builder expects. */
-function toPayload(form: OcData) {
+/** Origin is opt-in, so strip it unless the user asked for it. */
+function toPayload(form: InvData, includeOrigin: boolean) {
   return {
     ...form,
     freight: Number(form.freight) || 0,
     vat: Number(form.vat) || 0,
+    manufacturer: includeOrigin ? form.manufacturer : '',
+    country_of_origin: includeOrigin ? form.country_of_origin : '',
     items: form.items.map((item, index) => ({
       ...item,
       line: index + 1,
@@ -121,7 +128,7 @@ function toPayload(form: OcData) {
   };
 }
 
-const lineTotal = (item: OcLine) => (Number(item.quantity) || 0) * (Number(item.unit_price) || 0);
+const lineTotal = (item: InvLine) => (Number(item.quantity) || 0) * (Number(item.unit_price) || 0);
 const money = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 2 });
 
 // ── Field primitives ──────────────────────────────────────────────────────
@@ -155,14 +162,15 @@ function AreaField({ label, value, onChange, placeholder, rows = 2, className = 
   );
 }
 
-function Section({ icon, title, children }: {
-  icon: React.ReactNode; title: string; children: React.ReactNode;
+function Section({ icon, title, children, action }: {
+  icon: React.ReactNode; title: string; children: React.ReactNode; action?: React.ReactNode;
 }) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
       <div className="px-5 py-3.5 border-b border-gray-100 flex items-center gap-2">
         <span className="text-gray-400">{icon}</span>
-        <h2 className="font-semibold text-gray-800 text-sm">{title}</h2>
+        <h2 className="font-semibold text-gray-800 text-sm flex-1">{title}</h2>
+        {action}
       </div>
       <div className="p-5">{children}</div>
     </div>
@@ -171,7 +179,7 @@ function Section({ icon, title, children }: {
 
 // ── Page ──────────────────────────────────────────────────────────────────
 
-export default function OrderConfirmationPage() {
+export default function InvoiceDocumentPage() {
   const { id } = useParams<{ id: string }>();
   const [params] = useSearchParams();
   const navigate = useNavigate();
@@ -181,14 +189,15 @@ export default function OrderConfirmationPage() {
   const operationIdParam = params.get('operation_id');
 
   const [loading, setLoading] = useState(true);
-  const [form, setForm] = useState<OcData>(blankData());
-  const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
+  const [form, setForm] = useState<InvData>(blankData());
+  const [record, setRecord] = useState<InvoiceRecord | null>(null);
   const [orderId, setOrderId] = useState<number | null>(orderIdParam ? Number(orderIdParam) : null);
   const [operationId, setOperationId] = useState<number | null>(operationIdParam ? Number(operationIdParam) : null);
-  const [operationNumber, setOperationNumber] = useState('');
+
   const [entity, setEntity] = useState<'NL' | 'BE'>('BE');
   const [profiles, setProfiles] = useState<Array<{ id: number; name: string; is_default: boolean }>>([]);
   const [profileId, setProfileId] = useState<number | null>(null);
+  const [includeOrigin, setIncludeOrigin] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -206,7 +215,7 @@ export default function OrderConfirmationPage() {
 
   const set = (key: string, value: string) => setForm(prev => ({ ...prev, [key]: value }));
 
-  const setItem = (index: number, patch: Partial<OcLine>) =>
+  const setItem = (index: number, patch: Partial<InvLine>) =>
     setForm(prev => ({ ...prev, items: prev.items.map((it, i) => (i === index ? { ...it, ...patch } : it)) }));
 
   const addItem = () =>
@@ -218,12 +227,27 @@ export default function OrderConfirmationPage() {
       items: prev.items.length === 1 ? prev.items : prev.items.filter((_, i) => i !== index),
     }));
 
-  const adopt = useCallback((record: Confirmation) => {
-    setConfirmation(record);
-    setForm(toFormData(record.data));
-    setOrderId(record.order_id);
-    setOperationId(record.operation_id);
+  const adopt = useCallback((rec: InvoiceRecord) => {
+    setRecord(rec);
+    setForm(toFormData(rec.data));
+    setOrderId(rec.order_id);
+    setOperationId(rec.operation_id);
+    setIncludeOrigin(!!(rec.data.manufacturer || rec.data.country_of_origin));
   }, []);
+
+  /** Re-fetch the draft when the entity or billing profile changes. */
+  const loadDraft = useCallback(async (opts: { entity?: string; profile_id?: number } = {}) => {
+    const { data } = await api.get('/invoice-documents/prepare', {
+      params: { order_id: orderIdParam || orderId, ...opts },
+    });
+    if (data.existing) { adopt(data.existing); return; }
+    setForm(toFormData(data.draft));
+    setEntity(data.entity);
+    setProfiles(data.profiles || []);
+    setProfileId(data.profile_id ?? null);
+    setIncludeOrigin(false);
+    if (data.operation) setOperationId(data.operation.id);
+  }, [orderIdParam, orderId, adopt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -231,7 +255,7 @@ export default function OrderConfirmationPage() {
     async function load() {
       try {
         if (id) {
-          const { data } = await api.get(`/order-confirmations/${id}`);
+          const { data } = await api.get(`/invoice-documents/${id}`);
           if (!cancelled) adopt(data);
           return;
         }
@@ -240,24 +264,10 @@ export default function OrderConfirmationPage() {
           navigate('/operations');
           return;
         }
-        const { data } = await api.get('/order-confirmations/prepare', { params: { order_id: orderIdParam } });
-        if (cancelled) return;
-        if (data.existing) {
-          adopt(data.existing);
-          addToast('An order confirmation already exists for this order — opening it for editing', 'info');
-        } else {
-          setForm(toFormData(data.draft));
-          setEntity(data.entity);
-          setProfiles(data.profiles || []);
-          setProfileId(data.profile_id ?? null);
-          if (data.operation) {
-            setOperationId(data.operation.id);
-            setOperationNumber(data.operation.operation_number);
-          }
-        }
+        await loadDraft();
       } catch (err: any) {
         if (!cancelled) {
-          addToast(err.response?.data?.error || 'Failed to load the order confirmation', 'error');
+          addToast(err.response?.data?.error || 'Failed to load the invoice', 'error');
           navigate('/operations');
         }
       } finally {
@@ -272,32 +282,27 @@ export default function OrderConfirmationPage() {
   useEffect(() => {
     if (!showEmail) return;
     setEmailTo(prev => prev || form.contact_email || '');
-    setEmailSubject(prev => prev || `Order Confirmation ${form.oc_number}${form.client_name ? ` — ${form.client_name}` : ''}`);
+    setEmailSubject(prev => prev || `Commercial Invoice ${form.doc_number}${form.client_name ? ` — ${form.client_name}` : ''}`);
   }, [showEmail]);
 
-  // ── Actions ─────────────────────────────────────────────────────────────
+  async function switchEntity(next: 'NL' | 'BE') {
+    setEntity(next);
+    if (record) { addToast('Entity is fixed once the invoice is generated', 'info'); return; }
+    try { await loadDraft({ entity: next, ...(profileId ? { profile_id: profileId } : {}) }); }
+    catch { addToast('Failed to switch entity', 'error'); }
+  }
 
-  /** Re-fetch the draft when the entity or billing profile changes. */
-  async function reDraft(opts: { entity?: string; profile_id?: number }) {
-    if (confirmation) { addToast('Already generated — edit the fields directly', 'info'); return; }
-    try {
-      const { data } = await api.get('/order-confirmations/prepare', {
-        params: { order_id: orderIdParam || orderId, ...opts },
-      });
-      if (data.draft) {
-        setForm(toFormData(data.draft));
-        setEntity(data.entity);
-        setProfileId(data.profile_id ?? null);
-      }
-    } catch {
-      addToast('Failed to reload the draft', 'error');
-    }
+  async function switchProfile(next: number) {
+    setProfileId(next);
+    if (record) return;
+    try { await loadDraft({ entity, profile_id: next }); }
+    catch { addToast('Failed to switch profile', 'error'); }
   }
 
   async function handlePreview() {
     setPreviewing(true);
     try {
-      const res = await api.post('/order-confirmations/preview', { data: toPayload(form) }, { responseType: 'blob' });
+      const res = await api.post('/invoice-documents/preview', { data: toPayload(form, includeOrigin) }, { responseType: 'blob' });
       if (previewUrl) URL.revokeObjectURL(previewUrl);
       setPreviewUrl(URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' })));
     } catch {
@@ -311,28 +316,28 @@ export default function OrderConfirmationPage() {
     if (!orderId) { addToast('No order linked', 'error'); return; }
     setSaving(true);
     try {
-      const body = { order_id: orderId, operation_id: operationId, data: toPayload(form) };
-      const { data } = confirmation
-        ? await api.put(`/order-confirmations/${confirmation.id}`, body)
-        : await api.post('/order-confirmations', body);
+      const body = { order_id: orderId, operation_id: operationId, data: toPayload(form, includeOrigin) };
+      const { data } = record
+        ? await api.put(`/invoice-documents/${record.id}`, body)
+        : await api.post('/invoice-documents', body);
       adopt(data);
       addToast(`Generated ${data.file_name}${operationId ? ' — filed under the operation documents' : ''}`, 'success');
-      if (!confirmation) navigate(`/order-confirmations/${data.id}`, { replace: true });
+      if (!record) navigate(`/invoices/documents/${data.id}`, { replace: true });
     } catch (err: any) {
-      addToast(err.response?.data?.error || 'Failed to generate the order confirmation', 'error');
+      addToast(err.response?.data?.error || 'Failed to generate the invoice', 'error');
     } finally {
       setSaving(false);
     }
   }
 
   async function handleDownload() {
-    if (!confirmation) return;
+    if (!record) return;
     try {
-      const res = await api.get(`/order-confirmations/${confirmation.id}/pdf`, { responseType: 'blob' });
+      const res = await api.get(`/invoice-documents/${record.id}/pdf`, { responseType: 'blob' });
       const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
       const a = document.createElement('a');
       a.href = url;
-      a.download = confirmation.file_name || `${form.oc_number}OC.pdf`;
+      a.download = record.file_name || `${form.doc_number}.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -343,14 +348,14 @@ export default function OrderConfirmationPage() {
   }
 
   async function handleSend() {
-    if (!confirmation) return;
+    if (!record) return;
     if (!emailTo.trim()) { addToast('Enter at least one recipient', 'error'); return; }
     setSending(true);
     try {
-      const { data } = await api.post(`/order-confirmations/${confirmation.id}/email`, {
+      const { data } = await api.post(`/invoice-documents/${record.id}/email`, {
         to: emailTo, subject: emailSubject, message: emailMessage,
       });
-      setConfirmation(data.confirmation);
+      setRecord(data.invoice);
       addToast(data.message, 'success');
       setShowEmail(false);
     } catch (err: any) {
@@ -359,8 +364,6 @@ export default function OrderConfirmationPage() {
       setSending(false);
     }
   }
-
-  // ── Render ──────────────────────────────────────────────────────────────
 
   if (loading) {
     return <div className="flex justify-center py-20"><Loader2 className="animate-spin text-primary-600" size={24} /></div>;
@@ -385,16 +388,33 @@ export default function OrderConfirmationPage() {
           </Button>
           <Button size="sm" onClick={handleSave} disabled={saving}>
             {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
-            {confirmation ? 'Confirm & regenerate' : 'Confirm & generate'}
+            {record ? 'Confirm & regenerate' : 'Confirm & generate'}
           </Button>
-          <Button variant="secondary" size="sm" onClick={handleDownload} disabled={!confirmation}>
+          <Button variant="secondary" size="sm" onClick={handleDownload} disabled={!record}>
             <FileDown size={14} /> Download PDF
           </Button>
-          <Button variant="secondary" size="sm" onClick={() => setShowEmail(true)} disabled={!confirmation}>
+          <Button variant="secondary" size="sm" onClick={() => setShowEmail(true)} disabled={!record}>
             <Mail size={14} /> Send by email
           </Button>
         </div>
       </div>
+
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900">Commercial Invoice</h1>
+        <p className="text-sm text-gray-500 mt-1">
+          Check the details, then confirm to produce the PDF as{' '}
+          <strong className="text-gray-700">{(form.doc_number || 'invoice').replace(/[^A-Za-z0-9._-]+/g, '-')}.pdf</strong>
+          {operationId && ' under the operation documents'}.
+        </p>
+      </div>
+
+      {record && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm">
+          <CheckCircle size={16} className="text-green-600 flex-shrink-0" />
+          <span className="text-green-800"><strong>{record.file_name}</strong> generated.</span>
+          {record.sent_at && <span className="text-green-700">Sent to {record.sent_to}.</span>}
+        </div>
+      )}
 
       {/* Issuer + billing profile */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-5 py-4 flex flex-wrap items-center gap-x-8 gap-y-3">
@@ -404,8 +424,8 @@ export default function OrderConfirmationPage() {
             {(['BE', 'NL'] as const).map(code => (
               <button
                 key={code}
-                onClick={() => { setEntity(code); reDraft({ entity: code, ...(profileId ? { profile_id: profileId } : {}) }); }}
-                disabled={!!confirmation}
+                onClick={() => switchEntity(code)}
+                disabled={!!record}
                 className={`px-3 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-60 ${
                   entity === code ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
                 }`}
@@ -422,8 +442,8 @@ export default function OrderConfirmationPage() {
             <span className="text-xs font-medium text-gray-500">Billing profile</span>
             <select
               value={profileId ?? ''}
-              onChange={e => { const v = Number(e.target.value); setProfileId(v); reDraft({ entity, profile_id: v }); }}
-              disabled={!!confirmation}
+              onChange={e => switchProfile(Number(e.target.value))}
+              disabled={!!record}
               className="rounded-lg border border-gray-300 px-2 py-1 text-xs disabled:opacity-60"
             >
               {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -432,35 +452,18 @@ export default function OrderConfirmationPage() {
         )}
       </div>
 
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Order Confirmation</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Check the details below, then confirm to produce the PDF. It is saved as{' '}
-          <strong className="text-gray-700">
-            {(operationNumber || form.oc_number || 'operation').replace(/[^A-Za-z0-9._-]+/g, '-')}OC.pdf
-          </strong>
-          {operationId && ' under the operation documents'}.
-        </p>
-      </div>
-
-      {confirmation && (
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm">
-          <CheckCircle size={16} className="text-green-600 flex-shrink-0" />
-          <span className="text-green-800"><strong>{confirmation.file_name}</strong> generated.</span>
-          {confirmation.sent_at && <span className="text-green-700">Sent to {confirmation.sent_to}.</span>}
-        </div>
-      )}
-
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
         <div className="space-y-5">
           <Section icon={<FileText size={16} />} title="Document">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Field label="Confirmation number" value={form.oc_number} onChange={v => set('oc_number', v)} placeholder={operationNumber || 'Operation number'} />
-              <Field label="Date" type="date" value={form.oc_date} onChange={v => set('oc_date', v)} />
-              <Field label="SQ" value={form.sq_number} onChange={v => set('sq_number', v)} placeholder="LA001" />
+              <Field label="Invoice number" value={form.doc_number} onChange={v => set('doc_number', v)} placeholder="CIBE202601" />
+              <Field label="Date" type="date" value={form.doc_date} onChange={v => set('doc_date', v)} />
+              <Field label="SQ" value={form.sq_number} onChange={v => set('sq_number', v)} placeholder="SQ202601 GR" />
               <Field label="Our ref" value={form.our_ref} onChange={v => set('our_ref', v)} />
-              <Field label="PO number" value={form.po_number} onChange={v => set('po_number', v)} />
-              <Field label="Client code" value={form.client_code} onChange={v => set('client_code', v)} placeholder="00FR02" />
+              <Field label="Your order# (PO)" value={form.po_number} onChange={v => set('po_number', v)} />
+              <Field label="Our order# (operation)" value={form.operation_number} onChange={v => set('operation_number', v)} />
+              <Field label="Client code" value={form.client_code} onChange={v => set('client_code', v)} placeholder="00GR01" />
+              <Field label="Attention" value={form.attention} onChange={v => set('attention', v)} />
             </div>
           </Section>
 
@@ -470,19 +473,19 @@ export default function OrderConfirmationPage() {
               <AreaField label="Address (one line per row)" value={form.billing_address} onChange={v => set('billing_address', v)} className="sm:col-span-2" />
               <Field label="Phone" value={form.client_phone} onChange={v => set('client_phone', v)} />
               <Field label="Tax Id" value={form.tax_id} onChange={v => set('tax_id', v)} />
-              <Field label="Email (for sending — not printed)" type="email" value={form.contact_email} onChange={v => set('contact_email', v)} className="sm:col-span-2" />
+              <Field label="EORI#" value={form.eori} onChange={v => set('eori', v)} />
+              <Field label="Email (for sending — not printed)" type="email" value={form.contact_email} onChange={v => set('contact_email', v)} />
             </div>
           </Section>
 
           <Section icon={<Truck size={16} />} title="Delivery, terms & totals">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Field label="Delivery" value={form.delivery} onChange={v => set('delivery', v)} placeholder="EXW TRIPLEW" />
-              <Field label="Delivery date" value={form.delivery_date_text} onChange={v => set('delivery_date_text', v)} placeholder="September, 28 2026" />
+              <Field label="Delivery" value={form.delivery} onChange={v => set('delivery', v)} placeholder="CIF Piraeus Greece" />
+              <Field label="Delivery date" value={form.delivery_date_text} onChange={v => set('delivery_date_text', v)} placeholder="May 24, 2026" />
               <Field label="Delivery address" value={form.delivery_address} onChange={v => set('delivery_address', v)} className="sm:col-span-2" />
-              <Field label="Contact" value={form.delivery_contact} onChange={v => set('delivery_contact', v)} className="sm:col-span-2" />
               <Field label={`Freight (${currency})`} type="number" value={form.freight} onChange={v => set('freight', v)} />
               <Field label={`VAT (${currency})`} type="number" value={form.vat} onChange={v => set('vat', v)} />
-              <AreaField label="Terms & conditions" value={form.terms} onChange={v => set('terms', v)} className="sm:col-span-2" placeholder="100% payable at 30 days" />
+              <AreaField label="Terms & conditions" value={form.terms} onChange={v => set('terms', v)} className="sm:col-span-2" />
             </div>
 
             <div className="mt-4 border-t border-gray-100 pt-3 space-y-1 text-sm">
@@ -493,6 +496,35 @@ export default function OrderConfirmationPage() {
                 <span>Total Order</span><span>{money(subtotal + freight + vat)} {currency}</span>
               </div>
             </div>
+          </Section>
+
+          {/* Origin block — opt-in, per the template */}
+          <Section
+            icon={<Factory size={16} />}
+            title="Manufacturer & country of origin"
+            action={
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={includeOrigin}
+                  onChange={e => setIncludeOrigin(e.target.checked)}
+                  className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                />
+                Add to this invoice
+              </label>
+            }
+          >
+            {includeOrigin ? (
+              <div className="space-y-4">
+                <AreaField label="Manufacturer" value={form.manufacturer} onChange={v => set('manufacturer', v)} rows={3}
+                  placeholder="Made in China for TripleW by …" />
+                <Field label="Country of origin" value={form.country_of_origin} onChange={v => set('country_of_origin', v)} placeholder="China" />
+              </div>
+            ) : (
+              <p className="text-sm text-gray-400">
+                Not included. Tick <strong className="text-gray-600">Add to this invoice</strong> if this shipment needs the manufacturer and origin declared.
+              </p>
+            )}
           </Section>
         </div>
 
@@ -510,10 +542,11 @@ export default function OrderConfirmationPage() {
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <Field label="Reference" value={item.reference} onChange={v => setItem(index, { reference: v })} placeholder="LACLC90 PU25" />
+                    <Field label="Reference" value={item.reference} onChange={v => setItem(index, { reference: v })} placeholder="CLNCG5H BU25" />
                     <Field label="Commercial name" value={item.commercial_name} onChange={v => setItem(index, { commercial_name: v })} />
-                    <Field label="Packaging" value={item.packaging} onChange={v => setItem(index, { packaging: v })} placeholder="25 KG Pail" />
+                    <Field label="Packaging" value={item.packaging} onChange={v => setItem(index, { packaging: v })} placeholder="25 KG bags" />
                     <Field label="HS code" value={item.hs_code} onChange={v => setItem(index, { hs_code: v })} placeholder="2918.11" />
+                    <Field label="Lot" value={item.lot} onChange={v => setItem(index, { lot: v })} placeholder="01.2602-003" className="sm:col-span-2" />
                   </div>
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -551,7 +584,7 @@ export default function OrderConfirmationPage() {
           <Section icon={<Eye size={16} />} title="Preview">
             {previewUrl ? (
               <div className="space-y-3">
-                <iframe src={previewUrl} title="Order confirmation preview" className="w-full rounded-lg border border-gray-200 bg-white" style={{ height: '70vh' }} />
+                <iframe src={previewUrl} title="Invoice preview" className="w-full rounded-lg border border-gray-200 bg-white" style={{ height: '70vh' }} />
                 <button type="button" onClick={handlePreview} disabled={previewing}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50">
                   {previewing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} Refresh preview
@@ -560,19 +593,19 @@ export default function OrderConfirmationPage() {
             ) : (
               <div className="text-center py-10 text-sm text-gray-400">
                 <Eye size={24} className="mx-auto mb-2 text-gray-300" />
-                Click <strong className="text-gray-600">Preview</strong> to render the confirmation.
+                Click <strong className="text-gray-600">Preview</strong> to render the invoice.
               </div>
             )}
           </Section>
         </div>
       </div>
 
-      {showEmail && confirmation && (
+      {showEmail && record && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => !sending && setShowEmail(false)}>
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-200">
               <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-                <Mail size={16} className="text-gray-400" /> Send {confirmation.file_name}
+                <Mail size={16} className="text-gray-400" /> Send {record.file_name}
               </h3>
               <button onClick={() => setShowEmail(false)} disabled={sending} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
                 <X size={18} />
@@ -583,7 +616,7 @@ export default function OrderConfirmationPage() {
               <Field label="Subject" value={emailSubject} onChange={setEmailSubject} />
               <AreaField label="Message (optional)" value={emailMessage} onChange={setEmailMessage} rows={4} placeholder="Leave empty to use the default covering note." />
               <p className="text-xs text-gray-500 flex items-center gap-1.5">
-                <FileText size={12} /> {confirmation.file_name} will be attached.
+                <FileText size={12} /> {record.file_name} will be attached.
               </p>
             </div>
             <div className="px-5 py-3.5 border-t border-gray-200 flex justify-end gap-2">

@@ -95,4 +95,99 @@ router.get('/:id/shipments', (req: Request, res: Response) => {
   res.json(shipments);
 });
 
+// ── Document profiles ─────────────────────────────────────────────────────
+// Defaults reused whenever a document is generated for this customer. A
+// customer may trade as several legal entities, hence one row per profile.
+
+const EMPTY_PROFILE = {
+  shared: {
+    legal_name: '', client_code: '', billing_address: '', tax_id: '', eori: '',
+    contact_person: '', contact_phone: '', contact_email: '', attention: '',
+  },
+  order_confirmation: { terms: '', delivery: '', delivery_address: '', sq_suffix: '', note: '' },
+  invoice: { terms: '', delivery: '', delivery_address: '', note: '' },
+  packing_list: { delivery_address: '', port_of_loading: '', port_of_discharge: '', note: '' },
+};
+
+function parseProfile(row: any) {
+  if (!row) return row;
+  let data: any = {};
+  try { data = JSON.parse(row.data); } catch { /* corrupt rows surface as empty */ }
+  return {
+    ...row,
+    is_default: !!row.is_default,
+    data: {
+      shared: { ...EMPTY_PROFILE.shared, ...(data.shared || {}) },
+      order_confirmation: { ...EMPTY_PROFILE.order_confirmation, ...(data.order_confirmation || {}) },
+      invoice: { ...EMPTY_PROFILE.invoice, ...(data.invoice || {}) },
+      packing_list: { ...EMPTY_PROFILE.packing_list, ...(data.packing_list || {}) },
+    },
+  };
+}
+
+router.get('/:id/profiles', (req: Request, res: Response) => {
+  const rows = db.prepare(
+    'SELECT * FROM customer_document_profiles WHERE customer_id = ? ORDER BY is_default DESC, id'
+  ).all(req.params.id) as any[];
+  res.json(rows.map(parseProfile));
+});
+
+router.post('/:id/profiles', (req: Request, res: Response) => {
+  const customer = db.prepare('SELECT id, name FROM customers WHERE id = ?').get(req.params.id) as any;
+  if (!customer) { res.status(404).json({ error: 'Customer not found' }); return; }
+
+  const name = String(req.body?.name || '').trim() || 'Default';
+  const data = req.body?.data && typeof req.body.data === 'object' ? req.body.data : EMPTY_PROFILE;
+
+  const isFirst = !db.prepare('SELECT id FROM customer_document_profiles WHERE customer_id = ?').get(customer.id);
+  const result = db.prepare(
+    'INSERT INTO customer_document_profiles (customer_id, name, is_default, data) VALUES (?, ?, ?, ?)'
+  ).run(customer.id, name, isFirst ? 1 : 0, JSON.stringify(data));
+
+  const row = db.prepare('SELECT * FROM customer_document_profiles WHERE id = ?').get(result.lastInsertRowid);
+  notifyAdmin({ action: 'created', entity: 'Customer Profile', label: `${customer.name} — ${name}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
+  res.status(201).json(parseProfile(row));
+});
+
+router.put('/:id/profiles/:profileId', (req: Request, res: Response) => {
+  const existing = db.prepare(
+    'SELECT * FROM customer_document_profiles WHERE id = ? AND customer_id = ?'
+  ).get(Number(req.params.profileId), Number(req.params.id)) as any;
+  if (!existing) { res.status(404).json({ error: 'Profile not found' }); return; }
+
+  const name = req.body?.name !== undefined ? String(req.body.name).trim() || existing.name : existing.name;
+  const data = req.body?.data && typeof req.body.data === 'object' ? req.body.data : JSON.parse(existing.data);
+
+  // Exactly one profile per customer carries the default flag
+  if (req.body?.is_default) {
+    db.prepare('UPDATE customer_document_profiles SET is_default = 0 WHERE customer_id = ?').run(existing.customer_id);
+  }
+
+  db.prepare(`
+    UPDATE customer_document_profiles
+    SET name = ?, data = ?, is_default = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `).run(name, JSON.stringify(data), req.body?.is_default ? 1 : existing.is_default, existing.id);
+
+  const row = db.prepare('SELECT * FROM customer_document_profiles WHERE id = ?').get(existing.id);
+  res.json(parseProfile(row));
+});
+
+router.delete('/:id/profiles/:profileId', (req: Request, res: Response) => {
+  const existing = db.prepare(
+    'SELECT * FROM customer_document_profiles WHERE id = ? AND customer_id = ?'
+  ).get(Number(req.params.profileId), Number(req.params.id)) as any;
+  if (!existing) { res.status(404).json({ error: 'Profile not found' }); return; }
+
+  db.prepare('DELETE FROM customer_document_profiles WHERE id = ?').run(existing.id);
+
+  // Never leave a customer with profiles but no default
+  if (existing.is_default) {
+    const next = db.prepare('SELECT id FROM customer_document_profiles WHERE customer_id = ? ORDER BY id LIMIT 1').get(existing.customer_id) as any;
+    if (next) db.prepare('UPDATE customer_document_profiles SET is_default = 1 WHERE id = ?').run(next.id);
+  }
+
+  res.json({ message: 'Profile deleted' });
+});
+
 export default router;

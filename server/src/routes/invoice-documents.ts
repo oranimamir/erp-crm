@@ -7,12 +7,12 @@ import { Resend } from 'resend';
 import db from '../database.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { entityFromOperationNumber, entityProfile, isEntityCode, type EntityCode } from '../lib/companyEntity.js';
-import { listProfiles, prefillLines, resolveProfile } from '../lib/documentPrefill.js';
+import { listProfiles, originForItems, prefillLines, resolveProfile } from '../lib/documentPrefill.js';
 import {
-  buildOrderConfirmationPdf,
+  buildDocumentPdf,
   computeTotals,
   formatLongDate,
-  type OrderConfirmationData,
+  type DocumentData,
 } from '../lib/document-pdf.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -23,13 +23,26 @@ const router = Router();
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-/**
- * Confirmations are filed as `<operation number>OC.pdf`. Without an operation
- * the confirmation number stands in, so the name is never just "OC.pdf".
- */
-function confirmationFileName(operationNumber: string | null, ocNumber: string | null): string {
-  const stem = (operationNumber || ocNumber || 'order-confirmation').trim();
-  return `${stem.replace(/[^A-Za-z0-9._-]+/g, '-')}OC.pdf`;
+/** `CIBE20260112.pdf` — the invoice number is the document's identity. */
+function invoiceFileName(invoiceNumber: string | null): string {
+  const stem = (invoiceNumber || 'commercial-invoice').trim();
+  return `${stem.replace(/[^A-Za-z0-9._-]+/g, '-')}.pdf`;
+}
+
+/** Next free `CI{BE|NL}{year}{NN}`, e.g. CIBE202601. */
+function nextInvoiceNumber(entity: EntityCode, dateIso?: string | null): string {
+  const year = (dateIso || new Date().toISOString()).slice(0, 4);
+  const prefix = `CI${entity}${year}`;
+  const rows = db.prepare(
+    'SELECT invoice_number FROM invoice_documents WHERE invoice_number LIKE ?'
+  ).all(`${prefix}%`) as Array<{ invoice_number: string }>;
+
+  let max = 0;
+  for (const row of rows) {
+    const m = row.invoice_number.match(new RegExp(`^${prefix}(\\d+)$`));
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  return `${prefix}${String(max + 1).padStart(2, '0')}`;
 }
 
 function operationNumberFor(operationId: number | null): string | null {
@@ -38,34 +51,33 @@ function operationNumberFor(operationId: number | null): string | null {
   return row?.operation_number ?? null;
 }
 
-function orderConfirmationCategoryId(): number | null {
-  const row = db.prepare(`SELECT id FROM document_categories WHERE name = 'Order Confirmation'`).get() as any;
+function invoiceCategoryId(): number | null {
+  const row = db.prepare(`SELECT id FROM document_categories WHERE name = 'Commercial Invoice'`).get() as any;
   return row?.id ?? null;
 }
 
 function parseRecord(row: any) {
   if (!row) return row;
-  let data: OrderConfirmationData = {};
+  let data: DocumentData = {};
   try { data = JSON.parse(row.data); } catch { /* corrupt rows surface as empty */ }
   return { ...row, data };
 }
 
 /**
  * Writes the PDF to operation-docs and keeps the operation_documents row in
- * sync, so the confirmation always appears under the operation's documents.
- * Returns the stored file name and document id.
+ * sync, so the invoice always appears under the operation's documents.
  */
 async function renderAndFile(
-  data: OrderConfirmationData,
-  opts: { operationId: number | null; existing?: any; userId?: number }
+  data: DocumentData,
+  opts: { operationId: number | null; existing?: any }
 ): Promise<{ filePath: string; fileName: string; documentId: number | null }> {
-  const pdf = await buildOrderConfirmationPdf(data);
+  const pdf = await buildDocumentPdf('invoice', data);
 
   fs.mkdirSync(docsDir, { recursive: true });
-  const storedName = `oc-${Date.now()}-${crypto.randomBytes(6).toString('hex')}.pdf`;
+  const storedName = `ci-${Date.now()}-${crypto.randomBytes(6).toString('hex')}.pdf`;
   fs.writeFileSync(path.join(docsDir, storedName), pdf);
 
-  const displayName = confirmationFileName(operationNumberFor(opts.operationId), data.oc_number ?? null);
+  const displayName = invoiceFileName(data.doc_number ?? null);
 
   // Drop the superseded file once the new one is safely on disk
   if (opts.existing?.file_path) {
@@ -75,23 +87,22 @@ async function renderAndFile(
 
   let documentId: number | null = opts.existing?.document_id ?? null;
   if (opts.operationId) {
-    const categoryId = orderConfirmationCategoryId();
+    const categoryId = invoiceCategoryId();
     const stillLinked = documentId
       ? db.prepare('SELECT id FROM operation_documents WHERE id = ?').get(documentId)
       : null;
 
     if (stillLinked) {
       db.prepare(
-        `UPDATE operation_documents SET operation_id = ?, category_id = ?, file_path = ?, file_name = ? WHERE id = ?`
+        'UPDATE operation_documents SET operation_id = ?, category_id = ?, file_path = ?, file_name = ? WHERE id = ?'
       ).run(opts.operationId, categoryId, storedName, displayName, documentId);
     } else {
       const result = db.prepare(
-        `INSERT INTO operation_documents (operation_id, category_id, file_path, file_name, notes) VALUES (?, ?, ?, ?, ?)`
-      ).run(opts.operationId, categoryId, storedName, displayName, `Order Confirmation ${data.oc_number || ''}`.trim());
+        'INSERT INTO operation_documents (operation_id, category_id, file_path, file_name, notes) VALUES (?, ?, ?, ?, ?)'
+      ).run(opts.operationId, categoryId, storedName, displayName, `Commercial Invoice ${data.doc_number || ''}`.trim());
       documentId = Number(result.lastInsertRowid);
     }
   } else if (documentId) {
-    // Operation link was removed — drop the stale document row
     db.prepare('DELETE FROM operation_documents WHERE id = ?').run(documentId);
     documentId = null;
   }
@@ -108,13 +119,12 @@ function discardFiled(filed: { filePath: string; documentId: number | null }, ke
   }
 }
 
-/** True when `ocNumber` is already taken by a different confirmation. */
-function ocNumberTaken(ocNumber: string, exceptId?: number): boolean {
-  const row = db.prepare('SELECT id FROM order_confirmations WHERE oc_number = ?').get(ocNumber) as any;
+function numberTaken(invoiceNumber: string, exceptId?: number): boolean {
+  const row = db.prepare('SELECT id FROM invoice_documents WHERE invoice_number = ?').get(invoiceNumber) as any;
   return !!row && row.id !== exceptId;
 }
 
-// ── Prefill a draft from the uploaded order ───────────────────────────────
+// ── Prefill a draft from the order ────────────────────────────────────────
 
 router.get('/prepare', (req: Request, res: Response) => {
   const orderId = parseInt(String(req.query.order_id || ''), 10);
@@ -122,7 +132,7 @@ router.get('/prepare', (req: Request, res: Response) => {
 
   const order = db.prepare(`
     SELECT o.*, c.name as customer_name, c.email as customer_email, c.phone as customer_phone,
-           c.address as customer_address, c.company as customer_company,
+           c.address as customer_address,
            s.name as supplier_name, s.email as supplier_email, s.phone as supplier_phone,
            s.address as supplier_address
     FROM orders o
@@ -132,9 +142,8 @@ router.get('/prepare', (req: Request, res: Response) => {
   `).get(orderId) as any;
   if (!order) { res.status(404).json({ error: 'Order not found' }); return; }
 
-  // An order confirmation already issued for this order is the source of truth
   const existing = db.prepare(
-    'SELECT * FROM order_confirmations WHERE order_id = ? ORDER BY id DESC LIMIT 1'
+    'SELECT * FROM invoice_documents WHERE order_id = ? ORDER BY id DESC LIMIT 1'
   ).get(orderId) as any;
   if (existing) { res.json({ existing: parseRecord(existing) }); return; }
 
@@ -147,46 +156,48 @@ router.get('/prepare', (req: Request, res: Response) => {
   const today = new Date().toISOString().slice(0, 10);
   const isSupplier = order.type === 'supplier';
 
-  // Which TripleW entity issues this — SOBE… is Belgian, SONL… Dutch. An
-  // explicit ?entity= wins so the heuristic can always be overridden.
   const requested = String(req.query.entity || '').toUpperCase();
   const entity: EntityCode = isEntityCode(requested)
     ? requested
     : entityFromOperationNumber(operation?.operation_number || order.order_number);
   const issuer = entityProfile(entity);
 
-  // The customer's saved defaults (client code, tax id, terms, delivery…)
   const requestedProfile = parseInt(String(req.query.profile_id || ''), 10);
   const profile = resolveProfile(
     isSupplier ? null : order.customer_id,
     Number.isInteger(requestedProfile) ? requestedProfile : null
   );
   const shared = profile?.data.shared || {};
-  const ocDefaults = profile?.data.order_confirmation || {};
+  const invDefaults = profile?.data.invoice || {};
 
-  const draft: OrderConfirmationData = {
+  const origin = originForItems(items);
+
+  const draft: DocumentData = {
     ...issuer,
-    // The operation number is the document's reference, per the master template
-    oc_number: operation?.operation_number || order.order_number || '',
-    oc_date: today,
+    doc_number: nextInvoiceNumber(entity, today),
+    doc_date: today,
     sq_number: '',
     our_ref: items[0]?.description || order.description || '',
     po_number: order.order_number || '',
+    operation_number: operation?.operation_number || '',
     client_code: shared.client_code || '',
+    attention: shared.attention || '',
     client_name: shared.legal_name || (isSupplier ? order.supplier_name : order.customer_name) || '',
     billing_address: shared.billing_address || (isSupplier ? order.supplier_address : order.customer_address) || '',
     client_phone: shared.contact_phone || (isSupplier ? order.supplier_phone : order.customer_phone) || '',
     tax_id: shared.tax_id || '',
+    eori: shared.eori || '',
     contact_email: shared.contact_email || (isSupplier ? order.supplier_email : order.customer_email) || '',
     items: prefillLines(items),
-    // The order's own terms win; the customer default fills the gap
-    delivery: [order.inco_terms, order.destination].filter(Boolean).join(' ') || ocDefaults.delivery || '',
-    delivery_address: ocDefaults.delivery_address || issuer.delivery_address || '',
-    delivery_contact: issuer.delivery_contact || '',
+    delivery: [order.inco_terms, order.destination].filter(Boolean).join(' ') || invDefaults.delivery || '',
+    delivery_address: invDefaults.delivery_address || '',
     delivery_date_text: order.delivery_date ? formatLongDate(order.delivery_date) : '',
     freight: 0,
     vat: 0,
-    terms: order.payment_terms || ocDefaults.terms || '',
+    // Offered to the user behind a toggle rather than printed unasked
+    manufacturer: origin.manufacturer,
+    country_of_origin: origin.country_of_origin,
+    terms: order.payment_terms || invDefaults.terms || '',
   };
 
   res.json({
@@ -210,14 +221,14 @@ router.get('/prepare', (req: Request, res: Response) => {
 
 router.get('/by-order/:orderId', (req: Request, res: Response) => {
   const rows = db.prepare(
-    'SELECT * FROM order_confirmations WHERE order_id = ? ORDER BY id DESC'
+    'SELECT * FROM invoice_documents WHERE order_id = ? ORDER BY id DESC'
   ).all(Number(req.params.orderId)) as any[];
   res.json(rows.map(parseRecord));
 });
 
 router.get('/:id', (req: Request, res: Response) => {
-  const row = db.prepare('SELECT * FROM order_confirmations WHERE id = ?').get(Number(req.params.id));
-  if (!row) { res.status(404).json({ error: 'Order confirmation not found' }); return; }
+  const row = db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(Number(req.params.id));
+  if (!row) { res.status(404).json({ error: 'Invoice not found' }); return; }
   res.json(parseRecord(row));
 });
 
@@ -225,12 +236,12 @@ router.get('/:id', (req: Request, res: Response) => {
 
 router.post('/preview', async (req: Request, res: Response) => {
   try {
-    const pdf = await buildOrderConfirmationPdf((req.body?.data || {}) as OrderConfirmationData);
+    const pdf = await buildDocumentPdf('invoice', (req.body?.data || {}) as DocumentData);
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'inline; filename="order-confirmation-preview.pdf"');
+    res.setHeader('Content-Disposition', 'inline; filename="invoice-preview.pdf"');
     res.send(pdf);
   } catch (err: any) {
-    console.error('[order-confirmations] preview failed:', err?.message || err);
+    console.error('[invoice-documents] preview failed:', err?.message || err);
     res.status(500).json({ error: 'Failed to render preview' });
   }
 });
@@ -239,7 +250,7 @@ router.post('/preview', async (req: Request, res: Response) => {
 
 router.post('/', async (req: Request, res: Response) => {
   const { order_id, operation_id, data } = req.body as {
-    order_id?: number; operation_id?: number | null; data?: OrderConfirmationData;
+    order_id?: number; operation_id?: number | null; data?: DocumentData;
   };
 
   if (!order_id) { res.status(400).json({ error: 'order_id is required' }); return; }
@@ -248,157 +259,145 @@ router.post('/', async (req: Request, res: Response) => {
   const order = db.prepare('SELECT id, order_number FROM orders WHERE id = ?').get(order_id) as any;
   if (!order) { res.status(404).json({ error: 'Order not found' }); return; }
 
-  // Fall back to the operation already linked to the order
   let operationId: number | null = operation_id ?? null;
   if (operationId == null) {
     const linked = db.prepare('SELECT id FROM operations WHERE order_id = ? ORDER BY id DESC LIMIT 1').get(order_id) as any;
     operationId = linked?.id ?? null;
   }
 
-  const payload: OrderConfirmationData = {
+  const entity = entityFromOperationNumber(operationNumberFor(operationId) || order.order_number);
+  const payload: DocumentData = {
     ...data,
-    oc_number: (data.oc_number || '').trim()
-      || operationNumberFor(operationId)
-      || (order as any).order_number
-      || '',
+    doc_number: (data.doc_number || '').trim() || nextInvoiceNumber(entity, data.doc_date),
+    operation_number: data.operation_number || operationNumberFor(operationId) || '',
   };
-  if (!payload.oc_number) { res.status(400).json({ error: 'A confirmation number is required' }); return; }
 
-  // Reject before rendering, so a clash never leaves a stray PDF behind
-  if (ocNumberTaken(payload.oc_number)) {
-    res.status(409).json({ error: `Order confirmation ${payload.oc_number} already exists` });
+  if (numberTaken(payload.doc_number!)) {
+    res.status(409).json({ error: `Invoice ${payload.doc_number} already exists` });
     return;
   }
 
   let filed: { filePath: string; fileName: string; documentId: number | null } | null = null;
   try {
-    filed = await renderAndFile(payload, { operationId, userId: req.user?.userId });
+    filed = await renderAndFile(payload, { operationId });
 
     const result = db.prepare(`
-      INSERT INTO order_confirmations (oc_number, order_id, operation_id, data, file_path, file_name, document_id, created_by)
+      INSERT INTO invoice_documents (invoice_number, order_id, operation_id, data, file_path, file_name, document_id, created_by)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      payload.oc_number, order_id, operationId,
+      payload.doc_number, order_id, operationId,
       JSON.stringify(payload), filed.filePath, filed.fileName, filed.documentId, req.user?.userId ?? null
     );
 
-    const row = db.prepare('SELECT * FROM order_confirmations WHERE id = ?').get(result.lastInsertRowid);
+    const row = db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(result.lastInsertRowid);
     notifyAdmin({
-      action: 'created', entity: 'Order Confirmation', label: payload.oc_number!,
+      action: 'created', entity: 'Commercial Invoice', label: payload.doc_number!,
       performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
     });
     res.status(201).json(parseRecord(row));
   } catch (err: any) {
     if (filed) discardFiled(filed, null);
     if (err?.message?.includes('UNIQUE')) {
-      res.status(409).json({ error: `Order confirmation ${payload.oc_number} already exists` });
+      res.status(409).json({ error: `Invoice ${payload.doc_number} already exists` });
       return;
     }
-    console.error('[order-confirmations] create failed:', err?.message || err);
-    res.status(500).json({ error: 'Failed to generate the order confirmation' });
+    console.error('[invoice-documents] create failed:', err?.message || err);
+    res.status(500).json({ error: 'Failed to generate the invoice' });
   }
 });
 
-// ── Update (regenerates the PDF and replaces the filed document) ──────────
+// ── Update ────────────────────────────────────────────────────────────────
 
 router.put('/:id', async (req: Request, res: Response) => {
-  const existing = db.prepare('SELECT * FROM order_confirmations WHERE id = ?').get(Number(req.params.id)) as any;
-  if (!existing) { res.status(404).json({ error: 'Order confirmation not found' }); return; }
+  const existing = db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(Number(req.params.id)) as any;
+  if (!existing) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
-  const { data, operation_id } = req.body as { data?: OrderConfirmationData; operation_id?: number | null };
+  const { data, operation_id } = req.body as { data?: DocumentData; operation_id?: number | null };
   if (!data || typeof data !== 'object') { res.status(400).json({ error: 'data is required' }); return; }
 
-  const payload: OrderConfirmationData = {
+  const payload: DocumentData = {
     ...data,
-    oc_number: (data.oc_number || '').trim() || existing.oc_number,
+    doc_number: (data.doc_number || '').trim() || existing.invoice_number,
   };
   const operationId = operation_id !== undefined ? operation_id : existing.operation_id;
 
-  if (ocNumberTaken(payload.oc_number!, existing.id)) {
-    res.status(409).json({ error: `Order confirmation ${payload.oc_number} already exists` });
+  if (numberTaken(payload.doc_number!, existing.id)) {
+    res.status(409).json({ error: `Invoice ${payload.doc_number} already exists` });
     return;
   }
 
   let filed: { filePath: string; fileName: string; documentId: number | null } | null = null;
   try {
-    filed = await renderAndFile(payload, { operationId, existing, userId: req.user?.userId });
+    filed = await renderAndFile(payload, { operationId, existing });
 
     db.prepare(`
-      UPDATE order_confirmations
-      SET oc_number = ?, operation_id = ?, data = ?, file_path = ?, file_name = ?, document_id = ?, updated_at = datetime('now')
+      UPDATE invoice_documents
+      SET invoice_number = ?, operation_id = ?, data = ?, file_path = ?, file_name = ?, document_id = ?, updated_at = datetime('now')
       WHERE id = ?
-    `).run(payload.oc_number, operationId, JSON.stringify(payload), filed.filePath, filed.fileName, filed.documentId, existing.id);
+    `).run(payload.doc_number, operationId, JSON.stringify(payload), filed.filePath, filed.fileName, filed.documentId, existing.id);
 
-    const row = db.prepare('SELECT * FROM order_confirmations WHERE id = ?').get(existing.id);
+    const row = db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(existing.id);
     notifyAdmin({
-      action: 'updated', entity: 'Order Confirmation', label: payload.oc_number!,
+      action: 'updated', entity: 'Commercial Invoice', label: payload.doc_number!,
       performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
     });
     res.json(parseRecord(row));
   } catch (err: any) {
-    // The superseded file is already gone, so only discard what this call wrote
     if (filed) discardFiled(filed, existing.document_id);
-    if (err?.message?.includes('UNIQUE')) {
-      res.status(409).json({ error: `Order confirmation ${payload.oc_number} already exists` });
-      return;
-    }
-    console.error('[order-confirmations] update failed:', err?.message || err);
-    res.status(500).json({ error: 'Failed to regenerate the order confirmation' });
+    console.error('[invoice-documents] update failed:', err?.message || err);
+    res.status(500).json({ error: 'Failed to regenerate the invoice' });
   }
 });
 
 // ── Download ──────────────────────────────────────────────────────────────
 
 router.get('/:id/pdf', (req: Request, res: Response) => {
-  const row = db.prepare('SELECT * FROM order_confirmations WHERE id = ?').get(Number(req.params.id)) as any;
-  if (!row?.file_path) { res.status(404).json({ error: 'Order confirmation not found' }); return; }
+  const row = db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(Number(req.params.id)) as any;
+  if (!row?.file_path) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
   const filePath = path.join(docsDir, row.file_path);
   if (!fs.existsSync(filePath)) { res.status(404).json({ error: 'File not found' }); return; }
 
   res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename="${row.file_name || 'order-confirmation.pdf'}"`);
+  res.setHeader('Content-Disposition', `attachment; filename="${row.file_name || 'invoice.pdf'}"`);
   fs.createReadStream(filePath).pipe(res);
 });
 
-// ── Email to the customer ─────────────────────────────────────────────────
+// ── Email ─────────────────────────────────────────────────────────────────
 
 router.post('/:id/email', async (req: Request, res: Response) => {
-  const row = db.prepare('SELECT * FROM order_confirmations WHERE id = ?').get(Number(req.params.id)) as any;
-  if (!row) { res.status(404).json({ error: 'Order confirmation not found' }); return; }
+  const row = db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(Number(req.params.id)) as any;
+  if (!row) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) { res.status(501).json({ error: 'Email sending is not configured (missing RESEND_API_KEY)' }); return; }
 
-  const recipients = String(req.body?.to || '')
-    .split(/[,;]/).map(s => s.trim()).filter(Boolean);
+  const recipients = String(req.body?.to || '').split(/[,;]/).map(s => s.trim()).filter(Boolean);
   if (!recipients.length) { res.status(400).json({ error: 'At least one recipient email is required' }); return; }
 
   const invalid = recipients.filter(r => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r));
   if (invalid.length) { res.status(400).json({ error: `Invalid email address: ${invalid.join(', ')}` }); return; }
 
   const filePath = row.file_path ? path.join(docsDir, row.file_path) : null;
-  if (!filePath || !fs.existsSync(filePath)) { res.status(404).json({ error: 'Generated PDF is missing — save the confirmation again' }); return; }
+  if (!filePath || !fs.existsSync(filePath)) { res.status(404).json({ error: 'Generated PDF is missing — save the invoice again' }); return; }
 
-  const data = parseRecord(row).data as OrderConfirmationData;
+  const data = parseRecord(row).data as DocumentData;
   const subject = String(req.body?.subject || '').trim()
-    || `Order Confirmation ${row.oc_number}${data.client_name ? ` — ${data.client_name}` : ''}`;
+    || `Commercial Invoice ${row.invoice_number}${data.client_name ? ` — ${data.client_name}` : ''}`;
   const bodyText = String(req.body?.message || '').trim();
-
   const { total, currency } = computeTotals(data);
-  const totals = `${total.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${currency}`;
 
   const html = `
 <div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#111827;">
   <p style="font-size:15px;">Dear ${escapeHtml(data.client_name || 'Sir/Madam')},</p>
   ${bodyText
       ? `<p style="font-size:14px;white-space:pre-wrap;">${escapeHtml(bodyText)}</p>`
-      : `<p style="font-size:14px;">Please find attached our order confirmation <strong>${escapeHtml(row.oc_number)}</strong>.</p>`}
+      : `<p style="font-size:14px;">Please find attached our commercial invoice <strong>${escapeHtml(row.invoice_number)}</strong>.</p>`}
   <table style="width:100%;border-collapse:collapse;font-size:14px;border:1px solid #e5e7eb;border-radius:8px;margin-top:16px;">
-    <tr style="background:#f9fafb;"><td style="padding:8px 12px;color:#6b7280;">Confirmation</td><td style="padding:8px 12px;font-weight:600;">${escapeHtml(row.oc_number)}</td></tr>
-    <tr><td style="padding:8px 12px;color:#6b7280;">Date</td><td style="padding:8px 12px;">${escapeHtml(formatLongDate(data.oc_date))}</td></tr>
-    ${data.po_number ? `<tr style="background:#f9fafb;"><td style="padding:8px 12px;color:#6b7280;">PO number</td><td style="padding:8px 12px;">${escapeHtml(data.po_number)}</td></tr>` : ''}
-    ${totals ? `<tr><td style="padding:8px 12px;color:#6b7280;">Total</td><td style="padding:8px 12px;font-weight:600;">${escapeHtml(totals)}</td></tr>` : ''}
+    <tr style="background:#f9fafb;"><td style="padding:8px 12px;color:#6b7280;">Invoice</td><td style="padding:8px 12px;font-weight:600;">${escapeHtml(row.invoice_number)}</td></tr>
+    <tr><td style="padding:8px 12px;color:#6b7280;">Date</td><td style="padding:8px 12px;">${escapeHtml(formatLongDate(data.doc_date))}</td></tr>
+    ${data.po_number ? `<tr style="background:#f9fafb;"><td style="padding:8px 12px;color:#6b7280;">Your order#</td><td style="padding:8px 12px;">${escapeHtml(data.po_number)}</td></tr>` : ''}
+    <tr><td style="padding:8px 12px;color:#6b7280;">Total</td><td style="padding:8px 12px;font-weight:600;">${escapeHtml(`${total.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${currency}`)}</td></tr>
   </table>
   <p style="font-size:14px;margin-top:20px;">Kind regards,<br/>${escapeHtml(data.company_name || 'TripleW BV')}</p>
 </div>`;
@@ -407,27 +406,24 @@ router.post('/:id/email', async (req: Request, res: Response) => {
     const resend = new Resend(apiKey);
     const from = process.env.RESEND_FROM_EMAIL || 'CirculERP <onboarding@resend.dev>';
     const { error } = await resend.emails.send({
-      from,
-      to: recipients,
-      subject,
-      html,
-      attachments: [{ filename: row.file_name || 'order-confirmation.pdf', content: fs.readFileSync(filePath).toString('base64') }],
+      from, to: recipients, subject, html,
+      attachments: [{ filename: row.file_name || 'invoice.pdf', content: fs.readFileSync(filePath).toString('base64') }],
     });
     if (error) throw new Error(error.message || 'Resend rejected the message');
 
-    db.prepare(`UPDATE order_confirmations SET sent_to = ?, sent_at = datetime('now') WHERE id = ?`)
+    db.prepare(`UPDATE invoice_documents SET sent_to = ?, sent_at = datetime('now') WHERE id = ?`)
       .run(recipients.join(', '), row.id);
 
     notifyAdmin({
-      action: 'updated', entity: 'Order Confirmation', label: row.oc_number,
+      action: 'updated', entity: 'Commercial Invoice', label: row.invoice_number,
       detail: `emailed to ${recipients.join(', ')}`,
       performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
     });
 
-    const updated = db.prepare('SELECT * FROM order_confirmations WHERE id = ?').get(row.id);
-    res.json({ message: `Order confirmation sent to ${recipients.join(', ')}`, confirmation: parseRecord(updated) });
+    const updated = db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(row.id);
+    res.json({ message: `Invoice sent to ${recipients.join(', ')}`, invoice: parseRecord(updated) });
   } catch (err: any) {
-    console.error('[order-confirmations] email failed:', err?.message || err);
+    console.error('[invoice-documents] email failed:', err?.message || err);
     res.status(502).json({ error: `Failed to send email: ${err?.message || 'unknown error'}` });
   }
 });
@@ -435,21 +431,21 @@ router.post('/:id/email', async (req: Request, res: Response) => {
 // ── Delete ────────────────────────────────────────────────────────────────
 
 router.delete('/:id', (req: Request, res: Response) => {
-  const row = db.prepare('SELECT * FROM order_confirmations WHERE id = ?').get(Number(req.params.id)) as any;
-  if (!row) { res.status(404).json({ error: 'Order confirmation not found' }); return; }
+  const row = db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(Number(req.params.id)) as any;
+  if (!row) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
   if (row.file_path) {
     const filePath = path.join(docsDir, row.file_path);
     if (fs.existsSync(filePath)) { try { fs.unlinkSync(filePath); } catch { /* best effort */ } }
   }
   if (row.document_id) db.prepare('DELETE FROM operation_documents WHERE id = ?').run(row.document_id);
-  db.prepare('DELETE FROM order_confirmations WHERE id = ?').run(row.id);
+  db.prepare('DELETE FROM invoice_documents WHERE id = ?').run(row.id);
 
   notifyAdmin({
-    action: 'deleted', entity: 'Order Confirmation', label: row.oc_number,
+    action: 'deleted', entity: 'Commercial Invoice', label: row.invoice_number,
     performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
   });
-  res.json({ message: 'Order confirmation deleted' });
+  res.json({ message: 'Invoice deleted' });
 });
 
 function escapeHtml(value: string): string {
