@@ -1,13 +1,28 @@
 import { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
 import api from '../lib/api';
 import Card from '../components/ui/Card';
 import StatusBadge from '../components/ui/StatusBadge';
-import CustomerDocumentProfiles from '../components/CustomerDocumentProfiles';
+import DocumentDefaults, { useCustomerProfiles, type DocType } from '../components/CustomerDocumentProfiles';
 import { ArrowLeft, Mail, Phone, MapPin, Building, FileText, ShoppingCart, Package, DollarSign } from 'lucide-react';
+
+type TabId = 'overview' | DocType;
+
+const TABS: { id: TabId; label: string }[] = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'order_confirmation', label: 'Order Confirmation' },
+  { id: 'invoice', label: 'Invoice' },
+  { id: 'packing_list', label: 'Packing List' },
+];
 
 export default function CustomerDetailPage() {
   const { id } = useParams();
+  const [params, setParams] = useSearchParams();
+  const tabParam = params.get('tab') as TabId | null;
+  const activeTab: TabId = TABS.some(t => t.id === tabParam) ? tabParam! : 'overview';
+  // The tab lives in the URL so each document screen is its own address
+  const goTab = (tab: TabId) => setParams(tab === 'overview' ? {} : { tab }, { replace: false });
+  const profileState = useCustomerProfiles(id!);
   const [customer, setCustomer] = useState<any>(null);
   const [invoices, setInvoices] = useState<any[]>([]);
   const [orders, setOrders] = useState<any[]>([]);
@@ -54,8 +69,28 @@ export default function CustomerDetailPage() {
         {customer.notes && <p className="mt-4 text-sm text-gray-600 bg-gray-50 rounded-lg p-3">{customer.notes}</p>}
       </Card>
 
-      <CustomerDocumentProfiles customerId={id!} />
+      {/* Sub-tabs — each document type is its own screen */}
+      <div className="border-b border-gray-200">
+        <nav className="flex gap-0 -mb-px overflow-x-auto">
+          {TABS.map(t => (
+            <button
+              key={t.id}
+              onClick={() => goTab(t.id)}
+              className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                activeTab === t.id
+                  ? 'border-primary-600 text-primary-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </nav>
+      </div>
 
+      {activeTab !== 'overview' && <DocumentDefaults docType={activeTab} state={profileState} />}
+
+      {activeTab === 'overview' && (<>
       {/* Financial Summary */}
       {invoices.length > 0 && (() => {
         const eurOf = (inv: any) => Number(inv.eur_amount ?? inv.amount) || 0;
@@ -147,6 +182,7 @@ export default function CustomerDetailPage() {
           </div>
         </Card>
       </div>
+      </>)}
     </div>
   );
 }

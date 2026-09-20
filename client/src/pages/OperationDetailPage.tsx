@@ -67,6 +67,8 @@ interface WireTransfer {
 interface Operation {
   id: number;
   operation_number: string;
+  customer_id?: number | null;
+  supplier_id?: number | null;
   order_id: number | null;
   order_number?: string;
   order_type?: string;
@@ -649,7 +651,11 @@ export default function OperationDetailPage() {
             )}
           </div>
           <p className="text-sm text-gray-500 mt-1">
-            {operation.customer_name || operation.supplier_name || '—'} · Created {formatDate(operation.created_at) || '-'}
+            {operation.customer_id && operation.customer_name ? (
+              <Link to={`/customers/${operation.customer_id}`} className="hover:text-primary-600 hover:underline">{operation.customer_name}</Link>
+            ) : operation.supplier_id && operation.supplier_name ? (
+              <Link to={`/suppliers/${operation.supplier_id}`} className="hover:text-primary-600 hover:underline">{operation.supplier_name}</Link>
+            ) : (operation.customer_name || operation.supplier_name || '—')} · Created {formatDate(operation.created_at) || '-'}
           </p>
         </div>
       </div>

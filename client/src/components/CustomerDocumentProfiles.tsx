@@ -3,17 +3,20 @@ import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
-import { FileCheck2, Loader2, Plus, Receipt, Save, Star, Trash2, Boxes, IdCard } from 'lucide-react';
+import { Loader2, Plus, Save, Star, Trash2 } from 'lucide-react';
 
 /**
  * Per-customer defaults reused when generating documents. A customer may trade
- * as several legal entities, so the data is held per named profile; the shared
- * identity block is common to all three documents, and each tab adds its own.
+ * as several legal entities, so the data is held per named profile: a shared
+ * identity block common to every document, plus a section per document type.
+ *
+ * The state lives in `useCustomerProfiles` on the page so that switching
+ * between the document screens never discards unsaved edits.
  */
 
-type TabId = 'order_confirmation' | 'invoice' | 'packing_list';
+export type DocType = 'order_confirmation' | 'invoice' | 'packing_list';
 
-interface Profile {
+export interface Profile {
   id: number;
   name: string;
   is_default: boolean;
@@ -24,12 +27,6 @@ interface Profile {
     packing_list: Record<string, string>;
   };
 }
-
-const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
-  { id: 'order_confirmation', label: 'Order Confirmation', icon: <FileCheck2 size={14} /> },
-  { id: 'invoice', label: 'Invoice', icon: <Receipt size={14} /> },
-  { id: 'packing_list', label: 'Packing List', icon: <Boxes size={14} /> },
-];
 
 const inputCls =
   'block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500';
@@ -56,11 +53,12 @@ function Area({ label, value, onChange, placeholder, rows = 3, className = '' }:
   );
 }
 
-export default function CustomerDocumentProfiles({ customerId }: { customerId: string | number }) {
+// ── State shared by the three document screens ────────────────────────────
+
+export function useCustomerProfiles(customerId: string | number) {
   const { addToast } = useToast();
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [activeId, setActiveId] = useState<number | null>(null);
-  const [tab, setTab] = useState<TabId>('order_confirmation');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -81,7 +79,7 @@ export default function CustomerDocumentProfiles({ customerId }: { customerId: s
 
   const active = profiles.find(p => p.id === activeId) || null;
 
-  function patch(section: 'shared' | TabId, key: string, value: string) {
+  function patch(section: 'shared' | DocType, key: string, value: string) {
     if (!active) return;
     setDirty(true);
     setProfiles(prev => prev.map(p => p.id !== active.id ? p : {
@@ -90,7 +88,7 @@ export default function CustomerDocumentProfiles({ customerId }: { customerId: s
     }));
   }
 
-  function renameActive(name: string) {
+  function rename(name: string) {
     if (!active) return;
     setDirty(true);
     setProfiles(prev => prev.map(p => (p.id === active.id ? { ...p, name } : p)));
@@ -146,21 +144,62 @@ export default function CustomerDocumentProfiles({ customerId }: { customerId: s
     }
   }
 
+  return { profiles, active, activeId, setActiveId, loading, saving, dirty, patch, rename, save, addProfile, makeDefault, removeProfile };
+}
+
+export type ProfileState = ReturnType<typeof useCustomerProfiles>;
+
+// ── One document screen ───────────────────────────────────────────────────
+
+const TITLES: Record<DocType, string> = {
+  order_confirmation: 'Order Confirmation',
+  invoice: 'Commercial Invoice',
+  packing_list: 'Packing List',
+};
+
+export default function DocumentDefaults({ docType, state }: { docType: DocType; state: ProfileState }) {
+  const {
+    profiles, active, activeId, setActiveId, loading, saving, dirty,
+    patch, rename, save, addProfile, makeDefault, removeProfile,
+  } = state;
+
   if (loading) {
+    return <Card className="p-8 flex justify-center"><Loader2 size={20} className="animate-spin text-primary-600" /></Card>;
+  }
+
+  if (!profiles.length) {
     return (
-      <Card className="p-6 flex justify-center">
-        <Loader2 size={20} className="animate-spin text-primary-600" />
+      <Card className="p-8 text-center text-sm text-gray-500">
+        <p>No document defaults yet.</p>
+        <p className="text-gray-400 mt-1">Add a profile to stop retyping this customer's details on every document.</p>
+        <Button size="sm" className="mt-4" onClick={addProfile}><Plus size={14} /> Add profile</Button>
       </Card>
     );
   }
 
   return (
-    <Card>
-      <div className="px-5 py-4 border-b border-gray-100 flex flex-wrap items-center gap-2 justify-between">
-        <h2 className="font-semibold text-gray-800 flex items-center gap-2">
-          <IdCard size={16} className="text-gray-400" />
-          Document Defaults
-        </h2>
+    <div className="space-y-5">
+      {/* Billing profile — a customer may trade as several legal entities */}
+      <Card className="px-5 py-4 flex flex-wrap items-center gap-3 justify-between">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs font-medium text-gray-500">Billing profile</span>
+          {profiles.map(p => (
+            <button
+              key={p.id}
+              onClick={() => setActiveId(p.id)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                p.id === activeId
+                  ? 'bg-primary-50 border-primary-300 text-primary-700'
+                  : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              {p.name}{p.is_default ? ' ★' : ''}
+            </button>
+          ))}
+          <button onClick={addProfile} className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 border border-dashed border-gray-300 rounded-lg px-2 py-1.5">
+            <Plus size={12} /> Add
+          </button>
+        </div>
         <div className="flex items-center gap-2">
           {active && !active.is_default && (
             <button onClick={makeDefault} className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2 py-1">
@@ -172,122 +211,84 @@ export default function CustomerDocumentProfiles({ customerId }: { customerId: s
               <Trash2 size={12} /> Delete
             </button>
           )}
-          <button onClick={addProfile} className="flex items-center gap-1 text-xs text-gray-600 hover:text-gray-800 border border-gray-300 rounded-lg px-2 py-1">
-            <Plus size={12} /> Add profile
-          </button>
         </div>
-      </div>
+      </Card>
 
-      {profiles.length === 0 ? (
-        <div className="px-5 py-8 text-center text-sm text-gray-400">
-          No document defaults yet.
-          <button onClick={addProfile} className="ml-1 text-primary-600 hover:underline">Add a profile</button>
-          {' '}to stop retyping this customer's details on every document.
-        </div>
-      ) : (
+      {active && (
         <>
-          {/* Profile selector — a customer may trade as several legal entities */}
-          {profiles.length > 1 && (
-            <div className="px-5 pt-4 flex gap-1 flex-wrap">
-              {profiles.map(p => (
-                <button
-                  key={p.id}
-                  onClick={() => setActiveId(p.id)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-                    p.id === activeId
-                      ? 'bg-primary-50 border-primary-300 text-primary-700'
-                      : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  {p.name}{p.is_default ? ' ★' : ''}
-                </button>
-              ))}
+          {/* Shared identity — the same values on all three documents */}
+          <Card>
+            <div className="px-5 py-3.5 border-b border-gray-100 flex items-center gap-2">
+              <h2 className="font-semibold text-gray-800 text-sm">Client identity</h2>
+              <span className="text-xs text-gray-400">· shared across all documents</span>
             </div>
-          )}
+            <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Field label="Profile name" value={active.name} onChange={rename} placeholder="Costa Rica" />
+              <Field label="Client code" value={active.data.shared.client_code} onChange={v => patch('shared', 'client_code', v)} placeholder="00GR01" />
+              <Field label="Legal name" value={active.data.shared.legal_name} onChange={v => patch('shared', 'legal_name', v)} placeholder="Astron Chemicals SA" className="sm:col-span-2" />
+              <Area label="Billing address (one line per row)" value={active.data.shared.billing_address} onChange={v => patch('shared', 'billing_address', v)} className="sm:col-span-2" />
+              <Field label="Tax ID" value={active.data.shared.tax_id} onChange={v => patch('shared', 'tax_id', v)} />
+              <Field label="EORI#" value={active.data.shared.eori} onChange={v => patch('shared', 'eori', v)} placeholder="GR094468327" />
+              <Field label="Contact person" value={active.data.shared.contact_person} onChange={v => patch('shared', 'contact_person', v)} />
+              <Field label="Contact phone" value={active.data.shared.contact_phone} onChange={v => patch('shared', 'contact_phone', v)} />
+              <Field label="Contact email" value={active.data.shared.contact_email} onChange={v => patch('shared', 'contact_email', v)} />
+              <Field label="Attention" value={active.data.shared.attention} onChange={v => patch('shared', 'attention', v)} placeholder="Melina Mamma m.mamma@…" />
+            </div>
+          </Card>
 
-          {active && (
-            <div className="p-5 space-y-5">
-              {/* Shared identity — common to all three documents */}
-              <div className="space-y-4">
-                <div className="flex items-center gap-2">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Client identity</p>
-                  <span className="text-xs text-gray-400">· used on all documents</span>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <Field label="Profile name" value={active.name} onChange={renameActive} placeholder="Costa Rica" />
-                  <Field label="Client code" value={active.data.shared.client_code} onChange={v => patch('shared', 'client_code', v)} placeholder="00GR01" />
-                  <Field label="Legal name" value={active.data.shared.legal_name} onChange={v => patch('shared', 'legal_name', v)} placeholder="Astron Chemicals SA" className="sm:col-span-2" />
-                  <Area label="Billing address (one line per row)" value={active.data.shared.billing_address} onChange={v => patch('shared', 'billing_address', v)} className="sm:col-span-2" />
-                  <Field label="Tax ID" value={active.data.shared.tax_id} onChange={v => patch('shared', 'tax_id', v)} />
-                  <Field label="EORI#" value={active.data.shared.eori} onChange={v => patch('shared', 'eori', v)} placeholder="GR094468327" />
-                  <Field label="Contact person" value={active.data.shared.contact_person} onChange={v => patch('shared', 'contact_person', v)} />
-                  <Field label="Contact phone" value={active.data.shared.contact_phone} onChange={v => patch('shared', 'contact_phone', v)} />
-                  <Field label="Contact email" value={active.data.shared.contact_email} onChange={v => patch('shared', 'contact_email', v)} />
-                  <Field label="Attention" value={active.data.shared.attention} onChange={v => patch('shared', 'attention', v)} placeholder="Melina Mamma m.mamma@…" />
-                </div>
-              </div>
+          {/* This document's own defaults */}
+          <Card>
+            <div className="px-5 py-3.5 border-b border-gray-100">
+              <h2 className="font-semibold text-gray-800 text-sm">{TITLES[docType]} defaults</h2>
+            </div>
+            <div className="p-5 space-y-4">
+              {docType === 'packing_list' && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  Saved for later — the packing list generator is not built yet.
+                </p>
+              )}
 
-              {/* Per-document defaults */}
-              <div className="pt-4 border-t border-gray-100 space-y-4">
-                <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">
-                  {TABS.map(t => (
-                    <button
-                      key={t.id}
-                      onClick={() => setTab(t.id)}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap ${
-                        tab === t.id ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
-                      }`}
-                    >
-                      {t.icon} {t.label}
-                    </button>
-                  ))}
-                </div>
-
-                {tab === 'order_confirmation' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {docType === 'order_confirmation' && (
+                  <>
                     <Field label="Delivery (incoterm + place)" value={active.data.order_confirmation.delivery} onChange={v => patch('order_confirmation', 'delivery', v)} placeholder="CIF Piraeus Greece" />
                     <Field label="SQ suffix" value={active.data.order_confirmation.sq_suffix} onChange={v => patch('order_confirmation', 'sq_suffix', v)} placeholder="GR" />
                     <Area label="Delivery address" value={active.data.order_confirmation.delivery_address} onChange={v => patch('order_confirmation', 'delivery_address', v)} rows={2} className="sm:col-span-2" />
                     <Area label="Payment terms" value={active.data.order_confirmation.terms} onChange={v => patch('order_confirmation', 'terms', v)} rows={2} placeholder="100% payable at 60 days date of B/L" className="sm:col-span-2" />
                     <Area label="Note" value={active.data.order_confirmation.note} onChange={v => patch('order_confirmation', 'note', v)} rows={2} className="sm:col-span-2" />
-                  </div>
+                  </>
                 )}
 
-                {tab === 'invoice' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {docType === 'invoice' && (
+                  <>
                     <Field label="Delivery (incoterm + place)" value={active.data.invoice.delivery} onChange={v => patch('invoice', 'delivery', v)} placeholder="CIF Piraeus Greece" />
                     <div />
                     <Area label="Delivery address" value={active.data.invoice.delivery_address} onChange={v => patch('invoice', 'delivery_address', v)} rows={2} className="sm:col-span-2" />
                     <Area label="Payment terms" value={active.data.invoice.terms} onChange={v => patch('invoice', 'terms', v)} rows={2} className="sm:col-span-2" />
                     <Area label="Note" value={active.data.invoice.note} onChange={v => patch('invoice', 'note', v)} rows={2} className="sm:col-span-2" />
-                  </div>
+                  </>
                 )}
 
-                {tab === 'packing_list' && (
+                {docType === 'packing_list' && (
                   <>
-                    <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                      Saved for later — the packing list generator is not built yet.
-                    </p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <Field label="Port of loading" value={active.data.packing_list.port_of_loading} onChange={v => patch('packing_list', 'port_of_loading', v)} placeholder="Antwerp" />
-                      <Field label="Port of discharge" value={active.data.packing_list.port_of_discharge} onChange={v => patch('packing_list', 'port_of_discharge', v)} placeholder="Piraeus" />
-                      <Area label="Consignee / delivery address" value={active.data.packing_list.delivery_address} onChange={v => patch('packing_list', 'delivery_address', v)} rows={2} className="sm:col-span-2" />
-                      <Area label="Note" value={active.data.packing_list.note} onChange={v => patch('packing_list', 'note', v)} rows={2} className="sm:col-span-2" />
-                    </div>
+                    <Field label="Port of loading" value={active.data.packing_list.port_of_loading} onChange={v => patch('packing_list', 'port_of_loading', v)} placeholder="Antwerp" />
+                    <Field label="Port of discharge" value={active.data.packing_list.port_of_discharge} onChange={v => patch('packing_list', 'port_of_discharge', v)} placeholder="Piraeus" />
+                    <Area label="Consignee / delivery address" value={active.data.packing_list.delivery_address} onChange={v => patch('packing_list', 'delivery_address', v)} rows={2} className="sm:col-span-2" />
+                    <Area label="Note" value={active.data.packing_list.note} onChange={v => patch('packing_list', 'note', v)} rows={2} className="sm:col-span-2" />
                   </>
                 )}
               </div>
 
-              <div className="flex justify-end pt-2 border-t border-gray-100">
+              <div className="flex justify-end pt-3 border-t border-gray-100">
                 <Button size="sm" onClick={save} disabled={saving || !dirty}>
                   {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                   {dirty ? 'Save changes' : 'Saved'}
                 </Button>
               </div>
             </div>
-          )}
+          </Card>
         </>
       )}
-    </Card>
+    </div>
   );
 }

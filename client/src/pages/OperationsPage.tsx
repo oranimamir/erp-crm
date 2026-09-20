@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
@@ -20,6 +20,8 @@ interface Operation {
   order_date?: string;
   order_file_path?: string;
   order_file_name?: string;
+  customer_id?: number | null;
+  supplier_id?: number | null;
   customer_name?: string;
   supplier_name?: string;
   country?: string;
@@ -845,7 +847,11 @@ export default function OperationsPage() {
                     <span className="font-semibold text-primary-700">{op.operation_number}</span>
                   </td>
                   <td className="px-4 py-3 text-gray-700">
-                    {op.customer_name || op.supplier_name || <span className="text-gray-400">—</span>}
+                    {op.customer_id && op.customer_name ? (
+                      <Link to={`/customers/${op.customer_id}`} onClick={e => e.stopPropagation()} className="hover:text-primary-600 hover:underline">{op.customer_name}</Link>
+                    ) : op.supplier_id && op.supplier_name ? (
+                      <Link to={`/suppliers/${op.supplier_id}`} onClick={e => e.stopPropagation()} className="hover:text-primary-600 hover:underline">{op.supplier_name}</Link>
+                    ) : <span className="text-gray-400">—</span>}
                   </td>
                   <td className="px-4 py-3 text-gray-700">
                     {op.order_number || <span className="text-gray-400">—</span>}
