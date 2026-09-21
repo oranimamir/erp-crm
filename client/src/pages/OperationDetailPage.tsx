@@ -138,7 +138,6 @@ function formatCurrency(amount: number, currency = 'USD') {
   const sym = currency === 'EUR' ? '€' : currency === 'GBP' ? '£' : '$';
   return `${sym}${Number(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
-function isImage(filename: string) { return /\.(jpg|jpeg|png|webp)$/i.test(filename); }
 function uid() { return Math.random().toString(36).slice(2); }
 function addDays(dateStr: string, days: number): string {
   if (!dateStr) return '';

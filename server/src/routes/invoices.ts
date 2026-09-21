@@ -346,6 +346,21 @@ router.delete('/:id', (req: Request, res: Response) => {
     }
   }
 
+  // wire_transfers reference this invoice with ON DELETE RESTRICT, so they must
+  // go first — and their proof files with them, which no cascade could remove.
+  const transfers = db.prepare('SELECT id, file_path FROM wire_transfers WHERE invoice_id = ?').all(req.params.id) as any[];
+  for (const wt of transfers) {
+    if (wt.file_path) {
+      try {
+        const wtPath = path.join(uploadsBase, 'wire-transfers', wt.file_path);
+        if (fs.existsSync(wtPath)) fs.unlinkSync(wtPath);
+      } catch (err) {
+        console.warn('[invoices] Failed to delete wire transfer file:', err);
+      }
+    }
+  }
+  db.prepare('DELETE FROM wire_transfers WHERE invoice_id = ?').run(req.params.id);
+
   db.prepare('DELETE FROM invoices WHERE id = ?').run(req.params.id);
   refreshEstimatedPaymentDate(db, existing.operation_id);
   notifyAdmin({ action: 'deleted', entity: 'Invoice', label: existing.invoice_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });

@@ -228,7 +228,6 @@ export default function OrderConfirmationPage() {
   const adopt = useCallback((record: Confirmation) => {
     setConfirmation(record);
     setEntityConfirmed(true);
-    setEntityConfirmed(true);
     setForm(toFormData(record.data));
     setOrderId(record.order_id);
     setOperationId(record.operation_id);
@@ -262,9 +261,6 @@ export default function OrderConfirmationPage() {
           setProfileName(data.profile_name ?? null);
           setMatchedBy(data.matched_by || '');
           setMatchConfident(!!data.match_confident);
-    setProfileName(data.profile_name ?? null);
-    setMatchedBy(data.matched_by || '');
-    setMatchConfident(!!data.match_confident);
           if (data.operation) {
             setOperationId(data.operation.id);
             setOperationNumber(data.operation.operation_number);
@@ -303,9 +299,9 @@ export default function OrderConfirmationPage() {
         setForm(toFormData(data.draft));
         setEntity(data.entity);
         setProfileId(data.profile_id ?? null);
-    setProfileName(data.profile_name ?? null);
-    setMatchedBy(data.matched_by || '');
-    setMatchConfident(!!data.match_confident);
+        setProfileName(data.profile_name ?? null);
+        setMatchedBy(data.matched_by || '');
+        setMatchConfident(!!data.match_confident);
       }
     } catch {
       addToast('Failed to reload the draft', 'error');

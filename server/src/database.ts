@@ -134,8 +134,17 @@ class DatabaseWrapper {
       this.sqlDb = new SQL.Database();
     }
 
-    // Enable foreign keys
-    this.sqlDb.run('PRAGMA foreign_keys = ON;');
+    this.enableForeignKeys();
+  }
+
+  /**
+   * `foreign_keys` is a per-connection setting, and sql.js's `export()` closes
+   * and reopens the underlying handle — which silently resets it to OFF. Since
+   * every write schedules a save, the pragma has to be re-asserted after each
+   * export or no ON DELETE CASCADE / SET NULL in the schema ever fires.
+   */
+  private enableForeignKeys() {
+    try { this.sqlDb.run('PRAGMA foreign_keys = ON;'); } catch { /* handle not ready */ }
   }
 
   private scheduleSave() {
@@ -218,6 +227,7 @@ class DatabaseWrapper {
   saveToDisk(): boolean {
     try {
       const data = this.sqlDb.export();
+      this.enableForeignKeys(); // export() reopened the handle
       const buffer = Buffer.from(data);
       // Write to temp file first, then rename — atomic swap prevents corruption on ENOSPC
       const tmpPath = dbPath + '.tmp';
@@ -235,6 +245,7 @@ class DatabaseWrapper {
         console.warn(`[db] Disk full — purged ${removed} backup/temp file(s) and retrying save...`);
         try {
           const data = this.sqlDb.export();
+      this.enableForeignKeys(); // export() reopened the handle
           const buffer = Buffer.from(data);
           const tmpPath = dbPath + '.tmp';
           fs.writeFileSync(tmpPath, buffer);
@@ -1554,6 +1565,90 @@ export async function initializeDatabase() {
   // Which profile a document was drafted from, so regenerating never switches entity
   try { db.exec(`ALTER TABLE order_confirmations ADD COLUMN profile_id INTEGER`); } catch (_) { /* column may already exist */ }
   try { db.exec(`ALTER TABLE invoice_documents ADD COLUMN profile_id INTEGER`); } catch (_) { /* column may already exist */ }
+
+  // ── Repair FK references broken by an old rebuild migration ─────────────
+  // `ALTER TABLE invoices RENAME TO invoices_old` also rewrites the FK clauses
+  // of tables pointing at it, so dropping the temp table left wire_transfers
+  // and payments referencing a table that no longer exists. Harmless while
+  // foreign keys were off; fatal now that they are enforced.
+  for (const [table, createSql] of [
+    ['wire_transfers', `CREATE TABLE wire_transfers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      invoice_id INTEGER NOT NULL,
+      amount REAL NOT NULL,
+      transfer_date TEXT NOT NULL,
+      bank_reference TEXT,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+      approved_by INTEGER,
+      approved_at TEXT,
+      rejection_reason TEXT,
+      file_path TEXT,
+      file_name TEXT,
+      notes TEXT,
+      fx_rate REAL,
+      eur_amount REAL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE RESTRICT,
+      FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL
+    )`],
+    ['payments', `CREATE TABLE payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      invoice_id INTEGER NOT NULL,
+      amount REAL NOT NULL,
+      payment_date TEXT NOT NULL,
+      payment_method TEXT NOT NULL,
+      reference TEXT,
+      notes TEXT,
+      file_path TEXT,
+      file_name TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      fx_rate REAL,
+      eur_amount REAL,
+      FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE RESTRICT
+    )`],
+  ] as Array<[string, string]>) {
+    try {
+      const info = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(table) as any;
+      if (!info?.sql || !info.sql.includes('invoices_old')) continue;
+
+      const cols = (db.prepare(`PRAGMA table_info(${table})`).all() as any[]).map(c => c.name).join(', ');
+      db.exec(`PRAGMA foreign_keys = OFF`, true);
+      db.exec(`ALTER TABLE ${table} RENAME TO ${table}_fixup`, true);
+      db.exec(createSql, true);
+      db.exec(`INSERT INTO ${table} (${cols}) SELECT ${cols} FROM ${table}_fixup`, true);
+      db.exec(`DROP TABLE ${table}_fixup`, true);
+      db.exec(`PRAGMA foreign_keys = ON`, true);
+      db.saveToDisk();
+      console.log(`[db] Repaired dangling invoices_old reference on ${table}`);
+    } catch (err: any) {
+      console.error(`[db] Failed to repair ${table}: ${err?.message || err}`);
+      try { db.exec(`PRAGMA foreign_keys = ON`, true); } catch { /* ignore */ }
+    }
+  }
+
+  // One-off sweep of rows orphaned while foreign keys were silently disabled
+  // (sql.js export() resets the pragma — see enableForeignKeys). Cascades work
+  // from now on, but the historic debris has to be cleared explicitly.
+  try {
+    const sweeps: Array<[string, string]> = [
+      ['order_items',                 'DELETE FROM order_items WHERE order_id NOT IN (SELECT id FROM orders)'],
+      ['order_confirmations',         'DELETE FROM order_confirmations WHERE order_id IS NOT NULL AND order_id NOT IN (SELECT id FROM orders)'],
+      ['invoice_documents',           'DELETE FROM invoice_documents WHERE order_id IS NOT NULL AND order_id NOT IN (SELECT id FROM orders)'],
+      ['operation_documents',         'DELETE FROM operation_documents WHERE operation_id NOT IN (SELECT id FROM operations)'],
+      ['customer_document_profiles',  'DELETE FROM customer_document_profiles WHERE customer_id NOT IN (SELECT id FROM customers)'],
+      ['wire_transfers',              'DELETE FROM wire_transfers WHERE invoice_id NOT IN (SELECT id FROM invoices)'],
+    ];
+    const cleared: string[] = [];
+    for (const [label, sql] of sweeps) {
+      try {
+        const removed = db.prepare(sql).run().changes;
+        if (removed > 0) cleared.push(`${label}: ${removed}`);
+      } catch { /* table may not exist on an older DB */ }
+    }
+    if (cleared.length) console.log(`[db] Removed orphaned rows — ${cleared.join(', ')}`);
+  } catch { /* best effort */ }
 
   seedCustomerDocumentProfiles();
 

@@ -201,6 +201,12 @@ app.use('/api/health', authenticateToken, healthRoutes);
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');
 app.use(express.static(clientDist));
 
+// An unmatched /api path must not fall through to the SPA fallback below —
+// callers would get index.html with a 200 and a confusing JSON parse error.
+app.use('/api', (_req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
 // ── Error handling ────────────────────────────────────────────────────────────
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   // Log full error server-side only — never expose stack traces or DB details to clients
@@ -208,6 +214,15 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 
   if (err.code === 'LIMIT_FILE_SIZE') {
     res.status(400).json({ error: 'File too large. Maximum size is 10MB.' });
+    return;
+  }
+  // A malformed request body is the caller's mistake, not a server fault
+  if (err.type === 'entity.parse.failed' || err instanceof SyntaxError) {
+    res.status(400).json({ error: 'Malformed request body' });
+    return;
+  }
+  if (err.type === 'entity.too.large') {
+    res.status(413).json({ error: 'Request body too large' });
     return;
   }
   // Safe user-facing multer/upload errors

@@ -560,10 +560,6 @@ export default function OperationsPage() {
     }
   }
 
-  function isImage(filename: string) {
-    return /\.(jpg|jpeg|png|webp)$/i.test(filename);
-  }
-
   const thSortable = 'text-left px-4 py-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900 select-none';
 
   return (

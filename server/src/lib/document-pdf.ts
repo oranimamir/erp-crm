@@ -158,12 +158,19 @@ const MONTHS = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
-/** "2026-09-16" → "16 September 2026". Non-ISO input passes through. */
+/**
+ * "2026-09-16" → "16 September 2026". Non-ISO input passes through unchanged —
+ * delivery dates are free text ("Septiembre 2026") and AI extraction can return
+ * an out-of-range month, which must never reach a document as "undefined".
+ */
 export function formatLongDate(iso?: string | null): string {
   if (!iso) return '';
   const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!m) return String(iso);
-  return `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]} ${m[1]}`;
+  const month = MONTHS[Number(m[2]) - 1];
+  const day = Number(m[3]);
+  if (!month || day < 1 || day > 31) return String(iso);
+  return `${day} ${month} ${m[1]}`;
 }
 
 function num(value: unknown): number {

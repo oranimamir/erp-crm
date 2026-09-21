@@ -93,7 +93,6 @@ export default function OrderDetailPage() {
     return `${sym}${Number(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
-  const isImage = (filename: string) => /\.(jpg|jpeg|png|webp)$/i.test(filename);
 
   const openPreview = async (apiPath: string, filename: string) => {
     try {

@@ -1,9 +1,13 @@
 import { Router, Request, Response } from 'express';
+import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import db from '../database.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { resolveUpload, streamZip, safeName } from '../lib/zipFiles.js';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
 const router = Router();
 
 // Bulk-download the attached documents of multiple orders as a single ZIP.
@@ -305,6 +309,29 @@ router.patch('/:id/status', (req: Request, res: Response) => {
 
 router.delete('/:id', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT order_number FROM orders WHERE id = ?').get(req.params.id) as any;
+  if (!existing) { res.status(404).json({ error: 'Order not found' }); return; }
+
+  // Confirmations and invoices cascade away with the order, but their generated
+  // PDFs and the operation_documents rows pointing at them do not.
+  const docsDir = path.join(uploadsBase, 'operation-docs');
+  const generated = [
+    ...db.prepare('SELECT file_path, document_id FROM order_confirmations WHERE order_id = ?').all(req.params.id) as any[],
+    ...db.prepare('SELECT file_path, document_id FROM invoice_documents WHERE order_id = ?').all(req.params.id) as any[],
+  ];
+  for (const doc of generated) {
+    if (doc.file_path) {
+      try {
+        const full = path.join(docsDir, doc.file_path);
+        if (fs.existsSync(full)) fs.unlinkSync(full);
+      } catch (err) {
+        console.warn('[orders] Failed to delete generated document:', err);
+      }
+    }
+    if (doc.document_id) {
+      try { db.prepare('DELETE FROM operation_documents WHERE id = ?').run(doc.document_id); } catch { /* best effort */ }
+    }
+  }
+
   const result = db.prepare('DELETE FROM orders WHERE id = ?').run(req.params.id);
   if (result.changes === 0) { res.status(404).json({ error: 'Order not found' }); return; }
   notifyAdmin({ action: 'deleted', entity: 'Order', label: existing?.order_number || `#${req.params.id}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });

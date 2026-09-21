@@ -303,13 +303,6 @@ export default function InvoiceDocumentPage() {
     catch { addToast('Failed to switch entity', 'error'); }
   }
 
-  async function switchProfile(next: number) {
-    setProfileId(next);
-    if (record) return;
-    try { await loadDraft({ entity, profile_id: next }); }
-    catch { addToast('Failed to switch profile', 'error'); }
-  }
-
   // The entity is never applied silently — see EntityConfirmStep
   const entityReady = profiles.length < 2 || entityConfirmed;
 
