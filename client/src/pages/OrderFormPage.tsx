@@ -311,16 +311,16 @@ export default function OrderFormPage() {
           })),
       };
 
-      if (isEditing) {
-        await api.put(`/orders/${id}`, payload);
-        addToast('Order updated', 'success');
-        navigate('/orders');
-      } else {
-        await api.post('/orders', payload);
-        addToast('Order created', 'success');
-        // A new order starts an operation, so that's where the work continues
-        navigate('/operations');
-      }
+      const { data: saved } = isEditing
+        ? await api.put(`/orders/${id}`, payload)
+        : await api.post('/orders', payload);
+      addToast(isEditing ? 'Order updated' : 'Order created', 'success');
+
+      // An order belongs to an operation, so that is where the work continues —
+      // back to the operation itself when there is one, never the orders list.
+      if (saved?.operation_id) navigate(`/operations/${saved.operation_id}`);
+      else if (isEditing) navigate('/orders');
+      else navigate('/operations');
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Failed to save order', 'error');
     } finally {

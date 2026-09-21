@@ -187,7 +187,11 @@ router.post('/', (req: Request, res: Response) => {
     }
 
     notifyAdmin({ action: 'created', entity: 'Order', label: order.order_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
-    res.status(201).json({ ...order, items: orderItems });
+    // Re-read: the operation link above updates operation_number on the row, and
+    // the client needs operation_id to return to the operation it came from.
+    const saved = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as any;
+    const linked = db.prepare('SELECT id FROM operations WHERE order_id = ? ORDER BY id DESC LIMIT 1').get(orderId) as any;
+    res.status(201).json({ ...saved, items: orderItems, operation_id: linked?.id ?? null });
   } catch (err: any) {
     if (err.message?.includes('UNIQUE')) {
       res.status(409).json({ error: 'Order number already exists' });
@@ -229,6 +233,7 @@ router.put('/:id', (req: Request, res: Response) => {
       UPDATE orders SET order_number=?, customer_id=?, supplier_id=?, type=?, status=?, total_amount=?,
         description=?, notes=?, order_date=?, inco_terms=?, destination=?, transport=?,
         delivery_date=?, payment_terms=?, operation_number=?,
+        client_entity_name=COALESCE(?, client_entity_name), client_tax_id=COALESCE(?, client_tax_id),
         file_path=COALESCE(?, file_path), file_name=COALESCE(?, file_name),
         updated_at=datetime('now')
       WHERE id=?
@@ -276,8 +281,9 @@ router.put('/:id', (req: Request, res: Response) => {
 
     const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id) as any;
     const orderItems = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(req.params.id as any);
+    const linked = db.prepare('SELECT id FROM operations WHERE order_id = ? ORDER BY id DESC LIMIT 1').get(req.params.id) as any;
     notifyAdmin({ action: 'updated', entity: 'Order', label: order.order_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
-    res.json({ ...order, items: orderItems });
+    res.json({ ...order, items: orderItems, operation_id: linked?.id ?? null });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
