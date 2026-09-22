@@ -1648,6 +1648,49 @@ export async function initializeDatabase() {
       } catch { /* table may not exist on an older DB */ }
     }
     if (cleared.length) console.log(`[db] Removed orphaned rows — ${cleared.join(', ')}`);
+
+    // Dangling *pointers* are the other half of the damage: a row that survives
+    // but references something deleted. `operations.order_id` is the visible one
+    // — the UI renders a ghost order for it — but every nullable FK that was
+    // never enforced can be in this state.
+    const pointers: Array<[string, string, string]> = [
+      ['operations', 'order_id',     'orders'],
+      ['operations', 'customer_id',  'customers'],
+      ['operations', 'supplier_id',  'suppliers'],
+      ['shipments',  'order_id',     'orders'],
+      ['shipments',  'customer_id',  'customers'],
+      ['shipments',  'supplier_id',  'suppliers'],
+      ['orders',     'customer_id',  'customers'],
+      ['orders',     'supplier_id',  'suppliers'],
+      ['invoices',   'customer_id',  'customers'],
+      ['invoices',   'supplier_id',  'suppliers'],
+      // invoices.operation_id has no FK at all — it was added by a plain ALTER
+      ['invoices',   'operation_id', 'operations'],
+      ['working_capital_forecasts', 'operation_id', 'operations'],
+    ];
+    const nulled: string[] = [];
+    for (const [table, column, target] of pointers) {
+      try {
+        const changed = db.prepare(
+          `UPDATE ${table} SET ${column} = NULL WHERE ${column} IS NOT NULL AND ${column} NOT IN (SELECT id FROM ${target})`
+        ).run().changes;
+        if (changed > 0) nulled.push(`${table}.${column}: ${changed}`);
+      } catch { /* table or column may not exist on an older DB */ }
+    }
+    if (nulled.length) console.log(`[db] Cleared dangling references — ${nulled.join(', ')}`);
+
+    // status_history has no FK to any of its entities, so its rows outlive them
+    for (const [entity, table] of [
+      ['order', 'orders'], ['invoice', 'invoices'],
+      ['shipment', 'shipments'], ['production', 'production_batches'],
+    ] as Array<[string, string]>) {
+      try {
+        const stale = db.prepare(
+          `DELETE FROM status_history WHERE entity_type = ? AND entity_id NOT IN (SELECT id FROM ${table})`
+        ).run(entity).changes;
+        if (stale > 0) console.log(`[db] Removed ${stale} status_history row(s) for deleted ${entity}s`);
+      } catch { /* table may not exist */ }
+    }
   } catch { /* best effort */ }
 
   seedCustomerDocumentProfiles();
@@ -1672,6 +1715,16 @@ export async function initializeDatabase() {
         AND amount > 0
     `).run();
   } catch { /* ignore */ }
+
+  // Referential integrity is only as good as the last migration — surface any
+  // violation in the logs rather than letting it rot silently as it did before.
+  try {
+    const violations = db.prepare('PRAGMA foreign_key_check').all() as any[];
+    if (violations.length) {
+      const summary = violations.slice(0, 5).map(v => `${v.table}.rowid=${v.rowid} → ${v.parent}`).join(', ');
+      console.warn(`[db] ⚠️  ${violations.length} foreign key violation(s): ${summary}${violations.length > 5 ? ', …' : ''}`);
+    }
+  } catch { /* pragma unsupported */ }
 
   db.saveToDisk();
 }

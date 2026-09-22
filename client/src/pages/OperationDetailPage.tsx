@@ -660,7 +660,9 @@ export default function OperationDetailPage() {
       </div>
 
       {/* ── Linked Order ───────────────────────────────────────────────────── */}
-      {operation.order_id ? (
+      {/* Require the joined order, not just the pointer: a reference to a deleted
+          order must render the "no order linked" state, never an empty card. */}
+      {operation.order_id && operation.order_number ? (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
           <div className="px-4 sm:px-5 py-3 sm:py-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center gap-2 sm:justify-between">
             <h2 className="font-semibold text-gray-800 flex items-center gap-2 text-sm sm:text-base">

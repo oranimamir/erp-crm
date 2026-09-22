@@ -871,8 +871,8 @@ export default function OperationsPage() {
                   </td>
                   <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                     <div className="flex items-center gap-1">
-                      {/* Order preview */}
-                      {op.order_file_path ? (
+                      {/* Order preview — order_number proves the order still exists */}
+                      {op.order_file_path && op.order_number ? (
                         <button
                           onClick={() => previewOrder(op)}
                           className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-blue-600"
@@ -882,7 +882,7 @@ export default function OperationsPage() {
                             ? <Loader2 size={14} className="animate-spin" />
                             : <FileSpreadsheet size={14} />}
                         </button>
-                      ) : op.order_id ? (
+                      ) : op.order_id && op.order_number ? (
                         <button
                           onClick={() => navigate(`/orders/${op.order_id}/edit`)}
                           className="p-1 rounded hover:bg-gray-200 text-gray-300 hover:text-blue-600"
@@ -915,7 +915,7 @@ export default function OperationsPage() {
                             : <Landmark size={14} />}
                         </button>
                       )}
-                      {!op.order_file_path && !op.order_id && op.invoice_count === 0 && op.wire_transfer_count === 0 && (
+                      {!op.order_number && op.invoice_count === 0 && op.wire_transfer_count === 0 && (
                         <span className="text-gray-300">—</span>
                       )}
                     </div>

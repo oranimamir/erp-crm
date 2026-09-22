@@ -23,6 +23,14 @@ router.get('/storage', (req: Request, res: Response) => {
       counts[t] = null;
     }
   }
+  // Dangling references are invisible in normal use; surface the count here
+  let fkViolations: number | null = null;
+  try {
+    fkViolations = (db.prepare('PRAGMA foreign_key_check').all() as any[]).length;
+  } catch {
+    fkViolations = null;
+  }
+
   let uploadsSize = 0;
   let uploadsCount = 0;
   try {
@@ -45,6 +53,7 @@ router.get('/storage', (req: Request, res: Response) => {
   res.json({
     ...info,
     row_counts: counts,
+    foreign_key_violations: fkViolations,
     uploads_file_count: uploadsCount,
     uploads_total_bytes: uploadsSize,
   });

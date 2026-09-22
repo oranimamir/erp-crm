@@ -131,6 +131,8 @@ router.patch('/:id/status', (req: Request, res: Response) => {
 
 router.delete('/:id', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT tracking_number FROM shipments WHERE id = ?').get(req.params.id) as any;
+  // status_history has no FK, so its rows would linger after the shipment is gone
+  try { db.prepare(`DELETE FROM status_history WHERE entity_type = 'shipment' AND entity_id = ?`).run(req.params.id); } catch { /* best effort */ }
   const result = db.prepare('DELETE FROM shipments WHERE id = ?').run(req.params.id);
   if (result.changes === 0) { res.status(404).json({ error: 'Shipment not found' }); return; }
   notifyAdmin({ action: 'deleted', entity: 'Shipment', label: existing?.tracking_number || `Shipment #${req.params.id}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });

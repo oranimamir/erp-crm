@@ -361,6 +361,8 @@ router.delete('/:id', (req: Request, res: Response) => {
   }
   db.prepare('DELETE FROM wire_transfers WHERE invoice_id = ?').run(req.params.id);
 
+  // status_history has no FK, so its rows would linger after the invoice is gone
+  try { db.prepare(`DELETE FROM status_history WHERE entity_type = 'invoice' AND entity_id = ?`).run(req.params.id); } catch { /* best effort */ }
   db.prepare('DELETE FROM invoices WHERE id = ?').run(req.params.id);
   refreshEstimatedPaymentDate(db, existing.operation_id);
   notifyAdmin({ action: 'deleted', entity: 'Invoice', label: existing.invoice_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });

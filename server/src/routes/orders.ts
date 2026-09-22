@@ -314,7 +314,7 @@ router.patch('/:id/status', (req: Request, res: Response) => {
 });
 
 router.delete('/:id', (req: Request, res: Response) => {
-  const existing = db.prepare('SELECT order_number FROM orders WHERE id = ?').get(req.params.id) as any;
+  const existing = db.prepare('SELECT order_number, file_path FROM orders WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Order not found' }); return; }
 
   // Confirmations and invoices cascade away with the order, but their generated
@@ -337,6 +337,23 @@ router.delete('/:id', (req: Request, res: Response) => {
       try { db.prepare('DELETE FROM operation_documents WHERE id = ?').run(doc.document_id); } catch { /* best effort */ }
     }
   }
+
+  // The scanned order PDF itself. DELETE /operations/:id already unlinks this;
+  // without it here the file stays on disk and /api/files/orders/<file> keeps
+  // serving it, so a preview of the deleted order still renders.
+  if (existing.file_path) {
+    try {
+      const orderFile = path.join(uploadsBase, 'orders', existing.file_path);
+      if (fs.existsSync(orderFile)) fs.unlinkSync(orderFile);
+    } catch (err) {
+      console.warn('[orders] Failed to delete order document:', err);
+    }
+  }
+
+  // status_history has no FK to orders, so its rows would linger forever
+  try {
+    db.prepare(`DELETE FROM status_history WHERE entity_type = 'order' AND entity_id = ?`).run(req.params.id);
+  } catch { /* best effort */ }
 
   const result = db.prepare('DELETE FROM orders WHERE id = ?').run(req.params.id);
   if (result.changes === 0) { res.status(404).json({ error: 'Order not found' }); return; }

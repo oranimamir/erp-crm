@@ -118,6 +118,8 @@ router.get('/', async (req: Request, res: Response) => {
 
   const operations = db.prepare(`
     SELECT op.*,
+      -- order_id from the join, not op.*: a pointer at a deleted order reads NULL
+      o.id as order_id,
       c.name as customer_name,
       s.name as supplier_name,
       o.order_number,
@@ -409,6 +411,8 @@ router.get('/wire-match', async (req: Request, res: Response) => {
 router.get('/:id', (req: Request, res: Response) => {
   const operation = db.prepare(`
     SELECT op.*,
+      -- order_id from the join, not op.*: a pointer at a deleted order reads NULL
+      o.id as order_id,
       c.name as customer_name,
       s.name as supplier_name,
       o.order_number, o.type as order_type, o.total_amount as order_total,
