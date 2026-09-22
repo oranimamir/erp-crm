@@ -7,7 +7,7 @@ import { Resend } from 'resend';
 import db from '../database.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { entityFromOperationNumber, entityProfile, isEntityCode, type EntityCode } from '../lib/companyEntity.js';
-import { listProfiles, prefillLines } from '../lib/documentPrefill.js';
+import { deliveryTerms, listProfiles, prefillLines } from '../lib/documentPrefill.js';
 import { matchProfile } from '../lib/profileMatch.js';
 import {
   buildOrderConfirmationPdf,
@@ -186,7 +186,7 @@ router.get('/prepare', (req: Request, res: Response) => {
     contact_email: shared.contact_email || (isSupplier ? order.supplier_email : order.customer_email) || '',
     items: prefillLines(items),
     // The order's own terms win; the customer default fills the gap
-    delivery: [order.inco_terms, order.destination].filter(Boolean).join(' ') || ocDefaults.delivery || '',
+    delivery: deliveryTerms(order) || ocDefaults.delivery || '',
     delivery_address: ocDefaults.delivery_address || issuer.delivery_address || '',
     delivery_contact: issuer.delivery_contact || '',
     delivery_date_text: order.delivery_date ? formatLongDate(order.delivery_date) : '',

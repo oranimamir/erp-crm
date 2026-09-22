@@ -3,6 +3,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
+import { normalizeLayout } from './lib/invoiceLayout.js';
+import { layoutSeedFor } from './lib/invoiceLayoutSeeds.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dbPath = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'erp.db');
@@ -1530,14 +1532,32 @@ export async function initializeDatabase() {
         company_email: 'denis@triplew.co',
         company_vat: '866836974B01',
         company_kvk: '94614342',
-        bank_name: '',
-        iban: '',
-        bic: '',
-        bank_address: '',
+        bank_name: 'ING Bank NV - Foreign Operations',
+        iban: 'NL55 INGB 0107 6779 54',
+        bic: 'INGBNL2A',
+        bank_address: 'PO Box 1800, 1000 BV Amsterdam, Netherlands',
         delivery_address: '',
         delivery_contact: '',
       })
     );
+  } catch { /* ignore */ }
+
+  // The Dutch entity was seeded with an empty bank block, so every NL invoice
+  // printed without payment details. Fill it in where it was never set — an
+  // entity whose bank someone has since entered is left alone.
+  try {
+    const row = db.prepare(`SELECT value FROM app_settings WHERE key = 'company_entity_NL'`).get() as any;
+    if (row?.value) {
+      const profile = JSON.parse(row.value);
+      if (!String(profile.bank_name || '').trim() && !String(profile.iban || '').trim()) {
+        profile.bank_name = 'ING Bank NV - Foreign Operations';
+        profile.iban = 'NL55 INGB 0107 6779 54';
+        profile.bic = 'INGBNL2A';
+        profile.bank_address = 'PO Box 1800, 1000 BV Amsterdam, Netherlands';
+        db.prepare(`UPDATE app_settings SET value = ? WHERE key = 'company_entity_NL'`).run(JSON.stringify(profile));
+        console.log('[db] Filled in the Dutch entity bank details');
+      }
+    }
   } catch { /* ignore */ }
 
   // ── Per-customer document profiles ──────────────────────────────────────
@@ -1904,6 +1924,42 @@ function seedCustomerDocumentProfiles() {
 
   if (matched.length) console.log(`[seed] Customer document profiles created: ${matched.join(', ')}`);
   if (missed.length) console.warn(`[seed] No customer matched: ${missed.join(', ')}`);
+
+  seedInvoiceLayouts();
+}
+
+/**
+ * Gives each customer the invoice format read off the invoices they have
+ * actually received (see lib/invoiceLayoutSeeds.ts). Runs over profiles that
+ * were created before layouts existed as well as newly seeded ones, and never
+ * touches a profile that already carries a layout — once the user has saved
+ * their own format, it is theirs.
+ */
+function seedInvoiceLayouts() {
+  let applied = 0;
+  try {
+    const rows = db.prepare(`
+      SELECT p.id, p.name, p.data, c.name AS customer_name
+      FROM customer_document_profiles p
+      JOIN customers c ON p.customer_id = c.id
+    `).all() as any[];
+
+    for (const row of rows) {
+      let data: any = {};
+      try { data = JSON.parse(row.data); } catch { continue; }
+      if (data.invoice_layout) continue;
+
+      const seed = layoutSeedFor(row.customer_name, row.name);
+      if (!seed) continue;
+
+      data.invoice_layout = normalizeLayout(seed.layout);
+      db.prepare('UPDATE customer_document_profiles SET data = ? WHERE id = ?')
+        .run(JSON.stringify(data), row.id);
+      applied += 1;
+    }
+  } catch { /* table may not exist on an older DB */ }
+
+  if (applied) console.log(`[seed] Invoice layouts applied to ${applied} customer profile(s)`);
 }
 
 export default db;

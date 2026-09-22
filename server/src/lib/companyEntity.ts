@@ -53,11 +53,11 @@ const BUILT_IN: Record<EntityCode, EntityProfile> = {
     company_email: 'denis@triplew.co',
     company_vat: '866836974B01',
     company_kvk: '94614342',
-    // The Dutch masters carry no bank block
-    bank_name: '',
-    iban: '',
-    bic: '',
-    bank_address: '',
+    // As printed on CINL20260103, the latest Dutch invoice
+    bank_name: 'ING Bank NV - Foreign Operations',
+    iban: 'NL55 INGB 0107 6779 54',
+    bic: 'INGBNL2A',
+    bank_address: 'PO Box 1800, 1000 BV Amsterdam, Netherlands',
     delivery_address: '',
     delivery_contact: '',
   },

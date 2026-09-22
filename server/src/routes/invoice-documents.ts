@@ -7,7 +7,10 @@ import { Resend } from 'resend';
 import db from '../database.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { entityFromOperationNumber, entityProfile, isEntityCode, type EntityCode } from '../lib/companyEntity.js';
-import { listProfiles, originForItems, prefillLines } from '../lib/documentPrefill.js';
+import {
+  carryForwardInvoiceText, deliveryTerms, listProfiles, originForItems, prefillLines,
+  resolveInvoiceLayout,
+} from '../lib/documentPrefill.js';
 import { matchProfile } from '../lib/profileMatch.js';
 import {
   buildDocumentPdf,
@@ -15,6 +18,7 @@ import {
   formatLongDate,
   type DocumentData,
 } from '../lib/document-pdf.js';
+import { normalizeLayout } from '../lib/invoiceLayout.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
@@ -213,6 +217,12 @@ router.get('/prepare', (req: Request, res: Response) => {
 
   const origin = originForItems(items);
 
+  // How this customer's invoices are laid out, and the wording the last one
+  // used — an invoice is drafted from the previous one, not from a blank page.
+  const customerId = isSupplier ? null : order.customer_id;
+  const { layout, source: layoutSource } = resolveInvoiceLayout(customerId, profile, order.customer_name);
+  const carried = carryForwardInvoiceText(customerId);
+
   const draft: DocumentData = {
     ...issuer,
     doc_number: nextInvoiceNumber(entity, today),
@@ -230,21 +240,27 @@ router.get('/prepare', (req: Request, res: Response) => {
     eori: shared.eori || '',
     contact_email: shared.contact_email || (isSupplier ? order.supplier_email : order.customer_email) || '',
     items: prefillLines(items),
-    delivery: [order.inco_terms, order.destination].filter(Boolean).join(' ') || invDefaults.delivery || '',
-    delivery_address: invDefaults.delivery_address || '',
+    ...carried,
+    delivery: deliveryTerms(order) || invDefaults.delivery || carried.delivery || '',
+    delivery_address: invDefaults.delivery_address || carried.delivery_address || '',
     delivery_date_text: order.delivery_date ? formatLongDate(order.delivery_date) : '',
+    product_reference: carried.product_reference || items[0]?.description || '',
     freight: 0,
     vat: 0,
+    insurance: 0,
     // Offered to the user behind a toggle rather than printed unasked
     manufacturer: origin.manufacturer,
     country_of_origin: origin.country_of_origin,
-    terms: order.payment_terms || invDefaults.terms || '',
+    terms: order.payment_terms || invDefaults.terms || carried.terms || '',
+    layout,
   };
 
   res.json({
     existing: null,
     draft,
     entity,
+    layout,
+    layout_source: layoutSource,
     profiles: listProfiles(isSupplier ? null : order.customer_id),
     profile_id: profile?.id ?? null,
     profile_name: profile?.name ?? null,
@@ -259,6 +275,30 @@ router.get('/prepare', (req: Request, res: Response) => {
     },
     operation: operation || null,
   });
+});
+
+// ── Save a layout as the customer's own ───────────────────────────────────
+
+/**
+ * Makes the layout the user just edited this customer's standing format, so
+ * every later invoice for them starts from it. Stored on the document profile
+ * beside the rest of their defaults.
+ */
+router.put('/layout/:profileId', (req: Request, res: Response) => {
+  const profileId = Number(req.params.profileId);
+  const row = db.prepare('SELECT * FROM customer_document_profiles WHERE id = ?').get(profileId) as any;
+  if (!row) { res.status(404).json({ error: 'Customer profile not found' }); return; }
+
+  const layout = normalizeLayout(req.body?.layout);
+
+  let data: any = {};
+  try { data = JSON.parse(row.data); } catch { /* corrupt row → start clean */ }
+  data.invoice_layout = layout;
+
+  db.prepare(`UPDATE customer_document_profiles SET data = ?, updated_at = datetime('now') WHERE id = ?`)
+    .run(JSON.stringify(data), profileId);
+
+  res.json({ message: `Invoice format saved for ${row.name}`, layout });
 });
 
 // ── List / read ───────────────────────────────────────────────────────────

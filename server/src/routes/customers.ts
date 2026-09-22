@@ -124,6 +124,10 @@ function parseProfile(row: any) {
       invoice: { ...EMPTY_PROFILE.invoice, ...(data.invoice || {}) },
       packing_list: { ...EMPTY_PROFILE.packing_list, ...(data.packing_list || {}) },
       match: { ...EMPTY_PROFILE.match, ...(data.match || {}) },
+      // How this customer's Commercial Invoice is laid out. Absent until the
+      // user saves one from the generator; kept whole rather than merged so a
+      // removed row stays removed.
+      ...(data.invoice_layout ? { invoice_layout: data.invoice_layout } : {}),
     },
   };
 }

@@ -4,9 +4,12 @@ import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import Button from '../components/ui/Button';
 import EntityConfirmStep from '../components/EntityConfirmStep';
+import InvoiceLayoutEditor from '../components/InvoiceLayoutEditor';
+import { withDefaults, type InvoiceLayout } from '../lib/invoiceLayout';
 import {
   ArrowLeft, Plus, Trash2, Loader2, Eye, X, FileDown, Mail,
   CheckCircle, FileText, RefreshCw, User, Package, Truck, Factory,
+  LayoutTemplate, ChevronDown, ChevronRight,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -23,6 +26,7 @@ interface InvLine {
   hs_code: string;
   description: string;
   lot: string;
+  note: string;
 }
 
 interface InvData {
@@ -41,14 +45,22 @@ interface InvData {
   eori: string;
   contact_email: string;
   items: InvLine[];
+  product_reference: string;
   delivery: string;
   delivery_address: string;
+  delivery_contact: string;
   delivery_date_text: string;
+  payment_terms: string;
+  incoterm: string;
+  remarks: string;
   freight: string;
   vat: string;
+  insurance: string;
   manufacturer: string;
   country_of_origin: string;
   terms: string;
+  /** The saved shape of this document — edited through InvoiceLayoutEditor. */
+  layout?: Partial<InvoiceLayout>;
   [key: string]: unknown; // issuer + bank constants ride along untouched
 }
 
@@ -68,25 +80,29 @@ const CURRENCIES = ['EUR', 'USD', 'GBP'];
 
 const FORM_KEYS = [
   'doc_number', 'doc_date', 'sq_number', 'our_ref', 'po_number', 'operation_number',
-  'client_code', 'attention', 'client_name', 'billing_address', 'client_phone',
-  'tax_id', 'eori', 'contact_email', 'delivery', 'delivery_address',
-  'delivery_date_text', 'freight', 'vat', 'manufacturer', 'country_of_origin', 'terms',
+  'client_code', 'attention', 'product_reference', 'client_name', 'billing_address',
+  'client_phone', 'tax_id', 'eori', 'contact_email', 'delivery', 'delivery_address',
+  'delivery_contact', 'delivery_date_text', 'payment_terms', 'incoterm', 'remarks',
+  'freight', 'vat', 'insurance', 'manufacturer', 'country_of_origin', 'terms',
 ] as const;
 
 const emptyLine = (n: number): InvLine => ({
   line: n, reference: '', commercial_name: '', packaging: '',
   quantity: '', quantity_unit: 'KG', unit_price: '', currency: 'EUR',
-  hs_code: '', description: '', lot: '',
+  hs_code: '', description: '', lot: '', note: '',
 });
 
 const blankData = (): InvData => ({
   doc_number: '', doc_date: new Date().toISOString().slice(0, 10),
   sq_number: '', our_ref: '', po_number: '', operation_number: '',
-  client_code: '', attention: '', client_name: '', billing_address: '',
+  client_code: '', attention: '', product_reference: '',
+  client_name: '', billing_address: '',
   client_phone: '', tax_id: '', eori: '', contact_email: '',
   items: [emptyLine(1)],
-  delivery: '', delivery_address: '', delivery_date_text: '',
-  freight: '0', vat: '0', manufacturer: '', country_of_origin: '', terms: '',
+  delivery: '', delivery_address: '', delivery_contact: '', delivery_date_text: '',
+  payment_terms: '', incoterm: '', remarks: '',
+  freight: '0', vat: '0', insurance: '0',
+  manufacturer: '', country_of_origin: '', terms: '',
 });
 
 function toFormData(raw: any): InvData {
@@ -108,16 +124,19 @@ function toFormData(raw: any): InvData {
     hs_code: item?.hs_code ?? '',
     description: item?.description ?? '',
     lot: item?.lot ?? '',
+    note: item?.note ?? '',
   }));
   return merged as InvData;
 }
 
 /** Origin is opt-in, so strip it unless the user asked for it. */
-function toPayload(form: InvData, includeOrigin: boolean) {
+function toPayload(form: InvData, includeOrigin: boolean, layout: InvoiceLayout) {
   return {
     ...form,
+    layout,
     freight: Number(form.freight) || 0,
     vat: Number(form.vat) || 0,
+    insurance: Number(form.insurance) || 0,
     manufacturer: includeOrigin ? form.manufacturer : '',
     country_of_origin: includeOrigin ? form.country_of_origin : '',
     items: form.items.map((item, index) => ({
@@ -206,6 +225,12 @@ export default function InvoiceDocumentPage() {
   const [chooseEntity, setChooseEntity] = useState(false);
   const [includeOrigin, setIncludeOrigin] = useState(false);
 
+  // How this customer's invoice is laid out — see InvoiceLayoutEditor
+  const [layout, setLayout] = useState<InvoiceLayout>(withDefaults(null));
+  const [layoutSource, setLayoutSource] = useState('the standard company template');
+  const [showLayout, setShowLayout] = useState(false);
+  const [savingLayout, setSavingLayout] = useState(false);
+
   const [saving, setSaving] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -241,6 +266,8 @@ export default function InvoiceDocumentPage() {
     setOrderId(rec.order_id);
     setOperationId(rec.operation_id);
     setIncludeOrigin(!!(rec.data.manufacturer || rec.data.country_of_origin));
+    setLayout(withDefaults(rec.data.layout));
+    setLayoutSource('this invoice as it was generated');
   }, []);
 
   /** Re-fetch the draft when the entity or billing profile changes. */
@@ -250,13 +277,15 @@ export default function InvoiceDocumentPage() {
     });
     if (data.existing) { adopt(data.existing); return; }
     setForm(toFormData(data.draft));
+    setLayout(withDefaults(data.layout));
+    setLayoutSource(data.layout_source || 'the standard company template');
     setEntity(data.entity);
     setProfiles(data.profiles || []);
     setProfileId(data.profile_id ?? null);
     setProfileName(data.profile_name ?? null);
     setMatchedBy(data.matched_by || '');
     setMatchConfident(!!data.match_confident);
-    setIncludeOrigin(false);
+    setIncludeOrigin(!!data.layout?.origin && !!(data.draft?.manufacturer || data.draft?.country_of_origin));
     if (data.operation) setOperationId(data.operation.id);
   }, [orderIdParam, orderId, adopt]);
 
@@ -315,6 +344,8 @@ export default function InvoiceDocumentPage() {
       });
       if (data.draft) {
         setForm(toFormData(data.draft));
+        setLayout(withDefaults(data.layout));
+        setLayoutSource(data.layout_source || 'the standard company template');
         setProfileName(data.profile_name ?? null);
         setMatchedBy(data.matched_by || '');
         setMatchConfident(!!data.match_confident);
@@ -327,7 +358,7 @@ export default function InvoiceDocumentPage() {
   async function handlePreview() {
     setPreviewing(true);
     try {
-      const res = await api.post('/invoice-documents/preview', { data: toPayload(form, includeOrigin) }, { responseType: 'blob' });
+      const res = await api.post('/invoice-documents/preview', { data: toPayload(form, includeOrigin, layout) }, { responseType: 'blob' });
       if (previewUrl) URL.revokeObjectURL(previewUrl);
       setPreviewUrl(URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' })));
     } catch {
@@ -341,7 +372,7 @@ export default function InvoiceDocumentPage() {
     if (!orderId) { addToast('No order linked', 'error'); return; }
     setSaving(true);
     try {
-      const body = { order_id: orderId, operation_id: operationId, profile_id: profileId, data: toPayload(form, includeOrigin) };
+      const body = { order_id: orderId, operation_id: operationId, profile_id: profileId, data: toPayload(form, includeOrigin, layout) };
       const { data } = record
         ? await api.put(`/invoice-documents/${record.id}`, body)
         : await api.post('/invoice-documents', body);
@@ -352,6 +383,22 @@ export default function InvoiceDocumentPage() {
       addToast(err.response?.data?.error || 'Failed to generate the invoice', 'error');
     } finally {
       setSaving(false);
+    }
+  }
+
+  /** Makes this layout the customer's standing invoice format. */
+  async function handleSaveLayout() {
+    if (!profileId) { addToast('Confirm the customer entity first', 'error'); return; }
+    setSavingLayout(true);
+    try {
+      const { data } = await api.put(`/invoice-documents/layout/${profileId}`, { layout });
+      setLayout(withDefaults(data.layout));
+      setLayoutSource(`saved on ${profileName || 'this customer'}`);
+      addToast(data.message || 'Invoice format saved', 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to save the invoice format', 'error');
+    } finally {
+      setSavingLayout(false);
     }
   }
 
@@ -397,6 +444,14 @@ export default function InvoiceDocumentPage() {
   const subtotal = form.items.reduce((sum, item) => sum + lineTotal(item), 0);
   const freight = Number(form.freight) || 0;
   const vat = Number(form.vat) || 0;
+  const insurance = Number(form.insurance) || 0;
+  // The summary mirrors whatever the layout actually prints
+  const totalsShown = layout.totals.length
+    ? layout.totals
+    : [{ label: 'Total', field: 'total' as const }];
+  const totalValues: Record<string, number> = {
+    subtotal, freight, vat, insurance, total: subtotal + freight + vat + insurance,
+  };
   const currency = form.items.find(i => i.currency)?.currency || 'EUR';
 
   const backTo = operationId ? `/operations/${operationId}` : orderId ? `/orders/${orderId}` : '/operations';
@@ -495,7 +550,12 @@ export default function InvoiceDocumentPage() {
               <Field label="Our order# (operation)" value={form.operation_number} onChange={v => set('operation_number', v)} />
               <Field label="Client code" value={form.client_code} onChange={v => set('client_code', v)} placeholder="00GR01" />
               <Field label="Attention" value={form.attention} onChange={v => set('attention', v)} />
+              <Field label="Product reference" value={form.product_reference} onChange={v => set('product_reference', v)}
+                placeholder="Ethyl Circulac EF99" className="sm:col-span-2" />
             </div>
+            <p className="mt-3 text-xs text-gray-400">
+              Only the rows your layout lists are printed — open <strong className="text-gray-500">Invoice format</strong> to change them.
+            </p>
           </Section>
 
           <Section icon={<User size={16} />} title="Client">
@@ -514,20 +574,62 @@ export default function InvoiceDocumentPage() {
               <Field label="Delivery" value={form.delivery} onChange={v => set('delivery', v)} placeholder="CIF Piraeus Greece" />
               <Field label="Delivery date" value={form.delivery_date_text} onChange={v => set('delivery_date_text', v)} placeholder="May 24, 2026" />
               <Field label="Delivery address" value={form.delivery_address} onChange={v => set('delivery_address', v)} className="sm:col-span-2" />
+              <Field label="Delivery contact" value={form.delivery_contact} onChange={v => set('delivery_contact', v)} className="sm:col-span-2" />
+              <Field label="Payment terms" value={form.payment_terms} onChange={v => set('payment_terms', v)}
+                placeholder="Swift at 45 days Invoice date" />
+              <Field label="Incoterm and destination" value={form.incoterm} onChange={v => set('incoterm', v)}
+                placeholder="CIF New York" />
+              <AreaField label="Remarks" value={form.remarks} onChange={v => set('remarks', v)}
+                placeholder="HTS : 2918.11.5100, non-GMO, 16 totes * 2,640 lb" className="sm:col-span-2" />
               <Field label={`Freight (${currency})`} type="number" value={form.freight} onChange={v => set('freight', v)} />
               <Field label={`VAT (${currency})`} type="number" value={form.vat} onChange={v => set('vat', v)} />
+              <Field label={`Insurance (${currency})`} type="number" value={form.insurance} onChange={v => set('insurance', v)} />
               <AreaField label="Terms & conditions" value={form.terms} onChange={v => set('terms', v)} className="sm:col-span-2" />
             </div>
 
             <div className="mt-4 border-t border-gray-100 pt-3 space-y-1 text-sm">
-              <div className="flex justify-between text-gray-600"><span>Subtotal</span><span>{money(subtotal)} {currency}</span></div>
-              <div className="flex justify-between text-gray-600"><span>Freight</span><span>{money(freight)} {currency}</span></div>
-              <div className="flex justify-between text-gray-600"><span>VAT</span><span>{money(vat)} {currency}</span></div>
-              <div className="flex justify-between font-semibold text-gray-900 pt-1 border-t border-gray-100">
-                <span>Total Order</span><span>{money(subtotal + freight + vat)} {currency}</span>
-              </div>
+              {totalsShown.map((row, i) => (
+                <div
+                  key={`${row.field}-${i}`}
+                  className={row.field === 'total'
+                    ? 'flex justify-between font-semibold text-gray-900 pt-1 border-t border-gray-100'
+                    : 'flex justify-between text-gray-600'}
+                >
+                  <span>{row.label}</span>
+                  <span>{money(totalValues[row.field] ?? 0)} {currency}</span>
+                </div>
+              ))}
             </div>
           </Section>
+
+          {/* The customer's own invoice format */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setShowLayout(v => !v)}
+              className="w-full px-5 py-3.5 border-b border-gray-100 flex items-center gap-2 text-left hover:bg-gray-50"
+            >
+              <span className="text-gray-400"><LayoutTemplate size={16} /></span>
+              <span className="font-semibold text-gray-800 text-sm flex-1">
+                Invoice format
+                <span className="ml-2 font-normal text-xs text-gray-400">from {layoutSource}</span>
+              </span>
+              {showLayout ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
+            </button>
+            {showLayout && (
+              <div className="p-5">
+                <InvoiceLayoutEditor
+                  layout={layout}
+                  source={layoutSource}
+                  customerName={form.client_name}
+                  canSaveDefault={!!profileId}
+                  saving={savingLayout}
+                  onChange={setLayout}
+                  onSaveDefault={handleSaveLayout}
+                />
+              </div>
+            )}
+          </div>
 
           {/* Origin block — opt-in, per the template */}
           <Section
@@ -577,7 +679,9 @@ export default function InvoiceDocumentPage() {
                     <Field label="Commercial name" value={item.commercial_name} onChange={v => setItem(index, { commercial_name: v })} />
                     <Field label="Packaging" value={item.packaging} onChange={v => setItem(index, { packaging: v })} placeholder="25 KG bags" />
                     <Field label="HS code" value={item.hs_code} onChange={v => setItem(index, { hs_code: v })} placeholder="2918.11" />
-                    <Field label="Lot" value={item.lot} onChange={v => setItem(index, { lot: v })} placeholder="01.2602-003" className="sm:col-span-2" />
+                    <Field label="Lot" value={item.lot} onChange={v => setItem(index, { lot: v })} placeholder="01.2602-003" />
+                    <Field label="Packing note" value={item.note} onChange={v => setItem(index, { note: v })}
+                      placeholder="80 drums on 20 pallets" />
                   </div>
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">

@@ -4,7 +4,9 @@
  * details carried forward from whatever was last issued.
  */
 import db from '../database.js';
-import type { DocLine } from './document-pdf.js';
+import type { DocLine, DocumentData } from './document-pdf.js';
+import { DEFAULT_LAYOUT, normalizeLayout, type InvoiceLayout } from './invoiceLayout.js';
+import { layoutSeedFor } from './invoiceLayoutSeeds.js';
 
 export interface ProfileSections {
   shared: Record<string, string>;
@@ -59,6 +61,19 @@ export function listProfiles(customerId?: number | null): Array<{ id: number; na
   } catch {
     return [];
   }
+}
+
+/**
+ * "CIF Piraeus Greece" — the incoterm with the destination appended, unless the
+ * user already wrote the destination into the incoterm field, which would
+ * otherwise print the country twice.
+ */
+export function deliveryTerms(order: { inco_terms?: string | null; destination?: string | null }): string {
+  const inco = String(order.inco_terms || '').trim();
+  const dest = String(order.destination || '').trim();
+  if (!dest) return inco;
+  if (!inco) return dest;
+  return inco.toLowerCase().includes(dest.toLowerCase()) ? inco : `${inco} ${dest}`;
 }
 
 export interface ProductDefaults {
@@ -136,6 +151,7 @@ export function prefillLines(orderItems: any[]): DocLine[] {
       hs_code: prior.hs_code || '',
       description: prior.description || '',
       lot: '',
+      note: '',
     };
   });
 }
@@ -150,4 +166,81 @@ export function originForItems(orderItems: any[]): { manufacturer: string; count
     }
   }
   return { manufacturer: '', country_of_origin: '' };
+}
+
+// ── Per-customer invoice shape and carried-forward wording ────────────────
+
+/**
+ * The most recent Commercial Invoice generated for this customer, whichever
+ * order it belonged to. This is what "base it on the previous invoice" means:
+ * the last document they received is the template for the next one.
+ */
+export function lastInvoiceForCustomer(customerId?: number | null): DocumentData | null {
+  if (!customerId) return null;
+  try {
+    const row = db.prepare(`
+      SELECT d.data FROM invoice_documents d
+      JOIN orders o ON d.order_id = o.id
+      WHERE o.customer_id = ?
+      ORDER BY d.id DESC LIMIT 1
+    `).get(customerId) as any;
+    if (!row?.data) return null;
+    return JSON.parse(row.data) as DocumentData;
+  } catch {
+    return null;
+  }
+}
+
+export interface ResolvedLayout {
+  layout: InvoiceLayout;
+  /** Where it came from, shown in the generator so the choice is never silent. */
+  source: string;
+}
+
+/**
+ * The invoice layout to draft with, in order of authority: what the user saved
+ * on this customer's profile, then the layout of the last invoice they were
+ * actually sent, then the shape read off the invoices supplied as masters,
+ * then the house default.
+ */
+export function resolveInvoiceLayout(
+  customerId: number | null | undefined,
+  profile: CustomerProfile | null,
+  customerName?: string | null
+): ResolvedLayout {
+  const saved = (profile?.data as any)?.invoice_layout;
+  if (saved && typeof saved === 'object') {
+    return { layout: normalizeLayout(saved), source: `saved on ${profile!.name}` };
+  }
+
+  const previous = lastInvoiceForCustomer(customerId);
+  if (previous?.layout) {
+    return {
+      layout: normalizeLayout(previous.layout),
+      source: `the last invoice sent to this customer${previous.doc_number ? ` (${previous.doc_number})` : ''}`,
+    };
+  }
+
+  const seed = layoutSeedFor(customerName || '', profile?.name);
+  if (seed) {
+    return { layout: normalizeLayout(seed.layout), source: seed.source };
+  }
+
+  return { layout: DEFAULT_LAYOUT, source: 'the standard company template' };
+}
+
+/** Wording the last invoice used, so a new one starts where the old one left off. */
+export function carryForwardInvoiceText(customerId?: number | null): Partial<DocumentData> {
+  const previous = lastInvoiceForCustomer(customerId);
+  if (!previous) return {};
+  const keep: Array<keyof DocumentData> = [
+    'payment_terms', 'incoterm', 'remarks', 'product_reference',
+    'delivery', 'delivery_address', 'delivery_contact', 'terms',
+  ];
+  const out: Partial<DocumentData> = {};
+  for (const key of keep) {
+    const value = previous[key];
+    if (typeof value === 'string' && value.trim()) (out as any)[key] = value;
+  }
+  return out;
 }
