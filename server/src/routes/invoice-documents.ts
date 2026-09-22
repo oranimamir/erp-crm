@@ -30,20 +30,47 @@ function invoiceFileName(invoiceNumber: string | null): string {
   return `${stem.replace(/[^A-Za-z0-9._-]+/g, '-')}.pdf`;
 }
 
-/** Next free `CI{BE|NL}{year}{NN}`, e.g. CIBE202601. */
-function nextInvoiceNumber(entity: EntityCode, dateIso?: string | null): string {
+/** The series an invoice belongs to: CIBE… for Belgian, CINL… for Dutch. */
+function invoiceSeriesPrefix(entity: EntityCode, dateIso?: string | null): string {
   const year = (dateIso || new Date().toISOString()).slice(0, 4);
-  const prefix = `CI${entity}${year}`;
-  const rows = db.prepare(
-    'SELECT invoice_number FROM invoice_documents WHERE invoice_number LIKE ?'
-  ).all(`${prefix}%`) as Array<{ invoice_number: string }>;
+  return `CI${entity}${year}`;
+}
 
-  let max = 0;
-  for (const row of rows) {
-    const m = row.invoice_number.match(new RegExp(`^${prefix}(\\d+)$`));
-    if (m) max = Math.max(max, parseInt(m[1], 10));
+/** Every number already used in a series, from both generated and recorded invoices. */
+function issuedInSeries(prefix: string): number[] {
+  const pattern = new RegExp(`^${prefix}(\\d{4})$`);
+  const used: number[] = [];
+
+  // The historic series lives in `invoices` (the recorded/uploaded invoices);
+  // only invoices generated here are in `invoice_documents`. Continuing the
+  // real numbering means honouring both.
+  for (const table of ['invoice_documents', 'invoices']) {
+    try {
+      const rows = db.prepare(
+        `SELECT invoice_number AS n FROM ${table} WHERE invoice_number LIKE ?`
+      ).all(`${prefix}%`) as Array<{ n: string }>;
+      for (const row of rows) {
+        const m = String(row.n ?? '').trim().match(pattern);
+        if (m) used.push(parseInt(m[1], 10));
+      }
+    } catch { /* table may not exist on an older DB */ }
   }
-  return `${prefix}${String(max + 1).padStart(2, '0')}`;
+  return used;
+}
+
+/**
+ * Next number in the entity's own series, continuing from the last invoice
+ * actually issued — so a Belgian (SOBE…) operation continues CIBE…, and a
+ * Dutch (SONL…) one continues CINL…, each independently.
+ *
+ * The sequence is the four-digit form the company already uses
+ * (CIBE20260101 … CIBE20260119), starting a new year at 0101.
+ */
+function nextInvoiceNumber(entity: EntityCode, dateIso?: string | null): string {
+  const prefix = invoiceSeriesPrefix(entity, dateIso);
+  const used = issuedInSeries(prefix);
+  const next = used.length ? Math.max(...used) + 1 : 101;
+  return `${prefix}${String(next).padStart(4, '0')}`;
 }
 
 function operationNumberFor(operationId: number | null): string | null {
@@ -122,7 +149,15 @@ function discardFiled(filed: { filePath: string; documentId: number | null }, ke
 
 function numberTaken(invoiceNumber: string, exceptId?: number): boolean {
   const row = db.prepare('SELECT id FROM invoice_documents WHERE invoice_number = ?').get(invoiceNumber) as any;
-  return !!row && row.id !== exceptId;
+  if (row && row.id !== exceptId) return true;
+
+  // A number already on a recorded invoice must not be reused either
+  try {
+    const recorded = db.prepare('SELECT id FROM invoices WHERE invoice_number = ?').get(invoiceNumber) as any;
+    if (recorded) return true;
+  } catch { /* table unavailable */ }
+
+  return false;
 }
 
 // ── Prefill a draft from the order ────────────────────────────────────────
