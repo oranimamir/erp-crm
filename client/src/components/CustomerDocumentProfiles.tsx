@@ -3,7 +3,9 @@ import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
-import { Loader2, Plus, Save, Star, Trash2 } from 'lucide-react';
+import InvoiceLayoutEditor from './InvoiceLayoutEditor';
+import { withDefaults, type InvoiceLayout } from '../lib/invoiceLayout';
+import { ChevronDown, ChevronRight, LayoutTemplate, Loader2, Plus, Save, Star, Trash2 } from 'lucide-react';
 
 /**
  * Per-customer defaults reused when generating documents. A customer may trade
@@ -26,7 +28,11 @@ export interface Profile {
     invoice: Record<string, string>;
     packing_list: Record<string, string>;
     match: Record<string, string>;
+    /** How this customer's Commercial Invoice is laid out. */
+    invoice_layout?: Partial<InvoiceLayout>;
   };
+  /** Where the layout came from — saved here, a past invoice, or a master. */
+  invoice_layout_source?: string;
 }
 
 const inputCls =
@@ -89,6 +95,16 @@ export function useCustomerProfiles(customerId: string | number) {
     }));
   }
 
+  /** The invoice template is replaced whole — a removed row must stay removed. */
+  function patchLayout(layout: InvoiceLayout) {
+    if (!active) return;
+    setDirty(true);
+    setProfiles(prev => prev.map(p => (p.id !== active.id ? p : {
+      ...p,
+      data: { ...p.data, invoice_layout: layout },
+    })));
+  }
+
   function rename(name: string) {
     if (!active) return;
     setDirty(true);
@@ -145,7 +161,7 @@ export function useCustomerProfiles(customerId: string | number) {
     }
   }
 
-  return { profiles, active, activeId, setActiveId, loading, saving, dirty, patch, rename, save, addProfile, makeDefault, removeProfile };
+  return { profiles, active, activeId, setActiveId, loading, saving, dirty, patch, patchLayout, rename, save, addProfile, makeDefault, removeProfile };
 }
 
 export type ProfileState = ReturnType<typeof useCustomerProfiles>;
@@ -161,8 +177,9 @@ const TITLES: Record<DocType, string> = {
 export default function DocumentDefaults({ docType, state }: { docType: DocType; state: ProfileState }) {
   const {
     profiles, active, activeId, setActiveId, loading, saving, dirty,
-    patch, rename, save, addProfile, makeDefault, removeProfile,
+    patch, patchLayout, rename, save, addProfile, makeDefault, removeProfile,
   } = state;
+  const [showTemplate, setShowTemplate] = useState(false);
 
   if (loading) {
     return <Card className="p-8 flex justify-center"><Loader2 size={20} className="animate-spin text-primary-600" /></Card>;
@@ -285,6 +302,18 @@ export default function DocumentDefaults({ docType, state }: { docType: DocType;
                     <Area label="Delivery address" value={active.data.invoice.delivery_address} onChange={v => patch('invoice', 'delivery_address', v)} rows={2} className="sm:col-span-2" />
                     <Area label="Payment terms" value={active.data.invoice.terms} onChange={v => patch('invoice', 'terms', v)} rows={2} className="sm:col-span-2" />
                     <Area label="Note" value={active.data.invoice.note} onChange={v => patch('invoice', 'note', v)} rows={2} className="sm:col-span-2" />
+
+                    <div className="sm:col-span-2 pt-2 border-t border-gray-100">
+                      <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Bank account</h3>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        Printed on this profile&rsquo;s invoices, whichever entity issues them.
+                        Leave blank to use the issuing entity&rsquo;s own account.
+                      </p>
+                    </div>
+                    <Field label="Bank" value={active.data.invoice.bank_name} onChange={v => patch('invoice', 'bank_name', v)} placeholder="ING Bank NV - Foreign Operations" />
+                    <Field label="BIC" value={active.data.invoice.bic} onChange={v => patch('invoice', 'bic', v)} placeholder="INGBNL2A" />
+                    <Field label="IBAN" value={active.data.invoice.iban} onChange={v => patch('invoice', 'iban', v)} placeholder="NL55 INGB 0107 6779 54" className="sm:col-span-2" />
+                    <Field label="Bank address" value={active.data.invoice.bank_address} onChange={v => patch('invoice', 'bank_address', v)} placeholder="PO Box 1800, 1000 BV Amsterdam, Netherlands" className="sm:col-span-2" />
                   </>
                 )}
 
@@ -306,6 +335,42 @@ export default function DocumentDefaults({ docType, state }: { docType: DocType;
               </div>
             </div>
           </Card>
+
+          {/* The shape of the document itself — invoices only */}
+          {docType === 'invoice' && (
+            <Card>
+              <button
+                type="button"
+                onClick={() => setShowTemplate(v => !v)}
+                className="w-full px-5 py-3.5 border-b border-gray-100 flex items-center gap-2 text-left hover:bg-gray-50"
+              >
+                <LayoutTemplate size={16} className="text-gray-400" />
+                <span className="font-semibold text-gray-800 text-sm flex-1">
+                  Invoice template
+                  {active.invoice_layout_source && (
+                    <span className="ml-2 font-normal text-xs text-gray-400">from {active.invoice_layout_source}</span>
+                  )}
+                </span>
+                {showTemplate ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
+              </button>
+              {showTemplate && (
+                <div className="p-5 space-y-5">
+                  <InvoiceLayoutEditor
+                    layout={withDefaults(active.data.invoice_layout)}
+                    source={active.invoice_layout_source || 'the standard company template'}
+                    customerName={active.data.shared.legal_name || active.name}
+                    onChange={patchLayout}
+                  />
+                  <div className="flex justify-end pt-3 border-t border-gray-100">
+                    <Button size="sm" onClick={save} disabled={saving || !dirty}>
+                      {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                      {dirty ? 'Save changes' : 'Saved'}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </Card>
+          )}
         </>
       )}
     </div>

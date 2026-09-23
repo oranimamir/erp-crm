@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
 import { notifyAdmin } from '../lib/notify.js';
+import { resolveInvoiceLayout } from '../lib/documentPrefill.js';
+import { normalizeLayout } from '../lib/invoiceLayout.js';
 
 const router = Router();
 
@@ -105,17 +107,26 @@ const EMPTY_PROFILE = {
     contact_person: '', contact_phone: '', contact_email: '', attention: '',
   },
   order_confirmation: { terms: '', delivery: '', delivery_address: '', sq_suffix: '', note: '' },
-  invoice: { terms: '', delivery: '', delivery_address: '', note: '' },
+  // The bank block is per profile: blank fields fall back to the issuing entity
+  invoice: {
+    terms: '', delivery: '', delivery_address: '', note: '',
+    bank_name: '', iban: '', bic: '', bank_address: '',
+  },
   packing_list: { delivery_address: '', port_of_loading: '', port_of_discharge: '', note: '' },
   // How an incoming order is recognised as belonging to this entity
   match: { country: '', keywords: '' },
 };
 
-function parseProfile(row: any) {
+/**
+ * `customerName` lets an unsaved profile fall back to the layout read off the
+ * invoices this customer has actually received.
+ */
+function parseProfile(row: any, customerName?: string | null) {
   if (!row) return row;
   let data: any = {};
   try { data = JSON.parse(row.data); } catch { /* corrupt rows surface as empty */ }
-  return {
+
+  const profile = {
     ...row,
     is_default: !!row.is_default,
     data: {
@@ -124,19 +135,30 @@ function parseProfile(row: any) {
       invoice: { ...EMPTY_PROFILE.invoice, ...(data.invoice || {}) },
       packing_list: { ...EMPTY_PROFILE.packing_list, ...(data.packing_list || {}) },
       match: { ...EMPTY_PROFILE.match, ...(data.match || {}) },
-      // How this customer's Commercial Invoice is laid out. Absent until the
-      // user saves one from the generator; kept whole rather than merged so a
-      // removed row stays removed.
-      ...(data.invoice_layout ? { invoice_layout: data.invoice_layout } : {}),
     },
   };
+
+  // Show the layout that will actually be used, not an empty editor: what was
+  // saved here, else this customer's last invoice, else the shape read off the
+  // invoices supplied as masters, else the house default. Saving the screen
+  // pins whatever was shown, which is the point — what you see is what you get.
+  const resolved = resolveInvoiceLayout(
+    row.customer_id,
+    { id: row.id, name: row.name, is_default: !!row.is_default, data },
+    customerName
+  );
+  (profile.data as any).invoice_layout = resolved.layout;
+  (profile as any).invoice_layout_source = resolved.source;
+
+  return profile;
 }
 
 router.get('/:id/profiles', (req: Request, res: Response) => {
+  const customer = db.prepare('SELECT name FROM customers WHERE id = ?').get(req.params.id) as any;
   const rows = db.prepare(
     'SELECT * FROM customer_document_profiles WHERE customer_id = ? ORDER BY is_default DESC, id'
   ).all(req.params.id) as any[];
-  res.json(rows.map(parseProfile));
+  res.json(rows.map(row => parseProfile(row, customer?.name)));
 });
 
 router.post('/:id/profiles', (req: Request, res: Response) => {
@@ -153,7 +175,7 @@ router.post('/:id/profiles', (req: Request, res: Response) => {
 
   const row = db.prepare('SELECT * FROM customer_document_profiles WHERE id = ?').get(result.lastInsertRowid);
   notifyAdmin({ action: 'created', entity: 'Customer Profile', label: `${customer.name} — ${name}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
-  res.status(201).json(parseProfile(row));
+  res.status(201).json(parseProfile(row, customer.name));
 });
 
 router.put('/:id/profiles/:profileId', (req: Request, res: Response) => {
@@ -164,6 +186,9 @@ router.put('/:id/profiles/:profileId', (req: Request, res: Response) => {
 
   const name = req.body?.name !== undefined ? String(req.body.name).trim() || existing.name : existing.name;
   const data = req.body?.data && typeof req.body.data === 'object' ? req.body.data : JSON.parse(existing.data);
+
+  // A hand-edited or stale layout must never reach the renderer malformed
+  if (data.invoice_layout) data.invoice_layout = normalizeLayout(data.invoice_layout);
 
   // Exactly one profile per customer carries the default flag
   if (req.body?.is_default) {
@@ -177,7 +202,8 @@ router.put('/:id/profiles/:profileId', (req: Request, res: Response) => {
   `).run(name, JSON.stringify(data), req.body?.is_default ? 1 : existing.is_default, existing.id);
 
   const row = db.prepare('SELECT * FROM customer_document_profiles WHERE id = ?').get(existing.id);
-  res.json(parseProfile(row));
+  const owner = db.prepare('SELECT name FROM customers WHERE id = ?').get(existing.customer_id) as any;
+  res.json(parseProfile(row, owner?.name));
 });
 
 router.delete('/:id/profiles/:profileId', (req: Request, res: Response) => {

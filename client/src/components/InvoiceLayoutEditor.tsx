@@ -107,10 +107,11 @@ export default function InvoiceLayoutEditor({
   layout: InvoiceLayout;
   source: string;
   customerName: string;
-  canSaveDefault: boolean;
-  saving: boolean;
   onChange: (layout: InvoiceLayout) => void;
-  onSaveDefault: () => void;
+  /** Omit on the customer's own screen, where the page's Save already covers it. */
+  onSaveDefault?: () => void;
+  canSaveDefault?: boolean;
+  saving?: boolean;
 }) {
   const set = <K extends keyof InvoiceLayout>(key: K, value: InvoiceLayout[K]) =>
     onChange({ ...layout, [key]: value });
@@ -123,8 +124,11 @@ export default function InvoiceLayoutEditor({
   return (
     <div className="space-y-6">
       <p className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
-        Taken from <strong className="text-gray-700">{source}</strong>. Changes apply to this invoice only
-        until you save them as {customerName ? <strong className="text-gray-700">{customerName}</strong> : 'the customer'}&rsquo;s format.
+        Taken from <strong className="text-gray-700">{source}</strong>.{' '}
+        {onSaveDefault
+          ? <>Changes apply to this invoice only until you save them as{' '}
+              {customerName ? <strong className="text-gray-700">{customerName}</strong> : 'the customer'}&rsquo;s format.</>
+          : <>Every invoice for this profile is drafted from it.</>}
       </p>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -250,13 +254,15 @@ export default function InvoiceLayoutEditor({
       </div>
 
       <div className="border-t border-gray-100 pt-4 flex flex-wrap items-center gap-2">
-        <button
-          type="button" onClick={onSaveDefault} disabled={!canSaveDefault || saving}
-          title={canSaveDefault ? undefined : 'Pick the customer entity first'}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
-        >
-          <Save size={14} /> Save as this customer&rsquo;s format
-        </button>
+        {onSaveDefault && (
+          <button
+            type="button" onClick={onSaveDefault} disabled={!canSaveDefault || saving}
+            title={canSaveDefault ? undefined : 'Pick the customer entity first'}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
+          >
+            <Save size={14} /> Save as this customer&rsquo;s format
+          </button>
+        )}
         <button
           type="button" onClick={() => onChange(DEFAULT_LAYOUT)}
           className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50"

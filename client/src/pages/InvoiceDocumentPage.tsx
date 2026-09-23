@@ -224,6 +224,8 @@ export default function InvoiceDocumentPage() {
   const [entityConfirmed, setEntityConfirmed] = useState(false);
   const [chooseEntity, setChooseEntity] = useState(false);
   const [includeOrigin, setIncludeOrigin] = useState(false);
+  // Set from the order, so the generator can link to the customer's own screen
+  const [customerId, setCustomerId] = useState<number | null>(null);
 
   // How this customer's invoice is laid out — see InvoiceLayoutEditor
   const [layout, setLayout] = useState<InvoiceLayout>(withDefaults(null));
@@ -279,6 +281,7 @@ export default function InvoiceDocumentPage() {
     setForm(toFormData(data.draft));
     setLayout(withDefaults(data.layout));
     setLayoutSource(data.layout_source || 'the standard company template');
+    setCustomerId(data.order?.customer_id ?? null);
     setEntity(data.entity);
     setProfiles(data.profiles || []);
     setProfileId(data.profile_id ?? null);
@@ -604,18 +607,32 @@ export default function InvoiceDocumentPage() {
 
           {/* The customer's own invoice format */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-            <button
-              type="button"
-              onClick={() => setShowLayout(v => !v)}
-              className="w-full px-5 py-3.5 border-b border-gray-100 flex items-center gap-2 text-left hover:bg-gray-50"
-            >
-              <span className="text-gray-400"><LayoutTemplate size={16} /></span>
-              <span className="font-semibold text-gray-800 text-sm flex-1">
-                Invoice format
-                <span className="ml-2 font-normal text-xs text-gray-400">from {layoutSource}</span>
-              </span>
-              {showLayout ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
-            </button>
+            {/* The link sits beside the toggle, not inside it — a link nested in
+                a button is invalid and swallows the click either way. */}
+            <div className="px-5 py-3.5 border-b border-gray-100 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setShowLayout(v => !v)}
+                className="flex items-center gap-2 text-left flex-1 min-w-0"
+              >
+                <span className="text-gray-400"><LayoutTemplate size={16} /></span>
+                <span className="font-semibold text-gray-800 text-sm truncate">
+                  Invoice format
+                  <span className="ml-2 font-normal text-xs text-gray-400">from {layoutSource}</span>
+                </span>
+              </button>
+              {customerId && (
+                <Link
+                  to={`/customers/${customerId}?tab=invoice`}
+                  className="text-xs text-primary-600 hover:text-primary-700 hover:underline whitespace-nowrap"
+                >
+                  Edit this customer&rsquo;s template
+                </Link>
+              )}
+              <button type="button" onClick={() => setShowLayout(v => !v)} className="text-gray-400" aria-label="Toggle invoice format">
+                {showLayout ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+              </button>
+            </div>
             {showLayout && (
               <div className="p-5">
                 <InvoiceLayoutEditor

@@ -223,8 +223,18 @@ router.get('/prepare', (req: Request, res: Response) => {
   const { layout, source: layoutSource } = resolveInvoiceLayout(customerId, profile, order.customer_name);
   const carried = carryForwardInvoiceText(customerId);
 
+  // A bank account entered on the customer's profile replaces the issuing
+  // entity's own. Blank fields keep the entity account, so customers who never
+  // set one are unaffected.
+  const profileBank = Object.fromEntries(
+    (['bank_name', 'iban', 'bic', 'bank_address'] as const)
+      .map(key => [key, String(invDefaults[key] ?? '').trim()])
+      .filter(([, value]) => !!value)
+  );
+
   const draft: DocumentData = {
     ...issuer,
+    ...profileBank,
     doc_number: nextInvoiceNumber(entity, today),
     doc_date: today,
     sq_number: '',
@@ -270,6 +280,7 @@ router.get('/prepare', (req: Request, res: Response) => {
       id: order.id,
       order_number: order.order_number,
       type: order.type,
+      customer_id: customerId,
       customer_name: order.customer_name,
       supplier_name: order.supplier_name,
     },
