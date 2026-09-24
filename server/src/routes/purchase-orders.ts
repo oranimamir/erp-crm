@@ -154,6 +154,7 @@ router.get('/prepare', (req: Request, res: Response) => {
 
   const draft: PurchaseOrderData = {
     ...issuer,
+    entity_code: entity,
     po_number: operation?.operation_number || order.order_number || '',
     po_date: new Date().toISOString().slice(0, 10),
     our_ref: operation?.operation_number || '',

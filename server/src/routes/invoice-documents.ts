@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 import { Resend } from 'resend';
 import db from '../database.js';
 import { notifyAdmin } from '../lib/notify.js';
-import { entityFromOperationNumber, entityProfile, isEntityCode, type EntityCode } from '../lib/companyEntity.js';
+import { applyEntityBank, entityFromOperationNumber, entityProfile, isEntityCode, type EntityCode } from '../lib/companyEntity.js';
 import {
   carryForwardInvoiceText, deliveryTerms, listProfiles, originForItems, prefillLines,
   resolveInvoiceLayout,
@@ -200,7 +200,9 @@ router.get('/prepare', (req: Request, res: Response) => {
   const entity: EntityCode = isEntityCode(requested)
     ? requested
     : entityFromOperationNumber(operation?.operation_number || order.order_number);
-  const issuer = entityProfile(entity);
+  // The bank printed is the entity's account in the order's currency
+  const orderCurrency = String(items.find((i: any) => i.currency)?.currency || 'EUR').toUpperCase();
+  const issuer = entityProfile(entity, orderCurrency);
 
   // Which of the customer's legal entities this order belongs to. Never applied
   // silently — the client asks the user to confirm before generating.
@@ -235,6 +237,9 @@ router.get('/prepare', (req: Request, res: Response) => {
   const draft: DocumentData = {
     ...issuer,
     ...profileBank,
+    entity_code: entity,
+    // A bank from the customer's profile is theirs to keep, whatever the currency
+    bank_override: Object.keys(profileBank).length > 0,
     doc_number: nextInvoiceNumber(entity, today),
     doc_date: today,
     sq_number: '',
@@ -331,7 +336,7 @@ router.get('/:id', (req: Request, res: Response) => {
 
 router.post('/preview', async (req: Request, res: Response) => {
   try {
-    const pdf = await buildDocumentPdf('invoice', (req.body?.data || {}) as DocumentData);
+    const pdf = await buildDocumentPdf('invoice', applyEntityBank((req.body?.data || {}) as DocumentData));
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename="invoice-preview.pdf"');
     res.send(pdf);
@@ -360,12 +365,14 @@ router.post('/', async (req: Request, res: Response) => {
     operationId = linked?.id ?? null;
   }
 
-  const entity = entityFromOperationNumber(operationNumberFor(operationId) || order.order_number);
-  const payload: DocumentData = {
+  const entity = isEntityCode(data.entity_code)
+    ? data.entity_code
+    : entityFromOperationNumber(operationNumberFor(operationId) || order.order_number);
+  const payload: DocumentData = applyEntityBank({
     ...data,
     doc_number: (data.doc_number || '').trim() || nextInvoiceNumber(entity, data.doc_date),
     operation_number: data.operation_number || operationNumberFor(operationId) || '',
-  };
+  });
 
   if (numberTaken(payload.doc_number!)) {
     res.status(409).json({ error: `Invoice ${payload.doc_number} already exists` });
@@ -410,10 +417,10 @@ router.put('/:id', async (req: Request, res: Response) => {
   const { data, operation_id, profile_id } = req.body as { data?: DocumentData; operation_id?: number | null; profile_id?: number | null };
   if (!data || typeof data !== 'object') { res.status(400).json({ error: 'data is required' }); return; }
 
-  const payload: DocumentData = {
+  const payload: DocumentData = applyEntityBank({
     ...data,
     doc_number: (data.doc_number || '').trim() || existing.invoice_number,
-  };
+  });
   const operationId = operation_id !== undefined ? operation_id : existing.operation_id;
 
   if (numberTaken(payload.doc_number!, existing.id)) {

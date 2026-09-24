@@ -2,13 +2,38 @@
  * Which TripleW legal entity issues a document.
  *
  * Operation numbers carry the entity in their prefix — `SOBE20260113` is
- * Belgian, `SONL20260101` Dutch — and the two entities print different
- * addresses, VAT/KVK numbers and bank blocks.
+ * Belgian, `SONL20260101` Dutch — and each entity prints its own address,
+ * VAT/KVK numbers and bank block. The entities live in `company_entities`,
+ * edited on the TripleW Details page; each has a USD and a EUR account, and a
+ * document prints the one matching its currency.
  */
 import db from '../database.js';
+import { docCurrency, type DocumentData } from './document-pdf.js';
 
-export type EntityCode = 'NL' | 'BE';
+export type EntityCode = string;
 
+export interface EntityRow {
+  code: string;
+  company_name: string;
+  address1: string | null;
+  address2: string | null;
+  address3: string | null;
+  tel: string | null;
+  email: string | null;
+  vat: string | null;
+  kvk: string | null;
+  contact_person: string | null;
+  bank_name: string | null;
+  bank_address: string | null;
+  usd_account: string | null;
+  usd_bic: string | null;
+  eur_account: string | null;
+  eur_bic: string | null;
+  delivery_address: string | null;
+  is_default: number;
+}
+
+/** The flat shape the document builder prints from. */
 export interface EntityProfile {
   company_name: string;
   company_address1: string;
@@ -18,6 +43,7 @@ export interface EntityProfile {
   company_email: string;
   company_vat: string;
   company_kvk: string;
+  company_contact: string;
   bank_name: string;
   iban: string;
   bic: string;
@@ -26,69 +52,101 @@ export interface EntityProfile {
   delivery_contact: string;
 }
 
-/** Fallbacks used only if the app_settings rows are missing. */
-const BUILT_IN: Record<EntityCode, EntityProfile> = {
-  BE: {
-    company_name: 'TripleW BV',
-    company_address1: 'Innovatiestraat 1',
-    company_address2: '2030 Antwerpen, Belgium',
-    company_address3: '',
-    company_tel: '+1 414 467 7341',
-    company_email: 'denis@triplew.co',
-    company_vat: 'BE0725717772',
-    company_kvk: '',
-    bank_name: 'ING Belgium NV/SA',
-    iban: 'BE53 3631 9783 2853',
-    bic: 'BBRUBEBB',
-    bank_address: 'Marnixlaan 25, 1000 Brussels, Belgium',
-    delivery_address: 'TRIPLEW, Innovatiestraat 1, 2030 Antwerp, Belgium',
-    delivery_contact: '',
-  },
-  NL: {
-    company_name: 'TripleW NL BV',
-    company_address1: 'Kalmoesberg 3',
-    company_address2: '4708KN Roosendaal',
-    company_address3: 'Netherlands',
-    company_tel: '+1 414 467 7341',
-    company_email: 'denis@triplew.co',
-    company_vat: '866836974B01',
-    company_kvk: '94614342',
-    // As printed on CINL20260103, the latest Dutch invoice
-    bank_name: 'ING Bank NV - Foreign Operations',
-    iban: 'NL55 INGB 0107 6779 54',
-    bic: 'INGBNL2A',
-    bank_address: 'PO Box 1800, 1000 BV Amsterdam, Netherlands',
-    delivery_address: '',
-    delivery_contact: '',
-  },
-};
+export const ENTITY_CODE_PATTERN = /^[A-Z]{2,4}$/;
 
-export const ENTITY_CODES: EntityCode[] = ['NL', 'BE'];
+export function listEntities(): EntityRow[] {
+  try {
+    return db.prepare('SELECT * FROM company_entities ORDER BY is_default DESC, code').all() as EntityRow[];
+  } catch {
+    return [];
+  }
+}
+
+function entityRow(code: string): EntityRow | null {
+  try {
+    return (db.prepare('SELECT * FROM company_entities WHERE code = ?').get(code) as EntityRow) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function defaultEntityCode(): EntityCode {
+  return listEntities()[0]?.code || 'BE';
+}
 
 export function isEntityCode(value: unknown): value is EntityCode {
-  return value === 'NL' || value === 'BE';
+  return typeof value === 'string' && !!value && !!entityRow(value);
 }
 
 /**
- * Derives the issuing entity from an operation number. NL is checked first so
- * that a number containing both tokens resolves deterministically; anything
- * unrecognised falls back to BE, the main trading entity.
+ * Derives the issuing entity from an operation number. The code normally
+ * follows a two-letter document prefix (SOBE…, CINL…); failing that, any
+ * code the number contains, longest first; failing that, the default entity.
  */
 export function entityFromOperationNumber(operationNumber?: string | null): EntityCode {
   const value = String(operationNumber || '').toUpperCase();
-  if (value.includes('NL')) return 'NL';
-  if (value.includes('BE')) return 'BE';
-  return 'BE';
+  const codes = listEntities().map(e => e.code).sort((a, b) => b.length - a.length);
+  const prefixed = codes.find(code => value.slice(2).startsWith(code));
+  if (prefixed) return prefixed;
+  const contained = codes.find(code => value.includes(code));
+  return contained || defaultEntityCode();
 }
 
-/** Entity constants, from app_settings where present. */
-export function entityProfile(code: EntityCode): EntityProfile {
-  const fallback = BUILT_IN[code] ?? BUILT_IN.BE;
-  try {
-    const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(`company_entity_${code}`) as any;
-    if (row?.value) return { ...fallback, ...JSON.parse(row.value) };
-  } catch { /* fall through to the built-in profile */ }
-  return fallback;
+/** The account a document in `currency` is paid into; USD → USD, anything else → EUR. */
+function accountFor(row: EntityRow, currency?: string | null): { iban: string; bic: string } {
+  const usd = { iban: row.usd_account || '', bic: row.usd_bic || '' };
+  const eur = { iban: row.eur_account || '', bic: row.eur_bic || '' };
+  const [preferred, fallback] = String(currency || '').toUpperCase() === 'USD' ? [usd, eur] : [eur, usd];
+  // Never print a document without payment details when only one account is set
+  return preferred.iban ? preferred : fallback;
 }
 
-export { BUILT_IN as BUILT_IN_ENTITIES };
+/** Entity details for a document, with the bank account for its currency. */
+export function entityProfile(code: EntityCode, currency?: string | null): EntityProfile {
+  const row = entityRow(code) || entityRow(defaultEntityCode());
+  if (!row) {
+    return {
+      company_name: 'TripleW BV', company_address1: '', company_address2: '', company_address3: '',
+      company_tel: '', company_email: '', company_vat: '', company_kvk: '', company_contact: '',
+      bank_name: '', iban: '', bic: '', bank_address: '', delivery_address: '', delivery_contact: '',
+    };
+  }
+  const account = accountFor(row, currency);
+  return {
+    company_name: row.company_name || '',
+    company_address1: row.address1 || '',
+    company_address2: row.address2 || '',
+    company_address3: row.address3 || '',
+    company_tel: row.tel || '',
+    company_email: row.email || '',
+    company_vat: row.vat || '',
+    company_kvk: row.kvk || '',
+    company_contact: row.contact_person || '',
+    bank_name: row.bank_name || '',
+    iban: account.iban,
+    bic: account.bic,
+    bank_address: row.bank_address || '',
+    delivery_address: row.delivery_address || '',
+    delivery_contact: '',
+  };
+}
+
+/**
+ * Re-applies the issuing entity's bank for the document's current currency,
+ * so changing a line's currency in the form also changes the printed account.
+ * Leaves alone documents without an entity (saved before entities were
+ * editable) and invoices carrying a bank from the customer's profile.
+ */
+export function applyEntityBank<T extends DocumentData>(data: T): T {
+  if (!data?.entity_code || data.bank_override) return data;
+  const row = entityRow(data.entity_code);
+  if (!row) return data;
+  const account = accountFor(row, docCurrency(Array.isArray(data.items) ? data.items : []));
+  return {
+    ...data,
+    bank_name: row.bank_name || '',
+    bank_address: row.bank_address || '',
+    iban: account.iban,
+    bic: account.bic,
+  };
+}

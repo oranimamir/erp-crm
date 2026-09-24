@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom';
 import api from '../lib/api';
+import { useCompanyEntities } from '../lib/useCompanyEntities';
 import { useToast } from '../contexts/ToastContext';
 import Button from '../components/ui/Button';
 import EntityConfirmStep from '../components/EntityConfirmStep';
@@ -187,7 +188,8 @@ export default function OrderConfirmationPage() {
   const [orderId, setOrderId] = useState<number | null>(orderIdParam ? Number(orderIdParam) : null);
   const [operationId, setOperationId] = useState<number | null>(operationIdParam ? Number(operationIdParam) : null);
   const [operationNumber, setOperationNumber] = useState('');
-  const [entity, setEntity] = useState<'NL' | 'BE'>('BE');
+  const [entity, setEntity] = useState<string>('BE');
+  const entities = useCompanyEntities();
   const [profiles, setProfiles] = useState<Array<{ id: number; name: string; is_default: boolean }>>([]);
   const [profileId, setProfileId] = useState<number | null>(null);
   const [profileName, setProfileName] = useState<string | null>(null);
@@ -441,16 +443,16 @@ export default function OrderConfirmationPage() {
         <div className="flex items-center gap-2">
           <span className="text-xs font-medium text-gray-500">Issuing entity</span>
           <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">
-            {(['BE', 'NL'] as const).map(code => (
+            {entities.map(e => (
               <button
-                key={code}
-                onClick={() => { setEntity(code); reDraft({ entity: code, ...(profileId ? { profile_id: profileId } : {}) }); }}
+                key={e.code}
+                onClick={() => { setEntity(e.code); reDraft({ entity: e.code, ...(profileId ? { profile_id: profileId } : {}) }); }}
                 disabled={!!confirmation}
                 className={`px-3 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-60 ${
-                  entity === code ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                  (confirmation ? (form.entity_code || entity) : entity) === e.code ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
                 }`}
               >
-                {code === 'BE' ? 'TripleW BV (BE)' : 'TripleW NL BV (NL)'}
+                {e.company_name} ({e.code})
               </button>
             ))}
           </div>

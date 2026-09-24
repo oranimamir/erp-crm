@@ -89,6 +89,12 @@ export interface DocumentData {
   company_email?: string | null;
   company_vat?: string | null;
   company_kvk?: string | null;
+  /** The entity's contact person, printed under its address. */
+  company_contact?: string | null;
+  /** Which TripleW entity issued this — lets the bank follow the currency. */
+  entity_code?: string | null;
+  /** Set when the bank came from the customer's profile, so it is never swapped. */
+  bank_override?: boolean | null;
   // Document meta
   doc_date?: string | null; // YYYY-MM-DD
   sq_number?: string | null;
@@ -393,6 +399,7 @@ function drawHeader(doc: any, data: DocumentData): number {
     [data.company_address1 || '', false],
     [data.company_address2 || '', false],
     [data.company_address3 || '', false],
+    [data.company_contact ? `Contact: ${data.company_contact}` : '', false],
     [data.company_tel ? `Tel: ${data.company_tel}` : '', false],
     [data.company_email ? `Email: ${data.company_email}` : '', false],
     [data.company_vat ? `VAT: ${data.company_vat}` : '', false],

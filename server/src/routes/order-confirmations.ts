@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 import { Resend } from 'resend';
 import db from '../database.js';
 import { notifyAdmin } from '../lib/notify.js';
-import { entityFromOperationNumber, entityProfile, isEntityCode, type EntityCode } from '../lib/companyEntity.js';
+import { applyEntityBank, entityFromOperationNumber, entityProfile, isEntityCode, type EntityCode } from '../lib/companyEntity.js';
 import { deliveryTerms, listProfiles, prefillLines } from '../lib/documentPrefill.js';
 import { matchProfile } from '../lib/profileMatch.js';
 import {
@@ -154,7 +154,9 @@ router.get('/prepare', (req: Request, res: Response) => {
   const entity: EntityCode = isEntityCode(requested)
     ? requested
     : entityFromOperationNumber(operation?.operation_number || order.order_number);
-  const issuer = entityProfile(entity);
+  // The bank printed is the entity's account in the order's currency
+  const orderCurrency = String(items.find((i: any) => i.currency)?.currency || 'EUR').toUpperCase();
+  const issuer = entityProfile(entity, orderCurrency);
 
   // The customer's saved defaults (client code, tax id, terms, delivery…)
   // Which of the customer's legal entities this order belongs to. Never applied
@@ -172,6 +174,7 @@ router.get('/prepare', (req: Request, res: Response) => {
 
   const draft: OrderConfirmationData = {
     ...issuer,
+    entity_code: entity,
     // The operation number is the document's reference, per the master template
     oc_number: operation?.operation_number || order.order_number || '',
     oc_date: today,
@@ -234,7 +237,7 @@ router.get('/:id', (req: Request, res: Response) => {
 
 router.post('/preview', async (req: Request, res: Response) => {
   try {
-    const pdf = await buildOrderConfirmationPdf((req.body?.data || {}) as OrderConfirmationData);
+    const pdf = await buildOrderConfirmationPdf(applyEntityBank((req.body?.data || {}) as OrderConfirmationData));
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename="order-confirmation-preview.pdf"');
     res.send(pdf);
@@ -264,13 +267,13 @@ router.post('/', async (req: Request, res: Response) => {
     operationId = linked?.id ?? null;
   }
 
-  const payload: OrderConfirmationData = {
+  const payload: OrderConfirmationData = applyEntityBank({
     ...data,
     oc_number: (data.oc_number || '').trim()
       || operationNumberFor(operationId)
       || (order as any).order_number
       || '',
-  };
+  });
   if (!payload.oc_number) { res.status(400).json({ error: 'A confirmation number is required' }); return; }
 
   // Reject before rendering, so a clash never leaves a stray PDF behind
@@ -317,10 +320,10 @@ router.put('/:id', async (req: Request, res: Response) => {
   const { data, operation_id, profile_id } = req.body as { data?: OrderConfirmationData; operation_id?: number | null; profile_id?: number | null };
   if (!data || typeof data !== 'object') { res.status(400).json({ error: 'data is required' }); return; }
 
-  const payload: OrderConfirmationData = {
+  const payload: OrderConfirmationData = applyEntityBank({
     ...data,
     oc_number: (data.oc_number || '').trim() || existing.oc_number,
-  };
+  });
   const operationId = operation_id !== undefined ? operation_id : existing.operation_id;
 
   if (ocNumberTaken(payload.oc_number!, existing.id)) {

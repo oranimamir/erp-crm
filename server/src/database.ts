@@ -1597,6 +1597,49 @@ export async function initializeDatabase() {
     }
   } catch { /* ignore */ }
 
+  // ── TripleW entities (editable, one account per currency) ──────────────
+  // Supersedes the company_entity_* settings: seeded from them once, after
+  // which the TripleW Details page owns the data.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS company_entities (
+      code TEXT PRIMARY KEY,
+      company_name TEXT NOT NULL,
+      address1 TEXT, address2 TEXT, address3 TEXT,
+      tel TEXT, email TEXT, vat TEXT, kvk TEXT,
+      contact_person TEXT,
+      bank_name TEXT, bank_address TEXT,
+      usd_account TEXT, usd_bic TEXT,
+      eur_account TEXT, eur_bic TEXT,
+      delivery_address TEXT,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  try {
+    const count = (db.prepare('SELECT COUNT(*) as n FROM company_entities').get() as any).n;
+    if (!count) {
+      for (const code of ['BE', 'NL']) {
+        const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(`company_entity_${code}`) as any;
+        let p: any = {};
+        try { p = row?.value ? JSON.parse(row.value) : {}; } catch { /* keep empty */ }
+        db.prepare(`
+          INSERT INTO company_entities (code, company_name, address1, address2, address3, tel, email, vat, kvk,
+            contact_person, bank_name, bank_address, usd_account, usd_bic, eur_account, eur_bic, delivery_address, is_default)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, ?)
+        `).run(
+          code, p.company_name || (code === 'BE' ? 'TripleW BV' : 'TripleW NL BV'),
+          p.company_address1 || '', p.company_address2 || '', p.company_address3 || '',
+          p.company_tel || '', p.company_email || '', p.company_vat || '', p.company_kvk || '',
+          p.delivery_contact || '', p.bank_name || '', p.bank_address || '',
+          // The accounts on record are the EUR ones; USD is entered on the page
+          p.iban || '', p.bic || '', p.delivery_address || '', code === 'BE' ? 1 : 0
+        );
+      }
+      console.log('[db] Seeded company_entities from settings');
+    }
+  } catch (err: any) { console.error('[db] company_entities seed failed:', err?.message); }
+
   // ── Per-customer document profiles ──────────────────────────────────────
   // A customer may trade as several legal entities (Distribuidora del Caribe
   // has a Costa Rican and a Guatemalan arm), so defaults are held per profile.

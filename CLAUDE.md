@@ -34,5 +34,10 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - `operations.category`: 'blending' | 'trading' (required for new operations)
 - Trading ops: supplier Purchase Order via `/api/purchase-orders` — Order Confirmation template, entity from operation number, filed as `<op#>PO.pdf`, prices entered by hand
 
+## TripleW Entities
+- Table `company_entities` (edited on the TripleW Details page, `/api/company-entities`); `server/src/lib/companyEntity.ts`
+- Entity picked from the operation number (`SO<code>…`), default entity otherwise
+- Each entity has a USD and a EUR account; `applyEntityBank()` prints the one matching the document currency (skipped when `bank_override` — customer-profile bank)
+
 ## Deployment
 Railway, auto-deploys from `main` on push. Commit and push immediately after every change.
