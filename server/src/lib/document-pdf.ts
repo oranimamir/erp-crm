@@ -154,7 +154,8 @@ const OC_LAYOUT: InvoiceLayout = {
   ],
   labels: { ...DEFAULT_LAYOUT.labels, to: '', contact: '', address: '', tax: 'Tax Id :' },
   hs_code: 'panel',
-  bank_inline: true,
+  // One account detail per line, as on the invoices
+  bank_inline: false,
 };
 
 /** A supplier purchase order: the confirmation's shape, addressed to the supplier. */
