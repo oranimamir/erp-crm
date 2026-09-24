@@ -5,7 +5,7 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import InvoiceLayoutEditor from './InvoiceLayoutEditor';
 import { withDefaults, type InvoiceLayout } from '../lib/invoiceLayout';
-import { ChevronDown, ChevronRight, LayoutTemplate, Loader2, Plus, Save, Star, Trash2 } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, LayoutTemplate, Loader2, Pencil, Plus, Save, Star, Trash2, X } from 'lucide-react';
 
 /**
  * Per-customer defaults reused when generating documents. A customer may trade
@@ -105,34 +105,68 @@ export function useCustomerProfiles(customerId: string | number) {
     })));
   }
 
-  function rename(name: string) {
-    if (!active) return;
-    setDirty(true);
-    setProfiles(prev => prev.map(p => (p.id === active.id ? { ...p, name } : p)));
+  /** Renames a profile straight away — only the name is sent, unsaved edits stay pending. */
+  async function renameProfile(id: number, name: string): Promise<boolean> {
+    const trimmed = name.trim();
+    if (!trimmed) { addToast('A profile needs a name', 'error'); return false; }
+    try {
+      await api.put(`/customers/${customerId}/profiles/${id}`, { name: trimmed });
+      setProfiles(prev => prev.map(p => (p.id === id ? { ...p, name: trimmed } : p)));
+      addToast(`Renamed to "${trimmed}"`, 'success');
+      return true;
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to rename', 'error');
+      return false;
+    }
   }
 
-  async function save() {
-    if (!active) return;
+  async function save(quiet = false): Promise<boolean> {
+    if (!active) return true;
     setSaving(true);
     try {
       await api.put(`/customers/${customerId}/profiles/${active.id}`, { name: active.name, data: active.data });
-      addToast('Document defaults saved', 'success');
+      if (!quiet) addToast('Document defaults saved', 'success');
       setDirty(false);
+      return true;
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Failed to save', 'error');
+      return false;
     } finally {
       setSaving(false);
     }
   }
 
-  async function addProfile() {
+  /** Unsaved edits belong to the active profile — keep them before leaving it. */
+  async function saveBeforeLeaving(): Promise<boolean> {
+    if (!dirty) return true;
+    const ok = await save(true);
+    if (ok && active) addToast(`Saved your changes to "${active.name}"`, 'info');
+    return ok;
+  }
+
+  async function selectProfile(id: number) {
+    if (id === activeId) return;
+    if (!(await saveBeforeLeaving())) return;
+    setActiveId(id);
+  }
+
+  /** A new profile, empty or starting from a copy of the active one's details. */
+  async function addProfile(name: string, copyFromActive = false): Promise<boolean> {
+    const trimmed = name.trim();
+    if (!trimmed) { addToast('A profile needs a name', 'error'); return false; }
+    if (!(await saveBeforeLeaving())) return false;
     try {
-      const { data } = await api.post(`/customers/${customerId}/profiles`, { name: `Profile ${profiles.length + 1}` });
+      const body: any = { name: trimmed };
+      if (copyFromActive && active) body.data = active.data;
+      const { data } = await api.post(`/customers/${customerId}/profiles`, body);
       setProfiles(prev => [...prev, data]);
       setActiveId(data.id);
       setDirty(false);
+      addToast(`Profile "${trimmed}" added`, 'success');
+      return true;
     } catch {
       addToast('Failed to add profile', 'error');
+      return false;
     }
   }
 
@@ -161,7 +195,7 @@ export function useCustomerProfiles(customerId: string | number) {
     }
   }
 
-  return { profiles, active, activeId, setActiveId, loading, saving, dirty, patch, patchLayout, rename, save, addProfile, makeDefault, removeProfile };
+  return { profiles, active, activeId, selectProfile, loading, saving, dirty, patch, patchLayout, renameProfile, save, addProfile, makeDefault, removeProfile };
 }
 
 export type ProfileState = ReturnType<typeof useCustomerProfiles>;
@@ -175,62 +209,18 @@ const TITLES: Record<DocType, string> = {
 };
 
 export default function DocumentDefaults({ docType, state }: { docType: DocType; state: ProfileState }) {
-  const {
-    profiles, active, activeId, setActiveId, loading, saving, dirty,
-    patch, patchLayout, rename, save, addProfile, makeDefault, removeProfile,
-  } = state;
+  const { profiles, active, loading, saving, dirty, patch, patchLayout, save } = state;
   const [showTemplate, setShowTemplate] = useState(false);
 
   if (loading) {
     return <Card className="p-8 flex justify-center"><Loader2 size={20} className="animate-spin text-primary-600" /></Card>;
   }
 
-  if (!profiles.length) {
-    return (
-      <Card className="p-8 text-center text-sm text-gray-500">
-        <p>No document defaults yet.</p>
-        <p className="text-gray-400 mt-1">Add a profile to stop retyping this customer's details on every document.</p>
-        <Button size="sm" className="mt-4" onClick={addProfile}><Plus size={14} /> Add profile</Button>
-      </Card>
-    );
-  }
+  if (!profiles.length) return <ProfileBar state={state} />;
 
   return (
     <div className="space-y-5">
-      {/* Billing profile — a customer may trade as several legal entities */}
-      <Card className="px-5 py-4 flex flex-wrap items-center gap-3 justify-between">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs font-medium text-gray-500">Billing profile</span>
-          {profiles.map(p => (
-            <button
-              key={p.id}
-              onClick={() => setActiveId(p.id)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-                p.id === activeId
-                  ? 'bg-primary-50 border-primary-300 text-primary-700'
-                  : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
-              }`}
-            >
-              {p.name}{p.is_default ? ' ★' : ''}
-            </button>
-          ))}
-          <button onClick={addProfile} className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 border border-dashed border-gray-300 rounded-lg px-2 py-1.5">
-            <Plus size={12} /> Add
-          </button>
-        </div>
-        <div className="flex items-center gap-2">
-          {active && !active.is_default && (
-            <button onClick={makeDefault} className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2 py-1">
-              <Star size={12} /> Make default
-            </button>
-          )}
-          {active && profiles.length > 1 && (
-            <button onClick={removeProfile} className="flex items-center gap-1 text-xs text-red-500 hover:text-red-700 border border-red-200 rounded-lg px-2 py-1">
-              <Trash2 size={12} /> Delete
-            </button>
-          )}
-        </div>
-      </Card>
+      <ProfileBar state={state} />
 
       {active && (
         <>
@@ -241,7 +231,6 @@ export default function DocumentDefaults({ docType, state }: { docType: DocType;
               <span className="text-xs text-gray-400">· shared across all documents</span>
             </div>
             <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Field label="Profile name" value={active.name} onChange={rename} placeholder="Costa Rica" />
               <Field label="Client code" value={active.data.shared.client_code} onChange={v => patch('shared', 'client_code', v)} placeholder="00GR01" />
               <Field label="Legal name" value={active.data.shared.legal_name} onChange={v => patch('shared', 'legal_name', v)} placeholder="Astron Chemicals SA" className="sm:col-span-2" />
               <Area label="Billing address (one line per row)" value={active.data.shared.billing_address} onChange={v => patch('shared', 'billing_address', v)} className="sm:col-span-2" />
@@ -328,7 +317,7 @@ export default function DocumentDefaults({ docType, state }: { docType: DocType;
               </div>
 
               <div className="flex justify-end pt-3 border-t border-gray-100">
-                <Button size="sm" onClick={save} disabled={saving || !dirty}>
+                <Button size="sm" onClick={() => save()} disabled={saving || !dirty}>
                   {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                   {dirty ? 'Save changes' : 'Saved'}
                 </Button>
@@ -362,7 +351,7 @@ export default function DocumentDefaults({ docType, state }: { docType: DocType;
                     onChange={patchLayout}
                   />
                   <div className="flex justify-end pt-3 border-t border-gray-100">
-                    <Button size="sm" onClick={save} disabled={saving || !dirty}>
+                    <Button size="sm" onClick={() => save()} disabled={saving || !dirty}>
                       {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                       {dirty ? 'Save changes' : 'Saved'}
                     </Button>
@@ -374,5 +363,129 @@ export default function DocumentDefaults({ docType, state }: { docType: DocType;
         </>
       )}
     </div>
+  );
+}
+
+// ── Profile bar: choose, rename, add, default, delete ─────────────────────
+
+/**
+ * The customer's billing profiles, one per legal entity they trade as. Renames
+ * and new profiles save immediately; switching away saves pending edits first.
+ */
+export function ProfileBar({ state }: { state: ProfileState }) {
+  const { profiles, active, activeId, selectProfile, renameProfile, addProfile, makeDefault, removeProfile } = state;
+  const [renaming, setRenaming] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [copy, setCopy] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const startRename = () => { setNameDraft(active?.name || ''); setRenaming(true); setAdding(false); };
+  const commitRename = async () => {
+    if (!active) return;
+    if (nameDraft.trim() === active.name) { setRenaming(false); return; }
+    setBusy(true);
+    if (await renameProfile(active.id, nameDraft)) setRenaming(false);
+    setBusy(false);
+  };
+  const commitAdd = async () => {
+    setBusy(true);
+    if (await addProfile(newName, copy)) { setAdding(false); setNewName(''); setCopy(false); }
+    setBusy(false);
+  };
+
+  return (
+    <Card className="px-5 py-4 space-y-3">
+      <div className="flex flex-wrap items-center gap-3 justify-between">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs font-medium text-gray-500">Billing profiles</span>
+          {profiles.map(p => (
+            p.id === activeId && renaming ? (
+              <span key={p.id} className="flex items-center gap-1">
+                <input
+                  autoFocus
+                  value={nameDraft}
+                  onChange={e => setNameDraft(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setRenaming(false); }}
+                  className="w-40 rounded-lg border border-primary-300 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+                <button onClick={commitRename} disabled={busy} className="p-1 rounded text-green-600 hover:bg-green-50" title="Save name"><Check size={14} /></button>
+                <button onClick={() => setRenaming(false)} className="p-1 rounded text-gray-400 hover:bg-gray-100" title="Cancel"><X size={14} /></button>
+              </span>
+            ) : (
+              <button
+                key={p.id}
+                onClick={() => { setRenaming(false); selectProfile(p.id); }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                  p.id === activeId
+                    ? 'bg-primary-50 border-primary-300 text-primary-700'
+                    : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                {p.name}{p.is_default ? ' ★' : ''}
+              </button>
+            )
+          ))}
+          {!adding && (
+            <button
+              onClick={() => { setAdding(true); setRenaming(false); }}
+              className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 border border-dashed border-gray-300 rounded-lg px-2 py-1.5"
+            >
+              <Plus size={12} /> Add profile
+            </button>
+          )}
+        </div>
+        {active && !renaming && (
+          <div className="flex items-center gap-2">
+            <button onClick={startRename} className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2 py-1">
+              <Pencil size={12} /> Rename
+            </button>
+            {!active.is_default && (
+              <button onClick={makeDefault} className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2 py-1">
+                <Star size={12} /> Make default
+              </button>
+            )}
+            {profiles.length > 1 && (
+              <button onClick={removeProfile} className="flex items-center gap-1 text-xs text-red-500 hover:text-red-700 border border-red-200 rounded-lg px-2 py-1">
+                <Trash2 size={12} /> Delete
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {!profiles.length && !adding && (
+        <p className="text-sm text-gray-500">
+          No profiles yet. Add one per legal entity this customer trades as (e.g. "Costa Rica", "Guatemala")
+          to stop retyping their details on every document.
+        </p>
+      )}
+
+      {adding && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-primary-200 bg-primary-50/40 px-3 py-2.5">
+          <input
+            autoFocus
+            value={newName}
+            onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') commitAdd(); if (e.key === 'Escape') setAdding(false); }}
+            placeholder="Profile name, e.g. Guatemala"
+            className="w-56 rounded-lg border border-gray-300 px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+          />
+          {active && (
+            <label className="flex items-center gap-1.5 text-xs text-gray-600">
+              <input type="checkbox" checked={copy} onChange={e => setCopy(e.target.checked)} />
+              Copy details from "{active.name}"
+            </label>
+          )}
+          <div className="flex items-center gap-2 ml-auto">
+            <Button size="sm" variant="secondary" onClick={() => setAdding(false)}>Cancel</Button>
+            <Button size="sm" onClick={commitAdd} disabled={busy || !newName.trim()}>
+              {busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} Add
+            </Button>
+          </div>
+        </div>
+      )}
+    </Card>
   );
 }

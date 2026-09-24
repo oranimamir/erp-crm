@@ -3,7 +3,7 @@ import { useParams, Link, useSearchParams } from 'react-router-dom';
 import api from '../lib/api';
 import Card from '../components/ui/Card';
 import StatusBadge from '../components/ui/StatusBadge';
-import DocumentDefaults, { useCustomerProfiles, type DocType } from '../components/CustomerDocumentProfiles';
+import DocumentDefaults, { ProfileBar, useCustomerProfiles, type DocType } from '../components/CustomerDocumentProfiles';
 import { ArrowLeft, Mail, Phone, MapPin, Building, FileText, ShoppingCart, Package, DollarSign } from 'lucide-react';
 
 type TabId = 'overview' | DocType;
@@ -91,6 +91,8 @@ export default function CustomerDetailPage() {
       {activeTab !== 'overview' && <DocumentDefaults docType={activeTab} state={profileState} />}
 
       {activeTab === 'overview' && (<>
+      {/* One profile per legal entity the customer trades as */}
+      {!profileState.loading && <ProfileBar state={profileState} />}
       {/* Financial Summary */}
       {invoices.length > 0 && (() => {
         const eurOf = (inv: any) => Number(inv.eur_amount ?? inv.amount) || 0;
