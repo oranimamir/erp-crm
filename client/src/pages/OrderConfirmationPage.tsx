@@ -1,13 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom';
 import api from '../lib/api';
+import OrderCompareModal from '../components/OrderCompareModal';
 import { useCompanyEntities } from '../lib/useCompanyEntities';
 import { useToast } from '../contexts/ToastContext';
 import Button from '../components/ui/Button';
 import EntityConfirmStep from '../components/EntityConfirmStep';
 import {
   ArrowLeft, Plus, Trash2, Loader2, Eye, X, FileDown, Mail,
-  CheckCircle, FileText, RefreshCw, User, Package, Truck,
+  CheckCircle, FileText, RefreshCw, User, Package, Truck, Columns2,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -201,6 +202,7 @@ export default function OrderConfirmationPage() {
 
   const [saving, setSaving] = useState(false);
   const [previewing, setPreviewing] = useState(false);
+  const [comparing, setComparing] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   const [showEmail, setShowEmail] = useState(false);
@@ -420,6 +422,18 @@ export default function OrderConfirmationPage() {
           <Button variant="secondary" size="sm" onClick={handlePreview} disabled={previewing}>
             {previewing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
           </Button>
+          <Button variant="secondary" size="sm" onClick={() => setComparing(true)} disabled={!orderId}
+            title="Show the customer's order side by side with this document">
+            <Columns2 size={14} /> Compare with order
+          </Button>
+          {comparing && orderId && (
+            <OrderCompareModal
+              orderId={orderId}
+              title="Order confirmation"
+              renderPreview={async () => (await api.post('/order-confirmations/preview', { data: toPayload(form) }, { responseType: 'blob' })).data as Blob}
+              onClose={() => setComparing(false)}
+            />
+          )}
           <Button
             size="sm"
             onClick={handleSave}

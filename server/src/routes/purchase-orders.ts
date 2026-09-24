@@ -126,7 +126,7 @@ router.get('/prepare', (req: Request, res: Response) => {
   const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as any;
   if (!order) { res.status(404).json({ error: 'Order not found' }); return; }
 
-  const suppliers = db.prepare('SELECT id, name FROM suppliers ORDER BY name').all();
+  const suppliers = db.prepare('SELECT id, name, category FROM suppliers ORDER BY name').all();
 
   const existing = db.prepare(
     'SELECT * FROM purchase_orders WHERE order_id = ? ORDER BY id DESC LIMIT 1'
@@ -201,7 +201,7 @@ router.get('/by-order/:orderId', (req: Request, res: Response) => {
 router.get('/:id', (req: Request, res: Response) => {
   const row = db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(Number(req.params.id));
   if (!row) { res.status(404).json({ error: 'Purchase order not found' }); return; }
-  const suppliers = db.prepare('SELECT id, name FROM suppliers ORDER BY name').all();
+  const suppliers = db.prepare('SELECT id, name, category FROM suppliers ORDER BY name').all();
   res.json({ ...parseRecord(row), suppliers });
 });
 

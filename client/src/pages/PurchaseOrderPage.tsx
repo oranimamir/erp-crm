@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom';
 import api from '../lib/api';
+import OrderCompareModal from '../components/OrderCompareModal';
 import { useCompanyEntities } from '../lib/useCompanyEntities';
 import { useToast } from '../contexts/ToastContext';
 import Button from '../components/ui/Button';
 import {
   ArrowLeft, Plus, Trash2, Loader2, Eye, X, FileDown, Mail,
-  CheckCircle, FileText, RefreshCw, Building2, Package, Truck, AlertTriangle,
+  CheckCircle, FileText, RefreshCw, Building2, Package, Truck, AlertTriangle, Columns2,
 } from 'lucide-react';
 
 // Supplier purchase order for a trading operation — the order confirmation's
@@ -60,6 +61,15 @@ interface PurchaseOrder {
   sent_at: string | null;
   data: Partial<PoData>;
 }
+
+/** Supplier categories, the trading ones (listed by default) first. */
+const SUPPLIER_GROUPS = [
+  { key: 'raw_materials', label: 'Raw materials', trading: true },
+  { key: 'blenders', label: 'Blenders', trading: true },
+  { key: 'logistics', label: 'Logistics', trading: false },
+  { key: 'shipping', label: 'Shipping', trading: false },
+  { key: 'other', label: 'Other', trading: false },
+];
 
 const UNITS = ['KG', 'TONS', 'MT', 'LBS', 'L', 'PAIL', 'DRUM', 'IBC'];
 const CURRENCIES = ['EUR', 'USD', 'GBP'];
@@ -189,11 +199,14 @@ export default function PurchaseOrderPage() {
   const [operationNumber, setOperationNumber] = useState('');
   const [entity, setEntity] = useState<string>('BE');
   const entities = useCompanyEntities();
-  const [suppliers, setSuppliers] = useState<Array<{ id: number; name: string }>>([]);
+  const [suppliers, setSuppliers] = useState<Array<{ id: number; name: string; category?: string }>>([]);
+  // Trading goods are bought from raw-material suppliers and blenders
+  const [showAllSuppliers, setShowAllSuppliers] = useState(false);
   const [supplierId, setSupplierId] = useState<number | null>(null);
 
   const [saving, setSaving] = useState(false);
   const [previewing, setPreviewing] = useState(false);
+  const [comparing, setComparing] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   const [showEmail, setShowEmail] = useState(false);
@@ -314,6 +327,13 @@ export default function PurchaseOrderPage() {
         client_phone: data.phone || '',
         contact_email: data.email || '',
       }));
+      const missing = [!data.address && 'address', !data.phone && 'phone', !data.email && 'email'].filter(Boolean);
+      addToast(
+        missing.length
+          ? `${data.name} added — no ${missing.join(', ')} on file in Suppliers; fill in below if needed`
+          : `${data.name}'s details added to the purchase order`,
+        missing.length ? 'info' : 'success',
+      );
     } catch {
       addToast('Failed to load the supplier', 'error');
     }
@@ -410,6 +430,18 @@ export default function PurchaseOrderPage() {
           <Button variant="secondary" size="sm" onClick={handlePreview} disabled={previewing}>
             {previewing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
           </Button>
+          <Button variant="secondary" size="sm" onClick={() => setComparing(true)} disabled={!orderId}
+            title="Show the customer's order side by side with this document">
+            <Columns2 size={14} /> Compare with order
+          </Button>
+          {comparing && orderId && (
+            <OrderCompareModal
+              orderId={orderId}
+              title="Purchase order"
+              renderPreview={async () => (await api.post('/purchase-orders/preview', { data: toPayload(form) }, { responseType: 'blob' })).data as Blob}
+              onClose={() => setComparing(false)}
+            />
+          )}
           <Button size="sm" onClick={handleSave} disabled={saving}>
             {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
             {purchaseOrder ? 'Confirm & regenerate' : 'Confirm & generate'}
@@ -478,15 +510,32 @@ export default function PurchaseOrderPage() {
           <Section icon={<Building2 size={16} />} title="Supplier">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1 sm:col-span-2">
-                <label className="block text-xs font-medium text-gray-500">Supplier</label>
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-medium text-gray-500">Supplier</label>
+                  <label className="flex items-center gap-1.5 text-xs text-gray-500">
+                    <input type="checkbox" checked={showAllSuppliers} onChange={e => setShowAllSuppliers(e.target.checked)} />
+                    Show all suppliers
+                  </label>
+                </div>
                 <select
                   value={supplierId ?? ''}
                   onChange={e => chooseSupplier(e.target.value ? Number(e.target.value) : null)}
                   className={inputCls}
                 >
                   <option value="">Select supplier…</option>
-                  {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  {SUPPLIER_GROUPS.map(g => {
+                    const list = suppliers.filter(s =>
+                      (s.category || 'other') === g.key && (showAllSuppliers || g.trading || s.id === supplierId));
+                    return list.length ? (
+                      <optgroup key={g.key} label={g.label}>
+                        {list.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </optgroup>
+                    ) : null;
+                  })}
                 </select>
+                <p className="text-xs text-gray-400">
+                  Raw materials and blenders suppliers from the Suppliers tab. Choosing one fills in their name, address, phone and email below.
+                </p>
               </div>
               <Field label="Name on document" value={form.client_name} onChange={v => set('client_name', v)} className="sm:col-span-2" />
               <AreaField label="Address (one line per row)" value={form.billing_address} onChange={v => set('billing_address', v)} className="sm:col-span-2" />
