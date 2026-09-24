@@ -120,7 +120,13 @@ export default function DashboardPage() {
   const totalYear = paidYTD + pending + expected;
 
   const expensesYTD = monthlyPayments.reduce((s: number, m: any) => s + (m.paid_out ?? 0), 0);
-  const monthsElapsed = monthlyPayments.length;
+  const operatingYTD = monthlyPayments.reduce((s: number, m: any) => s + (m.paid_out_operating ?? 0), 0);
+  const tradingYTD = monthlyPayments.reduce((s: number, m: any) => s + (m.paid_out_sales ?? 0), 0);
+  // Average only over months whose supplier invoices are in: months not yet
+  // uploaded would otherwise count as zero-spend months and drag it down.
+  const lastRecorded = monthlyPayments.reduce((last: number, m: any, i: number) => ((m.paid_out ?? 0) > 0 ? i : last), -1);
+  const monthsElapsed = lastRecorded + 1;
+  const monthsPending = monthlyPayments.length - monthsElapsed;
   const expensesAvgPerMonth = monthsElapsed > 0 ? expensesYTD / monthsElapsed : 0;
 
   return (
@@ -209,20 +215,22 @@ export default function DashboardPage() {
           <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
             <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
               Expenses YTD {year}
-              <InfoBadge id="expenses-ytd" text="Total paid to suppliers this calendar year — every supplier invoice recorded, operating costs and sales activities alike. Matches the Analytics → Supplier Expenses total for the same period." />
+              <InfoBadge id="expenses-ytd" text="Supplier invoices dated this calendar year, excluding VAT, in EUR — operating costs (salaries, rent, services…) and trading purchases (goods bought to resell) alike. It counts invoices by their date, not payments. Matches the Analytics → Supplier Expenses total for the same period." />
             </p>
             <p className="text-lg sm:text-2xl font-bold text-red-600 truncate">{fmt(expensesYTD)}</p>
-            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Total paid to suppliers this year</p>
+            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">
+              Operating {fmt(operatingYTD)} · Trading purchases {fmt(tradingYTD)}
+            </p>
           </Card>
         </Link>
         <Link to="/invoices?type=supplier">
           <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
             <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
               Avg / Month
-              <InfoBadge id="avg-month" text={`Expenses YTD divided by the number of months elapsed so far this year (${monthsElapsed} months). Gives an average monthly spend rate for supplier payments.`} />
+              <InfoBadge id="avg-month" text={`Expenses YTD divided by the months whose supplier invoices are recorded (${monthsElapsed}).${monthsPending > 0 ? ` The last ${monthsPending} month${monthsPending > 1 ? 's have' : ' has'} no invoices uploaded yet and ${monthsPending > 1 ? 'are' : 'is'} left out.` : ''}`} />
             </p>
             <p className="text-lg sm:text-2xl font-bold text-orange-500 truncate">{fmt(expensesAvgPerMonth)}</p>
-            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Average monthly expenses ({monthsElapsed} mo)</p>
+            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Average monthly expenses ({monthsElapsed} mo{monthsPending > 0 ? `, ${monthsPending} not uploaded yet` : ''})</p>
           </Card>
         </Link>
         <button onClick={() => setTonsBreakdownOpen(true)} className="col-span-2 sm:col-span-1 text-left">
