@@ -11,6 +11,7 @@ import ExportReportModal from '../components/ExportReportModal';
 import ColumnChart from '../components/charts/ColumnChart';
 import { PanelCard, PeriodPanel, BreakdownPanel, StatTile, VizRow } from '../components/charts/Panels';
 import TimelineScatter from '../components/charts/TimelineScatter';
+import TradingComparison from '../components/analytics/TradingComparison';
 
 // ── Interfaces ────────────────────────────────────────────────────────────────
 
@@ -133,12 +134,13 @@ function alignTo(periods: string[], rows: Array<{ period: string } & Record<stri
 
 // ── Main tabs ─────────────────────────────────────────────────────────────────
 
-type View = 'revenue' | 'expenses' | 'tonnage';
+type View = 'revenue' | 'expenses' | 'tonnage' | 'trading';
 
 const VIEW_OPTIONS: { value: View; label: string; active: string }[] = [
   { value: 'revenue',  label: 'Revenue',          active: 'bg-green-600 text-white' },
   { value: 'expenses', label: 'Supplier Expenses', active: 'bg-indigo-600 text-white' },
   { value: 'tonnage',  label: 'Tonnage Sold',      active: 'bg-gray-700 text-white' },
+  { value: 'trading',  label: 'Trading: Sale vs Purchase', active: 'bg-sky-600 text-white' },
 ];
 
 function ToggleBtn({ active, onClick, color, children }: {
@@ -479,7 +481,7 @@ export default function AnalyticsPage() {
         </div>
 
         <div className="flex flex-wrap items-end gap-4 pt-3 border-t border-gray-100">
-          {(view === 'revenue' || view === 'tonnage') && (
+          {(view === 'revenue' || view === 'tonnage' || view === 'trading') && (
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1">
                 <Users size={11} /> Customer
@@ -943,6 +945,10 @@ export default function AnalyticsPage() {
         {/* ═══════════════════════════════════════════════════════════════════ */}
         {/* TONNAGE                                                            */}
         {/* ═══════════════════════════════════════════════════════════════════ */}
+        {view === 'trading' && (
+          <TradingComparison year={year} monthFrom={monthFrom} monthTo={monthTo} customerId={customerId} />
+        )}
+
         {view === 'tonnage' && quantityData && data && (
           quantityData.total_tons === 0 ? (
             <Card className="p-10 text-center">

@@ -18,6 +18,211 @@ async function sumLiveEur(rows: { amount: number; currency: string }[]): Promise
 
 const VALID_SUPPLIER_CATEGORIES = ['logistics', 'blenders', 'raw_materials', 'shipping'];
 
+/** Quantity in metric tons, or null when the unit is not a weight. */
+function toMt(qty: number, unit?: string | null): number | null {
+  const u = String(unit || '').trim().toLowerCase();
+  if (['mt', 'metric ton', 'metric tons', 'tonne', 'tonnes', 'tons', 'ton', 't'].includes(u)) return qty;
+  if (['kg', 'kgs', 'kilogram', 'kilograms'].includes(u)) return qty / 1000;
+  if (['lb', 'lbs', 'pound', 'pounds'].includes(u)) return qty / 2204.6226218;
+  return null;
+}
+
+interface TradeLine { name: string; quantity: number; unit: string; unit_price: number; currency: string }
+
+// GET /analytics/trading
+//   ?year=2026&month_from=1&month_to=12&customer_id=
+// Trading operations: what the customer ordered (sale) against what was bought
+// from the supplier — the supplier purchase order, or the supplier invoices
+// recorded on the operation when no PO was generated. EUR at today's rates.
+router.get('/trading', async (req: Request, res: Response) => {
+  const yearNum = parseInt((req.query.year as string) || new Date().getFullYear().toString());
+  if (isNaN(yearNum) || yearNum < 2000 || yearNum > 2100) { res.status(400).json({ error: 'Invalid year' }); return; }
+  const rawFrom = parseInt(req.query.month_from as string || '1');
+  const rawTo = parseInt(req.query.month_to as string || '12');
+  const monthStart = Math.min(Math.max(isNaN(rawFrom) ? 1 : rawFrom, 1), 12);
+  const monthEnd = Math.max(Math.min(isNaN(rawTo) ? 12 : rawTo, 12), monthStart);
+  const dateStart = `${yearNum}-${String(monthStart).padStart(2, '0')}-01`;
+  const dateEnd = `${yearNum}-${String(monthEnd).padStart(2, '0')}-31`;
+  const customerId = req.query.customer_id ? parseInt(req.query.customer_id as string) : null;
+
+  const params: any[] = [dateStart, dateEnd];
+  let customerClause = '';
+  if (customerId && !isNaN(customerId)) { customerClause = 'AND op.customer_id = ?'; params.push(customerId); }
+
+  const ops = db.prepare(`
+    SELECT op.id, op.operation_number, op.status, o.id as order_id,
+      c.name as customer_name, o.order_number, COALESCE(o.order_date, date(op.created_at)) as order_date
+    FROM operations op
+    LEFT JOIN customers c ON op.customer_id = c.id
+    LEFT JOIN orders o ON op.order_id = o.id
+    WHERE op.category = 'trading'
+      AND COALESCE(o.order_date, date(op.created_at)) BETWEEN ? AND ?
+      ${customerClause}
+    ORDER BY COALESCE(o.order_date, op.created_at) DESC
+  `).all(...params) as any[];
+
+  const rows = ops.map(op => {
+    const sale: TradeLine[] = (op.order_id
+      ? db.prepare('SELECT description, quantity, unit, unit_price, currency FROM order_items WHERE order_id = ? ORDER BY id').all(op.order_id) as any[]
+      : []
+    ).map(i => ({
+      name: i.description || '',
+      quantity: Number(i.quantity) || 0,
+      unit: i.unit || '',
+      unit_price: Number(i.unit_price) || 0,
+      currency: String(i.currency || 'USD').toUpperCase(),
+    }));
+
+    // The supplier side: the generated purchase order first, else supplier invoices
+    let source: 'purchase_order' | 'supplier_invoice' | null = null;
+    let supplierName: string | null = null;
+    let purchase: TradeLine[] = [];
+    let freight = 0;
+    let invoiceLines: Array<{ amount: number; currency: string; eur_amount: number | null }> = [];
+
+    const po = op.order_id
+      ? db.prepare('SELECT data FROM purchase_orders WHERE order_id = ? ORDER BY id DESC LIMIT 1').get(op.order_id) as any
+      : null;
+    if (po) {
+      let data: any = {};
+      try { data = JSON.parse(po.data); } catch { /* corrupt row → empty */ }
+      source = 'purchase_order';
+      supplierName = data.client_name || null;
+      purchase = (Array.isArray(data.items) ? data.items : []).map((i: any) => ({
+        name: i.commercial_name || '',
+        quantity: Number(i.quantity) || 0,
+        unit: i.quantity_unit || '',
+        unit_price: Number(i.unit_price) || 0,
+        currency: String(i.currency || 'EUR').toUpperCase(),
+      }));
+      freight = Number(data.freight) || 0;
+    } else {
+      const invs = db.prepare(`
+        SELECT i.amount, i.currency, i.eur_amount, s.name as supplier_name
+        FROM invoices i LEFT JOIN suppliers s ON i.supplier_id = s.id
+        WHERE i.operation_id = ? AND i.type = 'supplier' AND i.status != 'cancelled'
+      `).all(op.id) as any[];
+      if (invs.length) {
+        source = 'supplier_invoice';
+        supplierName = invs[0].supplier_name || null;
+        invoiceLines = invs.map(i => ({ amount: Number(i.amount) || 0, currency: String(i.currency || 'USD').toUpperCase(), eur_amount: i.eur_amount }));
+      }
+    }
+    return { op, sale, source, supplierName, purchase, freight, invoiceLines };
+  });
+
+  // Live EUR rates for every currency involved
+  const currencies = new Set<string>();
+  for (const r of rows) {
+    r.sale.forEach(i => currencies.add(i.currency));
+    r.purchase.forEach(i => currencies.add(i.currency));
+    r.invoiceLines.forEach(i => currencies.add(i.currency));
+  }
+  currencies.delete('EUR');
+  const rates: Record<string, number> = { EUR: 1 };
+  await Promise.all([...currencies].map(async c => {
+    try { rates[c] = await getEurRate(c, 'latest'); } catch { rates[c] = 1; }
+  }));
+  const eur = (amount: number, currency: string) => amount * (rates[currency] ?? 1);
+
+  const mtOf = (items: TradeLine[]): number | null => {
+    if (!items.length) return null;
+    let total = 0;
+    for (const i of items) {
+      const mt = toMt(i.quantity, i.unit);
+      if (mt == null) return null;
+      total += mt;
+    }
+    return total;
+  };
+
+  const operations = rows.map(({ op, sale, source, supplierName, purchase, freight, invoiceLines }) => {
+    const saleEur = sale.reduce((s, i) => s + eur(i.quantity * i.unit_price, i.currency), 0);
+
+    let purchaseCurrency: string | null = null;
+    let purchaseTotal: number | null = null;
+    let purchaseEur: number | null = null;
+    if (source === 'purchase_order') {
+      purchaseCurrency = purchase[0]?.currency || 'EUR';
+      purchaseTotal = purchase.reduce((s, i) => s + i.quantity * i.unit_price, 0) + freight;
+      purchaseEur = purchase.reduce((s, i) => s + eur(i.quantity * i.unit_price, i.currency), 0) + eur(freight, purchaseCurrency);
+    } else if (source === 'supplier_invoice') {
+      purchaseCurrency = invoiceLines[0]?.currency || 'EUR';
+      purchaseTotal = invoiceLines.reduce((s, i) => s + i.amount, 0);
+      purchaseEur = invoiceLines.reduce((s, i) => s + (i.eur_amount ?? eur(i.amount, i.currency)), 0);
+    }
+    // A PO still waiting for its prices can't give a margin yet
+    const unpriced = source === 'purchase_order' && purchase.some(i => !i.unit_price);
+
+    // Line by line: matched on product name, else by position
+    const used = new Set<number>();
+    const lines = sale.map((s, idx) => {
+      let j = purchase.findIndex((p, k) => !used.has(k) && p.name.trim().toLowerCase() === s.name.trim().toLowerCase());
+      if (j < 0 && idx < purchase.length && !used.has(idx)) j = idx;
+      if (j >= 0) used.add(j);
+      const p = j >= 0 ? purchase[j] : null;
+      return {
+        product: s.name,
+        sale_quantity: s.quantity as number | null, sale_unit: s.unit, sale_price: s.unit_price as number | null, sale_currency: s.currency,
+        purchase_quantity: p ? p.quantity : null, purchase_unit: p ? p.unit : null,
+        purchase_price: p && p.unit_price ? p.unit_price : null, purchase_currency: p ? p.currency : null,
+        unit_margin_eur: p && p.unit_price ? eur(s.unit_price, s.currency) - eur(p.unit_price, p.currency) : null,
+      };
+    });
+    purchase.forEach((p, k) => {
+      if (used.has(k)) return;
+      lines.push({
+        product: p.name, sale_quantity: null, sale_unit: '', sale_price: null, sale_currency: '',
+        purchase_quantity: p.quantity, purchase_unit: p.unit, purchase_price: p.unit_price || null,
+        purchase_currency: p.currency, unit_margin_eur: null,
+      });
+    });
+
+    const saleMt = mtOf(sale);
+    const purchaseMt = source === 'purchase_order' ? mtOf(purchase) : null;
+    const marginEur = purchaseEur != null && !unpriced ? saleEur - purchaseEur : null;
+
+    return {
+      operation_id: op.id,
+      operation_number: op.operation_number,
+      status: op.status,
+      order_number: op.order_number,
+      order_date: op.order_date,
+      customer_name: op.customer_name,
+      supplier_name: supplierName,
+      source,
+      sale_currency: sale[0]?.currency || 'EUR',
+      sale_total: sale.reduce((s, i) => s + i.quantity * i.unit_price, 0),
+      sale_eur: saleEur,
+      purchase_currency: purchaseCurrency,
+      purchase_total: purchaseTotal,
+      purchase_eur: purchaseEur,
+      unpriced,
+      margin_eur: marginEur,
+      margin_pct: marginEur != null && saleEur ? (marginEur / saleEur) * 100 : null,
+      sale_mt: saleMt,
+      purchase_mt: purchaseMt,
+      quantity_mismatch: saleMt != null && purchaseMt != null && Math.abs(saleMt - purchaseMt) > 0.001,
+      lines,
+    };
+  });
+
+  // Totals only over operations where both sides are known, so the margin is honest
+  const compared = operations.filter(o => o.margin_eur != null);
+  res.json({
+    totals: {
+      operations: operations.length,
+      compared: compared.length,
+      missing_supplier: operations.filter(o => !o.source).length,
+      unpriced: operations.filter(o => o.unpriced).length,
+      sale_eur: compared.reduce((s, o) => s + o.sale_eur, 0),
+      purchase_eur: compared.reduce((s, o) => s + (o.purchase_eur || 0), 0),
+      margin_eur: compared.reduce((s, o) => s + (o.margin_eur || 0), 0),
+    },
+    operations,
+  });
+});
+
 // GET /analytics/years — list of years that have invoice data
 router.get('/years', (_req: Request, res: Response) => {
   const rows = db.prepare(`

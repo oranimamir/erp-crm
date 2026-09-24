@@ -2355,18 +2355,22 @@ router.patch('/invoices/:id/supplier', (req: Request, res: Response) => {
 // AMOUNT / CURRENCY UPDATE
 // ═══════════════════════════════════════════════════════════════════════════════
 
-router.patch('/invoices/:id/amount', (req: Request, res: Response) => {
+router.patch('/invoices/:id/amount', async (req: Request, res: Response) => {
   try {
     const { amount, currency } = req.body;
     if (amount == null && !currency) { res.status(400).json({ error: 'amount or currency required' }); return; }
 
-    const inv = db.prepare('SELECT id, amount, currency, batch_id FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
+    const inv = db.prepare('SELECT id, amount, vat_amount, currency, issue_date, batch_id FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
     if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
     const newAmount = amount != null ? Number(amount) : inv.amount;
     if (isNaN(newAmount) || newAmount < 0) { res.status(400).json({ error: 'Invalid amount' }); return; }
     const newCurrency = currency || inv.currency;
-    db.prepare('UPDATE demo_invoices SET amount = ?, currency = ? WHERE id = ?').run(newAmount, newCurrency, req.params.id);
+    // Every total reads COALESCE(eur_amount, amount), so the EUR value must be
+    // redone with the amount — otherwise the old figure keeps being counted.
+    const fx = await computeFxFields(newAmount, inv.vat_amount, newCurrency, inv.issue_date);
+    db.prepare('UPDATE demo_invoices SET amount = ?, currency = ?, fx_rate = ?, eur_amount = ?, vat_eur_amount = ? WHERE id = ?')
+      .run(newAmount, newCurrency, fx.fx_rate, fx.eur_amount, fx.vat_eur_amount, req.params.id);
 
     // Update batch total
     if (inv.batch_id) {
@@ -2455,7 +2459,10 @@ router.patch('/invoices/:id/vat', (req: Request, res: Response) => {
     const newVat = Number(vat_amount);
     if (isNaN(newVat) || newVat < 0) { res.status(400).json({ error: 'Invalid vat_amount' }); return; }
     const oldVat = inv.vat_amount;
-    db.prepare('UPDATE demo_invoices SET vat_amount = ? WHERE id = ?').run(newVat, req.params.id);
+    // Keep the EUR VAT in step for foreign-currency invoices
+    db.prepare(`UPDATE demo_invoices SET vat_amount = ?,
+      vat_eur_amount = CASE WHEN fx_rate IS NOT NULL THEN ROUND(? * fx_rate, 2) ELSE vat_eur_amount END
+      WHERE id = ?`).run(newVat, newVat, req.params.id);
     if (audit_action) {
       db.prepare('INSERT INTO vat_audit_log (invoice_id, action, old_vat, new_vat, performed_by) VALUES (?, ?, ?, ?, ?)').run(
         inv.id, audit_action, oldVat, newVat, (req as any).user?.display_name || 'Unknown'
