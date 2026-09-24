@@ -54,6 +54,7 @@ interface InvData {
   payment_terms: string;
   incoterm: string;
   remarks: string;
+  notes: string;
   freight: string;
   vat: string;
   insurance: string;
@@ -84,7 +85,7 @@ const FORM_KEYS = [
   'client_code', 'attention', 'product_reference', 'client_name', 'billing_address',
   'client_phone', 'tax_id', 'eori', 'contact_email', 'delivery', 'delivery_address',
   'delivery_contact', 'delivery_date_text', 'payment_terms', 'incoterm', 'remarks',
-  'freight', 'vat', 'insurance', 'manufacturer', 'country_of_origin', 'terms',
+  'notes', 'freight', 'vat', 'insurance', 'manufacturer', 'country_of_origin', 'terms',
 ] as const;
 
 const emptyLine = (n: number): InvLine => ({
@@ -101,7 +102,7 @@ const blankData = (): InvData => ({
   client_phone: '', tax_id: '', eori: '', contact_email: '',
   items: [emptyLine(1)],
   delivery: '', delivery_address: '', delivery_contact: '', delivery_date_text: '',
-  payment_terms: '', incoterm: '', remarks: '',
+  payment_terms: '', incoterm: '', remarks: '', notes: '',
   freight: '0', vat: '0', insurance: '0',
   manufacturer: '', country_of_origin: '', terms: '',
 });
@@ -732,6 +733,9 @@ export default function InvoiceDocumentPage() {
                 className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50">
                 <Plus size={14} /> Add line
               </button>
+
+              <AreaField label="Notes (printed under the table)" value={form.notes} onChange={v => set('notes', v)}
+                rows={3} placeholder="e.g. Goods shipped in 2 x 20' containers" />
             </div>
           </Section>
 

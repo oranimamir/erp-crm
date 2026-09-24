@@ -216,8 +216,8 @@ export default function InvoiceLayoutEditor({
       <div className="border-t border-gray-100 pt-4 space-y-2">
         <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">What each line carries</h4>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-          <Toggle label="Lot number" hint="Printed under the product name" checked={layout.show_lot} onChange={v => set('show_lot', v)} />
-          <Toggle label="Packing note" hint="e.g. 80 drums on 20 pallets" checked={layout.show_line_note} onChange={v => set('show_line_note', v)} />
+          <Toggle label="Lot number" hint="Under the product name, when there is no Lot column" checked={layout.show_lot} onChange={v => set('show_lot', v)} />
+          <Toggle label="Packing note" hint="e.g. 80 drums on 20 pallets — when there is no Packing column" checked={layout.show_line_note} onChange={v => set('show_line_note', v)} />
           <Toggle label="Product description" hint="The long paragraph in the panel" checked={layout.show_description} onChange={v => set('show_description', v)} />
           <Toggle label="TOTAL row across the table" hint="Sums quantity and amount when there is more than one line" checked={layout.show_quantity_total} onChange={v => set('show_quantity_total', v)} />
           <Toggle label="Offer manufacturer and origin" hint="Pre-ticks the origin block for this customer" checked={layout.origin} onChange={v => set('origin', v)} />

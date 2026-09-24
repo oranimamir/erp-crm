@@ -27,8 +27,8 @@ export type DetailField =
 export type TotalField = 'subtotal' | 'freight' | 'insurance' | 'vat' | 'total';
 
 export type ColumnKey =
-  | 'line' | 'reference' | 'commercial_name' | 'packaging'
-  | 'quantity' | 'unit_price' | 'amount';
+  | 'line' | 'reference' | 'commercial_name' | 'packaging' | 'packing_note'
+  | 'hs_code' | 'lot' | 'quantity' | 'unit_price' | 'amount';
 
 export interface LayoutRow<F extends string> { label: string; field: F }
 export interface LayoutColumn { key: ColumnKey; label: string; width: number }
@@ -64,10 +64,15 @@ export interface InvoiceLayout {
    * first page; the invoices all list them separately.
    */
   bank_inline: boolean;
+  /**
+   * 2 = the HS code, lot and packing columns exist. Layouts saved before then
+   * get those columns added once; after that, removing one sticks.
+   */
+  columns_version: number;
 }
 
 /** docx gridCol twips / 20 -> points (766, 1744, 2430, 1440, 1440, 1620, 1350). */
-export const DEFAULT_COLUMNS: LayoutColumn[] = [
+export const ORIGINAL_COLUMNS: LayoutColumn[] = [
   { key: 'line', label: 'Line', width: 38.3 },
   { key: 'reference', label: 'Reference', width: 87.2 },
   { key: 'commercial_name', label: 'Commercial name', width: 121.5 },
@@ -76,6 +81,38 @@ export const DEFAULT_COLUMNS: LayoutColumn[] = [
   { key: 'unit_price', label: 'Unit price', width: 81 },
   { key: 'amount', label: 'Amount', width: 67.5 },
 ];
+
+/** The per-line details every invoice lists in their own columns. */
+const DETAIL_COLUMNS: LayoutColumn[] = [
+  { key: 'packing_note', label: 'Packing', width: 60 },
+  { key: 'hs_code', label: 'HS code', width: 52 },
+  { key: 'lot', label: 'Lot', width: 58 },
+];
+
+/** Ten columns on an A4 width — narrower than the docx seven, and set smaller. */
+export const DEFAULT_COLUMNS: LayoutColumn[] = [
+  { key: 'line', label: 'Line', width: 30 },
+  { key: 'reference', label: 'Reference', width: 54 },
+  { key: 'commercial_name', label: 'Commercial name', width: 80 },
+  { key: 'packaging', label: 'Packaging', width: 58 },
+  ...DETAIL_COLUMNS,
+  { key: 'quantity', label: 'Quantity', width: 50 },
+  { key: 'unit_price', label: 'Unit price', width: 56 },
+  { key: 'amount', label: 'Amount', width: 58 },
+];
+
+/**
+ * Adds the packaging, packing, HS code and lot columns to a layout saved before
+ * they existed: after the product name, keeping whatever else it had.
+ */
+function withDetailColumns(cols: LayoutColumn[]): LayoutColumn[] {
+  const wanted = [DEFAULT_COLUMNS.find(c => c.key === 'packaging')!, ...DETAIL_COLUMNS];
+  const missing = wanted.filter(w => !cols.some(c => c.key === w.key));
+  if (!missing.length) return cols;
+  const anchor = Math.max(cols.findIndex(c => c.key === 'packaging'), cols.findIndex(c => c.key === 'commercial_name'));
+  const at = anchor >= 0 ? anchor + 1 : cols.length;
+  return [...cols.slice(0, at), ...missing, ...cols.slice(at)];
+}
 
 export const DEFAULT_LAYOUT: InvoiceLayout = {
   title: 'Commercial Invoice',
@@ -111,6 +148,7 @@ export const DEFAULT_LAYOUT: InvoiceLayout = {
   terms_heading: 'Terms & Conditions',
   bank_heading: 'Bank Transfer',
   bank_inline: false,
+  columns_version: 2,
 };
 
 const META_FIELDS: MetaField[] = [
@@ -123,7 +161,8 @@ const DETAIL_FIELDS: DetailField[] = [
 ];
 const TOTAL_FIELDS: TotalField[] = ['subtotal', 'freight', 'insurance', 'vat', 'total'];
 const COLUMN_KEYS: ColumnKey[] = [
-  'line', 'reference', 'commercial_name', 'packaging', 'quantity', 'unit_price', 'amount',
+  'line', 'reference', 'commercial_name', 'packaging', 'packing_note', 'hs_code', 'lot',
+  'quantity', 'unit_price', 'amount',
 ];
 
 /** Friendly names for the layout editor - kept here so both ends agree. */
@@ -136,6 +175,7 @@ export const FIELD_LABELS: Record<string, string> = {
   delivery_contact: 'Delivery contact', delivery_date_text: 'Delivery date',
   payment_terms: 'Payment terms', incoterm: 'Incoterm and destination', remarks: 'Remarks',
   subtotal: 'Subtotal', freight: 'Freight', insurance: 'Insurance', vat: 'VAT', total: 'Total',
+  packing_note: 'Packing', hs_code: 'HS code', lot: 'Lot',
 };
 
 function str(value: unknown, fallback: string): string {
@@ -164,7 +204,7 @@ function columns(value: unknown, fallback: LayoutColumn[]): LayoutColumn[] {
     if (!col || !COLUMN_KEYS.includes(col.key) || seen.has(col.key)) continue;
     seen.add(col.key);
     const width = Number(col.width);
-    const preset = DEFAULT_COLUMNS.find(c => c.key === col.key)!;
+    const preset = [...DEFAULT_COLUMNS, ...ORIGINAL_COLUMNS].find(c => c.key === col.key)!;
     kept.push({
       key: col.key,
       label: String(col.label ?? preset.label),
@@ -193,7 +233,9 @@ export function normalizeLayout(raw: unknown): InvoiceLayout {
       tax: str(labels.tax, d.labels.tax),
       eori: str(labels.eori, d.labels.eori),
     },
-    columns: columns(l.columns, d.columns),
+    columns: Number(l.columns_version) >= 2
+      ? columns(l.columns, d.columns)
+      : withDetailColumns(columns(l.columns, d.columns)),
     hs_code: ['line', 'panel', 'off'].includes(l.hs_code) ? l.hs_code : d.hs_code,
     show_lot: bool(l.show_lot, d.show_lot),
     show_line_note: bool(l.show_line_note, d.show_line_note),
@@ -205,5 +247,6 @@ export function normalizeLayout(raw: unknown): InvoiceLayout {
     terms_heading: str(l.terms_heading, d.terms_heading),
     bank_heading: str(l.bank_heading, d.bank_heading),
     bank_inline: bool(l.bank_inline, d.bank_inline),
+    columns_version: 2,
   };
 }

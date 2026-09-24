@@ -10,7 +10,7 @@
  * Keys are matched against the customer name the same way the profile seeds
  * are, so a customer not in this list simply gets DEFAULT_LAYOUT.
  */
-import { DEFAULT_LAYOUT, type InvoiceLayout } from './invoiceLayout.js';
+import { ORIGINAL_COLUMNS, type InvoiceLayout } from './invoiceLayout.js';
 
 export interface LayoutSeed {
   /** LIKE fragment against customers.name. */
@@ -199,7 +199,7 @@ export const LAYOUT_SEEDS: LayoutSeed[] = [
       ],
       labels: { to: 'Client :', contact: 'Contact Person :', address: 'Billing address :', tax: 'Tax Id :', eori: 'EORI# :' },
       columns: [
-        ...DEFAULT_LAYOUT.columns.slice(0, 5),
+        ...ORIGINAL_COLUMNS.slice(0, 5),
         { key: 'unit_price', label: 'Price/kg', width: 81 },
         { key: 'amount', label: 'Total', width: 67.5 },
       ],
@@ -230,7 +230,7 @@ export const LAYOUT_SEEDS: LayoutSeed[] = [
       ],
       labels: { to: 'Client :', contact: 'Contact Person :', address: 'Billing address :', tax: 'Tax Id :', eori: 'EORI# :' },
       columns: [
-        ...DEFAULT_LAYOUT.columns.slice(0, 4),
+        ...ORIGINAL_COLUMNS.slice(0, 4),
         { key: 'quantity', label: 'Quantity lb', width: 72 },
         { key: 'unit_price', label: 'Price/lb USD', width: 81 },
         { key: 'amount', label: 'Total USD', width: 67.5 },

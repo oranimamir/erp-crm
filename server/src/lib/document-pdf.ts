@@ -18,6 +18,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import {
   DEFAULT_LAYOUT,
+  ORIGINAL_COLUMNS,
   normalizeLayout,
   type InvoiceLayout,
   type LayoutColumn,
@@ -124,6 +125,8 @@ export interface DocumentData {
   payment_terms?: string | null;
   incoterm?: string | null;
   remarks?: string | null;
+  /** Free text printed under the table. */
+  notes?: string | null;
   // Totals
   freight?: number | null;
   vat?: number | null;
@@ -153,6 +156,8 @@ const OC_LAYOUT: InvoiceLayout = {
     { label: 'Client:', field: 'client_code' },
   ],
   labels: { ...DEFAULT_LAYOUT.labels, to: '', contact: '', address: '', tax: 'Tax Id :' },
+  // The confirmation keeps the docx master's seven columns
+  columns: ORIGINAL_COLUMNS,
   hs_code: 'panel',
   // One account detail per line, as on the invoices
   bank_inline: false,
@@ -273,38 +278,48 @@ function cellValues(item: DocLine, index: number, layout: InvoiceLayout): Record
   // The masters stack the lot, the HS code and any note under the product name.
   // Where the HS code goes, the note follows — customers whose HS code sits in
   // the panel (La Mesta, Distribuidora) have their packing note there too.
+  // A detail with its own column is printed there instead.
+  const has = (key: string) => layout.columns.some(c => c.key === key);
   const inRow = layout.hs_code === 'line';
   const nameParts = [item.commercial_name || ''];
-  if (inRow && item.hs_code) nameParts.push(`HS code: ${item.hs_code}`);
-  if (layout.show_lot && item.lot) nameParts.push(`Lot : ${item.lot}`);
-  if (inRow && layout.show_line_note && item.note) nameParts.push(item.note);
+  if (inRow && item.hs_code && !has('hs_code')) nameParts.push(`HS code: ${item.hs_code}`);
+  if (layout.show_lot && item.lot && !has('lot')) nameParts.push(`Lot : ${item.lot}`);
+  if (inRow && layout.show_line_note && item.note && !has('packing_note')) nameParts.push(item.note);
 
   return {
     line: String(item.line ?? index + 1),
     reference: item.reference || '',
     commercial_name: nameParts.filter(Boolean).join('\n'),
     packaging: item.packaging || '',
+    packing_note: item.note || '',
+    hs_code: item.hs_code || '',
+    lot: item.lot || '',
     quantity: qty ? `${fmt(qty)}${unit ? ` ${unit}` : ''}` : '',
     unit_price: price ? `${fmt(price)} ${currency}${unit ? `/${unit}` : ''}` : '',
     amount: qty && price ? `${fmt(qty * price)} ${currency}` : '',
   };
 }
 
-/** Columns whose value is one figure and reads badly broken across lines. */
-const NUMERIC_COLUMNS = new Set(['line', 'quantity', 'unit_price', 'amount']);
+/** Columns whose value is one figure or code and reads badly broken across lines. */
+const NUMERIC_COLUMNS = new Set(['line', 'quantity', 'unit_price', 'amount', 'hs_code', 'lot']);
 
 /**
  * The size a figure fits its column at. "16,320 USD" is 60pt at 11pt against a
  * 57pt cell, and wrapping "USD" onto its own line looks like a mistake — one
  * step down keeps it whole. Text columns still wrap normally.
  */
-function fittedSize(doc: any, key: string, text: string, width: number): number {
-  if (!NUMERIC_COLUMNS.has(key) || !text || text.includes('\n')) return BODY;
-  for (const size of [BODY, 10, 9]) {
+function fittedSize(doc: any, key: string, text: string, width: number, base = BODY): number {
+  if (!NUMERIC_COLUMNS.has(key) || !text || text.includes('\n')) return base;
+  for (const size of [base, base - 1, base - 2]) {
     doc.font('Helvetica').fontSize(size);
     if (doc.widthOfString(text) <= width) return size;
   }
-  return 9;
+  return base - 2;
+}
+
+/** Wide tables (the invoice's ten columns) are set a size smaller to fit A4. */
+function tableSizes(cols: LayoutColumn[]): { cell: number; head: number } {
+  return cols.length > 7 ? { cell: 9, head: 8.5 } : { cell: BODY, head: 9.5 };
 }
 
 /** Renders the document and resolves with the finished PDF bytes. */
@@ -323,6 +338,7 @@ export async function buildDocumentPdf(kind: DocumentKind, data: DocumentData): 
     : drawStackedTitleAndMeta(doc, layout, data, y);
   y = drawTable(doc, layout, data, y + 10);
   y = drawDetailPanel(doc, layout, data, y);
+  y = drawNotes(doc, data, y);
   y = drawOriginBlock(doc, data, y);
   drawFooterBlocks(doc, layout, data, y + 16);
   stampPageNumbers(doc);
@@ -503,14 +519,27 @@ function drawTable(doc: any, layout: InvoiceLayout, data: DocumentData, top: num
   const items = Array.isArray(data.items) ? data.items : [];
   const cols = fittedColumns(layout);
   const PAD = 5;
-  const HEADER_H = 24;
+  const size = tableSizes(cols);
+
+  // A heading may wrap between words, never inside one — a word too wide for
+  // its column sets that heading smaller instead
+  const headSizes = cols.map(c => {
+    const inner = c.width - PAD * 2;
+    let s = size.head;
+    doc.font('Helvetica-Bold');
+    while (s > 6.5 && c.label.split(/\s+/).some(w => doc.fontSize(s).widthOfString(w) > inner)) s -= 0.5;
+    return s;
+  });
+  const headText = Math.max(...cols.map((c, i) =>
+    doc.font('Helvetica-Bold').fontSize(headSizes[i]).heightOfString(c.label, { width: c.width - PAD * 2 })));
+  const HEADER_H = Math.max(24, headText + 14);
 
   top = ensureRoom(doc, top, HEADER_H + 24);
   doc.rect(L, top, W, HEADER_H).fill(GREEN_HEAD);
   let x = L;
-  for (const col of cols) {
-    doc.font('Helvetica-Bold').fontSize(9.5).fillColor('#FFFFFF')
-      .text(col.label, x + PAD, top + 7, { width: col.width - PAD * 2, lineBreak: false });
+  for (const [i, col] of cols.entries()) {
+    doc.font('Helvetica-Bold').fontSize(headSizes[i]).fillColor('#FFFFFF')
+      .text(col.label, x + PAD, top + 7, { width: col.width - PAD * 2 });
     x += col.width;
   }
 
@@ -522,9 +551,9 @@ function drawTable(doc: any, layout: InvoiceLayout, data: DocumentData, top: num
     let contentH = 0;
     for (const col of cols) {
       const inner = col.width - PAD * 2;
-      const size = fittedSize(doc, col.key, values[col.key] || '', inner);
-      sizes[col.key] = size;
-      doc.font('Helvetica').fontSize(size);
+      const fitted = fittedSize(doc, col.key, values[col.key] || '', inner, size.cell);
+      sizes[col.key] = fitted;
+      doc.font('Helvetica').fontSize(fitted);
       contentH = Math.max(contentH, doc.heightOfString(values[col.key] || ' ', { width: inner }));
     }
     const rowH = Math.max(24, contentH + 10);
@@ -595,8 +624,9 @@ function drawDetailPanel(doc: any, layout: InvoiceLayout, data: DocumentData, to
   const lh = BODY * 1.32;
   const totals = computeTotals(data);
 
-  const showHs = layout.hs_code === 'panel';
-  const showNote = showHs && layout.show_line_note;
+  const has = (key: string) => layout.columns.some(c => c.key === key);
+  const showHs = layout.hs_code === 'panel' && !has('hs_code');
+  const showNote = layout.hs_code === 'panel' && layout.show_line_note && !has('packing_note');
   const detailed = items.filter(i =>
     (showNote && i.note) || (showHs && i.hs_code) || (layout.show_description && i.description));
 
@@ -671,6 +701,20 @@ function drawDetailPanel(doc: any, layout: InvoiceLayout, data: DocumentData, to
   }
 
   return top + height;
+}
+
+// ── Notes under the table ─────────────────────────────────────────────────
+function drawNotes(doc: any, data: DocumentData, top: number): number {
+  const notes = String(data.notes || '').trim();
+  if (!notes) return top;
+
+  doc.font('Helvetica').fontSize(BODY);
+  const lh = BODY * 1.32;
+  let y = ensureRoom(doc, top + 10, lh + doc.heightOfString(notes, { width: W }));
+  doc.font('Helvetica-Bold').fontSize(BODY).fillColor(BLACK).text('Notes', L, y, { width: W, lineBreak: false });
+  y += lh;
+  doc.font('Helvetica').fontSize(BODY).fillColor(BLACK).text(notes, L, y, { width: W });
+  return y + doc.heightOfString(notes, { width: W });
 }
 
 // ── Manufacturer / country of origin (invoice, opt-in) ────────────────────

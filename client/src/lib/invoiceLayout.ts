@@ -15,8 +15,8 @@ export type DetailField =
 export type TotalField = 'subtotal' | 'freight' | 'insurance' | 'vat' | 'total';
 
 export type ColumnKey =
-  | 'line' | 'reference' | 'commercial_name' | 'packaging'
-  | 'quantity' | 'unit_price' | 'amount';
+  | 'line' | 'reference' | 'commercial_name' | 'packaging' | 'packing_note'
+  | 'hs_code' | 'lot' | 'quantity' | 'unit_price' | 'amount';
 
 export interface LayoutRow<F extends string> { label: string; field: F }
 export interface LayoutColumn { key: ColumnKey; label: string; width: number }
@@ -38,6 +38,8 @@ export interface InvoiceLayout {
   bank_heading: string;
   /** Run IBAN, BIC and the bank address together on one line. */
   bank_inline: boolean;
+  /** Set by the server once the HS code, lot and packing columns exist. */
+  columns_version?: number;
 }
 
 export const META_FIELDS: MetaField[] = [
@@ -53,7 +55,8 @@ export const DETAIL_FIELDS: DetailField[] = [
 export const TOTAL_FIELDS: TotalField[] = ['subtotal', 'freight', 'insurance', 'vat', 'total'];
 
 export const COLUMN_KEYS: ColumnKey[] = [
-  'line', 'reference', 'commercial_name', 'packaging', 'quantity', 'unit_price', 'amount',
+  'line', 'reference', 'commercial_name', 'packaging', 'packing_note', 'hs_code', 'lot',
+  'quantity', 'unit_price', 'amount',
 ];
 
 export const FIELD_LABELS: Record<string, string> = {
@@ -67,16 +70,20 @@ export const FIELD_LABELS: Record<string, string> = {
   subtotal: 'Subtotal', freight: 'Freight', insurance: 'Insurance', vat: 'VAT', total: 'Total',
   line: 'Line', reference: 'Reference', commercial_name: 'Commercial name',
   packaging: 'Packaging', quantity: 'Quantity', unit_price: 'Unit price', amount: 'Amount',
+  packing_note: 'Packing', hs_code: 'HS code', lot: 'Lot',
 };
 
 export const DEFAULT_COLUMNS: LayoutColumn[] = [
-  { key: 'line', label: 'Line', width: 38.3 },
-  { key: 'reference', label: 'Reference', width: 87.2 },
-  { key: 'commercial_name', label: 'Commercial name', width: 121.5 },
-  { key: 'packaging', label: 'Packaging', width: 72 },
-  { key: 'quantity', label: 'Quantity', width: 72 },
-  { key: 'unit_price', label: 'Unit price', width: 81 },
-  { key: 'amount', label: 'Amount', width: 67.5 },
+  { key: 'line', label: 'Line', width: 30 },
+  { key: 'reference', label: 'Reference', width: 54 },
+  { key: 'commercial_name', label: 'Commercial name', width: 80 },
+  { key: 'packaging', label: 'Packaging', width: 58 },
+  { key: 'packing_note', label: 'Packing', width: 60 },
+  { key: 'hs_code', label: 'HS code', width: 52 },
+  { key: 'lot', label: 'Lot', width: 58 },
+  { key: 'quantity', label: 'Quantity', width: 50 },
+  { key: 'unit_price', label: 'Unit price', width: 56 },
+  { key: 'amount', label: 'Amount', width: 58 },
 ];
 
 export const DEFAULT_LAYOUT: InvoiceLayout = {
@@ -113,6 +120,7 @@ export const DEFAULT_LAYOUT: InvoiceLayout = {
   terms_heading: 'Terms & Conditions',
   bank_heading: 'Bank Transfer',
   bank_inline: false,
+  columns_version: 2,
 };
 
 /** Fills in anything a saved layout is missing, so the editor never sees undefined. */
