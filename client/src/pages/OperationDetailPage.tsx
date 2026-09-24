@@ -67,6 +67,7 @@ interface WireTransfer {
 interface Operation {
   id: number;
   operation_number: string;
+  category?: 'blending' | 'trading' | null;
   customer_id?: number | null;
   supplier_id?: number | null;
   order_id: number | null;
@@ -195,6 +196,7 @@ export default function OperationDetailPage() {
 
   // Order confirmation issued for the linked order, if any
   const [orderConfirmation, setOrderConfirmation] = useState<{ id: number; file_name: string | null } | null>(null);
+  const [purchaseOrder, setPurchaseOrder] = useState<{ id: number; file_name: string | null } | null>(null);
   const [invoiceDoc, setInvoiceDoc] = useState<{ id: number; file_name: string | null } | null>(null);
 
   // Link Order modal
@@ -285,10 +287,13 @@ export default function OperationDetailPage() {
 
   // The confirmation lives on the order, so re-check whenever the link changes
   useEffect(() => {
-    if (!operation?.order_id) { setOrderConfirmation(null); return; }
+    if (!operation?.order_id) { setOrderConfirmation(null); setPurchaseOrder(null); return; }
     api.get(`/order-confirmations/by-order/${operation.order_id}`)
       .then(({ data }) => setOrderConfirmation(data?.[0] || null))
       .catch(() => setOrderConfirmation(null));
+    api.get(`/purchase-orders/by-order/${operation.order_id}`)
+      .then(({ data }) => setPurchaseOrder(data?.[0] || null))
+      .catch(() => setPurchaseOrder(null));
     api.get(`/invoice-documents/by-order/${operation.order_id}`)
       .then(({ data }) => setInvoiceDoc(data?.[0] || null))
       .catch(() => setInvoiceDoc(null));
@@ -472,6 +477,16 @@ export default function OperationDetailPage() {
     }
   }
 
+  async function handleCategoryChange(category: string) {
+    if (category !== 'blending' && category !== 'trading') return;
+    try {
+      await api.put(`/operations/${id}`, { category });
+      setOperation(prev => prev ? { ...prev, category } : prev);
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to update category', 'error');
+    }
+  }
+
   async function handleConfirmShip() {
     if (!shipDate || !dueDate) return;
     setSavingShip(true);
@@ -633,6 +648,20 @@ export default function OperationDetailPage() {
                 <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
               ))}
             </select>
+            <select
+              value={operation.category || ''}
+              onChange={e => handleCategoryChange(e.target.value)}
+              className={`text-xs font-medium px-2 py-1 rounded-full border-0 focus:ring-2 focus:ring-primary-500 cursor-pointer ${
+                operation.category === 'trading' ? 'bg-sky-100 text-sky-700'
+                : operation.category === 'blending' ? 'bg-violet-100 text-violet-700'
+                : 'bg-gray-100 text-gray-500'
+              }`}
+              title="Operation category"
+            >
+              {!operation.category && <option value="">No category</option>}
+              <option value="blending">Blending</option>
+              <option value="trading">Trading</option>
+            </select>
             {(operation.status === 'shipped' || operation.status === 'in clearance' || operation.status === 'delivered') && (
               <button
                 onClick={() => {
@@ -695,6 +724,19 @@ export default function OperationDetailPage() {
               >
                 <FileCheck2 size={13} /> Order Confirmation{orderConfirmation ? ' ✓' : ''}
               </button>
+              {operation.category === 'trading' && (
+                <button
+                  onClick={() => navigate(
+                    purchaseOrder
+                      ? `/purchase-orders/${purchaseOrder.id}`
+                      : `/purchase-orders/new?order_id=${operation.order_id}&operation_id=${operation.id}`
+                  )}
+                  className="flex items-center gap-1 text-xs sm:text-sm text-primary-600 hover:text-primary-700 border border-primary-200 bg-primary-50 rounded-lg px-2 py-1"
+                  title={purchaseOrder ? `Edit ${purchaseOrder.file_name || 'the purchase order'}` : 'Generate a supplier purchase order from this order'}
+                >
+                  <ShoppingCart size={13} /> Supplier PO{purchaseOrder ? ' ✓' : ''}
+                </button>
+              )}
               <button
                 onClick={() => navigate(
                   invoiceDoc

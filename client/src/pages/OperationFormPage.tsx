@@ -63,6 +63,7 @@ export default function OperationFormPage() {
   const [form, setForm] = useState({
     operation_number: '',
     status: 'pre-ordered',
+    category: '' as '' | 'blending' | 'trading',
     partyType: 'none',
     customer_id: '',
     supplier_id: '',
@@ -158,6 +159,10 @@ export default function OperationFormPage() {
       addToast('Operation number is required', 'error');
       return;
     }
+    if (!form.category) {
+      addToast('Choose whether this is a blending or a trading operation', 'error');
+      return;
+    }
 
     const partyId = form.partyType === 'customer' ? form.customer_id
       : form.partyType === 'supplier' ? form.supplier_id : '';
@@ -175,6 +180,7 @@ export default function OperationFormPage() {
       const payload: any = {
         operation_number: form.operation_number.trim(),
         status: form.status,
+        category: form.category,
         notes: form.notes || null,
       };
       if (form.partyType === 'customer' && form.customer_id) payload.customer_id = Number(form.customer_id);
@@ -388,6 +394,29 @@ export default function OperationFormPage() {
               onChange={e => set('status', e.target.value)}
               options={statusOptions}
             />
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-gray-700">Category *</label>
+            <div className="flex gap-2">
+              {(['blending', 'trading'] as const).map(c => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => set('category', c)}
+                  className={`px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                    form.category === c
+                      ? 'border-primary-500 bg-primary-50 text-primary-700'
+                      : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  {c === 'blending' ? 'Blending' : 'Trading'}
+                </button>
+              ))}
+            </div>
+            {form.category === 'trading' && (
+              <p className="text-xs text-gray-500">Trading operations can generate a supplier purchase order from the order.</p>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

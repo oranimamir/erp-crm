@@ -30,5 +30,9 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - `DELETE /invoices/:id/wire-transfers/:transferId` — reverts invoice to `sent`
 - No approval workflow; no confirmation modals (inline drag-drop IS the confirm)
 
+## Operations
+- `operations.category`: 'blending' | 'trading' (required for new operations)
+- Trading ops: supplier Purchase Order via `/api/purchase-orders` — Order Confirmation template, entity from operation number, filed as `<op#>PO.pdf`, prices entered by hand
+
 ## Deployment
 Railway, auto-deploys from `main` on push. Commit and push immediately after every change.

@@ -40,6 +40,9 @@ interface Operation {
   invoice_currency?: string;
   wire_transfer_count: number;
   order_total_eur: number;
+  order_total?: number;
+  order_currency?: string;
+  category?: 'blending' | 'trading' | null;
   invoice_date?: string;
   wire_transfer_date?: string;
   etd?: string;
@@ -90,7 +93,7 @@ const STATUS_COLORS: Record<string, string> = {
   completed:       'bg-emerald-100 text-emerald-800',
 };
 
-type SortField = 'order_date' | 'invoice_date' | 'wire_transfer_date' | 'status' | 'name';
+type SortField = 'order_date' | 'invoice_date' | 'wire_transfer_date' | 'status' | 'name' | 'operation_number';
 type DateFilterField = 'order_date' | 'invoice_date' | 'wire_transfer_date';
 type Tab = 'active' | 'completed';
 
@@ -796,7 +799,14 @@ export default function OperationsPage() {
           <table className="w-full text-xs sm:text-sm">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                <th className="text-left px-4 py-3 font-medium text-gray-600">Operation #</th>
+                <th
+                  className={thSortable}
+                  onClick={() => handleSort('operation_number')}
+                >
+                  <span className="flex items-center gap-1">
+                    Operation # <SortIcon field="operation_number" />
+                  </span>
+                </th>
                 <th
                   className={thSortable}
                   onClick={() => handleSort('name')}
@@ -841,6 +851,11 @@ export default function OperationsPage() {
                 >
                   <td className="px-4 py-3">
                     <span className="font-semibold text-primary-700">{op.operation_number}</span>
+                    {op.category && (
+                      <span className={`block w-fit mt-0.5 px-1.5 rounded text-[10px] font-medium uppercase tracking-wide ${op.category === 'trading' ? 'bg-sky-100 text-sky-700' : 'bg-violet-100 text-violet-700'}`}>
+                        {op.category}
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-gray-700">
                     {op.customer_id && op.customer_name ? (
@@ -978,8 +993,10 @@ export default function OperationsPage() {
                   <td className="px-4 py-3 text-right">
                     {showRaw
                       ? (op.invoice_count > 0 && op.invoice_amount_raw > 0
-                          ? <span className="font-medium text-gray-900">{op.invoice_currency || ''} {Number(op.invoice_amount_raw).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                          : <span className="text-gray-400">—</span>)
+                          ? <span className="font-medium text-gray-900">{op.invoice_currency || op.order_currency || 'USD'} {Number(op.invoice_amount_raw).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          : (op.order_total ?? 0) > 0
+                            ? <span className="font-medium text-amber-600 italic" title="Based on order (no invoice)">{op.order_currency || 'USD'} {Number(op.order_total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            : <span className="text-gray-400">—</span>)
                       : (op.invoice_count > 0 && op.invoice_total > 0
                           ? <span className="font-medium text-gray-900">{Number(op.invoice_total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                           : op.order_total_eur > 0

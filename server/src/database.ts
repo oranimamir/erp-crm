@@ -1498,6 +1498,43 @@ export async function initializeDatabase() {
     db.prepare(`INSERT OR IGNORE INTO document_categories (name) VALUES ('Commercial Invoice')`).run();
   } catch { /* ignore */ }
 
+  // ── Operation category ──────────────────────────────────────────────────
+  // 'blending' or 'trading'; NULL for operations created before the choice existed.
+  try { db.exec(`ALTER TABLE operations ADD COLUMN category TEXT`); } catch (_) {}
+
+  // ── Supplier purchase orders ────────────────────────────────────────────
+  // Trading operations buy the customer's order from a supplier. Same shape and
+  // PDF builder as order_confirmations.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS purchase_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      po_number TEXT NOT NULL UNIQUE,
+      order_id INTEGER,
+      operation_id INTEGER,
+      supplier_id INTEGER,
+      data TEXT NOT NULL,
+      file_path TEXT,
+      file_name TEXT,
+      document_id INTEGER,
+      sent_to TEXT,
+      sent_at TEXT,
+      created_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (order_id)     REFERENCES orders(id)               ON DELETE CASCADE,
+      FOREIGN KEY (operation_id) REFERENCES operations(id)           ON DELETE SET NULL,
+      FOREIGN KEY (supplier_id)  REFERENCES suppliers(id)            ON DELETE SET NULL,
+      FOREIGN KEY (document_id)  REFERENCES operation_documents(id)  ON DELETE SET NULL,
+      FOREIGN KEY (created_by)   REFERENCES users(id)                ON DELETE SET NULL
+    )
+  `);
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_po_order ON purchase_orders(order_id)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_po_operation ON purchase_orders(operation_id)`); } catch (_) {}
+
+  try {
+    db.prepare(`INSERT OR IGNORE INTO document_categories (name) VALUES ('Purchase Order')`).run();
+  } catch { /* ignore */ }
+
   // ── Issuing entities ────────────────────────────────────────────────────
   // The entity is derived from the operation number (SOBE… / SONL…) and decides
   // the address, VAT/KVK and bank block printed on every document. Supersedes

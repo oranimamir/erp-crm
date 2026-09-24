@@ -51,7 +51,8 @@ router.get('/', async (req: Request, res: Response) => {
   const sortByMap: Record<string, string> = {
     order_date:         'COALESCE(o.order_date, op.created_at)',
     created_at:         'op.created_at',
-    status:             'op.status',
+    operation_number:   'op.operation_number',
+    status:            'op.status',
     name:               'COALESCE(c.name, s.name)',
     invoice_date:       'inv_dates.latest_invoice_date',
     wire_transfer_date: 'wt_dates.latest_wt_date',
@@ -466,11 +467,16 @@ router.get('/:id', (req: Request, res: Response) => {
 // ── Create operation ──────────────────────────────────────────────────────────
 
 const VALID_STATUSES = ['pre-ordered', 'ordered', 'shipped', 'in clearance', 'delivered', 'completed'];
+const VALID_CATEGORIES = ['blending', 'trading'];
 
 router.post('/', (req: Request, res: Response) => {
-  const { operation_number, order_id, customer_id, supplier_id, notes, status } = req.body;
+  const { operation_number, order_id, customer_id, supplier_id, notes, status, category } = req.body;
   if (!operation_number) {
     res.status(400).json({ error: 'operation_number is required' });
+    return;
+  }
+  if (!VALID_CATEGORIES.includes(category)) {
+    res.status(400).json({ error: 'Choose a category: blending or trading' });
     return;
   }
   if (status && !VALID_STATUSES.includes(status)) {
@@ -479,9 +485,9 @@ router.post('/', (req: Request, res: Response) => {
   }
   try {
     const result = db.prepare(`
-      INSERT INTO operations (operation_number, order_id, customer_id, supplier_id, notes, status)
-      VALUES (?, ?, ?, ?, ?, COALESCE(?, 'ordered'))
-    `).run(operation_number, order_id || null, customer_id || null, supplier_id || null, notes || null, status || null);
+      INSERT INTO operations (operation_number, order_id, customer_id, supplier_id, notes, status, category)
+      VALUES (?, ?, ?, ?, ?, COALESCE(?, 'ordered'), ?)
+    `).run(operation_number, order_id || null, customer_id || null, supplier_id || null, notes || null, status || null, category);
     const op = db.prepare('SELECT * FROM operations WHERE id = ?').get(result.lastInsertRowid);
     notifyAdmin({ action: 'created', entity: 'Operation', label: operation_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
     res.status(201).json(op);
@@ -626,10 +632,14 @@ router.put('/:id', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT * FROM operations WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Operation not found' }); return; }
 
-  const { operation_number, status, notes, order_id, customer_id, supplier_id } = req.body;
+  const { operation_number, status, notes, order_id, customer_id, supplier_id, category } = req.body;
+  if (category !== undefined && category !== null && !VALID_CATEGORIES.includes(category)) {
+    res.status(400).json({ error: 'Category must be blending or trading' });
+    return;
+  }
   try {
     db.prepare(`
-      UPDATE operations SET operation_number=?, status=?, notes=?, order_id=?, customer_id=?, supplier_id=?, updated_at=datetime('now') WHERE id=?
+      UPDATE operations SET operation_number=?, status=?, notes=?, order_id=?, customer_id=?, supplier_id=?, category=?, updated_at=datetime('now') WHERE id=?
     `).run(
       operation_number || existing.operation_number,
       status || existing.status,
@@ -637,6 +647,7 @@ router.put('/:id', (req: Request, res: Response) => {
       order_id !== undefined ? (order_id || null) : existing.order_id,
       customer_id !== undefined ? (customer_id || null) : existing.customer_id,
       supplier_id !== undefined ? (supplier_id || null) : existing.supplier_id,
+      category !== undefined ? (category || null) : existing.category,
       req.params.id
     );
     const op = db.prepare('SELECT * FROM operations WHERE id = ?').get(req.params.id);

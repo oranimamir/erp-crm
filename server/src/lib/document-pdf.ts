@@ -58,7 +58,7 @@ function ensureRoom(doc: any, y: number, needed: number): number {
   return PAGE_TOP;
 }
 
-export type DocumentKind = 'order_confirmation' | 'invoice';
+export type DocumentKind = 'order_confirmation' | 'invoice' | 'purchase_order';
 
 export interface DocLine {
   line?: number | null;
@@ -151,6 +151,18 @@ const OC_LAYOUT: InvoiceLayout = {
   bank_inline: true,
 };
 
+/** A supplier purchase order: the confirmation's shape, addressed to the supplier. */
+const PO_LAYOUT: InvoiceLayout = {
+  ...OC_LAYOUT,
+  title: 'Purchase Order',
+  meta: [
+    { label: 'Date:', field: 'doc_date' },
+    { label: 'Our ref:', field: 'our_ref' },
+    { label: 'Your ref:', field: 'sq_number' },
+    { label: 'Supplier:', field: 'client_code' },
+  ],
+};
+
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
@@ -205,7 +217,8 @@ export function computeTotals(data: DocumentData) {
 
 /** The layout in force: the customer's for an invoice, the fixed one for a confirmation. */
 function layoutFor(kind: DocumentKind, data: DocumentData): InvoiceLayout {
-  return kind === 'invoice' ? normalizeLayout(data.layout) : OC_LAYOUT;
+  if (kind === 'invoice') return normalizeLayout(data.layout);
+  return kind === 'purchase_order' ? PO_LAYOUT : OC_LAYOUT;
 }
 
 /** Column widths are editable, so rescale them to fill exactly the page width. */
@@ -325,6 +338,16 @@ export interface OrderConfirmationData extends Omit<DocumentData, 'doc_number' |
 export function buildOrderConfirmationPdf(data: OrderConfirmationData): Promise<Buffer> {
   const { oc_number, oc_date, ...rest } = data;
   return buildDocumentPdf('order_confirmation', { ...rest, doc_number: oc_number, doc_date: oc_date });
+}
+
+export interface PurchaseOrderData extends Omit<DocumentData, 'doc_number' | 'doc_date'> {
+  po_number?: string | null;
+  po_date?: string | null;
+}
+
+export function buildPurchaseOrderPdf(data: PurchaseOrderData): Promise<Buffer> {
+  const { po_number, po_date, ...rest } = data;
+  return buildDocumentPdf('purchase_order', { ...rest, doc_number: po_number, doc_date: po_date });
 }
 
 /** Bold label with a regular value beside it; returns the height consumed. */
