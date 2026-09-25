@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import api from '../lib/api';
 import { Columns2, Loader2, RefreshCw, X } from 'lucide-react';
 
@@ -71,11 +72,14 @@ export default function OrderCompareModal({ orderId, title, renderPreview, onClo
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // Just the pages: no thumbnail sidebar or toolbar in the browser's PDF viewer
+  const pdfOnly = (url: string) => `${url}#navpanes=0&toolbar=0&view=FitH`;
+
   const pane = 'flex-1 min-h-0 min-w-0 flex flex-col bg-white rounded-lg border border-gray-200 overflow-hidden';
   const head = 'px-3 py-2 border-b border-gray-100 flex items-center gap-2 text-sm font-medium text-gray-700';
 
-  return (
-    <div className="fixed inset-0 z-50 bg-black/70 p-2 sm:p-4 flex flex-col" onClick={onClose}>
+  return createPortal(
+    <div className="fixed inset-0 z-[100] bg-black/70 p-2 sm:p-4 flex flex-col" onClick={onClose}>
       <div className="flex items-center justify-between text-white mb-2" onClick={e => e.stopPropagation()}>
         <h2 className="font-semibold flex items-center gap-2"><Columns2 size={18} /> Order vs {title.toLowerCase()}</h2>
         <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/10" title="Close (Esc)"><X size={20} /></button>
@@ -93,7 +97,7 @@ export default function OrderCompareModal({ orderId, title, renderPreview, onClo
             ) : orderUrl && orderType.startsWith('image/') ? (
               <img src={orderUrl} alt="Customer order" className="max-w-full mx-auto" />
             ) : orderUrl ? (
-              <iframe src={orderUrl} title="Customer order" className="w-full h-full min-h-[60vh] bg-white" />
+              <iframe src={pdfOnly(orderUrl)} title="Customer order" className="w-full h-full min-h-[60vh] bg-white" />
             ) : order ? (
               <OrderLines order={order} />
             ) : (
@@ -116,12 +120,13 @@ export default function OrderCompareModal({ orderId, title, renderPreview, onClo
             ) : docError && !docUrl ? (
               <p className="p-6 text-sm text-red-600">The preview could not be rendered.</p>
             ) : docUrl ? (
-              <iframe src={docUrl} title={title} className="w-full h-full min-h-[60vh] bg-white" />
+              <iframe src={pdfOnly(docUrl)} title={title} className="w-full h-full min-h-[60vh] bg-white" />
             ) : null}
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
