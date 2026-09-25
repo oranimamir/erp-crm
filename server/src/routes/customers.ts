@@ -158,6 +158,28 @@ function parseProfile(row: any, customerName?: string | null) {
   return profile;
 }
 
+/**
+ * The customer record carries the default entity's identity, so lists, exports
+ * and the edit form agree with the Details tab. Only non-empty values are
+ * copied — a blank field in the entity never wipes the record.
+ */
+function mirrorDefaultProfile(customerId: number) {
+  const row = db.prepare(
+    'SELECT data FROM customer_document_profiles WHERE customer_id = ? ORDER BY is_default DESC, id LIMIT 1'
+  ).get(customerId) as any;
+  if (!row) return;
+  let shared: any = {};
+  try { shared = JSON.parse(row.data).shared || {}; } catch { return; }
+  const map: Array<[string, string]> = [
+    ['company', shared.legal_name], ['address', shared.billing_address], ['vat_number', shared.tax_id],
+    ['email', shared.contact_email], ['phone', shared.contact_phone], ['contact_person', shared.contact_person],
+  ];
+  const set = map.filter(([, v]) => typeof v === 'string' && v.trim());
+  if (!set.length) return;
+  db.prepare(`UPDATE customers SET ${set.map(([k]) => `${k} = ?`).join(', ')}, updated_at = datetime('now') WHERE id = ?`)
+    .run(...set.map(([, v]) => v.trim()), customerId);
+}
+
 router.get('/:id/profiles', (req: Request, res: Response) => {
   const customer = db.prepare('SELECT name FROM customers WHERE id = ?').get(req.params.id) as any;
   const rows = db.prepare(
@@ -178,6 +200,7 @@ router.post('/:id/profiles', (req: Request, res: Response) => {
     'INSERT INTO customer_document_profiles (customer_id, name, is_default, data) VALUES (?, ?, ?, ?)'
   ).run(customer.id, name, isFirst ? 1 : 0, JSON.stringify(data));
 
+  mirrorDefaultProfile(customer.id);
   const row = db.prepare('SELECT * FROM customer_document_profiles WHERE id = ?').get(result.lastInsertRowid);
   notifyAdmin({ action: 'created', entity: 'Customer Profile', label: `${customer.name} — ${name}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.status(201).json(parseProfile(row, customer.name));
@@ -206,6 +229,7 @@ router.put('/:id/profiles/:profileId', (req: Request, res: Response) => {
     WHERE id = ?
   `).run(name, JSON.stringify(data), req.body?.is_default ? 1 : existing.is_default, existing.id);
 
+  mirrorDefaultProfile(existing.customer_id);
   const row = db.prepare('SELECT * FROM customer_document_profiles WHERE id = ?').get(existing.id);
   const owner = db.prepare('SELECT name FROM customers WHERE id = ?').get(existing.customer_id) as any;
   res.json(parseProfile(row, owner?.name));
@@ -223,6 +247,7 @@ router.delete('/:id/profiles/:profileId', (req: Request, res: Response) => {
   if (existing.is_default) {
     const next = db.prepare('SELECT id FROM customer_document_profiles WHERE customer_id = ? ORDER BY id LIMIT 1').get(existing.customer_id) as any;
     if (next) db.prepare('UPDATE customer_document_profiles SET is_default = 1 WHERE id = ?').run(next.id);
+    mirrorDefaultProfile(existing.customer_id);
   }
 
   res.json({ message: 'Profile deleted' });

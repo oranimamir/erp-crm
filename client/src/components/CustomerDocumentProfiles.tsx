@@ -200,166 +200,148 @@ export function useCustomerProfiles(customerId: string | number) {
 
 export type ProfileState = ReturnType<typeof useCustomerProfiles>;
 
-// ── One document screen ───────────────────────────────────────────────────
+// ── The Details tab ───────────────────────────────────────────────────────
 
-const TITLES: Record<DocType, string> = {
-  order_confirmation: 'Order Confirmation',
-  invoice: 'Commercial Invoice',
-  packing_list: 'Packing List',
-};
+/** A collapsible block of the Details tab. */
+function Fold({ title, hint, open, onToggle, children }: {
+  title: string; hint?: string; open: boolean; onToggle: () => void; children: React.ReactNode;
+}) {
+  return (
+    <Card>
+      <button type="button" onClick={onToggle}
+        className="w-full px-5 py-3.5 flex items-center gap-2 text-left hover:bg-gray-50">
+        {open ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
+        <span className="font-semibold text-gray-800 text-sm">{title}</span>
+        {hint && <span className="text-xs text-gray-400 truncate">· {hint}</span>}
+      </button>
+      {open && <div className="px-5 pb-5 pt-1 border-t border-gray-100">{children}</div>}
+    </Card>
+  );
+}
 
-export default function DocumentDefaults({ docType, state }: { docType: DocType; state: ProfileState }) {
+/**
+ * Everything the documents take from this customer, per legal entity: its
+ * identity, how orders are matched to it, and each document's own defaults.
+ * Order confirmations and invoices draft from the entity chosen here.
+ */
+export default function CustomerDetails({ state }: { state: ProfileState }) {
   const { profiles, active, loading, saving, dirty, patch, patchLayout, save } = state;
-  const [showTemplate, setShowTemplate] = useState(false);
+  const [open, setOpen] = useState<Record<string, boolean>>({ oc: false, invoice: false, template: false, packing: false });
+  const toggle = (k: string) => setOpen(o => ({ ...o, [k]: !o[k] }));
 
   if (loading) {
     return <Card className="p-8 flex justify-center"><Loader2 size={20} className="animate-spin text-primary-600" /></Card>;
   }
-
   if (!profiles.length) return <ProfileBar state={state} />;
 
+  const saveButton = (
+    <Button size="sm" onClick={() => save()} disabled={saving || !dirty}>
+      {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+      {dirty ? 'Save changes' : 'Saved'}
+    </Button>
+  );
+
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <ProfileBar state={state} />
 
       {active && (
         <>
-          {/* Shared identity — the same values on all three documents */}
+          {dirty && (
+            <div className="sticky top-2 z-10 flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800 shadow-sm">
+              Unsaved changes to "{active.name}"
+              {saveButton}
+            </div>
+          )}
+
           <Card>
             <div className="px-5 py-3.5 border-b border-gray-100 flex items-center gap-2">
-              <h2 className="font-semibold text-gray-800 text-sm">Client identity</h2>
-              <span className="text-xs text-gray-400">· shared across all documents</span>
+              <h2 className="font-semibold text-gray-800 text-sm">{active.name}: company details</h2>
+              <span className="text-xs text-gray-400">· printed on order confirmations and invoices</span>
             </div>
             <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Field label="Client code" value={active.data.shared.client_code} onChange={v => patch('shared', 'client_code', v)} placeholder="00GR01" />
               <Field label="Legal name" value={active.data.shared.legal_name} onChange={v => patch('shared', 'legal_name', v)} placeholder="Astron Chemicals SA" className="sm:col-span-2" />
               <Area label="Billing address (one line per row)" value={active.data.shared.billing_address} onChange={v => patch('shared', 'billing_address', v)} className="sm:col-span-2" />
-              <Field label="Tax ID" value={active.data.shared.tax_id} onChange={v => patch('shared', 'tax_id', v)} />
+              <Field label="Tax ID / VAT" value={active.data.shared.tax_id} onChange={v => patch('shared', 'tax_id', v)} />
               <Field label="EORI#" value={active.data.shared.eori} onChange={v => patch('shared', 'eori', v)} placeholder="GR094468327" />
+              <Field label="Client code" value={active.data.shared.client_code} onChange={v => patch('shared', 'client_code', v)} placeholder="00GR01" />
               <Field label="Contact person" value={active.data.shared.contact_person} onChange={v => patch('shared', 'contact_person', v)} />
               <Field label="Contact phone" value={active.data.shared.contact_phone} onChange={v => patch('shared', 'contact_phone', v)} />
               <Field label="Contact email" value={active.data.shared.contact_email} onChange={v => patch('shared', 'contact_email', v)} />
-              <Field label="Attention" value={active.data.shared.attention} onChange={v => patch('shared', 'attention', v)} placeholder="Melina Mamma m.mamma@…" />
+              <Field label="Attention" value={active.data.shared.attention} onChange={v => patch('shared', 'attention', v)} placeholder="Melina Mamma m.mamma@…" className="sm:col-span-2" />
             </div>
-          </Card>
-
-          {/* How an incoming order is recognised as belonging to this entity */}
-          <Card>
-            <div className="px-5 py-3.5 border-b border-gray-100 flex items-center gap-2">
-              <h2 className="font-semibold text-gray-800 text-sm">Match orders to this entity</h2>
-              <span className="text-xs text-gray-400">· how the system recognises it</span>
-            </div>
-            <div className="p-5 space-y-3">
-              <p className="text-xs text-gray-500">
-                When an order ships to this country, its documents are drafted from this profile.
-                You are always asked to confirm before anything is generated.
+            <div className="px-5 py-3 border-t border-gray-100">
+              <p className="text-xs text-gray-500 mb-3">
+                <strong className="text-gray-700">Match orders to this entity</strong> — an order shipping to this country (or mentioning one of these terms)
+                is drafted from this entity. You always confirm the entity before a document is generated.
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Field label="Country" value={active.data.match?.country} onChange={v => patch('match', 'country', v)} placeholder="Guatemala" />
                 <Field label="Other match terms (comma separated)" value={active.data.match?.keywords} onChange={v => patch('match', 'keywords', v)} placeholder="Puerto Quetzal, DISCA" />
               </div>
             </div>
+            <div className="px-5 py-3 border-t border-gray-100 flex justify-end">{saveButton}</div>
           </Card>
 
-          {/* This document's own defaults */}
-          <Card>
-            <div className="px-5 py-3.5 border-b border-gray-100">
-              <h2 className="font-semibold text-gray-800 text-sm">{TITLES[docType]} defaults</h2>
+          <Fold title="Order confirmation defaults" hint="delivery, terms and notes used when drafting" open={open.oc} onToggle={() => toggle('oc')}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-3">
+              <Field label="Delivery (incoterm + place)" value={active.data.order_confirmation.delivery} onChange={v => patch('order_confirmation', 'delivery', v)} placeholder="CIF Piraeus Greece" />
+              <Field label="SQ suffix" value={active.data.order_confirmation.sq_suffix} onChange={v => patch('order_confirmation', 'sq_suffix', v)} placeholder="GR" />
+              <Area label="Delivery address" value={active.data.order_confirmation.delivery_address} onChange={v => patch('order_confirmation', 'delivery_address', v)} rows={2} className="sm:col-span-2" />
+              <Area label="Payment terms" value={active.data.order_confirmation.terms} onChange={v => patch('order_confirmation', 'terms', v)} rows={2} placeholder="100% payable at 60 days date of B/L" className="sm:col-span-2" />
+              <Area label="Note" value={active.data.order_confirmation.note} onChange={v => patch('order_confirmation', 'note', v)} rows={2} className="sm:col-span-2" />
             </div>
-            <div className="p-5 space-y-4">
-              {docType === 'packing_list' && (
-                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                  Saved for later — the packing list generator is not built yet.
+            <div className="flex justify-end pt-4">{saveButton}</div>
+          </Fold>
+
+          <Fold title="Invoice defaults" hint="delivery, terms and this entity's bank account" open={open.invoice} onToggle={() => toggle('invoice')}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-3">
+              <Field label="Delivery (incoterm + place)" value={active.data.invoice.delivery} onChange={v => patch('invoice', 'delivery', v)} placeholder="CIF Piraeus Greece" />
+              <div />
+              <Area label="Delivery address" value={active.data.invoice.delivery_address} onChange={v => patch('invoice', 'delivery_address', v)} rows={2} className="sm:col-span-2" />
+              <Area label="Payment terms" value={active.data.invoice.terms} onChange={v => patch('invoice', 'terms', v)} rows={2} className="sm:col-span-2" />
+              <Area label="Note" value={active.data.invoice.note} onChange={v => patch('invoice', 'note', v)} rows={2} className="sm:col-span-2" />
+              <div className="sm:col-span-2 pt-2 border-t border-gray-100">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Bank account</h3>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Printed on this entity&rsquo;s invoices, whichever TripleW entity issues them.
+                  Leave blank to use the TripleW entity&rsquo;s own account for the invoice currency.
                 </p>
-              )}
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {docType === 'order_confirmation' && (
-                  <>
-                    <Field label="Delivery (incoterm + place)" value={active.data.order_confirmation.delivery} onChange={v => patch('order_confirmation', 'delivery', v)} placeholder="CIF Piraeus Greece" />
-                    <Field label="SQ suffix" value={active.data.order_confirmation.sq_suffix} onChange={v => patch('order_confirmation', 'sq_suffix', v)} placeholder="GR" />
-                    <Area label="Delivery address" value={active.data.order_confirmation.delivery_address} onChange={v => patch('order_confirmation', 'delivery_address', v)} rows={2} className="sm:col-span-2" />
-                    <Area label="Payment terms" value={active.data.order_confirmation.terms} onChange={v => patch('order_confirmation', 'terms', v)} rows={2} placeholder="100% payable at 60 days date of B/L" className="sm:col-span-2" />
-                    <Area label="Note" value={active.data.order_confirmation.note} onChange={v => patch('order_confirmation', 'note', v)} rows={2} className="sm:col-span-2" />
-                  </>
-                )}
-
-                {docType === 'invoice' && (
-                  <>
-                    <Field label="Delivery (incoterm + place)" value={active.data.invoice.delivery} onChange={v => patch('invoice', 'delivery', v)} placeholder="CIF Piraeus Greece" />
-                    <div />
-                    <Area label="Delivery address" value={active.data.invoice.delivery_address} onChange={v => patch('invoice', 'delivery_address', v)} rows={2} className="sm:col-span-2" />
-                    <Area label="Payment terms" value={active.data.invoice.terms} onChange={v => patch('invoice', 'terms', v)} rows={2} className="sm:col-span-2" />
-                    <Area label="Note" value={active.data.invoice.note} onChange={v => patch('invoice', 'note', v)} rows={2} className="sm:col-span-2" />
-
-                    <div className="sm:col-span-2 pt-2 border-t border-gray-100">
-                      <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Bank account</h3>
-                      <p className="text-xs text-gray-400 mt-0.5">
-                        Printed on this profile&rsquo;s invoices, whichever entity issues them.
-                        Leave blank to use the issuing entity&rsquo;s own account.
-                      </p>
-                    </div>
-                    <Field label="Bank" value={active.data.invoice.bank_name} onChange={v => patch('invoice', 'bank_name', v)} placeholder="ING Bank NV - Foreign Operations" />
-                    <Field label="BIC" value={active.data.invoice.bic} onChange={v => patch('invoice', 'bic', v)} placeholder="INGBNL2A" />
-                    <Field label="IBAN" value={active.data.invoice.iban} onChange={v => patch('invoice', 'iban', v)} placeholder="NL55 INGB 0107 6779 54" className="sm:col-span-2" />
-                    <Field label="Bank address" value={active.data.invoice.bank_address} onChange={v => patch('invoice', 'bank_address', v)} placeholder="PO Box 1800, 1000 BV Amsterdam, Netherlands" className="sm:col-span-2" />
-                  </>
-                )}
-
-                {docType === 'packing_list' && (
-                  <>
-                    <Field label="Port of loading" value={active.data.packing_list.port_of_loading} onChange={v => patch('packing_list', 'port_of_loading', v)} placeholder="Antwerp" />
-                    <Field label="Port of discharge" value={active.data.packing_list.port_of_discharge} onChange={v => patch('packing_list', 'port_of_discharge', v)} placeholder="Piraeus" />
-                    <Area label="Consignee / delivery address" value={active.data.packing_list.delivery_address} onChange={v => patch('packing_list', 'delivery_address', v)} rows={2} className="sm:col-span-2" />
-                    <Area label="Note" value={active.data.packing_list.note} onChange={v => patch('packing_list', 'note', v)} rows={2} className="sm:col-span-2" />
-                  </>
-                )}
               </div>
-
-              <div className="flex justify-end pt-3 border-t border-gray-100">
-                <Button size="sm" onClick={() => save()} disabled={saving || !dirty}>
-                  {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                  {dirty ? 'Save changes' : 'Saved'}
-                </Button>
-              </div>
+              <Field label="Bank" value={active.data.invoice.bank_name} onChange={v => patch('invoice', 'bank_name', v)} placeholder="ING Bank NV - Foreign Operations" />
+              <Field label="BIC" value={active.data.invoice.bic} onChange={v => patch('invoice', 'bic', v)} placeholder="INGBNL2A" />
+              <Field label="IBAN" value={active.data.invoice.iban} onChange={v => patch('invoice', 'iban', v)} placeholder="NL55 INGB 0107 6779 54" className="sm:col-span-2" />
+              <Field label="Bank address" value={active.data.invoice.bank_address} onChange={v => patch('invoice', 'bank_address', v)} placeholder="PO Box 1800, 1000 BV Amsterdam, Netherlands" className="sm:col-span-2" />
             </div>
-          </Card>
+            <div className="flex justify-end pt-4">{saveButton}</div>
+          </Fold>
 
-          {/* The shape of the document itself — invoices only */}
-          {docType === 'invoice' && (
-            <Card>
-              <button
-                type="button"
-                onClick={() => setShowTemplate(v => !v)}
-                className="w-full px-5 py-3.5 border-b border-gray-100 flex items-center gap-2 text-left hover:bg-gray-50"
-              >
-                <LayoutTemplate size={16} className="text-gray-400" />
-                <span className="font-semibold text-gray-800 text-sm flex-1">
-                  Invoice template
-                  {active.invoice_layout_source && (
-                    <span className="ml-2 font-normal text-xs text-gray-400">from {active.invoice_layout_source}</span>
-                  )}
-                </span>
-                {showTemplate ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
-              </button>
-              {showTemplate && (
-                <div className="p-5 space-y-5">
-                  <InvoiceLayoutEditor
-                    layout={withDefaults(active.data.invoice_layout)}
-                    source={active.invoice_layout_source || 'the standard company template'}
-                    customerName={active.data.shared.legal_name || active.name}
-                    onChange={patchLayout}
-                  />
-                  <div className="flex justify-end pt-3 border-t border-gray-100">
-                    <Button size="sm" onClick={() => save()} disabled={saving || !dirty}>
-                      {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                      {dirty ? 'Save changes' : 'Saved'}
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </Card>
-          )}
+          <Fold
+            title="Invoice template"
+            hint={active.invoice_layout_source ? `from ${active.invoice_layout_source}` : 'the standard company template'}
+            open={open.template}
+            onToggle={() => toggle('template')}
+          >
+            <div className="pt-3 space-y-5">
+              <InvoiceLayoutEditor
+                layout={withDefaults(active.data.invoice_layout)}
+                source={active.invoice_layout_source || 'the standard company template'}
+                customerName={active.data.shared.legal_name || active.name}
+                onChange={patchLayout}
+              />
+              <div className="flex justify-end">{saveButton}</div>
+            </div>
+          </Fold>
+
+          <Fold title="Packing list defaults" hint="kept for when the packing list generator is built" open={open.packing} onToggle={() => toggle('packing')}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-3">
+              <Field label="Port of loading" value={active.data.packing_list.port_of_loading} onChange={v => patch('packing_list', 'port_of_loading', v)} placeholder="Antwerp" />
+              <Field label="Port of discharge" value={active.data.packing_list.port_of_discharge} onChange={v => patch('packing_list', 'port_of_discharge', v)} placeholder="Piraeus" />
+              <Area label="Consignee / delivery address" value={active.data.packing_list.delivery_address} onChange={v => patch('packing_list', 'delivery_address', v)} rows={2} className="sm:col-span-2" />
+              <Area label="Note" value={active.data.packing_list.note} onChange={v => patch('packing_list', 'note', v)} rows={2} className="sm:col-span-2" />
+            </div>
+            <div className="flex justify-end pt-4">{saveButton}</div>
+          </Fold>
         </>
       )}
     </div>

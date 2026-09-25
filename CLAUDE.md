@@ -39,5 +39,11 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - Entity picked from the operation number (`SO<code>…`), default entity otherwise
 - Each entity has a USD and a EUR account; `applyEntityBank()` prints the one matching the document currency (skipped when `bank_override` — customer-profile bank)
 
+## Customers & Suppliers
+- Customer page: Summary | Details. Details = per-entity profiles (`customer_document_profiles`), the source for OC/invoice customer details; the default entity is mirrored onto the `customers` row
+- Invoice drafts use the entity confirmed on the order's OC (`order_confirmations.profile_id`)
+- Supplier page: Summary | Details (edits the `suppliers` row, which the supplier PO reads)
+- `lib/partyDetails.ts` reads a party's details off a PDF with Claude (cached in `party_extractions`); used once to seed the records
+
 ## Deployment
 Railway, auto-deploys from `main` on push. Commit and push immediately after every change.

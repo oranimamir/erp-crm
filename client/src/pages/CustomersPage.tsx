@@ -10,7 +10,7 @@ import SearchBar from '../components/ui/SearchBar';
 import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
-import { Plus, Users, Eye, Pencil, Trash2, BarChart3, FileSpreadsheet, FileSearch } from 'lucide-react';
+import { Plus, Users, Eye, Pencil, Trash2, BarChart3, FileSpreadsheet } from 'lucide-react';
 import { downloadExcel } from '../lib/exportExcel';
 
 const CHART_COLORS = [
@@ -101,9 +101,6 @@ export default function CustomersPage() {
             downloadExcel('customers', ['Name', 'Email', 'Phone', 'Company', 'Address', 'Notes'],
               res.data.data.map((c: any) => [c.name, c.email || '', c.phone || '', c.company || '', c.address || '', c.notes || '']));
           }}><FileSpreadsheet size={16} /> Export Excel</Button>
-          <Link to="/directory/fill">
-            <Button variant="secondary"><FileSearch size={16} /> Fill from documents</Button>
-          </Link>
           <Button onClick={openCreate}><Plus size={16} /> Add Customer</Button>
         </div>
       </div>

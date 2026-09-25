@@ -124,6 +124,7 @@ router.get('/prepare', (req: Request, res: Response) => {
   const order = db.prepare(`
     SELECT o.*, c.name as customer_name, c.email as customer_email, c.phone as customer_phone,
            c.address as customer_address, c.company as customer_company,
+           c.vat_number as customer_vat, c.contact_person as customer_contact,
            s.name as supplier_name, s.email as supplier_email, s.phone as supplier_phone,
            s.address as supplier_address
     FROM orders o
@@ -182,10 +183,10 @@ router.get('/prepare', (req: Request, res: Response) => {
     our_ref: items[0]?.description || order.description || '',
     po_number: order.order_number || '',
     client_code: shared.client_code || '',
-    client_name: shared.legal_name || (isSupplier ? order.supplier_name : order.customer_name) || '',
+    client_name: shared.legal_name || (isSupplier ? order.supplier_name : (order.customer_company || order.customer_name)) || '',
     billing_address: shared.billing_address || (isSupplier ? order.supplier_address : order.customer_address) || '',
     client_phone: shared.contact_phone || (isSupplier ? order.supplier_phone : order.customer_phone) || '',
-    tax_id: shared.tax_id || '',
+    tax_id: shared.tax_id || (isSupplier ? '' : order.customer_vat) || '',
     contact_email: shared.contact_email || (isSupplier ? order.supplier_email : order.customer_email) || '',
     items: prefillLines(items),
     // The order's own terms win; the customer default fills the gap

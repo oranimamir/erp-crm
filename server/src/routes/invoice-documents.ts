@@ -172,7 +172,8 @@ router.get('/prepare', (req: Request, res: Response) => {
 
   const order = db.prepare(`
     SELECT o.*, c.name as customer_name, c.email as customer_email, c.phone as customer_phone,
-           c.address as customer_address,
+           c.address as customer_address, c.company as customer_company,
+           c.vat_number as customer_vat, c.contact_person as customer_contact,
            s.name as supplier_name, s.email as supplier_email, s.phone as supplier_phone,
            s.address as supplier_address
     FROM orders o
@@ -206,7 +207,11 @@ router.get('/prepare', (req: Request, res: Response) => {
 
   // Which of the customer's legal entities this order belongs to. Never applied
   // silently — the client asks the user to confirm before generating.
-  const requestedProfile = parseInt(String(req.query.profile_id || ''), 10);
+  // The invoice names the same entity the order confirmation was confirmed for
+  const ocProfile = db.prepare(
+    'SELECT profile_id FROM order_confirmations WHERE order_id = ? AND profile_id IS NOT NULL ORDER BY id DESC LIMIT 1'
+  ).get(orderId) as any;
+  const requestedProfile = parseInt(String(req.query.profile_id || ocProfile?.profile_id || ''), 10);
   const match = matchProfile(
     isSupplier ? null : order.customer_id,
     order,
@@ -248,10 +253,10 @@ router.get('/prepare', (req: Request, res: Response) => {
     operation_number: operation?.operation_number || '',
     client_code: shared.client_code || '',
     attention: shared.attention || '',
-    client_name: shared.legal_name || (isSupplier ? order.supplier_name : order.customer_name) || '',
+    client_name: shared.legal_name || (isSupplier ? order.supplier_name : (order.customer_company || order.customer_name)) || '',
     billing_address: shared.billing_address || (isSupplier ? order.supplier_address : order.customer_address) || '',
     client_phone: shared.contact_phone || (isSupplier ? order.supplier_phone : order.customer_phone) || '',
-    tax_id: shared.tax_id || '',
+    tax_id: shared.tax_id || (isSupplier ? '' : order.customer_vat) || '',
     eori: shared.eori || '',
     contact_email: shared.contact_email || (isSupplier ? order.supplier_email : order.customer_email) || '',
     items: prefillLines(items),

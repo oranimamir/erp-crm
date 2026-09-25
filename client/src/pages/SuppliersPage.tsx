@@ -7,7 +7,7 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import PdfPreview from '../components/ui/PdfPreview';
-import { Plus, Truck, Eye, Pencil, Trash2, BarChart3, Beaker, Check, X, GitMerge, Loader2, FileSearch } from 'lucide-react';
+import { Plus, Truck, Eye, Pencil, Trash2, BarChart3, Beaker, Check, X, GitMerge, Loader2 } from 'lucide-react';
 
 const CHART_COLORS = [
   'bg-purple-500', 'bg-blue-500', 'bg-orange-400', 'bg-teal-500',
@@ -327,9 +327,6 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
           <Button variant="secondary" onClick={handleFindDuplicates} disabled={dupLoading}>
             <GitMerge size={16} /> {dupLoading ? 'Scanning...' : 'Find Duplicates'}
           </Button>
-          <Link to="/directory/fill">
-            <Button variant="secondary"><FileSearch size={16} /> Fill from documents</Button>
-          </Link>
           <Button onClick={() => setShowAdd(true)}><Plus size={16} /> Add Supplier</Button>
         </div>
       </div>

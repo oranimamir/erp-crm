@@ -3,25 +3,27 @@ import { useParams, Link, useSearchParams } from 'react-router-dom';
 import api from '../lib/api';
 import Card from '../components/ui/Card';
 import StatusBadge from '../components/ui/StatusBadge';
-import DocumentDefaults, { ProfileBar, useCustomerProfiles, type DocType } from '../components/CustomerDocumentProfiles';
+import CustomerDetails, { useCustomerProfiles } from '../components/CustomerDocumentProfiles';
 import { ArrowLeft, Mail, Phone, MapPin, Building, FileText, ShoppingCart, Package, DollarSign, Hash, UserRound } from 'lucide-react';
 
-type TabId = 'overview' | DocType;
+type TabId = 'summary' | 'details';
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'order_confirmation', label: 'Order Confirmation' },
-  { id: 'invoice', label: 'Invoice' },
-  { id: 'packing_list', label: 'Packing List' },
+  { id: 'summary', label: 'Summary' },
+  { id: 'details', label: 'Details' },
 ];
+
+/** Links to the old per-document tabs now land on Details, where those settings live. */
+const LEGACY_TABS = ['order_confirmation', 'invoice', 'packing_list'];
 
 export default function CustomerDetailPage() {
   const { id } = useParams();
   const [params, setParams] = useSearchParams();
   const tabParam = params.get('tab') as TabId | null;
-  const activeTab: TabId = TABS.some(t => t.id === tabParam) ? tabParam! : 'overview';
+  const activeTab: TabId = LEGACY_TABS.includes(tabParam || '') ? 'details'
+    : TABS.some(t => t.id === tabParam) ? tabParam! : 'summary';
   // The tab lives in the URL so each document screen is its own address
-  const goTab = (tab: TabId) => setParams(tab === 'overview' ? {} : { tab }, { replace: false });
+  const goTab = (tab: TabId) => setParams(tab === 'summary' ? {} : { tab }, { replace: false });
   const profileState = useCustomerProfiles(id!);
   const [customer, setCustomer] = useState<any>(null);
   const [invoices, setInvoices] = useState<any[]>([]);
@@ -90,11 +92,9 @@ export default function CustomerDetailPage() {
         </nav>
       </div>
 
-      {activeTab !== 'overview' && <DocumentDefaults docType={activeTab} state={profileState} />}
+      {activeTab === 'details' && <CustomerDetails state={profileState} />}
 
-      {activeTab === 'overview' && (<>
-      {/* One profile per legal entity the customer trades as */}
-      {!profileState.loading && <ProfileBar state={profileState} />}
+      {activeTab === 'summary' && (<>
       {/* Financial Summary */}
       {invoices.length > 0 && (() => {
         const eurOf = (inv: any) => Number(inv.eur_amount ?? inv.amount) || 0;
