@@ -91,10 +91,20 @@ router.get('/stats', async (_req: Request, res: Response) => {
     FROM payments p JOIN invoices i ON p.invoice_id = i.id
   `).get() as any).total;
   const activeShipments = (db.prepare("SELECT COUNT(*) as count FROM shipments WHERE status NOT IN ('delivered', 'returned', 'failed')").get() as any).count;
+  // Invoiced YTD: customer invoices issued this calendar year — the revenue
+  // measure sales-activity spend is set against (stored EUR when the invoice
+  // has been paid, else today's rate).
+  const invoicedRows = db.prepare(`
+    SELECT i.amount, i.eur_amount, UPPER(COALESCE(i.currency, 'USD')) as currency FROM invoices i
+    WHERE i.type = 'customer' AND i.status != 'cancelled'
+      AND strftime('%Y', COALESCE(i.invoice_date, i.created_at)) = strftime('%Y', 'now')
+  `).all() as any[];
+  const invoicedYTD = invoicedRows.filter(r => r.eur_amount != null).reduce((s, r) => s + Number(r.eur_amount), 0)
+    + await sumLiveEur(invoicedRows.filter(r => r.eur_amount == null));
 
   res.json({
     customers, suppliers, totalOrders, activeOrders,
-    totalInvoices, pendingAmount, expectedAmount, paidInvoiceAmount, paidYTD,
+    totalInvoices, pendingAmount, expectedAmount, paidInvoiceAmount, paidYTD, invoicedYTD,
     totalPayments, activeShipments,
     currency: 'EUR',
   });

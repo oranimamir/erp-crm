@@ -13,6 +13,7 @@ interface Stats {
   activeOrders: number;
   totalInvoices: number;
   paidYTD: number;           // payments received this calendar year
+  invoicedYTD?: number;      // customer invoices issued this calendar year
   pendingAmount: number;     // sent/overdue + has due_date
   expectedAmount: number;    // sent + no due_date
   paidInvoiceAmount: number;
@@ -128,6 +129,9 @@ export default function DashboardPage() {
   const monthsElapsed = lastRecorded + 1;
   const monthsPending = monthlyPayments.length - monthsElapsed;
   const expensesAvgPerMonth = monthsElapsed > 0 ? expensesYTD / monthsElapsed : 0;
+  // What generating the revenue costs: sales-activity spend against invoices issued
+  const invoicedYTD = stats?.invoicedYTD ?? 0;
+  const salesCostPct = invoicedYTD > 0 ? (tradingYTD / invoicedYTD) * 100 : null;
 
   return (
     <div className="space-y-6">
@@ -210,7 +214,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Expenses + Tons summary ───────────────────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <Link to="/invoices?type=supplier">
           <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
             <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
@@ -233,7 +237,21 @@ export default function DashboardPage() {
             <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">Average monthly expenses ({monthsElapsed} mo{monthsPending > 0 ? `, ${monthsPending} not uploaded yet` : ''})</p>
           </Card>
         </Link>
-        <button onClick={() => setTonsBreakdownOpen(true)} className="col-span-2 sm:col-span-1 text-left">
+        <Link to="/analytics">
+          <Card className="p-3 sm:p-5 hover:shadow-md transition-shadow h-full">
+            <p className="text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
+              Sales activities {year}
+              <InfoBadge id="sales-expenses" text={`Supplier invoices booked to sales activities this year — goods bought to resell, blending, shipping and logistics — excluding VAT, in EUR. Operating costs (salaries, rent, services) are left out. Set against the ${fmt(invoicedYTD)} of customer invoices issued this year.`} />
+            </p>
+            <p className="text-lg sm:text-2xl font-bold text-rose-600 truncate">{fmt(tradingYTD)}</p>
+            <p className="text-[10px] sm:text-xs text-gray-400 mt-1 hidden sm:block">
+              {salesCostPct != null
+                ? `${salesCostPct.toFixed(1)}% of invoiced revenue (${fmt(invoicedYTD)})`
+                : 'No customer invoices issued yet this year'}
+            </p>
+          </Card>
+        </Link>
+        <button onClick={() => setTonsBreakdownOpen(true)} className="text-left">
           <Card className="p-3 sm:p-5 hover:shadow-md hover:ring-1 hover:ring-indigo-200 transition-all h-full">
             <div className="flex items-center gap-2 mb-1">
               <Scale size={14} className="text-indigo-500" />
