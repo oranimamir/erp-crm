@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom';
 import api from '../lib/api';
+import { acceptPlaceholderOnTab } from '../lib/placeholderTab';
 import OrderCompareModal from '../components/OrderCompareModal';
 import { useCompanyEntities } from '../lib/useCompanyEntities';
 import { useToast } from '../contexts/ToastContext';
@@ -140,7 +141,8 @@ function Field({ label, value, onChange, placeholder, type = 'text', className =
     <div className={`space-y-1 ${className}`}>
       <label className="block text-xs font-medium text-gray-500">{label}</label>
       <input type={type} value={value} placeholder={placeholder}
-        onChange={e => onChange(e.target.value)} className={inputCls} />
+        onChange={e => onChange(e.target.value)}
+        onKeyDown={e => acceptPlaceholderOnTab(e, value, placeholder, onChange)} className={inputCls} />
     </div>
   );
 }
@@ -153,7 +155,8 @@ function AreaField({ label, value, onChange, placeholder, rows = 2, className = 
     <div className={`space-y-1 ${className}`}>
       <label className="block text-xs font-medium text-gray-500">{label}</label>
       <textarea value={value} rows={rows} placeholder={placeholder}
-        onChange={e => onChange(e.target.value)} className={inputCls} />
+        onChange={e => onChange(e.target.value)}
+        onKeyDown={e => acceptPlaceholderOnTab(e, value, placeholder, onChange)} className={inputCls} />
     </div>
   );
 }

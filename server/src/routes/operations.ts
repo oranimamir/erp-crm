@@ -5,6 +5,7 @@ import { getEurRate } from '../lib/fx.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { resolveCountry } from '../lib/portCountry.js';
 import { scoreCandidate } from '../lib/wireMatch.js';
+import { entityFromOperationNumber, isEntityCode } from '../lib/companyEntity.js';
 import { uploadOperationDoc } from '../middleware/upload.js';
 import fs from 'fs';
 import path from 'path';
@@ -70,6 +71,7 @@ router.get('/', async (req: Request, res: Response) => {
   const dateField      = (req.query.date_field as string) || '';
   const dateFrom       = (req.query.date_from as string) || '';
   const dateTo         = (req.query.date_to as string) || '';
+  const filterEntity   = String(req.query.entity || '').toUpperCase();
 
   const conditions: string[] = [];
   const params: any[] = [];
@@ -95,6 +97,14 @@ router.get('/', async (req: Request, res: Response) => {
   if (filterStatus) {
     conditions.push('op.status = ?');
     params.push(filterStatus);
+  }
+  if (filterEntity && isEntityCode(filterEntity)) {
+    // The entity is read off the operation number exactly as documents read it,
+    // so the list and the invoices it produces always agree
+    const ids = (db.prepare('SELECT id, operation_number FROM operations').all() as any[])
+      .filter(r => entityFromOperationNumber(r.operation_number) === filterEntity)
+      .map(r => Number(r.id));
+    conditions.push(ids.length ? `op.id IN (${ids.join(',')})` : '0');
   }
   if (dateFrom || dateTo) {
     const dateExprMap: Record<string, string> = {

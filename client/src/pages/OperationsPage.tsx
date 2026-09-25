@@ -104,6 +104,8 @@ export default function OperationsPage() {
   const [activeTab, setActiveTab] = useState<Tab>('active');
   const [completedYear, setCompletedYear] = useState<string>(''); // '' = all years
   const [completedYears, setCompletedYears] = useState<string[]>([]);
+  // Which TripleW entity's operations to show — read off the operation number
+  const [entityFilter, setEntityFilter] = useState<'' | 'BE' | 'NL'>('');
 
   // Wire-transfer upload + auto-match ("associate to operation" flow)
   const [wireModalOpen, setWireModalOpen] = useState(false);
@@ -391,6 +393,7 @@ export default function OperationsPage() {
     try {
       const params: any = { page, limit: 20, sort_by: sortBy, sort_dir: sortDir, tab: activeTab };
       if (activeTab === 'completed' && completedYear) params.year = completedYear;
+      if (entityFilter) params.entity = entityFilter;
       if (search) params.search = search;
       if (filterCustomer) params.customer = filterCustomer;
       if (filterStatus) params.status = filterStatus;
@@ -409,9 +412,9 @@ export default function OperationsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, sortBy, sortDir, activeTab, completedYear, filterCustomer, filterStatus, filterDateField, filterDateFrom, filterDateTo]);
+  }, [page, search, sortBy, sortDir, activeTab, completedYear, entityFilter, filterCustomer, filterStatus, filterDateField, filterDateFrom, filterDateTo]);
 
-  useEffect(() => { setPage(1); }, [activeTab, completedYear]);
+  useEffect(() => { setPage(1); }, [activeTab, completedYear, entityFilter]);
   useEffect(() => { fetchOperations(); }, [fetchOperations]);
 
   // Load distinct completion years when the Completed tab is active
@@ -607,6 +610,7 @@ export default function OperationsPage() {
               // The export follows what's on screen: the tab, the year and the filters
               const params: any = { page: 1, limit: 10000, sort_by: sortBy, sort_dir: sortDir, tab: activeTab };
               if (activeTab === 'completed' && completedYear) params.year = completedYear;
+              if (entityFilter) params.entity = entityFilter;
               if (search) params.search = search;
               if (filterCustomer) params.customer = filterCustomer;
               if (filterStatus) params.status = filterStatus;
@@ -761,6 +765,23 @@ export default function OperationsPage() {
             }`}
           >
             {tab === 'active' ? 'Active Operations' : 'Completed'}
+          </button>
+        ))}
+      </div>
+
+      {/* Entity filter: Belgian (SOBE…) or Dutch (SONL…) operations */}
+      <div className="flex flex-wrap items-center gap-2">
+        {([['', 'All'], ['BE', 'BE'], ['NL', 'NL']] as const).map(([code, label]) => (
+          <button
+            key={label}
+            onClick={() => setEntityFilter(code)}
+            className={`px-3 py-1 text-xs font-medium rounded-full border transition-colors ${
+              entityFilter === code
+                ? 'bg-primary-600 text-white border-primary-600'
+                : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            {label}
           </button>
         ))}
       </div>

@@ -32,7 +32,13 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 
 ## Operations
 - `operations.category`: 'blending' | 'trading' (required for new operations)
+- List filter All / BE / NL — entity read off the operation number (`entityFromOperationNumber`)
 - Trading ops: supplier Purchase Order via `/api/purchase-orders` — Order Confirmation template, entity from operation number, filed as `<op#>PO.pdf`, prices entered by hand
+
+## Generated Invoices
+- `/api/invoice-documents`; each is also filed as an `invoices` row (`invoice_documents.invoice_id`, PDF copied to `uploads/invoices`) so it shows in the operation's Invoices and quick view; re-save updates it, delete removes it unless wired
+- Line table uses one font size for every cell; optional `lot2` prints under `lot`; client block prints contact person, phone and email
+- Document forms (invoice/OC/PO): Tab on an empty field accepts its grey placeholder (`client/src/lib/placeholderTab.ts`)
 
 ## TripleW Entities
 - Table `company_entities` (edited on the TripleW Details page, `/api/company-entities`); `server/src/lib/companyEntity.ts`

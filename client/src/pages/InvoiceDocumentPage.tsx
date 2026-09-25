@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom';
 import api from '../lib/api';
+import { acceptPlaceholderOnTab } from '../lib/placeholderTab';
 import OrderCompareModal from '../components/OrderCompareModal';
 import { useCompanyEntities } from '../lib/useCompanyEntities';
 import { useToast } from '../contexts/ToastContext';
@@ -28,6 +29,8 @@ interface InvLine {
   hs_code: string;
   description: string;
   lot: string;
+  /** Optional second lot of the same product, printed under the first. */
+  lot2: string;
   note: string;
 }
 
@@ -42,6 +45,7 @@ interface InvData {
   attention: string;
   client_name: string;
   billing_address: string;
+  client_contact: string;
   client_phone: string;
   tax_id: string;
   eori: string;
@@ -84,7 +88,7 @@ const CURRENCIES = ['EUR', 'USD', 'GBP'];
 const FORM_KEYS = [
   'doc_number', 'doc_date', 'sq_number', 'our_ref', 'po_number', 'operation_number',
   'client_code', 'attention', 'product_reference', 'client_name', 'billing_address',
-  'client_phone', 'tax_id', 'eori', 'contact_email', 'delivery', 'delivery_address',
+  'client_contact', 'client_phone', 'tax_id', 'eori', 'contact_email', 'delivery', 'delivery_address',
   'delivery_contact', 'delivery_date_text', 'payment_terms', 'incoterm', 'remarks',
   'notes', 'freight', 'vat', 'insurance', 'manufacturer', 'country_of_origin', 'terms',
 ] as const;
@@ -92,7 +96,7 @@ const FORM_KEYS = [
 const emptyLine = (n: number): InvLine => ({
   line: n, reference: '', commercial_name: '', packaging: '',
   quantity: '', quantity_unit: 'KG', unit_price: '', currency: 'EUR',
-  hs_code: '', description: '', lot: '', note: '',
+  hs_code: '', description: '', lot: '', lot2: '', note: '',
 });
 
 const blankData = (): InvData => ({
@@ -100,7 +104,7 @@ const blankData = (): InvData => ({
   sq_number: '', our_ref: '', po_number: '', operation_number: '',
   client_code: '', attention: '', product_reference: '',
   client_name: '', billing_address: '',
-  client_phone: '', tax_id: '', eori: '', contact_email: '',
+  client_contact: '', client_phone: '', tax_id: '', eori: '', contact_email: '',
   items: [emptyLine(1)],
   delivery: '', delivery_address: '', delivery_contact: '', delivery_date_text: '',
   payment_terms: '', incoterm: '', remarks: '', notes: '',
@@ -127,6 +131,7 @@ function toFormData(raw: any): InvData {
     hs_code: item?.hs_code ?? '',
     description: item?.description ?? '',
     lot: item?.lot ?? '',
+    lot2: item?.lot2 ?? '',
     note: item?.note ?? '',
   }));
   return merged as InvData;
@@ -167,7 +172,8 @@ function Field({ label, value, onChange, placeholder, type = 'text', className =
     <div className={`space-y-1 ${className}`}>
       <label className="block text-xs font-medium text-gray-500">{label}</label>
       <input type={type} value={value} placeholder={placeholder}
-        onChange={e => onChange(e.target.value)} className={inputCls} />
+        onChange={e => onChange(e.target.value)}
+        onKeyDown={e => acceptPlaceholderOnTab(e, value, placeholder, onChange)} className={inputCls} />
     </div>
   );
 }
@@ -180,7 +186,8 @@ function AreaField({ label, value, onChange, placeholder, rows = 2, className = 
     <div className={`space-y-1 ${className}`}>
       <label className="block text-xs font-medium text-gray-500">{label}</label>
       <textarea value={value} rows={rows} placeholder={placeholder}
-        onChange={e => onChange(e.target.value)} className={inputCls} />
+        onChange={e => onChange(e.target.value)}
+        onKeyDown={e => acceptPlaceholderOnTab(e, value, placeholder, onChange)} className={inputCls} />
     </div>
   );
 }
@@ -582,10 +589,11 @@ export default function InvoiceDocumentPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Field label="Client name" value={form.client_name} onChange={v => set('client_name', v)} className="sm:col-span-2" />
               <AreaField label="Address (one line per row)" value={form.billing_address} onChange={v => set('billing_address', v)} className="sm:col-span-2" />
-              <Field label="Phone" value={form.client_phone} onChange={v => set('client_phone', v)} />
+              <Field label="Contact person" value={form.client_contact} onChange={v => set('client_contact', v)} />
+              <Field label="Contact phone" value={form.client_phone} onChange={v => set('client_phone', v)} />
+              <Field label="Contact email" type="email" value={form.contact_email} onChange={v => set('contact_email', v)} />
               <Field label="Tax Id" value={form.tax_id} onChange={v => set('tax_id', v)} />
               <Field label="EORI#" value={form.eori} onChange={v => set('eori', v)} />
-              <Field label="Email (for sending — not printed)" type="email" value={form.contact_email} onChange={v => set('contact_email', v)} />
             </div>
           </Section>
 
@@ -714,6 +722,7 @@ export default function InvoiceDocumentPage() {
                     <Field label="Packaging" value={item.packaging} onChange={v => setItem(index, { packaging: v })} placeholder="25 KG bags" />
                     <Field label="HS code" value={item.hs_code} onChange={v => setItem(index, { hs_code: v })} placeholder="2918.11" />
                     <Field label="Lot" value={item.lot} onChange={v => setItem(index, { lot: v })} placeholder="01.2602-003" />
+                    <Field label="Second lot (optional)" value={item.lot2} onChange={v => setItem(index, { lot2: v })} />
                     <Field label="Packing note" value={item.note} onChange={v => setItem(index, { note: v })}
                       placeholder="80 drums on 20 pallets" />
                   </div>

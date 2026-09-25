@@ -19,10 +19,13 @@ import {
   type DocumentData,
 } from '../lib/document-pdf.js';
 import { normalizeLayout } from '../lib/invoiceLayout.js';
+import { getEurRate } from '../lib/fx.js';
+import { refreshEstimatedPaymentDate } from '../lib/paymentTerms.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
 const docsDir = path.join(uploadsBase, 'operation-docs');
+const invoicesDir = path.join(uploadsBase, 'invoices');
 
 const router = Router();
 
@@ -151,17 +154,123 @@ function discardFiled(filed: { filePath: string; documentId: number | null }, ke
   }
 }
 
-function numberTaken(invoiceNumber: string, exceptId?: number): boolean {
+function numberTaken(invoiceNumber: string, exceptId?: number, linkedInvoiceId?: number | null): boolean {
   const row = db.prepare('SELECT id FROM invoice_documents WHERE invoice_number = ?').get(invoiceNumber) as any;
   if (row && row.id !== exceptId) return true;
 
-  // A number already on a recorded invoice must not be reused either
+  // A number already on a recorded invoice must not be reused either — except
+  // the one this generated invoice is itself filed as
   try {
     const recorded = db.prepare('SELECT id FROM invoices WHERE invoice_number = ?').get(invoiceNumber) as any;
-    if (recorded) return true;
+    if (recorded && recorded.id !== linkedInvoiceId) return true;
   } catch { /* table unavailable */ }
 
   return false;
+}
+
+/** Metric tons on the invoice's lines; null when no line has a weight unit. */
+function linesTonnage(items: DocumentData['items']): number | null {
+  let total = 0;
+  let known = false;
+  for (const item of items || []) {
+    const qty = Number(item.quantity) || 0;
+    const unit = String(item.quantity_unit || '').trim().toLowerCase();
+    if (['mt', 'metric ton', 'metric tons', 'tonne', 'tonnes', 'tons', 'ton', 't'].includes(unit)) { total += qty; known = true; }
+    else if (['kg', 'kgs', 'kilogram', 'kilograms'].includes(unit)) { total += qty / 1000; known = true; }
+    else if (['lbs', 'lb', 'pound', 'pounds'].includes(unit)) { total += qty / 2204.6226218; known = true; }
+  }
+  return known ? total : null;
+}
+
+/**
+ * Files a generated invoice as a recorded invoice (`invoices` row), so it sits
+ * in the operation's Invoices list, the quick view and every revenue figure
+ * like an uploaded one. Re-saving the invoice keeps that row in step; its
+ * status (and any wire transfers against it) is left alone.
+ */
+async function syncRecordedInvoice(docId: number): Promise<void> {
+  const docRow = db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(docId) as any;
+  if (!docRow) return;
+  const data = parseRecord(docRow).data as DocumentData;
+  const order = docRow.order_id
+    ? db.prepare('SELECT id, type, customer_id, supplier_id FROM orders WHERE id = ?').get(docRow.order_id) as any
+    : null;
+
+  const isSupplier = order?.type === 'supplier';
+  const customerId = isSupplier ? null : (order?.customer_id ?? null);
+  const supplierId = isSupplier ? (order?.supplier_id ?? null) : null;
+  // The invoices table insists on a counterparty for its type
+  if (!customerId && !supplierId) return;
+
+  const { total, currency } = computeTotals(data);
+  const invoiceDate = data.doc_date || new Date().toISOString().slice(0, 10);
+  let fxRate: number | null = null;
+  let eurAmount: number | null = null;
+  if (currency !== 'EUR') {
+    try { fxRate = await getEurRate(currency, invoiceDate); eurAmount = total * fxRate; }
+    catch { /* rate unavailable — aggregates fall back to the amount */ }
+  }
+
+  // A copy of the PDF where recorded invoices keep theirs
+  let storedName: string | null = null;
+  const source = docRow.file_path ? path.join(docsDir, docRow.file_path) : null;
+  if (source && fs.existsSync(source)) {
+    fs.mkdirSync(invoicesDir, { recursive: true });
+    storedName = `ci-${Date.now()}-${crypto.randomBytes(6).toString('hex')}.pdf`;
+    fs.copyFileSync(source, path.join(invoicesDir, storedName));
+  }
+
+  let linked = docRow.invoice_id
+    ? db.prepare('SELECT * FROM invoices WHERE id = ?').get(docRow.invoice_id) as any
+    : null;
+  // An invoice recorded earlier under the same number is this one
+  if (!linked) linked = db.prepare('SELECT * FROM invoices WHERE invoice_number = ?').get(docRow.invoice_number) as any;
+
+  const fields = [
+    docRow.invoice_number, customerId, supplierId, isSupplier ? 'supplier' : 'customer',
+    total, currency, invoiceDate, data.our_ref || null, data.po_number || null,
+    docRow.operation_id ?? null, fxRate, eurAmount, linesTonnage(data.items),
+  ];
+
+  let invoiceId: number;
+  if (linked) {
+    if (storedName && linked.file_path) {
+      const old = path.join(invoicesDir, linked.file_path);
+      if (fs.existsSync(old)) { try { fs.unlinkSync(old); } catch { /* best effort */ } }
+    }
+    db.prepare(`
+      UPDATE invoices SET invoice_number = ?, customer_id = ?, supplier_id = ?, type = ?, amount = ?, currency = ?,
+        invoice_date = ?, our_ref = ?, po_number = ?, operation_id = ?, fx_rate = ?, eur_amount = ?, quantity_mt = ?,
+        file_path = COALESCE(?, file_path), file_name = COALESCE(?, file_name), updated_at = datetime('now')
+      WHERE id = ?
+    `).run(...fields, storedName, storedName ? docRow.file_name : null, linked.id);
+    invoiceId = linked.id;
+  } else {
+    const result = db.prepare(`
+      INSERT INTO invoices (invoice_number, customer_id, supplier_id, type, amount, currency, invoice_date, our_ref, po_number,
+        operation_id, fx_rate, eur_amount, quantity_mt, status, file_path, file_name)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sent', ?, ?)
+    `).run(...fields, storedName, storedName ? docRow.file_name : null);
+    invoiceId = Number(result.lastInsertRowid);
+    db.prepare(`INSERT INTO status_history (entity_type, entity_id, new_status, changed_by) VALUES ('invoice', ?, 'sent', ?)`)
+      .run(invoiceId, docRow.created_by ?? null);
+  }
+
+  if (docRow.invoice_id !== invoiceId) {
+    db.prepare('UPDATE invoice_documents SET invoice_id = ? WHERE id = ?').run(invoiceId, docId);
+  }
+  refreshEstimatedPaymentDate(db, docRow.operation_id ?? null);
+}
+
+/** Generated invoices made before they were filed as recorded invoices. */
+export async function backfillRecordedInvoices(): Promise<void> {
+  let rows: Array<{ id: number }> = [];
+  try { rows = db.prepare('SELECT id FROM invoice_documents WHERE invoice_id IS NULL').all() as any[]; }
+  catch { return; }
+  for (const row of rows) {
+    try { await syncRecordedInvoice(row.id); }
+    catch (err: any) { console.error('[invoice-documents] backfill failed for', row.id, err?.message || err); }
+  }
 }
 
 // ── Prefill a draft from the order ────────────────────────────────────────
@@ -255,6 +364,7 @@ router.get('/prepare', (req: Request, res: Response) => {
     attention: shared.attention || '',
     client_name: shared.legal_name || (isSupplier ? order.supplier_name : (order.customer_company || order.customer_name)) || '',
     billing_address: shared.billing_address || (isSupplier ? order.supplier_address : order.customer_address) || '',
+    client_contact: shared.contact_person || (isSupplier ? '' : order.customer_contact) || '',
     client_phone: shared.contact_phone || (isSupplier ? order.supplier_phone : order.customer_phone) || '',
     tax_id: shared.tax_id || (isSupplier ? '' : order.customer_vat) || '',
     eori: shared.eori || '',
@@ -396,6 +506,9 @@ router.post('/', async (req: Request, res: Response) => {
       JSON.stringify(payload), filed.filePath, filed.fileName, filed.documentId, req.user?.userId ?? null
     );
 
+    try { await syncRecordedInvoice(Number(result.lastInsertRowid)); }
+    catch (err: any) { console.error('[invoice-documents] filing as recorded invoice failed:', err?.message || err); }
+
     const row = db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(result.lastInsertRowid);
     notifyAdmin({
       action: 'created', entity: 'Commercial Invoice', label: payload.doc_number!,
@@ -428,7 +541,7 @@ router.put('/:id', async (req: Request, res: Response) => {
   });
   const operationId = operation_id !== undefined ? operation_id : existing.operation_id;
 
-  if (numberTaken(payload.doc_number!, existing.id)) {
+  if (numberTaken(payload.doc_number!, existing.id, existing.invoice_id)) {
     res.status(409).json({ error: `Invoice ${payload.doc_number} already exists` });
     return;
   }
@@ -442,6 +555,9 @@ router.put('/:id', async (req: Request, res: Response) => {
       SET invoice_number = ?, operation_id = ?, profile_id = ?, data = ?, file_path = ?, file_name = ?, document_id = ?, updated_at = datetime('now')
       WHERE id = ?
     `).run(payload.doc_number, operationId, profile_id ?? existing.profile_id ?? null, JSON.stringify(payload), filed.filePath, filed.fileName, filed.documentId, existing.id);
+
+    try { await syncRecordedInvoice(existing.id); }
+    catch (err: any) { console.error('[invoice-documents] filing as recorded invoice failed:', err?.message || err); }
 
     const row = db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(existing.id);
     notifyAdmin({
@@ -547,6 +663,22 @@ router.delete('/:id', (req: Request, res: Response) => {
   }
   if (row.document_id) db.prepare('DELETE FROM operation_documents WHERE id = ?').run(row.document_id);
   db.prepare('DELETE FROM invoice_documents WHERE id = ?').run(row.id);
+
+  // The recorded copy goes too — unless money has already been matched to it
+  if (row.invoice_id) {
+    const recorded = db.prepare('SELECT * FROM invoices WHERE id = ?').get(row.invoice_id) as any;
+    const wires = db.prepare('SELECT COUNT(*) AS n FROM wire_transfers WHERE invoice_id = ?').get(row.invoice_id) as any;
+    if (recorded && !wires?.n) {
+      if (recorded.file_path) {
+        const recordedFile = path.join(invoicesDir, recorded.file_path);
+        if (fs.existsSync(recordedFile)) { try { fs.unlinkSync(recordedFile); } catch { /* best effort */ } }
+      }
+      try { db.prepare('DELETE FROM payments WHERE invoice_id = ?').run(recorded.id); } catch { /* table unavailable */ }
+      db.prepare(`DELETE FROM status_history WHERE entity_type = 'invoice' AND entity_id = ?`).run(recorded.id);
+      db.prepare('DELETE FROM invoices WHERE id = ?').run(recorded.id);
+      refreshEstimatedPaymentDate(db, recorded.operation_id ?? null);
+    }
+  }
 
   notifyAdmin({
     action: 'deleted', entity: 'Commercial Invoice', label: row.invoice_number,

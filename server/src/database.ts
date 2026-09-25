@@ -1493,6 +1493,8 @@ export async function initializeDatabase() {
   `);
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_invdoc_order ON invoice_documents(order_id)`); } catch (_) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_invdoc_operation ON invoice_documents(operation_id)`); } catch (_) {}
+  // The recorded invoice (`invoices` row) a generated invoice is filed as
+  try { db.exec(`ALTER TABLE invoice_documents ADD COLUMN invoice_id INTEGER`); } catch (_) { /* column may already exist */ }
 
   try {
     db.prepare(`INSERT OR IGNORE INTO document_categories (name) VALUES ('Commercial Invoice')`).run();

@@ -74,6 +74,8 @@ export interface DocLine {
   description?: string | null;
   /** Printed under the commercial name. */
   lot?: string | null;
+  /** An optional second lot of the same product, printed directly under the first. */
+  lot2?: string | null;
   /** Free note under the line — "80 drums on 20 pallets", "2 pallets lot 01-2601-001". */
   note?: string | null;
 }
@@ -109,10 +111,12 @@ export interface DocumentData {
   // Client
   client_name?: string | null;
   billing_address?: string | null; // one line per row
+  /** The customer's contact person, printed with their phone and email. */
+  client_contact?: string | null;
   client_phone?: string | null;
   tax_id?: string | null;
   eori?: string | null; // invoice only
-  /** Where the document gets emailed — carried on the record, never printed. */
+  /** Where the document gets emailed; the invoice also prints it under the contact. */
   contact_email?: string | null;
   // Items
   items?: DocLine[];
@@ -283,7 +287,8 @@ function cellValues(item: DocLine, index: number, layout: InvoiceLayout): Record
   const inRow = layout.hs_code === 'line';
   const nameParts = [item.commercial_name || ''];
   if (inRow && item.hs_code && !has('hs_code')) nameParts.push(`HS code: ${item.hs_code}`);
-  if (layout.show_lot && item.lot && !has('lot')) nameParts.push(`Lot : ${item.lot}`);
+  const lots = [item.lot, item.lot2].map(l => String(l || '').trim()).filter(Boolean);
+  if (layout.show_lot && lots.length && !has('lot')) nameParts.push(`Lot : ${lots.join('\n        ')}`);
   if (inRow && layout.show_line_note && item.note && !has('packing_note')) nameParts.push(item.note);
 
   return {
@@ -293,7 +298,7 @@ function cellValues(item: DocLine, index: number, layout: InvoiceLayout): Record
     packaging: item.packaging || '',
     packing_note: item.note || '',
     hs_code: item.hs_code || '',
-    lot: item.lot || '',
+    lot: lots.join('\n'),
     quantity: qty ? `${fmt(qty)}${unit ? ` ${unit}` : ''}` : '',
     unit_price: price ? `${fmt(price)} ${currency}${unit ? `/${unit}` : ''}` : '',
     amount: qty && price ? `${fmt(qty * price)} ${currency}` : '',
@@ -317,9 +322,30 @@ function fittedSize(doc: any, key: string, text: string, width: number, base = B
   return base - 2;
 }
 
-/** Wide tables (the invoice's ten columns) are set a size smaller to fit A4. */
-function tableSizes(cols: LayoutColumn[]): { cell: number; head: number } {
-  return cols.length > 7 ? { cell: 9, head: 8.5 } : { cell: BODY, head: 9.5 };
+/** Wide tables (the invoice's ten columns) are set smaller to fit A4. */
+function tableSizes(kind: DocumentKind, cols: LayoutColumn[]): { cell: number; head: number } {
+  if (kind === 'invoice' || cols.length > 7) return { cell: 8.5, head: 8 };
+  return { cell: BODY, head: 9.5 };
+}
+
+/**
+ * One size for every cell of the table: the largest at which each figure still
+ * fits its column whole. Shrinking cells one by one left the columns in
+ * different sizes.
+ */
+function uniformCellSize(doc: any, cols: LayoutColumn[], rows: Array<Record<string, string>>, base: number, pad: number): number {
+  let size = base;
+  for (const values of rows) {
+    for (const col of cols) {
+      const text = values[col.key] || '';
+      if (!NUMERIC_COLUMNS.has(col.key) || !text) continue;
+      doc.font('Helvetica');
+      for (const line of text.split('\n')) {
+        while (size > base - 2 && doc.fontSize(size).widthOfString(line) > col.width - pad * 2) size -= 0.5;
+      }
+    }
+  }
+  return size;
 }
 
 /** Renders the document and resolves with the finished PDF bytes. */
@@ -336,7 +362,7 @@ export async function buildDocumentPdf(kind: DocumentKind, data: DocumentData): 
   y = kind === 'invoice'
     ? drawSplitTitleAndMeta(doc, layout, data, y)
     : drawStackedTitleAndMeta(doc, layout, data, y);
-  y = drawTable(doc, layout, data, y + 10);
+  y = drawTable(doc, kind, layout, data, y + 10);
   y = drawDetailPanel(doc, layout, data, y);
   y = drawNotes(doc, data, y);
   y = drawOriginBlock(doc, data, y);
@@ -447,7 +473,11 @@ function drawTitle(doc: any, layout: InvoiceLayout, data: DocumentData, top: num
 function clientLines(layout: InvoiceLayout, data: DocumentData): Array<[string, string]> {
   const out: Array<[string, string]> = [];
   if (data.client_name) out.push([layout.labels.to, data.client_name]);
-  if (data.client_phone) out.push([layout.labels.contact, data.client_phone]);
+
+  // Contact person, then their phone and email under the same label
+  const contact = [data.client_contact, data.client_phone, data.contact_email]
+    .map(v => String(v || '').trim()).filter(Boolean);
+  contact.forEach((line, i) => out.push([i === 0 ? layout.labels.contact : '', line]));
 
   const address = String(data.billing_address || '').split('\n').map(s => s.trim()).filter(Boolean);
   address.forEach((line, i) => out.push([i === 0 ? layout.labels.address : '', line]));
@@ -515,11 +545,13 @@ function drawSplitTitleAndMeta(doc: any, layout: InvoiceLayout, data: DocumentDa
 }
 
 // ── Line-item table ───────────────────────────────────────────────────────
-function drawTable(doc: any, layout: InvoiceLayout, data: DocumentData, top: number): number {
+function drawTable(doc: any, kind: DocumentKind, layout: InvoiceLayout, data: DocumentData, top: number): number {
   const items = Array.isArray(data.items) ? data.items : [];
   const cols = fittedColumns(layout);
   const PAD = 5;
-  const size = tableSizes(cols);
+  const size = tableSizes(kind, cols);
+  const rows = items.map((item, index) => cellValues(item, index, layout));
+  const cellSize = uniformCellSize(doc, cols, rows, size.cell, PAD);
 
   // A heading may wrap between words, never inside one — a word too wide for
   // its column sets that heading smaller instead
@@ -544,17 +576,11 @@ function drawTable(doc: any, layout: InvoiceLayout, data: DocumentData, top: num
   }
 
   let y = top + HEADER_H;
-  items.forEach((item, index) => {
-    const values = cellValues(item, index, layout);
-
-    const sizes: Record<string, number> = {};
+  rows.forEach(values => {
     let contentH = 0;
+    doc.font('Helvetica').fontSize(cellSize);
     for (const col of cols) {
-      const inner = col.width - PAD * 2;
-      const fitted = fittedSize(doc, col.key, values[col.key] || '', inner, size.cell);
-      sizes[col.key] = fitted;
-      doc.font('Helvetica').fontSize(fitted);
-      contentH = Math.max(contentH, doc.heightOfString(values[col.key] || ' ', { width: inner }));
+      contentH = Math.max(contentH, doc.heightOfString(values[col.key] || ' ', { width: col.width - PAD * 2 }));
     }
     const rowH = Math.max(24, contentH + 10);
     y = ensureRoom(doc, y, rowH);
@@ -562,7 +588,7 @@ function drawTable(doc: any, layout: InvoiceLayout, data: DocumentData, top: num
     doc.rect(L, y, W, rowH).fill(GREEN_ROW);
     let cx = L;
     for (const col of cols) {
-      doc.font('Helvetica').fontSize(sizes[col.key]).fillColor(BLACK)
+      doc.font('Helvetica').fontSize(cellSize).fillColor(BLACK)
         .text(values[col.key] || '', cx + PAD, y + 5, { width: col.width - PAD * 2 });
       cx += col.width;
     }
@@ -572,14 +598,14 @@ function drawTable(doc: any, layout: InvoiceLayout, data: DocumentData, top: num
   // A one-line table totals itself — the masters only add the row when there
   // is more than one line to add up.
   if (layout.show_quantity_total && items.length > 1) {
-    y = drawQuantityTotalRow(doc, cols, items, y);
+    y = drawQuantityTotalRow(doc, cols, items, y, cellSize);
   }
 
   return y;
 }
 
 /** Astron's invoices close the table with a TOTAL row over quantity and amount. */
-function drawQuantityTotalRow(doc: any, cols: LayoutColumn[], items: DocLine[], y: number): number {
+function drawQuantityTotalRow(doc: any, cols: LayoutColumn[], items: DocLine[], y: number, size: number): number {
   const PAD = 5;
   const rowH = 24;
   y = ensureRoom(doc, y, rowH);
@@ -600,14 +626,14 @@ function drawQuantityTotalRow(doc: any, cols: LayoutColumn[], items: DocLine[], 
   // column on its own is far too narrow to hold the word
   const labelEnd = cols.findIndex(c => totals[c.key] !== undefined);
   const labelW = cols.slice(0, labelEnd < 0 ? 1 : labelEnd).reduce((sum, c) => sum + c.width, 0);
-  doc.font('Helvetica-Bold').fontSize(BODY).fillColor(BLACK)
+  doc.font('Helvetica-Bold').fontSize(size).fillColor(BLACK)
     .text('TOTAL', L + PAD, y + 6, { width: Math.max(40, labelW - PAD * 2), lineBreak: false });
 
   let cx = L;
   for (const col of cols) {
     const text = totals[col.key];
     if (text) {
-      doc.font('Helvetica-Bold').fontSize(fittedSize(doc, col.key, text, col.width - PAD * 2))
+      doc.font('Helvetica-Bold').fontSize(fittedSize(doc, col.key, text, col.width - PAD * 2, size))
         .fillColor(BLACK)
         .text(text, cx + PAD, y + 6, { width: col.width - PAD * 2, lineBreak: false });
     }
