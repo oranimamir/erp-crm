@@ -1498,6 +1498,21 @@ export async function initializeDatabase() {
     db.prepare(`INSERT OR IGNORE INTO document_categories (name) VALUES ('Commercial Invoice')`).run();
   } catch { /* ignore */ }
 
+  // ── Customer / supplier details ─────────────────────────────────────────
+  // VAT number and contact person, filled by hand or from their documents
+  for (const table of ['customers', 'suppliers']) {
+    try { db.exec(`ALTER TABLE ${table} ADD COLUMN vat_number TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE ${table} ADD COLUMN contact_person TEXT`); } catch (_) {}
+  }
+  // What the AI read off a document, so a document is only ever read once
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS party_extractions (
+      source_key TEXT PRIMARY KEY,
+      result TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
   // ── Operation category ──────────────────────────────────────────────────
   // 'blending' or 'trading'; NULL for operations created before the choice existed.
   try { db.exec(`ALTER TABLE operations ADD COLUMN category TEXT`); } catch (_) {}

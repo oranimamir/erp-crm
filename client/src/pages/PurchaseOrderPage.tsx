@@ -326,6 +326,7 @@ export default function PurchaseOrderPage() {
         billing_address: data.address || '',
         client_phone: data.phone || '',
         contact_email: data.email || '',
+        tax_id: data.vat_number || prev.tax_id,
       }));
       const missing = [!data.address && 'address', !data.phone && 'phone', !data.email && 'email'].filter(Boolean);
       addToast(

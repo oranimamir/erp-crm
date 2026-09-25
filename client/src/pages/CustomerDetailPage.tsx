@@ -4,7 +4,7 @@ import api from '../lib/api';
 import Card from '../components/ui/Card';
 import StatusBadge from '../components/ui/StatusBadge';
 import DocumentDefaults, { ProfileBar, useCustomerProfiles, type DocType } from '../components/CustomerDocumentProfiles';
-import { ArrowLeft, Mail, Phone, MapPin, Building, FileText, ShoppingCart, Package, DollarSign } from 'lucide-react';
+import { ArrowLeft, Mail, Phone, MapPin, Building, FileText, ShoppingCart, Package, DollarSign, Hash, UserRound } from 'lucide-react';
 
 type TabId = 'overview' | DocType;
 
@@ -63,7 +63,9 @@ export default function CustomerDetailPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
           {customer.email && <div className="flex items-center gap-2 text-gray-600"><Mail size={16} /> {customer.email}</div>}
           {customer.phone && <div className="flex items-center gap-2 text-gray-600"><Phone size={16} /> {customer.phone}</div>}
-          {customer.address && <div className="flex items-center gap-2 text-gray-600"><MapPin size={16} /> {customer.address}</div>}
+          {customer.address && <div className="flex items-start gap-2 text-gray-600"><MapPin size={16} className="mt-0.5 shrink-0" /> <span className="whitespace-pre-line">{customer.address}</span></div>}
+          {customer.vat_number && <div className="flex items-center gap-2 text-gray-600"><Hash size={16} /> VAT {customer.vat_number}</div>}
+          {customer.contact_person && <div className="flex items-center gap-2 text-gray-600"><UserRound size={16} /> {customer.contact_person}</div>}
           {customer.company && <div className="flex items-center gap-2 text-gray-600"><Building size={16} /> {customer.company}</div>}
         </div>
         {customer.notes && <p className="mt-4 text-sm text-gray-600 bg-gray-50 rounded-lg p-3">{customer.notes}</p>}

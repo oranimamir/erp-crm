@@ -37,7 +37,7 @@ router.get('/:id', (req: Request, res: Response) => {
 });
 
 router.post('/', (req: Request, res: Response) => {
-  const { name, email, phone, address, category, notes } = req.body;
+  const { name, email, phone, address, category, notes, vat_number, contact_person } = req.body;
   if (!name || !category) { res.status(400).json({ error: 'Name and category are required' }); return; }
 
   const validCategories = ['logistics', 'blenders', 'raw_materials', 'shipping'];
@@ -47,8 +47,8 @@ router.post('/', (req: Request, res: Response) => {
   }
 
   const result = db.prepare(
-    'INSERT INTO suppliers (name, email, phone, address, category, notes) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(name, email || null, phone || null, address || null, category, notes || null);
+    'INSERT INTO suppliers (name, email, phone, address, category, notes, vat_number, contact_person) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(name, email || null, phone || null, address || null, category, notes || null, vat_number || null, contact_person || null);
 
   const supplier = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(result.lastInsertRowid) as any;
   notifyAdmin({ action: 'created', entity: 'Supplier', label: supplier.name, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
@@ -56,15 +56,19 @@ router.post('/', (req: Request, res: Response) => {
 });
 
 router.put('/:id', (req: Request, res: Response) => {
-  const existing = db.prepare('SELECT id FROM suppliers WHERE id = ?').get(req.params.id);
+  const existing = db.prepare('SELECT id, vat_number, contact_person FROM suppliers WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Supplier not found' }); return; }
 
-  const { name, email, phone, address, category, notes } = req.body;
+  const { name, email, phone, address, category, notes, vat_number, contact_person } = req.body;
   if (!name || !category) { res.status(400).json({ error: 'Name and category are required' }); return; }
 
   db.prepare(
-    `UPDATE suppliers SET name=?, email=?, phone=?, address=?, category=?, notes=?, updated_at=datetime('now') WHERE id=?`
-  ).run(name, email || null, phone || null, address || null, category, notes || null, req.params.id);
+    `UPDATE suppliers SET name=?, email=?, phone=?, address=?, category=?, notes=?, vat_number=?, contact_person=?, updated_at=datetime('now') WHERE id=?`
+  ).run(name, email || null, phone || null, address || null, category, notes || null,
+    // Kept when a form that doesn't show them saves
+    vat_number !== undefined ? (vat_number || null) : existing.vat_number,
+    contact_person !== undefined ? (contact_person || null) : existing.contact_person,
+    req.params.id);
 
   const supplier = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(req.params.id) as any;
   notifyAdmin({ action: 'updated', entity: 'Supplier', label: supplier.name, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });

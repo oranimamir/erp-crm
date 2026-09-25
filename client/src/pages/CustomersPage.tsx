@@ -10,7 +10,7 @@ import SearchBar from '../components/ui/SearchBar';
 import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
-import { Plus, Users, Eye, Pencil, Trash2, BarChart3, FileSpreadsheet } from 'lucide-react';
+import { Plus, Users, Eye, Pencil, Trash2, BarChart3, FileSpreadsheet, FileSearch } from 'lucide-react';
 import { downloadExcel } from '../lib/exportExcel';
 
 const CHART_COLORS = [
@@ -30,7 +30,7 @@ export default function CustomersPage() {
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<any>(null);
   const [deleteId, setDeleteId] = useState<number | null>(null);
-  const [form, setForm] = useState({ name: '', email: '', phone: '', address: '', company: '', notes: '' });
+  const [form, setForm] = useState({ name: '', email: '', phone: '', address: '', company: '', notes: '', vat_number: '', contact_person: '' });
   const [saving, setSaving] = useState(false);
   const [paymentData, setPaymentData] = useState<any[]>([]);
 
@@ -49,13 +49,13 @@ export default function CustomersPage() {
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ name: '', email: '', phone: '', address: '', company: '', notes: '' });
+    setForm({ name: '', email: '', phone: '', address: '', company: '', notes: '', vat_number: '', contact_person: '' });
     setShowModal(true);
   };
 
   const openEdit = (c: any) => {
     setEditing(c);
-    setForm({ name: c.name || '', email: c.email || '', phone: c.phone || '', address: c.address || '', company: c.company || '', notes: c.notes || '' });
+    setForm({ name: c.name || '', email: c.email || '', phone: c.phone || '', address: c.address || '', company: c.company || '', notes: c.notes || '', vat_number: c.vat_number || '', contact_person: c.contact_person || '' });
     setShowModal(true);
   };
 
@@ -101,6 +101,9 @@ export default function CustomersPage() {
             downloadExcel('customers', ['Name', 'Email', 'Phone', 'Company', 'Address', 'Notes'],
               res.data.data.map((c: any) => [c.name, c.email || '', c.phone || '', c.company || '', c.address || '', c.notes || '']));
           }}><FileSpreadsheet size={16} /> Export Excel</Button>
+          <Link to="/directory/fill">
+            <Button variant="secondary"><FileSearch size={16} /> Fill from documents</Button>
+          </Link>
           <Button onClick={openCreate}><Plus size={16} /> Add Customer</Button>
         </div>
       </div>
@@ -163,7 +166,11 @@ export default function CustomersPage() {
             <Input label="Email" type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
             <Input label="Phone" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} />
           </div>
-          <Input label="Company" value={form.company} onChange={e => setForm({ ...form, company: e.target.value })} />
+          <Input label="Company (legal name)" value={form.company} onChange={e => setForm({ ...form, company: e.target.value })} />
+          <div className="grid grid-cols-2 gap-4">
+            <Input label="VAT / Tax ID" value={form.vat_number} onChange={e => setForm({ ...form, vat_number: e.target.value })} />
+            <Input label="Contact person" value={form.contact_person} onChange={e => setForm({ ...form, contact_person: e.target.value })} />
+          </div>
           <Input label="Address" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
           <div className="space-y-1">
             <label className="block text-sm font-medium text-gray-700">Notes</label>

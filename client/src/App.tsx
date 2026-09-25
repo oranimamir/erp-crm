@@ -19,6 +19,7 @@ import OrderDetailPage from './pages/OrderDetailPage';
 import OrderConfirmationPage from './pages/OrderConfirmationPage';
 import PurchaseOrderPage from './pages/PurchaseOrderPage';
 import TripleWDetailsPage from './pages/TripleWDetailsPage';
+import DirectoryFillPage from './pages/DirectoryFillPage';
 import InvoiceDocumentPage from './pages/InvoiceDocumentPage';
 import ShipmentsPage from './pages/ShipmentsPage';
 import ShipmentFormPage from './pages/ShipmentFormPage';
@@ -67,6 +68,7 @@ export default function App() {
               <Route path="/purchase-orders/new" element={<PurchaseOrderPage />} />
               <Route path="/purchase-orders/:id" element={<PurchaseOrderPage />} />
               <Route path="/triplew" element={<TripleWDetailsPage />} />
+              <Route path="/directory/fill" element={<DirectoryFillPage />} />
               <Route path="/invoices/documents/new" element={<InvoiceDocumentPage />} />
               <Route path="/invoices/documents/:id" element={<InvoiceDocumentPage />} />
               <Route path="/shipments" element={<ShipmentsPage />} />

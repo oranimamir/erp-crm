@@ -55,7 +55,7 @@ function parseRecord(row: any) {
 
 function supplierById(id: number | null | undefined): any {
   if (!id) return null;
-  return db.prepare('SELECT id, name, email, phone, address FROM suppliers WHERE id = ?').get(id) ?? null;
+  return db.prepare('SELECT id, name, email, phone, address, vat_number FROM suppliers WHERE id = ?').get(id) ?? null;
 }
 
 /**
@@ -163,7 +163,7 @@ router.get('/prepare', (req: Request, res: Response) => {
     client_name: supplier?.name || '',
     billing_address: supplier?.address || '',
     client_phone: supplier?.phone || '',
-    tax_id: '',
+    tax_id: supplier?.vat_number || '',
     contact_email: supplier?.email || '',
     // Products and quantities from the order; the purchase price is typed in,
     // so the selling price never reaches the supplier.

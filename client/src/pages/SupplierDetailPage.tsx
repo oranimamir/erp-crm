@@ -4,7 +4,7 @@ import api from '../lib/api';
 import Card from '../components/ui/Card';
 import StatusBadge from '../components/ui/StatusBadge';
 import Badge from '../components/ui/Badge';
-import { ArrowLeft, Mail, Phone, MapPin, Tag, FileText, ShoppingCart, Package, DollarSign } from 'lucide-react';
+import { ArrowLeft, Mail, Phone, MapPin, Tag, FileText, ShoppingCart, Package, DollarSign, Hash, UserRound } from 'lucide-react';
 
 const categoryColors: Record<string, 'blue' | 'purple' | 'orange' | 'green'> = {
   logistics: 'blue', blenders: 'purple', raw_materials: 'orange', shipping: 'green',
@@ -57,7 +57,9 @@ export default function SupplierDetailPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
           {supplier.email && <div className="flex items-center gap-2 text-gray-600"><Mail size={16} /> {supplier.email}</div>}
           {supplier.phone && <div className="flex items-center gap-2 text-gray-600"><Phone size={16} /> {supplier.phone}</div>}
-          {supplier.address && <div className="flex items-center gap-2 text-gray-600"><MapPin size={16} /> {supplier.address}</div>}
+          {supplier.address && <div className="flex items-start gap-2 text-gray-600"><MapPin size={16} className="mt-0.5 shrink-0" /> <span className="whitespace-pre-line">{supplier.address}</span></div>}
+          {supplier.vat_number && <div className="flex items-center gap-2 text-gray-600"><Hash size={16} /> VAT {supplier.vat_number}</div>}
+          {supplier.contact_person && <div className="flex items-center gap-2 text-gray-600"><UserRound size={16} /> {supplier.contact_person}</div>}
         </div>
         {supplier.notes && <p className="mt-4 text-sm text-gray-600 bg-gray-50 rounded-lg p-3">{supplier.notes}</p>}
       </Card>

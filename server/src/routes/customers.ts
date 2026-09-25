@@ -36,12 +36,12 @@ router.get('/:id', (req: Request, res: Response) => {
 
 // Create customer
 router.post('/', (req: Request, res: Response) => {
-  const { name, email, phone, address, company, notes } = req.body;
+  const { name, email, phone, address, company, notes, vat_number, contact_person } = req.body;
   if (!name) { res.status(400).json({ error: 'Name is required' }); return; }
 
   const result = db.prepare(
-    'INSERT INTO customers (name, email, phone, address, company, notes) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(name, email || null, phone || null, address || null, company || null, notes || null);
+    'INSERT INTO customers (name, email, phone, address, company, notes, vat_number, contact_person) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(name, email || null, phone || null, address || null, company || null, notes || null, vat_number || null, contact_person || null);
 
   const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(result.lastInsertRowid) as any;
   notifyAdmin({ action: 'created', entity: 'Customer', label: customer.name, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
@@ -50,15 +50,19 @@ router.post('/', (req: Request, res: Response) => {
 
 // Update customer
 router.put('/:id', (req: Request, res: Response) => {
-  const existing = db.prepare('SELECT id FROM customers WHERE id = ?').get(req.params.id);
+  const existing = db.prepare('SELECT id, vat_number, contact_person FROM customers WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Customer not found' }); return; }
 
-  const { name, email, phone, address, company, notes } = req.body;
+  const { name, email, phone, address, company, notes, vat_number, contact_person } = req.body;
   if (!name) { res.status(400).json({ error: 'Name is required' }); return; }
 
+  // VAT and contact are kept when a form that doesn't show them saves
   db.prepare(
-    `UPDATE customers SET name=?, email=?, phone=?, address=?, company=?, notes=?, updated_at=datetime('now') WHERE id=?`
-  ).run(name, email || null, phone || null, address || null, company || null, notes || null, req.params.id);
+    `UPDATE customers SET name=?, email=?, phone=?, address=?, company=?, notes=?, vat_number=?, contact_person=?, updated_at=datetime('now') WHERE id=?`
+  ).run(name, email || null, phone || null, address || null, company || null, notes || null,
+    vat_number !== undefined ? (vat_number || null) : existing.vat_number,
+    contact_person !== undefined ? (contact_person || null) : existing.contact_person,
+    req.params.id);
 
   const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(req.params.id) as any;
   notifyAdmin({ action: 'updated', entity: 'Customer', label: customer.name, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
