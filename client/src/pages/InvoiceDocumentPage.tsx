@@ -221,6 +221,7 @@ export default function InvoiceDocumentPage() {
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState<InvData>(blankData());
   const [record, setRecord] = useState<InvoiceRecord | null>(null);
+  const [packingListId, setPackingListId] = useState<number | null>(null);
   const [orderId, setOrderId] = useState<number | null>(orderIdParam ? Number(orderIdParam) : null);
   const [operationId, setOperationId] = useState<number | null>(operationIdParam ? Number(operationIdParam) : null);
 
@@ -333,6 +334,14 @@ export default function InvoiceDocumentPage() {
     load();
     return () => { cancelled = true; };
   }, [id, orderIdParam]);
+
+  // Whether this invoice already has its packing list
+  useEffect(() => {
+    if (!record) { setPackingListId(null); return; }
+    api.get(`/packing-lists/by-invoice/${record.id}`)
+      .then(({ data }) => setPackingListId(data?.[0]?.id ?? null))
+      .catch(() => setPackingListId(null));
+  }, [record?.id]);
 
   useEffect(() => {
     if (!showEmail) return;
@@ -507,6 +516,11 @@ export default function InvoiceDocumentPage() {
           </Button>
           <Button variant="secondary" size="sm" onClick={() => setShowEmail(true)} disabled={!record}>
             <Mail size={14} /> Send by email
+          </Button>
+          <Button variant="secondary" size="sm" disabled={!record}
+            onClick={() => record && navigate(packingListId ? `/packing-lists/${packingListId}` : `/packing-lists/new?invoice_document_id=${record.id}`)}
+            title={record ? 'Packing list for this invoice' : 'Generate the invoice first'}>
+            <Package size={14} /> Packing list{packingListId ? ' ✓' : ''}
           </Button>
         </div>
       </div>

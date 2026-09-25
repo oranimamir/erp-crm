@@ -1552,6 +1552,34 @@ export async function initializeDatabase() {
     db.prepare(`INSERT OR IGNORE INTO document_categories (name) VALUES ('Purchase Order')`).run();
   } catch { /* ignore */ }
 
+  // Packing lists — one per generated invoice, filed as <operation#>PL.pdf
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS packing_lists (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pl_number TEXT NOT NULL UNIQUE,
+      invoice_document_id INTEGER,
+      order_id INTEGER,
+      operation_id INTEGER,
+      data TEXT NOT NULL,
+      file_path TEXT,
+      file_name TEXT,
+      document_id INTEGER,
+      created_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (invoice_document_id) REFERENCES invoice_documents(id) ON DELETE SET NULL,
+      FOREIGN KEY (order_id)     REFERENCES orders(id)              ON DELETE CASCADE,
+      FOREIGN KEY (operation_id) REFERENCES operations(id)          ON DELETE SET NULL,
+      FOREIGN KEY (document_id)  REFERENCES operation_documents(id) ON DELETE SET NULL,
+      FOREIGN KEY (created_by)   REFERENCES users(id)               ON DELETE SET NULL
+    )
+  `);
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_pl_invoice ON packing_lists(invoice_document_id)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_pl_operation ON packing_lists(operation_id)`); } catch (_) {}
+  try {
+    db.prepare(`INSERT OR IGNORE INTO document_categories (name) VALUES ('Packing list')`).run();
+  } catch { /* ignore */ }
+
   // ── Issuing entities ────────────────────────────────────────────────────
   // The entity is derived from the operation number (SOBE… / SONL…) and decides
   // the address, VAT/KVK and bank block printed on every document. Supersedes

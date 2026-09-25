@@ -21,6 +21,7 @@ import {
 import { normalizeLayout } from '../lib/invoiceLayout.js';
 import { getEurRate } from '../lib/fx.js';
 import { refreshEstimatedPaymentDate } from '../lib/paymentTerms.js';
+import { deletePackingListsForInvoice } from './packing-lists.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
@@ -662,6 +663,8 @@ router.delete('/:id', (req: Request, res: Response) => {
     if (fs.existsSync(filePath)) { try { fs.unlinkSync(filePath); } catch { /* best effort */ } }
   }
   if (row.document_id) db.prepare('DELETE FROM operation_documents WHERE id = ?').run(row.document_id);
+  // The packing list packs this invoice's goods, so it goes with it
+  deletePackingListsForInvoice(row.id);
   db.prepare('DELETE FROM invoice_documents WHERE id = ?').run(row.id);
 
   // The recorded copy goes too — unless money has already been matched to it

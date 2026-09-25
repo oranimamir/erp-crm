@@ -40,6 +40,12 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - Line table uses one font size for every cell; optional `lot2` prints under `lot`; client block prints contact person, phone and email
 - Document forms (invoice/OC/PO): Tab on an empty field accepts its grey placeholder (`client/src/lib/placeholderTab.ts`)
 
+## Packing Lists
+- `/api/packing-lists`, page `/packing-lists/:id`; built from a generated invoice (`invoice_document_id`), numbered `<operation#>PL`, filed under the operation documents ("Packing list")
+- Packaging per line from Inventory → Packaging (`packaging` table) via `server/src/lib/packing.ts`: code token in the reference (BU25, DU25…) + longest product-name match; ties offered in a dropdown
+- units = ceil(net / product_mass); pallets = ceil(units / units_per_pallet); gross = net + units × weight_packaging + pallets × weight_pallet; units/pallets can be overridden; server recomputes on save
+- Deleted with its invoice
+
 ## TripleW Entities
 - Table `company_entities` (edited on the TripleW Details page, `/api/company-entities`); `server/src/lib/companyEntity.ts`
 - Entity picked from the operation number (`SO<code>…`), default entity otherwise

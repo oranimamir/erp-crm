@@ -6,7 +6,7 @@ import {
   ArrowLeft, Briefcase, ShoppingCart, FileText, Upload, Trash2,
   Download, Eye, X, Plus, Receipt, ExternalLink, CheckCircle,
   AlertCircle, Loader2, Edit2, Link2, Search, Truck, Landmark,
-  FileCheck2, Receipt as ReceiptIcon,
+  FileCheck2, Receipt as ReceiptIcon, Package,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
@@ -198,6 +198,7 @@ export default function OperationDetailPage() {
   const [orderConfirmation, setOrderConfirmation] = useState<{ id: number; file_name: string | null } | null>(null);
   const [purchaseOrder, setPurchaseOrder] = useState<{ id: number; file_name: string | null } | null>(null);
   const [invoiceDoc, setInvoiceDoc] = useState<{ id: number; file_name: string | null } | null>(null);
+  const [packingList, setPackingList] = useState<{ id: number; file_name: string | null } | null>(null);
 
   // Link Order modal
   const [showLinkOrder, setShowLinkOrder] = useState(false);
@@ -297,6 +298,9 @@ export default function OperationDetailPage() {
     api.get(`/invoice-documents/by-order/${operation.order_id}`)
       .then(({ data }) => setInvoiceDoc(data?.[0] || null))
       .catch(() => setInvoiceDoc(null));
+    api.get(`/packing-lists/by-order/${operation.order_id}`)
+      .then(({ data }) => setPackingList(data?.[0] || null))
+      .catch(() => setPackingList(null));
   }, [operation?.order_id, operation?.documents.length]);
 
   // ── Preview ─────────────────────────────────────────────────────────────────
@@ -747,6 +751,21 @@ export default function OperationDetailPage() {
                 title={invoiceDoc ? `Edit ${invoiceDoc.file_name || 'the invoice'}` : 'Generate a commercial invoice from this order'}
               >
                 <ReceiptIcon size={13} /> Invoice{invoiceDoc ? ' ✓' : ''}
+              </button>
+              {/* The packing list is built from the generated invoice */}
+              <button
+                onClick={() => navigate(
+                  packingList
+                    ? `/packing-lists/${packingList.id}`
+                    : `/packing-lists/new?invoice_document_id=${invoiceDoc?.id}`
+                )}
+                disabled={!packingList && !invoiceDoc}
+                className="flex items-center gap-1 text-xs sm:text-sm text-primary-600 hover:text-primary-700 border border-primary-200 bg-primary-50 rounded-lg px-2 py-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                title={packingList
+                  ? `Edit ${packingList.file_name || 'the packing list'}`
+                  : invoiceDoc ? 'Generate the packing list from the invoice' : 'Generate the invoice first — the packing list is built from it'}
+              >
+                <Package size={13} /> Packing List{packingList ? ' ✓' : ''}
               </button>
               <button
                 onClick={() => navigate(`/orders/${operation.order_id}/edit`)}
