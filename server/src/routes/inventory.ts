@@ -24,7 +24,8 @@ const router = Router();
 
 router.get('/', (req: Request, res: Response) => {
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
-  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+  // Exports and pickers ask for everything at once, so the cap is set well above the data size
+  const limit = Math.min(10000, Math.max(1, parseInt(req.query.limit as string) || 20));
   const search = (req.query.search as string) || '';
   const category = (req.query.category as string) || '';
   const offset = (page - 1) * limit;

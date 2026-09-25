@@ -42,6 +42,7 @@ import employeeExpenseRoutes, { backfillEmployeeExpensesHash } from './routes/em
 import workingCapitalRoutes from './routes/working-capital.js';
 import healthRoutes from './routes/health.js';
 import cron from 'node-cron';
+import { markOverdueInvoices } from './lib/overdue.js';
 import { checkEmailForStockUpdates } from './lib/email-stock.js';
 import { startBackupScheduler, buildCronExpr } from './lib/backup-scheduler.js';
 import { getEurRate } from './lib/fx.js';
@@ -151,6 +152,18 @@ try {
   const schedRow = db.prepare("SELECT value FROM app_settings WHERE key = 'backup_schedule'").get() as any;
   const sched = schedRow ? JSON.parse(schedRow.value) : { frequency: 'weekly', day: 0, hour: 2, minute: 0 };
   startBackupScheduler(buildCronExpr(sched));
+}
+
+// Sent invoices past their due date become overdue — at startup, then nightly
+{
+  const run = () => {
+    try {
+      const n = markOverdueInvoices();
+      if (n) console.log(`[overdue] marked ${n} invoice(s) overdue`);
+    } catch (err) { console.error('[overdue]', err); }
+  };
+  run();
+  cron.schedule('5 0 * * *', run);
 }
 
 // Poll inbox for warehouse stock CSV every 15 minutes

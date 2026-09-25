@@ -604,7 +604,18 @@ export default function OperationsPage() {
           </button>
           <button
             onClick={async () => {
-              const { data } = await api.get('/operations', { params: { page: 1, limit: 9999, search } });
+              // The export follows what's on screen: the tab, the year and the filters
+              const params: any = { page: 1, limit: 10000, sort_by: sortBy, sort_dir: sortDir, tab: activeTab };
+              if (activeTab === 'completed' && completedYear) params.year = completedYear;
+              if (search) params.search = search;
+              if (filterCustomer) params.customer = filterCustomer;
+              if (filterStatus) params.status = filterStatus;
+              if (filterDateFrom || filterDateTo) {
+                params.date_field = filterDateField;
+                if (filterDateFrom) params.date_from = filterDateFrom;
+                if (filterDateTo) params.date_to = filterDateTo;
+              }
+              const { data } = await api.get('/operations', { params });
               downloadExcel('operations',
                 ['Operation #', 'Order #', 'Country', 'Customer / Supplier', 'Status', 'ETD', 'ETA', 'Docs', 'Invoices', 'Quantity (MT)', 'Invoice Total (EUR)', 'Order Date', 'Invoice Date', 'Est. Payment Date', 'Wire Transfer Date'],
                 data.data.map((op: any) => [
