@@ -194,7 +194,9 @@ export default function PackingListPage() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [finalizing, setFinalizing] = useState(false);
   const [billOfLading, setBillOfLading] = useState<BillOfLading | null>(null);
-  const [comparing, setComparing] = useState(false);
+  const [invoiceFile, setInvoiceFile] = useState<{ file_path: string; file_name: string; number: string } | null>(null);
+  // Which document is shown beside the packing list
+  const [comparing, setComparing] = useState<'bl' | 'invoice' | null>(null);
 
   const previewUrlRef = useRef<string | null>(null);
   previewUrlRef.current = previewUrl;
@@ -251,6 +253,15 @@ export default function PackingListPage() {
     load();
     return () => { cancelled = true; };
   }, [id, invoiceParam]);
+
+  // The invoice this PL packs, for "Compare with invoice"
+  useEffect(() => {
+    if (!invoiceDocId) { setInvoiceFile(null); return; }
+    api.get(`/invoice-documents/${invoiceDocId}`)
+      .then(({ data }) => setInvoiceFile(data?.file_path
+        ? { file_path: data.file_path, file_name: data.file_name, number: data.invoice_number } : null))
+      .catch(() => setInvoiceFile(null));
+  }, [invoiceDocId]);
 
   // The operation's Bill of Lading, if uploaded — enables "Compare with BL"
   useEffect(() => {
@@ -403,18 +414,23 @@ export default function PackingListPage() {
           <Button variant="secondary" size="sm" onClick={handlePreview} disabled={previewing}>
             {previewing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
           </Button>
-          {billOfLading && (
-            <Button variant="secondary" size="sm" onClick={() => setComparing(true)}
-              title={`Show ${billOfLading.file_name} next to this packing list`}>
-              <Columns2 size={14} /> Compare with BL
-            </Button>
-          )}
-          {comparing && billOfLading && (
+          <Button variant="secondary" size="sm" onClick={() => setComparing('invoice')} disabled={!invoiceFile}
+            title={invoiceFile ? `Show invoice ${invoiceFile.number} next to this packing list` : 'The invoice PDF is not available'}>
+            <Columns2 size={14} /> Compare with invoice
+          </Button>
+          <Button variant="secondary" size="sm" onClick={() => setComparing('bl')} disabled={!billOfLading}
+            title={billOfLading ? `Show ${billOfLading.file_name} next to this packing list` : 'No BL in the operation documents yet'}>
+            <Columns2 size={14} /> Compare with BL
+          </Button>
+          {comparing && (comparing === 'bl' ? billOfLading : invoiceFile) && (
             <OrderCompareModal
+              key={comparing}
               title="Packing list"
-              left={{ title: 'Bill of Lading', filePath: billOfLading.file_path, fileName: billOfLading.file_name, subfolder: 'operation-docs' }}
+              left={comparing === 'bl'
+                ? { title: 'Bill of Lading', filePath: billOfLading!.file_path, fileName: billOfLading!.file_name, subfolder: 'operation-docs' }
+                : { title: `Invoice ${invoiceFile!.number}`, filePath: invoiceFile!.file_path, fileName: invoiceFile!.file_name, subfolder: 'operation-docs' }}
               renderPreview={async () => (await api.post('/packing-lists/preview', { data: toPayload(form) }, { responseType: 'blob' })).data as Blob}
-              onClose={() => setComparing(false)}
+              onClose={() => setComparing(null)}
             />
           )}
           <Button variant={packingList?.status === 'final' ? 'secondary' : 'primary'} size="sm" onClick={handleSave} disabled={saving}
