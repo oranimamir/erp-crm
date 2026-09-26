@@ -36,7 +36,7 @@ function timeAgo(dateStr: string): string {
 
 // Zoho-style sidebar item: a blue accent bar marks the current module
 const navClass = ({ isActive }: { isActive: boolean }) =>
-  `flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-colors border-l-[3px] ${
+  `flex items-center gap-3 px-3 py-2.5 rounded-md text-[15px] font-semibold transition-colors border-l-[3px] ${
     isActive
       ? 'bg-white/10 text-white border-[#3d9bff]'
       : 'text-[#b8c2d3] border-transparent hover:bg-white/5 hover:text-white'
@@ -121,7 +121,7 @@ export default function Layout() {
                 onClick={() => setSidebarOpen(false)}
                 className={navClass}
               >
-                <item.icon size={18} />
+                <item.icon size={20} />
                 {item.label}
               </NavLink>
             ))}
@@ -131,7 +131,7 @@ export default function Layout() {
                 onClick={() => setSidebarOpen(false)}
                 className={navClass}
               >
-                <Shield size={18} />
+                <Shield size={20} />
                 User Management
               </NavLink>
             )}
@@ -140,7 +140,7 @@ export default function Layout() {
               onClick={() => setSidebarOpen(false)}
               className={navClass}
             >
-              <Settings size={18} />
+              <Settings size={20} />
               Settings
             </NavLink>
           </div>
