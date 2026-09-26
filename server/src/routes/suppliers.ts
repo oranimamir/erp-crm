@@ -55,6 +55,29 @@ router.post('/', (req: Request, res: Response) => {
   res.status(201).json(supplier);
 });
 
+/**
+ * The supplier record for a name on the Suppliers list. That list also shows
+ * names known only from expense invoices; opening one creates its record, so
+ * its details can be filled in for trading purchase orders.
+ */
+router.post('/resolve', (req: Request, res: Response) => {
+  const name = String(req.body?.name || '').trim();
+  if (!name) { res.status(400).json({ error: 'Name is required' }); return; }
+
+  const existing = db.prepare('SELECT * FROM suppliers WHERE LOWER(TRIM(name)) = LOWER(?)').get(name) as any;
+  if (existing) { res.json(existing); return; }
+
+  const hint = String(req.body?.category || '').toLowerCase();
+  const category = /blend/.test(hint) ? 'blenders'
+    : /logist/.test(hint) ? 'logistics'
+    : /ship|freight/.test(hint) ? 'shipping'
+    : 'raw_materials';
+  const result = db.prepare('INSERT INTO suppliers (name, category) VALUES (?, ?)').run(name, category);
+  const supplier = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(result.lastInsertRowid) as any;
+  notifyAdmin({ action: 'created', entity: 'Supplier', label: supplier.name, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
+  res.status(201).json(supplier);
+});
+
 router.put('/:id', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT id, vat_number, contact_person FROM suppliers WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Supplier not found' }); return; }

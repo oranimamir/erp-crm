@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import { useCategories } from '../lib/categories';
@@ -43,7 +43,18 @@ type SupplierRow = { rowKey: string; id?: number; name: string; category: string
 
 function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
   const { addToast } = useToast();
+  const navigate = useNavigate();
   const { demoCategories, salesCategories, addCategory, customCategories, removeCategory } = useCategories();
+
+  /** Opens the supplier's Summary | Details page, creating its record on first open. */
+  const openSupplier = async (row: SupplierRow) => {
+    try {
+      const { data } = await api.post('/suppliers/resolve', { name: row.name, category: row.category });
+      navigate(`/suppliers/${data.id}`);
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to open the supplier', 'error');
+    }
+  };
   const categories = domain === 'demo' ? demoCategories : salesCategories;
   const colorMap = domain === 'demo' ? DEMO_CAT_COLORS : SALES_CAT_COLORS;
   const defaultCategory = domain === 'demo' ? 'Other' : (salesCategories[0] || 'Logistics');
@@ -456,15 +467,19 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
                       />
                     </td>
                     <td className="px-4 py-2.5">
-                      <Link to={`/supplier-invoices?supplier=${encodeURIComponent(row.name)}&tab=${domain}`}
-                        className="text-primary-600 hover:text-primary-800 font-medium capitalize">
+                      <button type="button" onClick={() => openSupplier(row)}
+                        className="text-primary-600 hover:text-primary-800 font-medium capitalize text-left"
+                        title="Open the supplier's Summary and Details">
                         {row.name}
-                      </Link>
+                      </button>
                       {row.source === 'hardcoded' && (
                         <span className="ml-2 text-[10px] uppercase tracking-wide text-gray-400 font-medium">built-in</span>
                       )}
                       {typeof row.invoiceCount === 'number' && row.invoiceCount > 0 && (
-                        <span className="ml-2 text-[11px] text-gray-400">· {row.invoiceCount} invoice{row.invoiceCount === 1 ? '' : 's'}</span>
+                        <Link to={`/supplier-invoices?supplier=${encodeURIComponent(row.name)}&tab=${domain}`}
+                          className="ml-2 text-[11px] text-gray-400 hover:text-primary-600 hover:underline">
+                          · {row.invoiceCount} invoice{row.invoiceCount === 1 ? '' : 's'}
+                        </Link>
                       )}
                     </td>
                     <td className="px-4 py-2.5">
