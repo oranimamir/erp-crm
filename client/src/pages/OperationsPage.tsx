@@ -301,6 +301,12 @@ export default function OperationsPage() {
         const fd = new FormData();
         fd.append('file', blFile);
         fd.append('notes', `Bill of Lading — BL date ${formatDate(blDate)}`);
+        try {
+          // Filed as a Bill of Lading, so the packing list can find it
+          const { data: categories } = await api.get('/operations/categories');
+          const bl = (categories || []).find((c: any) => /bill of lading/i.test(c.name));
+          if (bl) fd.append('category_id', String(bl.id));
+        } catch { /* uncategorised is fine */ }
         try { await api.post(`/operations/${blPrompt.opId}/documents`, fd, { headers: { 'Content-Type': 'multipart/form-data' } }); }
         catch { /* document upload is best-effort */ }
       }

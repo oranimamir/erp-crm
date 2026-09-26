@@ -1,16 +1,43 @@
 @import "tailwindcss";
 
+/* ── Zoho-CRM style theme ────────────────────────────────────────────────────
+   Colours and shapes only: Zoho blue as the primary, cool slate greys, flat
+   4–6px corners and Lato. Every page picks these up through the Tailwind
+   tokens, so nothing on a page moves. */
 @theme {
-  --color-primary-50: #eff6ff;
-  --color-primary-100: #dbeafe;
-  --color-primary-200: #bfdbfe;
-  --color-primary-300: #93c5fd;
-  --color-primary-400: #60a5fa;
-  --color-primary-500: #3b82f6;
-  --color-primary-600: #2563eb;
-  --color-primary-700: #1d4ed8;
-  --color-primary-800: #1e40af;
-  --color-primary-900: #1e3a8a;
+  --font-sans: 'Lato', 'Inter', system-ui, -apple-system, sans-serif;
+
+  --color-primary-50: #eef5fd;
+  --color-primary-100: #d9e9fb;
+  --color-primary-200: #b5d3f6;
+  --color-primary-300: #84b5ee;
+  --color-primary-400: #4a91e2;
+  --color-primary-500: #1f7ad8;
+  --color-primary-600: #0b6fd1;
+  --color-primary-700: #085bb0;
+  --color-primary-800: #0a4a8c;
+  --color-primary-900: #0c3d70;
+
+  --color-gray-50: #f5f7fa;
+  --color-gray-100: #eef1f5;
+  --color-gray-200: #e3e8ef;
+  --color-gray-300: #cfd6df;
+  --color-gray-400: #98a2b3;
+  --color-gray-500: #667085;
+  --color-gray-600: #4a5568;
+  --color-gray-700: #344054;
+  --color-gray-800: #1f2a37;
+  --color-gray-900: #111827;
+
+  --radius-md: 4px;
+  --radius-lg: 4px;
+  --radius-xl: 6px;
+  --radius-2xl: 8px;
+
+  --shadow-sm: 0 1px 2px 0 rgb(16 24 40 / 0.05);
+  --shadow: 0 1px 3px 0 rgb(16 24 40 / 0.08), 0 1px 2px -1px rgb(16 24 40 / 0.06);
+  --shadow-lg: 0 8px 24px -4px rgb(16 24 40 / 0.12), 0 2px 6px -2px rgb(16 24 40 / 0.06);
+  --shadow-xl: 0 16px 40px -8px rgb(16 24 40 / 0.18);
 }
 
 /* ── Data-viz palette ───────────────────────────────────────────────────────
@@ -52,8 +79,30 @@ html.dark {
 }
 
 body {
-  @apply bg-gray-50 text-gray-900 antialiased;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  @apply text-gray-900 antialiased;
+  background-color: #f3f5f8;
+  font-family: var(--font-sans);
+  font-size: 14px;
+}
+
+/* ── Zoho-style tables, headings and controls (light mode) ─────────────────── */
+html:not(.dark) main table thead th {
+  background-color: #f5f7fa;
+  color: #5b6b7f;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid #e3e8ef;
+}
+html:not(.dark) main table tbody tr:hover > td { background-color: #f5f9ff; }
+main h1 { letter-spacing: -0.01em; }
+
+html:not(.dark) input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
+html:not(.dark) textarea:focus,
+html:not(.dark) select:focus {
+  border-color: #0b6fd1;
+  box-shadow: 0 0 0 3px rgb(11 111 209 / 0.15);
 }
 
 /* ── Dark mode ────────────────────────────────────────────────────────────── */

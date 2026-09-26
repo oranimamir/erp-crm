@@ -8,13 +8,15 @@ import { Columns2, Loader2, RefreshCw, X } from 'lucide-react';
  * two can be checked against each other before confirming. The order shows
  * as the uploaded file when there is one, else as its recorded lines.
  */
-export default function OrderCompareModal({ orderId, title, renderPreview, onClose }: {
-  orderId: number;
+export default function OrderCompareModal({ orderId, title, renderPreview, onClose, left }: {
+  orderId?: number | null;
   /** "Order confirmation", "Invoice", "Purchase order" */
   title: string;
   /** Renders the current form to a PDF blob. */
   renderPreview: () => Promise<Blob>;
   onClose: () => void;
+  /** Show this file on the left instead of the customer's order (e.g. the Bill of Lading). */
+  left?: { title: string; filePath: string; fileName?: string; subfolder: string };
 }) {
   const [order, setOrder] = useState<any>(null);
   const [orderUrl, setOrderUrl] = useState<string | null>(null);
@@ -32,6 +34,16 @@ export default function OrderCompareModal({ orderId, title, renderPreview, onClo
     let cancelled = false;
     (async () => {
       try {
+        if (left) {
+          const resp = await api.get(`/files/${left.subfolder}/${left.filePath}`, { responseType: 'blob' });
+          const type = resp.headers['content-type'] || 'application/pdf';
+          if (!cancelled) {
+            setOrderType(type);
+            setOrderUrl(track(URL.createObjectURL(new Blob([resp.data], { type }))));
+          }
+          return;
+        }
+        if (!orderId) return;
         const { data } = await api.get(`/orders/${orderId}`);
         if (cancelled) return;
         setOrder(data);
@@ -50,7 +62,7 @@ export default function OrderCompareModal({ orderId, title, renderPreview, onClo
       }
     })();
     return () => { cancelled = true; };
-  }, [orderId]);
+  }, [orderId, left?.filePath]);
 
   async function refreshDoc() {
     setDocLoading(true);
@@ -81,15 +93,15 @@ export default function OrderCompareModal({ orderId, title, renderPreview, onClo
   return createPortal(
     <div className="fixed inset-0 z-[100] bg-black/70 p-2 sm:p-4 flex flex-col" onClick={onClose}>
       <div className="flex items-center justify-between text-white mb-2" onClick={e => e.stopPropagation()}>
-        <h2 className="font-semibold flex items-center gap-2"><Columns2 size={18} /> Order vs {title.toLowerCase()}</h2>
+        <h2 className="font-semibold flex items-center gap-2"><Columns2 size={18} /> {left ? left.title : 'Order'} vs {title.toLowerCase()}</h2>
         <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/10" title="Close (Esc)"><X size={20} /></button>
       </div>
 
       <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-3" onClick={e => e.stopPropagation()}>
         <div className={pane}>
           <div className={head}>
-            Customer order{order?.order_number ? ` ${order.order_number}` : ''}
-            {order?.file_name && <span className="text-xs font-normal text-gray-400 truncate">{order.file_name}</span>}
+            {left ? left.title : `Customer order${order?.order_number ? ` ${order.order_number}` : ''}`}
+            {(left?.fileName || order?.file_name) && <span className="text-xs font-normal text-gray-400 truncate">{left?.fileName || order?.file_name}</span>}
           </div>
           <div className="flex-1 min-h-0 overflow-auto bg-gray-50">
             {orderLoading ? (

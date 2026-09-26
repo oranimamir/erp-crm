@@ -198,7 +198,7 @@ export default function OperationDetailPage() {
   const [orderConfirmation, setOrderConfirmation] = useState<{ id: number; file_name: string | null } | null>(null);
   const [purchaseOrder, setPurchaseOrder] = useState<{ id: number; file_name: string | null } | null>(null);
   const [invoiceDoc, setInvoiceDoc] = useState<{ id: number; file_name: string | null } | null>(null);
-  const [packingList, setPackingList] = useState<{ id: number; file_name: string | null } | null>(null);
+  const [packingList, setPackingList] = useState<{ id: number; file_name: string | null; status?: string } | null>(null);
 
   // Link Order modal
   const [showLinkOrder, setShowLinkOrder] = useState(false);
@@ -765,7 +765,7 @@ export default function OperationDetailPage() {
                   ? `Edit ${packingList.file_name || 'the packing list'}`
                   : invoiceDoc ? 'Generate the packing list from the invoice' : 'Generate the invoice first — the packing list is built from it'}
               >
-                <Package size={13} /> Packing List{packingList ? ' ✓' : ''}
+                <Package size={13} /> Packing List{packingList ? (packingList.status === 'final' ? ' ✓' : ' (draft)') : ''}
               </button>
               <button
                 onClick={() => navigate(`/orders/${operation.order_id}/edit`)}

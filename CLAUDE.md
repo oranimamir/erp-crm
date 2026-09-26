@@ -23,6 +23,7 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - Auth: JWT via `req.user.userId`
 - Migrations: try/catch `ALTER TABLE` at bottom of `initializeDatabase()`
 - Currency: store `amount` + `currency` + `fx_rate` + `eur_amount`; aggregate via `COALESCE(eur_amount, amount)`; display EUR throughout
+- Theme: Zoho-CRM style tokens (primary blue, slate greys, radii, Lato) in `client/src/index.css` `@theme` — restyle there, don't move controls
 - Dates: use `formatDate()` from `client/src/lib/dates.ts` (DD/MM/YYYY)
 
 ## Wire Transfers
@@ -45,6 +46,8 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - Packaging per line from Inventory → Packaging (`packaging` table) via `server/src/lib/packing.ts`: code token in the reference (BU25, DU25…) + longest product-name match; ties offered in a dropdown
 - units = ceil(net / product_mass); pallets = ceil(units / units_per_pallet); gross = net + units × weight_packaging + pallets × weight_pallet; units/pallets can be overridden; server recomputes on save
 - Deleted with its invoice
+- Draft → final: `packing_lists.status`; "Save as draft PL" files `<op#>PL-DRAFT.pdf`, "Finalize the PL" (`POST /:id/finalize`) files `<op#>PL.pdf` — allowed without a BL (warns); saving edits reverts to draft; `POST /:id/reopen`
+- Always filed under the operation (invoice's operation, else the order's); BL found by "Bill of Lading" category or BL in name/notes (`findBillOfLading`); "Compare with BL" uses `OrderCompareModal` `left` prop
 
 ## TripleW Entities
 - Table `company_entities` (edited on the TripleW Details page, `/api/company-entities`); `server/src/lib/companyEntity.ts`

@@ -1576,6 +1576,12 @@ export async function initializeDatabase() {
   `);
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_pl_invoice ON packing_lists(invoice_document_id)`); } catch (_) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_pl_operation ON packing_lists(operation_id)`); } catch (_) {}
+  // Draft until the BL is in, then final
+  try { db.exec(`ALTER TABLE packing_lists ADD COLUMN status TEXT NOT NULL DEFAULT 'draft'`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE packing_lists ADD COLUMN finalized_at TEXT`); } catch (_) { /* column may already exist */ }
+  try {
+    db.prepare(`INSERT OR IGNORE INTO document_categories (name) VALUES ('Bill of Lading')`).run();
+  } catch { /* ignore */ }
   try {
     db.prepare(`INSERT OR IGNORE INTO document_categories (name) VALUES ('Packing list')`).run();
   } catch { /* ignore */ }

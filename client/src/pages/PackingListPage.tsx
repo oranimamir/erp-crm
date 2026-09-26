@@ -3,11 +3,13 @@ import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom'
 import api from '../lib/api';
 import { acceptPlaceholderOnTab } from '../lib/placeholderTab';
 import { computePacking, kg, netKg, packagingLabel, type PackagingOption } from '../lib/packing';
+import { formatDate } from '../lib/dates';
 import { useToast } from '../contexts/ToastContext';
 import Button from '../components/ui/Button';
+import OrderCompareModal from '../components/OrderCompareModal';
 import {
   ArrowLeft, Loader2, Eye, FileDown, CheckCircle, FileText, RefreshCw, User, Package, Truck,
-  AlertTriangle, RotateCcw, Trash2,
+  AlertTriangle, RotateCcw, Trash2, Save, BadgeCheck, Columns2, Undo2,
 } from 'lucide-react';
 
 // Packing list for a generated invoice: its goods with the packaging from
@@ -53,8 +55,12 @@ interface PackingList {
   invoice_document_id: number | null;
   operation_id: number | null;
   file_name: string | null;
+  status: 'draft' | 'final';
+  finalized_at: string | null;
   data: Partial<PlData>;
 }
+
+interface BillOfLading { id: number; file_path: string; file_name: string }
 
 const FORM_KEYS = [
   'doc_number', 'doc_date', 'invoice_number', 'po_number', 'operation_number',
@@ -186,6 +192,9 @@ export default function PackingListPage() {
   const [previewing, setPreviewing] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [finalizing, setFinalizing] = useState(false);
+  const [billOfLading, setBillOfLading] = useState<BillOfLading | null>(null);
+  const [comparing, setComparing] = useState(false);
 
   const previewUrlRef = useRef<string | null>(null);
   previewUrlRef.current = previewUrl;
@@ -243,6 +252,14 @@ export default function PackingListPage() {
     return () => { cancelled = true; };
   }, [id, invoiceParam]);
 
+  // The operation's Bill of Lading, if uploaded — enables "Compare with BL"
+  useEffect(() => {
+    const url = packingList ? `/packing-lists/${packingList.id}/bl`
+      : invoiceDocId ? `/packing-lists/bl-for-invoice/${invoiceDocId}` : null;
+    if (!url) return;
+    api.get(url).then(({ data }) => setBillOfLading(data || null)).catch(() => setBillOfLading(null));
+  }, [packingList?.id, invoiceDocId]);
+
   // ── Actions ─────────────────────────────────────────────────────────────
 
   async function refreshFromInvoice() {
@@ -283,12 +300,44 @@ export default function PackingListPage() {
         ? await api.put(`/packing-lists/${packingList.id}`, body)
         : await api.post('/packing-lists', body);
       adopt(data);
-      addToast(`Generated ${data.file_name}${data.operation_id ? ' — filed under the operation documents' : ''}`, 'success');
+      addToast(data.operation_id
+        ? `Draft saved — ${data.file_name} is in the operation's Documents`
+        : `Draft saved as ${data.file_name} (no operation linked, so not filed under Documents)`, 'success');
       if (!packingList) navigate(`/packing-lists/${data.id}`, { replace: true });
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Failed to generate the packing list', 'error');
     } finally {
       setSaving(false);
+    }
+  }
+
+  /** Final once the BL is in — allowed without one, with a warning. */
+  async function handleFinalize() {
+    if (!packingList) return;
+    setFinalizing(true);
+    try {
+      const { data } = await api.post(`/packing-lists/${packingList.id}/finalize`);
+      adopt(data.record);
+      if (data.bl_found) addToast(`Packing list finalized — ${data.record.file_name}`, 'success');
+      else addToast('No BL found in the operation documents — finalized anyway', 'info');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to finalize the packing list', 'error');
+    } finally {
+      setFinalizing(false);
+    }
+  }
+
+  async function handleReopen() {
+    if (!packingList) return;
+    setFinalizing(true);
+    try {
+      const { data } = await api.post(`/packing-lists/${packingList.id}/reopen`);
+      adopt(data.record);
+      addToast('Packing list reopened as a draft', 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to reopen the packing list', 'error');
+    } finally {
+      setFinalizing(false);
     }
   }
 
@@ -354,10 +403,36 @@ export default function PackingListPage() {
           <Button variant="secondary" size="sm" onClick={handlePreview} disabled={previewing}>
             {previewing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
           </Button>
-          <Button size="sm" onClick={handleSave} disabled={saving}>
-            {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
-            {packingList ? 'Confirm & regenerate' : 'Confirm & generate'}
+          {billOfLading && (
+            <Button variant="secondary" size="sm" onClick={() => setComparing(true)}
+              title={`Show ${billOfLading.file_name} next to this packing list`}>
+              <Columns2 size={14} /> Compare with BL
+            </Button>
+          )}
+          {comparing && billOfLading && (
+            <OrderCompareModal
+              title="Packing list"
+              left={{ title: 'Bill of Lading', filePath: billOfLading.file_path, fileName: billOfLading.file_name, subfolder: 'operation-docs' }}
+              renderPreview={async () => (await api.post('/packing-lists/preview', { data: toPayload(form) }, { responseType: 'blob' })).data as Blob}
+              onClose={() => setComparing(false)}
+            />
+          )}
+          <Button variant={packingList?.status === 'final' ? 'secondary' : 'primary'} size="sm" onClick={handleSave} disabled={saving}
+            title={packingList?.status === 'final' ? 'Saving changes turns the packing list back into a draft' : undefined}>
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+            Save as draft PL
           </Button>
+          {packingList?.status === 'final' ? (
+            <Button variant="secondary" size="sm" onClick={handleReopen} disabled={finalizing}>
+              {finalizing ? <Loader2 size={14} className="animate-spin" /> : <Undo2 size={14} />} Reopen as draft
+            </Button>
+          ) : (
+            <Button size="sm" onClick={handleFinalize} disabled={!packingList || finalizing}
+              title={!packingList ? 'Save the draft first'
+                : billOfLading ? 'Finalize now that the BL is in' : 'No BL in the operation documents yet — you can still finalize'}>
+              {finalizing ? <Loader2 size={14} className="animate-spin" /> : <BadgeCheck size={14} />} Finalize the PL
+            </Button>
+          )}
           <Button variant="secondary" size="sm" onClick={handleDownload} disabled={!packingList}>
             <FileDown size={14} /> Download PDF
           </Button>
@@ -370,19 +445,36 @@ export default function PackingListPage() {
       </div>
 
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Packing List</h1>
+        <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-3">
+          Packing List
+          {packingList?.status === 'final' ? (
+            <span className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-semibold bg-green-100 text-green-800">
+              <BadgeCheck size={12} /> Final{packingList.finalized_at ? ` · ${formatDate(packingList.finalized_at.slice(0, 10))}` : ''}
+            </span>
+          ) : (
+            <span className="inline-flex items-center rounded px-2 py-0.5 text-xs font-semibold bg-amber-100 text-amber-800">
+              Draft
+            </span>
+          )}
+        </h1>
         <p className="text-sm text-gray-500 mt-1">
           Built from invoice <strong className="text-gray-700">{form.invoice_number || '—'}</strong>. Packaging, units per pallet
           and weights come from <Link to="/inventory" className="text-primary-600 hover:underline">Inventory → Packaging</Link>.
-          Saved as <strong className="text-gray-700">{(form.doc_number || 'packing-list').replace(/[^A-Za-z0-9._-]+/g, '-')}.pdf</strong>
-          {operationId && ' under the operation documents'}.
+          Saved as <strong className="text-gray-700">
+            {(form.doc_number || 'packing-list').replace(/[^A-Za-z0-9._-]+/g, '-')}{packingList?.status === 'final' ? '' : '-DRAFT'}.pdf
+          </strong>
+          {operationId && ' in the operation\'s Documents'}. Save it as a draft first, then finalize it once the BL is in
+          {billOfLading ? <> — <span className="text-green-700">BL found: {billOfLading.file_name}</span></> : ' — no BL in the operation documents yet'}.
         </p>
       </div>
 
       {packingList && (
-        <div className="flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm">
-          <CheckCircle size={16} className="text-green-600 flex-shrink-0" />
-          <span className="text-green-800"><strong>{packingList.file_name}</strong> generated.</span>
+        <div className={`flex items-center gap-2 rounded-xl border px-4 py-3 text-sm ${packingList.status === 'final' ? 'border-green-200 bg-green-50' : 'border-amber-200 bg-amber-50'}`}>
+          <CheckCircle size={16} className={`flex-shrink-0 ${packingList.status === 'final' ? 'text-green-600' : 'text-amber-600'}`} />
+          <span className={packingList.status === 'final' ? 'text-green-800' : 'text-amber-800'}>
+            <strong>{packingList.file_name}</strong> {packingList.status === 'final' ? 'finalized' : 'saved as a draft'}
+            {operationId ? " — in the operation's Documents." : '.'}
+          </span>
         </div>
       )}
 

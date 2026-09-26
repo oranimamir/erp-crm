@@ -34,6 +34,14 @@ function timeAgo(dateStr: string): string {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
+// Zoho-style sidebar item: a blue accent bar marks the current module
+const navClass = ({ isActive }: { isActive: boolean }) =>
+  `flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-colors border-l-[3px] ${
+    isActive
+      ? 'bg-white/10 text-white border-[#3d9bff]'
+      : 'text-[#b8c2d3] border-transparent hover:bg-white/5 hover:text-white'
+  }`;
+
 const navItems = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/customers', icon: Users, label: 'Customers' },
@@ -99,9 +107,9 @@ export default function Layout() {
       )}
 
       {/* Sidebar */}
-      <aside className={`fixed lg:static inset-y-0 left-0 z-50 w-64 bg-gray-900 text-white transform transition-transform lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <Link to="/dashboard" className="flex items-center gap-3 px-6 py-5 border-b border-gray-800 hover:opacity-80 transition-opacity">
-          <div className="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center font-bold text-sm">C</div>
+      <aside className={`fixed lg:static inset-y-0 left-0 z-50 w-64 bg-[#1b2536] text-white transform transition-transform lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <Link to="/dashboard" className="flex items-center gap-3 px-6 py-5 border-b border-white/10 hover:opacity-80 transition-opacity">
+          <div className="w-8 h-8 bg-primary-600 rounded-md flex items-center justify-center font-bold text-sm shadow-sm">C</div>
           <span className="text-lg font-bold">CirculERP</span>
         </Link>
         <nav className="px-3 py-4 flex flex-col h-[calc(100%-73px)]">
@@ -111,13 +119,9 @@ export default function Layout() {
                 key={item.to}
                 to={item.to}
                 onClick={() => setSidebarOpen(false)}
-                className={({ isActive }) =>
-                  `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                    isActive ? 'bg-primary-600 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white'
-                  }`
-                }
+                className={navClass}
               >
-                <item.icon size={20} />
+                <item.icon size={18} />
                 {item.label}
               </NavLink>
             ))}
@@ -125,26 +129,18 @@ export default function Layout() {
               <NavLink
                 to="/admin/users"
                 onClick={() => setSidebarOpen(false)}
-                className={({ isActive }) =>
-                  `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                    isActive ? 'bg-primary-600 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white'
-                  }`
-                }
+                className={navClass}
               >
-                <Shield size={20} />
+                <Shield size={18} />
                 User Management
               </NavLink>
             )}
             <NavLink
               to="/settings"
               onClick={() => setSidebarOpen(false)}
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                  isActive ? 'bg-primary-600 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white'
-                }`
-              }
+              className={navClass}
             >
-              <Settings size={20} />
+              <Settings size={18} />
               Settings
             </NavLink>
           </div>
@@ -153,7 +149,7 @@ export default function Layout() {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="bg-white border-b border-gray-200 px-4 lg:px-6 py-3 flex items-center justify-between">
+        <header className="bg-white border-b border-gray-200 shadow-sm px-4 lg:px-6 py-2.5 flex items-center justify-between">
           <button onClick={() => setSidebarOpen(true)} className="lg:hidden text-gray-600 hover:text-gray-900">
             <Menu size={24} />
           </button>
@@ -211,7 +207,12 @@ export default function Layout() {
                 )}
               </div>
             ) : null}
-            <span className="text-xs sm:text-sm text-gray-600 hidden sm:inline">{user?.display_name}</span>
+            <span className="hidden sm:flex items-center gap-2 text-sm text-gray-700">
+              <span className="w-7 h-7 rounded-full bg-primary-600 text-white text-xs font-bold flex items-center justify-center">
+                {(user?.display_name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase()}
+              </span>
+              {user?.display_name}
+            </span>
             <button onClick={logout} className="flex items-center gap-1 text-xs sm:text-sm text-gray-500 hover:text-gray-700">
               <LogOut size={16} />
               <span className="hidden sm:inline">Logout</span>

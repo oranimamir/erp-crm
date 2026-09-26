@@ -19,7 +19,7 @@ import orderScanRoutes from './routes/order-scan.js';
 import orderConfirmationRoutes from './routes/order-confirmations.js';
 import invoiceDocumentRoutes, { backfillRecordedInvoices } from './routes/invoice-documents.js';
 import purchaseOrderRoutes from './routes/purchase-orders.js';
-import packingListRoutes from './routes/packing-lists.js';
+import packingListRoutes, { backfillPackingListFiling } from './routes/packing-lists.js';
 import companyEntityRoutes from './routes/company-entities.js';
 import shipmentRoutes from './routes/shipments.js';
 import dashboardRoutes from './routes/dashboard.js';
@@ -261,6 +261,7 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
   // Generated invoices from before they were filed alongside recorded invoices
   backfillRecordedInvoices()
+    .then(() => backfillPackingListFiling())
     .then(() => db.saveToDisk())
     .catch((err: any) => console.warn('[startup] Recorded-invoice backfill skipped:', err?.message || err));
   // Fire-and-forget: normalize any non-EUR demo invoices that still
