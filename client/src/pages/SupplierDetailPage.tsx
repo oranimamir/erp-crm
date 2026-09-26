@@ -2,12 +2,11 @@ import { useState, useEffect } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import api from '../lib/api';
 import Card from '../components/ui/Card';
-import StatusBadge from '../components/ui/StatusBadge';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import { useToast } from '../contexts/ToastContext';
 import { formatDate } from '../lib/dates';
-import { ArrowLeft, Mail, Phone, MapPin, Tag, FileText, ShoppingCart, Package, DollarSign, Hash, UserRound, Loader2, Save, Receipt } from 'lucide-react';
+import { ArrowLeft, Mail, Phone, MapPin, DollarSign, Hash, UserRound, Loader2, Save, Receipt } from 'lucide-react';
 
 const categoryColors: Record<string, 'blue' | 'purple' | 'orange' | 'green'> = {
   logistics: 'blue', blenders: 'purple', raw_materials: 'orange', shipping: 'green',
@@ -19,30 +18,23 @@ const categoryLabels: Record<string, string> = {
 export default function SupplierDetailPage() {
   const { id } = useParams();
   const [supplier, setSupplier] = useState<any>(null);
-  const [invoices, setInvoices] = useState<any[]>([]);
-  const [orders, setOrders] = useState<any[]>([]);
-  const [shipments, setShipments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [expenseInvoices, setExpenseInvoices] = useState<any[]>([]);
   const [params, setParams] = useSearchParams();
   const tab: 'summary' | 'details' = params.get('tab') === 'details' ? 'details' : 'summary';
 
   useEffect(() => {
-    Promise.all([
-      api.get(`/suppliers/${id}`),
-      api.get(`/suppliers/${id}/invoices`),
-      api.get(`/suppliers/${id}/orders`),
-      api.get(`/suppliers/${id}/shipments`),
-    ]).then(([s, i, o, sh]) => {
-      setSupplier(s.data);
-      setInvoices(i.data);
-      setOrders(o.data);
-      setShipments(sh.data);
-      // Most sales suppliers bill through the expense invoices, filed by name
-      api.get('/demo-expenses/invoices', { params: { suppliers: s.data.name, sort_by: 'issue_date', sort_dir: 'desc' } })
-        .then(r => setExpenseInvoices(r.data || []))
-        .catch(() => setExpenseInvoices([]));
-    }).finally(() => setLoading(false));
+    api.get(`/suppliers/${id}`)
+      .then(async s => {
+        setSupplier(s.data);
+        // Suppliers bill through the supplier (expense) invoices, filed by name
+        try {
+          const r = await api.get('/demo-expenses/invoices', { params: { suppliers: s.data.name, sort_by: 'issue_date', sort_dir: 'desc' } });
+          setExpenseInvoices(r.data || []);
+        } catch { setExpenseInvoices([]); }
+      })
+      .catch(() => setSupplier(null))
+      .finally(() => setLoading(false));
   }, [id]);
 
   if (loading) return <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" /></div>;
@@ -92,14 +84,56 @@ export default function SupplierDetailPage() {
 
       {tab === 'details' && <SupplierDetailsForm supplier={supplier} onSaved={setSupplier} />}
 
+      {tab === 'summary' && (() => {
+        // Supplier invoices are recorded excl. VAT; EUR throughout, converted at the invoice date
+        const eurOf = (r: any) => Number(r.eur_amount ?? r.amount) || 0;
+        const vatOf = (r: any) => Number(r.vat_eur_amount ?? r.vat_amount) || 0;
+        const year = String(new Date().getFullYear());
+        const total = expenseInvoices.reduce((sum, r) => sum + eurOf(r), 0);
+        const vat = expenseInvoices.reduce((sum, r) => sum + vatOf(r), 0);
+        const thisYear = expenseInvoices.filter(r => String(r.issue_date || '').startsWith(year)).reduce((sum, r) => sum + eurOf(r), 0);
+        const last = expenseInvoices[0]?.issue_date;
+        const fmtEur = (n: number) => `€${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        return (
+          <Card className="p-5">
+            <div className="flex items-center gap-2 mb-4">
+              <DollarSign size={16} className="text-gray-400" />
+              <h2 className="font-semibold text-gray-900">Financial Summary</h2>
+              <span className="text-xs text-gray-400">from the supplier invoices, in EUR</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+              <div className="bg-blue-50 rounded-lg p-3 text-center">
+                <p className="text-xs text-blue-600 font-medium">Total Invoices</p>
+                <p className="text-xl font-bold text-blue-700">{expenseInvoices.length}</p>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3 text-center">
+                <p className="text-xs text-gray-600 font-medium">Total Spend (excl. VAT)</p>
+                <p className="text-xl font-bold text-gray-700">{fmtEur(total)}</p>
+              </div>
+              <div className="bg-orange-50 rounded-lg p-3 text-center">
+                <p className="text-xs text-orange-600 font-medium">VAT</p>
+                <p className="text-xl font-bold text-orange-700">{fmtEur(vat)}</p>
+              </div>
+              <div className="bg-green-50 rounded-lg p-3 text-center">
+                <p className="text-xs text-green-600 font-medium">Spend {year}</p>
+                <p className="text-xl font-bold text-green-700">{fmtEur(thisYear)}</p>
+              </div>
+              <div className="bg-purple-50 rounded-lg p-3 text-center">
+                <p className="text-xs text-purple-600 font-medium">Last Invoice</p>
+                <p className="text-xl font-bold text-purple-700">{last ? formatDate(last) : '—'}</p>
+              </div>
+            </div>
+          </Card>
+        );
+      })()}
+
       {tab === 'summary' && expenseInvoices.length > 0 && (
         <Card className="p-5">
           <div className="flex items-center gap-2 mb-3">
             <Receipt size={16} className="text-gray-400" />
-            <h2 className="font-semibold text-gray-900">Expense invoices</h2>
-            <span className="text-sm text-gray-500">
-              {expenseInvoices.length} · €{expenseInvoices.reduce((sum, r) => sum + (Number(r.eur_amount ?? r.amount) || 0), 0).toLocaleString(undefined, { maximumFractionDigits: 0 })} excl. VAT
-            </span>
+            <h2 className="font-semibold text-gray-900">Supplier invoices</h2>
+            <Link to={`/supplier-invoices?supplier=${encodeURIComponent(supplier.name)}&tab=${expenseInvoices[0]?.domain || 'demo'}`}
+              className="ml-auto text-xs text-primary-600 hover:underline">View all</Link>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -126,80 +160,6 @@ export default function SupplierDetailPage() {
           {expenseInvoices.length > 12 && <p className="text-xs text-gray-400 mt-2">Showing the latest 12.</p>}
         </Card>
       )}
-
-      {tab === 'summary' && (<>
-      {/* Financial Summary */}
-      {invoices.length > 0 && (() => {
-        const eurOf = (inv: any) => Number(inv.eur_amount ?? inv.amount) || 0;
-        const totalCount = invoices.length;
-        const totalAmount = invoices.reduce((sum: number, inv: any) => sum + eurOf(inv), 0);
-        const paidAmount = invoices.filter((inv: any) => inv.status === 'paid').reduce((sum: number, inv: any) => sum + eurOf(inv), 0);
-        const outstanding = totalAmount - paidAmount;
-        const fmtEur = (n: number) => `€${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-        return (
-          <Card className="p-5">
-            <div className="flex items-center gap-2 mb-4">
-              <DollarSign size={16} className="text-gray-400" />
-              <h2 className="font-semibold text-gray-900">Financial Summary</h2>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div className="bg-blue-50 rounded-lg p-3 text-center">
-                <p className="text-xs text-blue-600 font-medium">Total Invoices</p>
-                <p className="text-xl font-bold text-blue-700">{totalCount}</p>
-              </div>
-              <div className="bg-gray-50 rounded-lg p-3 text-center">
-                <p className="text-xs text-gray-600 font-medium">Total Amount</p>
-                <p className="text-xl font-bold text-gray-700">{fmtEur(totalAmount)}</p>
-              </div>
-              <div className="bg-green-50 rounded-lg p-3 text-center">
-                <p className="text-xs text-green-600 font-medium">Paid</p>
-                <p className="text-xl font-bold text-green-700">{fmtEur(paidAmount)}</p>
-              </div>
-              <div className="bg-yellow-50 rounded-lg p-3 text-center">
-                <p className="text-xs text-yellow-600 font-medium">Outstanding</p>
-                <p className="text-xl font-bold text-yellow-700">{fmtEur(outstanding)}</p>
-              </div>
-            </div>
-          </Card>
-        );
-      })()}
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <Card>
-          <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2"><FileText size={16} className="text-gray-400" /><h2 className="font-semibold text-gray-900">Invoices ({invoices.length})</h2></div>
-          <div className="divide-y divide-gray-100">
-            {invoices.length === 0 ? <p className="px-5 py-6 text-center text-sm text-gray-500">No invoices</p> : invoices.map(inv => (
-              <Link key={inv.id} to={`/invoices/${inv.id}`} className="flex items-center justify-between px-5 py-3 hover:bg-gray-50">
-                <div><p className="text-sm font-medium">{inv.invoice_number}</p><p className="text-xs text-gray-500">{fmtMoney(inv.amount, inv.currency)}</p></div>
-                <StatusBadge status={inv.status} />
-              </Link>
-            ))}
-          </div>
-        </Card>
-        <Card>
-          <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2"><ShoppingCart size={16} className="text-gray-400" /><h2 className="font-semibold text-gray-900">Orders ({orders.length})</h2></div>
-          <div className="divide-y divide-gray-100">
-            {orders.length === 0 ? <p className="px-5 py-6 text-center text-sm text-gray-500">No orders</p> : orders.map(o => (
-              <Link key={o.id} to={`/orders/${o.id}`} className="flex items-center justify-between px-5 py-3 hover:bg-gray-50">
-                <div><p className="text-sm font-medium">{o.order_number}</p><p className="text-xs text-gray-500">{fmtMoney(o.total_amount, o.currency)}</p></div>
-                <StatusBadge status={o.status} />
-              </Link>
-            ))}
-          </div>
-        </Card>
-        <Card>
-          <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2"><Package size={16} className="text-gray-400" /><h2 className="font-semibold text-gray-900">Shipments ({shipments.length})</h2></div>
-          <div className="divide-y divide-gray-100">
-            {shipments.length === 0 ? <p className="px-5 py-6 text-center text-sm text-gray-500">No shipments</p> : shipments.map(s => (
-              <Link key={s.id} to={`/shipments/${s.id}`} className="flex items-center justify-between px-5 py-3 hover:bg-gray-50">
-                <div><p className="text-sm font-medium">{s.tracking_number || `#${s.id}`}</p><p className="text-xs text-gray-500">{s.carrier || 'No carrier'}</p></div>
-                <StatusBadge status={s.status} />
-              </Link>
-            ))}
-          </div>
-        </Card>
-      </div>
-      </>)}
     </div>
   );
 }
