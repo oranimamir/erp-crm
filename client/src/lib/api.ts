@@ -11,7 +11,10 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401) {
+    // A 401 from the login / OTP / invite calls means wrong credentials or code —
+    // the page shows that error; only an expired session sends the user to /login
+    const isAuthCall = /^\/?auth\/(login|verify-otp|resend-otp|accept-invite|invite-info)/.test(err.config?.url || '');
+    if (err.response?.status === 401 && !isAuthCall) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       window.location.href = '/login';

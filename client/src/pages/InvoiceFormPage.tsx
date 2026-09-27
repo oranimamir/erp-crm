@@ -351,13 +351,14 @@ export default function InvoiceFormPage() {
       // Always sent, blank included — clearing the box must clear the stored value.
       formData.append('quantity_mt', form.quantity_mt.trim());
       formData.append('status', form.status);
-      if (form.invoice_date) formData.append('invoice_date', form.invoice_date);
-      if (form.due_date) formData.append('due_date', form.due_date);
-      if (form.payment_date) formData.append('payment_date', form.payment_date);
-      if (form.notes) formData.append('notes', form.notes);
-      if (form.our_ref) formData.append('our_ref', form.our_ref);
-      if (form.po_number) formData.append('po_number', form.po_number);
-      if (form.operation_id) formData.append('operation_id', form.operation_id);
+      // Sent blank too, so clearing a field on edit clears the stored value
+      formData.append('invoice_date', form.invoice_date || '');
+      formData.append('due_date', form.due_date || '');
+      formData.append('payment_date', form.payment_date || '');
+      formData.append('notes', form.notes || '');
+      formData.append('our_ref', form.our_ref || '');
+      formData.append('po_number', form.po_number || '');
+      formData.append('operation_id', form.operation_id || '');
       if (file) formData.append('file', file);
 
       if (isEdit) {

@@ -20,11 +20,19 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - `client/src/lib/dates.ts` — `formatDate()` returns DD/MM/YYYY (EU format)
 
 ## Patterns
-- Auth: JWT via `req.user.userId`
+- Auth: JWT via `req.user.userId`; `authenticateToken` re-reads the user row each request (deleted user → 401, role from DB, not the token)
 - Migrations: try/catch `ALTER TABLE` at bottom of `initializeDatabase()`
 - Currency: store `amount` + `currency` + `fx_rate` + `eur_amount`; aggregate via `COALESCE(eur_amount, amount)`; display EUR throughout
 - Theme: Zoho-CRM style tokens (primary blue, slate greys, radii, Lato) in `client/src/index.css` `@theme` — restyle there, don't move controls
 - Dates: use `formatDate()` from `client/src/lib/dates.ts` (DD/MM/YYYY)
+
+## Security
+- No public sign-up: accounts come from admin create or invite only; login is password + emailed OTP (5 wrong codes burn it; compare dates with `datetime(expires_at)`)
+- 401 means "session gone" (client logs out) — use 400 for a wrong password/code inside a valid session
+- Any file name taken from a request must match `^[a-zA-Z0-9._-]+$` before it is stored, served or unlinked
+- `/api/files` renders only PDF/images inline; other types download. CSP set in `index.ts` helmet — new external hosts must be added there
+- User-entered text in email HTML goes through an escape helper
+- Update endpoints: a field left out keeps its stored value, a field sent blank clears it
 
 ## Wire Transfers
 - `POST /invoices/:id/wire-transfers` — upload + mark invoice paid; fetches FX on upload date, stores `fx_rate` + `eur_amount`

@@ -12,6 +12,13 @@ export interface NotifyPayload {
   detail?: string;      // Optional extra info (e.g. new status)
 }
 
+/** Record fields (customer names, invoice numbers…) are user-entered and go into HTML email */
+function esc(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 /** Sends a one-time login code to a user's email. Throws if sending fails. */
 export async function sendOtpEmail(to: string, code: string): Promise<void> {
   const apiKey = process.env.RESEND_API_KEY;
@@ -89,6 +96,12 @@ async function _send(payload: NotifyPayload): Promise<void> {
     dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC',
   }) + ' UTC';
 
+  const entity = esc(payload.entity);
+  const action = esc(payload.action);
+  const label = esc(payload.label);
+  const performedBy = esc(payload.performedBy);
+  const detail = payload.detail ? esc(payload.detail) : '';
+
   const html = `
 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
   <div style="background:#4f46e5;padding:16px 24px;display:flex;align-items:center;gap:10px;">
@@ -98,33 +111,33 @@ async function _send(payload: NotifyPayload): Promise<void> {
   </div>
   <div style="padding:24px;">
     <p style="margin:0 0 20px;font-size:16px;color:#111827;">
-      A <strong style="color:${color};">${payload.entity}</strong> was
-      <strong style="color:${color};">${payload.action}</strong>
-      by <strong>${payload.performedBy}</strong>.
+      A <strong style="color:${color};">${entity}</strong> was
+      <strong style="color:${color};">${action}</strong>
+      by <strong>${performedBy}</strong>.
     </p>
     <table style="width:100%;border-collapse:collapse;font-size:14px;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
       <tr style="background:#f9fafb;">
         <td style="padding:10px 14px;font-weight:600;color:#6b7280;width:35%;">Entity</td>
-        <td style="padding:10px 14px;color:#111827;">${payload.entity}</td>
+        <td style="padding:10px 14px;color:#111827;">${entity}</td>
       </tr>
       <tr>
         <td style="padding:10px 14px;font-weight:600;color:#6b7280;">Name / ID</td>
-        <td style="padding:10px 14px;color:#111827;font-weight:500;">${payload.label}</td>
+        <td style="padding:10px 14px;color:#111827;font-weight:500;">${label}</td>
       </tr>
       <tr style="background:#f9fafb;">
         <td style="padding:10px 14px;font-weight:600;color:#6b7280;">Action</td>
-        <td style="padding:10px 14px;color:${color};font-weight:600;text-transform:capitalize;">${payload.action}${payload.detail ? ` → ${payload.detail}` : ''}</td>
+        <td style="padding:10px 14px;color:${color};font-weight:600;text-transform:capitalize;">${action}${detail ? ` → ${detail}` : ''}</td>
       </tr>
       <tr>
         <td style="padding:10px 14px;font-weight:600;color:#6b7280;">Performed by</td>
-        <td style="padding:10px 14px;color:#111827;">${payload.performedBy}</td>
+        <td style="padding:10px 14px;color:#111827;">${performedBy}</td>
       </tr>
       <tr style="background:#f9fafb;">
         <td style="padding:10px 14px;font-weight:600;color:#6b7280;">Time</td>
         <td style="padding:10px 14px;color:#6b7280;">${now}</td>
       </tr>
     </table>
-    ${appUrl ? `<div style="margin-top:20px;"><a href="${appUrl}" style="background:#4f46e5;color:white;padding:10px 20px;text-decoration:none;border-radius:8px;font-size:14px;font-weight:500;">Open CirculERP →</a></div>` : ''}
+    ${appUrl ? `<div style="margin-top:20px;"><a href="${esc(appUrl)}" style="background:#4f46e5;color:white;padding:10px 20px;text-decoration:none;border-radius:8px;font-size:14px;font-weight:500;">Open CirculERP →</a></div>` : ''}
   </div>
 </div>`;
 

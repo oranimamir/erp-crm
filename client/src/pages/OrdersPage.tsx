@@ -156,7 +156,7 @@ export default function OrdersPage() {
   const openPreview = async (apiPath: string, filename: string) => {
     try {
       const res = await api.get(apiPath, { responseType: 'blob' });
-      const blob = new Blob([res.data], { type: res.headers['content-type'] || 'application/octet-stream' });
+      const blob = new Blob([res.data], { type: String(res.headers['content-type'] || 'application/octet-stream') });
       setPreviewUrl(URL.createObjectURL(blob));
       setPreviewFile(filename);
     } catch {

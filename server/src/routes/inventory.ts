@@ -12,12 +12,18 @@ const batchDocDir = process.env.UPLOADS_PATH
   : path.join(__dirname, '..', '..', 'uploads', 'batch-documents');
 fs.mkdirSync(batchDocDir, { recursive: true });
 
+const BATCH_DOC_EXTS = ['.pdf', '.jpg', '.jpeg', '.png', '.webp', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.txt'];
+
 const uploadBatchDoc = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, batchDocDir),
     filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`),
   }),
   limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (BATCH_DOC_EXTS.includes(path.extname(file.originalname).toLowerCase())) cb(null, true);
+    else cb(new Error('Only PDF, image, Word, Excel, CSV or text files are allowed'));
+  },
 });
 
 const router = Router();

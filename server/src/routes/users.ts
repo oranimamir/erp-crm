@@ -53,7 +53,7 @@ router.post('/', requireAdmin, (req: Request, res: Response) => {
     res.status(400).json({ error: 'Username and password are required' });
     return;
   }
-  if (password.length < 12) {
+  if (typeof password !== 'string' || password.length < 12) {
     res.status(400).json({ error: 'Password must be at least 12 characters' });
     return;
   }
@@ -79,20 +79,30 @@ router.post('/', requireAdmin, (req: Request, res: Response) => {
 
 // Update user
 router.put('/:id', requireAdmin, (req: Request, res: Response) => {
-  const existing = db.prepare('SELECT id FROM users WHERE id = ?').get(req.params.id);
+  const existing = db.prepare('SELECT id, role, display_name, email FROM users WHERE id = ?').get(req.params.id) as any;
   if (!existing) {
     res.status(404).json({ error: 'User not found' });
     return;
   }
 
-  const { display_name, email, role, password } = req.body;
+  const { display_name, email, password } = req.body;
+  // A request that leaves role out keeps the current one rather than demoting
+  const role = req.body.role || existing.role;
+  // Likewise a missing name or email is kept — wiping the email would lock the
+  // user out, since the login code is sent there
+  const nextName = display_name === undefined ? existing.display_name : (display_name || null);
+  const nextEmail = email === undefined ? existing.email : (email || null);
 
-  if (role && !['admin', 'user'].includes(role)) {
+  if (!['admin', 'user'].includes(role)) {
     res.status(400).json({ error: 'Role must be admin or user' });
     return;
   }
-  if (password && password.length < 8) {
-    res.status(400).json({ error: 'Password must be at least 8 characters' });
+  if (existing.id === req.user?.userId && role !== 'admin') {
+    res.status(400).json({ error: 'You cannot remove your own admin role' });
+    return;
+  }
+  if (password && (typeof password !== 'string' || password.length < 12)) {
+    res.status(400).json({ error: 'Password must be at least 12 characters' });
     return;
   }
 
@@ -100,11 +110,11 @@ router.put('/:id', requireAdmin, (req: Request, res: Response) => {
     const password_hash = bcrypt.hashSync(password, 10);
     db.prepare(
       `UPDATE users SET display_name=?, email=?, role=?, password_hash=?, updated_at=datetime('now') WHERE id=?`
-    ).run(display_name || null, email || null, role || 'user', password_hash, req.params.id);
+    ).run(nextName, nextEmail, role, password_hash, req.params.id);
   } else {
     db.prepare(
       `UPDATE users SET display_name=?, email=?, role=?, updated_at=datetime('now') WHERE id=?`
-    ).run(display_name || null, email || null, role || 'user', req.params.id);
+    ).run(nextName, nextEmail, role, req.params.id);
   }
 
   const user = db.prepare('SELECT id, username, display_name, email, role, notify_on_changes, created_at, updated_at FROM users WHERE id = ?').get(req.params.id);
@@ -157,8 +167,8 @@ router.post('/invite', requireAdmin, (req: Request, res: Response) => {
 
   // Check for existing pending invite
   const existingInvite = db.prepare(
-    'SELECT id FROM user_invitations WHERE email = ? AND accepted_at IS NULL AND expires_at > datetime(?)'
-  ).get(email, new Date().toISOString());
+    "SELECT id FROM user_invitations WHERE email = ? AND accepted_at IS NULL AND datetime(expires_at) > datetime('now')"
+  ).get(email);
   if (existingInvite) {
     res.status(409).json({ error: 'A pending invitation already exists for this email' });
     return;

@@ -7,15 +7,24 @@ import { sendOtpEmail, notifyAdmin } from '../lib/notify.js';
 
 const router = Router();
 
+// Compared against when the username is unknown, so a miss costs the same
+// bcrypt time as a wrong password and response time doesn't reveal which
+const DUMMY_HASH = bcrypt.hashSync(crypto.randomBytes(16).toString('hex'), 10);
+
+// Wrong codes allowed per user before every outstanding code is burned — the
+// per-IP limiter alone can be sidestepped by spreading guesses across IPs
+const MAX_OTP_ATTEMPTS = 5;
+
 router.post('/login', async (req: Request, res: Response) => {
   const { username, password } = req.body;
-  if (!username || !password) {
+  if (typeof username !== 'string' || typeof password !== 'string' || !username || !password) {
     res.status(400).json({ error: 'Username and password are required' });
     return;
   }
 
   const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username) as any;
-  if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+  const passwordOk = bcrypt.compareSync(password, user?.password_hash || DUMMY_HASH);
+  if (!user || !passwordOk) {
     res.status(401).json({ error: 'Invalid credentials' });
     return;
   }
@@ -46,11 +55,15 @@ router.post('/verify-otp', (req: Request, res: Response) => {
     return;
   }
 
+  // expires_at is ISO-8601 ("…T…Z"); comparing it as a string against
+  // datetime('now') ("… …") kept codes valid until midnight, so normalise it
   const otp = db.prepare(
-    `SELECT * FROM login_otps WHERE user_id = ? AND code = ? AND used = 0 AND expires_at > datetime('now') ORDER BY created_at DESC LIMIT 1`
-  ).get(user_id, code) as any;
+    `SELECT * FROM login_otps WHERE user_id = ? AND code = ? AND used = 0 AND attempts < ? AND datetime(expires_at) > datetime('now') ORDER BY created_at DESC LIMIT 1`
+  ).get(user_id, String(code), MAX_OTP_ATTEMPTS) as any;
 
   if (!otp) {
+    db.prepare('UPDATE login_otps SET attempts = attempts + 1 WHERE user_id = ? AND used = 0').run(user_id);
+    db.prepare('UPDATE login_otps SET used = 1 WHERE user_id = ? AND used = 0 AND attempts >= ?').run(user_id, MAX_OTP_ATTEMPTS);
     res.status(401).json({ error: 'Invalid or expired code' });
     return;
   }
@@ -68,31 +81,6 @@ router.post('/verify-otp', (req: Request, res: Response) => {
   res.json({
     token,
     user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role },
-  });
-});
-
-router.post('/register', (req: Request, res: Response) => {
-  const { username, password, display_name } = req.body;
-  if (!username || !password || !display_name) {
-    res.status(400).json({ error: 'Username, password, and display_name are required' });
-    return;
-  }
-
-  const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
-  if (existing) {
-    res.status(409).json({ error: 'Username already exists' });
-    return;
-  }
-
-  const hash = bcrypt.hashSync(password, 10);
-  const result = db.prepare('INSERT INTO users (username, password_hash, display_name) VALUES (?, ?, ?)').run(
-    username, hash, display_name
-  );
-
-  const token = generateToken({ userId: result.lastInsertRowid as number, username, display_name, role: 'user' });
-  res.status(201).json({
-    token,
-    user: { id: result.lastInsertRowid, username, display_name, role: 'user' },
   });
 });
 
@@ -141,7 +129,7 @@ router.post('/accept-invite', (req: Request, res: Response) => {
     res.status(400).json({ error: 'Token, username, and password are required' });
     return;
   }
-  if (password.length < 12) {
+  if (typeof password !== 'string' || password.length < 12) {
     res.status(400).json({ error: 'Password must be at least 12 characters' });
     return;
   }
@@ -213,7 +201,7 @@ router.post('/resend-otp', async (req: Request, res: Response) => {
 
   // Rate-limit: don't allow resend if a valid OTP was issued in the last 60 seconds
   const recent = db.prepare(
-    `SELECT id FROM login_otps WHERE user_id = ? AND used = 0 AND expires_at > datetime('now') AND created_at > datetime('now', '-60 seconds') LIMIT 1`
+    `SELECT id FROM login_otps WHERE user_id = ? AND used = 0 AND datetime(expires_at) > datetime('now') AND created_at > datetime('now', '-60 seconds') LIMIT 1`
   ).get(user_id);
   if (recent) {
     res.status(429).json({ error: 'Please wait before requesting a new code' });
@@ -241,14 +229,15 @@ router.post('/change-password', authenticateToken, (req: Request, res: Response)
     res.status(400).json({ error: 'Current password and new password are required' });
     return;
   }
-  if (new_password.length < 8) {
-    res.status(400).json({ error: 'New password must be at least 8 characters' });
+  if (typeof new_password !== 'string' || new_password.length < 12) {
+    res.status(400).json({ error: 'New password must be at least 12 characters' });
     return;
   }
 
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.userId) as any;
   if (!user || !bcrypt.compareSync(current_password, user.password_hash)) {
-    res.status(401).json({ error: 'Current password is incorrect' });
+    // 400, not 401: the session is fine, and the client treats 401 as logged out
+    res.status(400).json({ error: 'Current password is incorrect' });
     return;
   }
 

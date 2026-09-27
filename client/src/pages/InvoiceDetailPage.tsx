@@ -207,7 +207,7 @@ export default function InvoiceDetailPage() {
     setPreviewLoading(true);
     try {
       const resp = await api.get(`/files/${subfolder}/${filePath}`, { responseType: 'blob' });
-      const blob = new Blob([resp.data], { type: resp.headers['content-type'] || 'application/octet-stream' });
+      const blob = new Blob([resp.data], { type: String(resp.headers['content-type'] || 'application/octet-stream') });
       setPreviewUrl(URL.createObjectURL(blob));
     } catch {
       addToast('Failed to load preview', 'error');

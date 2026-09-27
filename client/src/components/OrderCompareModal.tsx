@@ -36,7 +36,7 @@ export default function OrderCompareModal({ orderId, title, renderPreview, onClo
       try {
         if (left) {
           const resp = await api.get(`/files/${left.subfolder}/${left.filePath}`, { responseType: 'blob' });
-          const type = resp.headers['content-type'] || 'application/pdf';
+          const type = String(resp.headers['content-type'] || 'application/pdf');
           if (!cancelled) {
             setOrderType(type);
             setOrderUrl(track(URL.createObjectURL(new Blob([resp.data], { type }))));
@@ -49,7 +49,7 @@ export default function OrderCompareModal({ orderId, title, renderPreview, onClo
         setOrder(data);
         if (data.file_path) {
           const resp = await api.get(`/files/orders/${data.file_path}`, { responseType: 'blob' });
-          const type = resp.headers['content-type'] || 'application/pdf';
+          const type = String(resp.headers['content-type'] || 'application/pdf');
           if (!cancelled) {
             setOrderType(type);
             setOrderUrl(track(URL.createObjectURL(new Blob([resp.data], { type }))));

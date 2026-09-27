@@ -30,7 +30,7 @@ router.get('/', (req, res) => {
 // POST / — create
 router.post('/', (req, res) => {
   const { name, sku, category = 'raw_material', unit = 'tons', notes = '' } = req.body;
-  if (!name?.trim() || !sku?.trim()) {
+  if (typeof name !== 'string' || typeof sku !== 'string' || !name.trim() || !sku.trim()) {
     return res.status(400).json({ error: 'Name and SKU are required' });
   }
   try {
@@ -52,7 +52,7 @@ router.post('/', (req, res) => {
 router.put('/:id', (req, res) => {
   const { id } = req.params;
   const { name, sku, category, notes } = req.body;
-  if (!name?.trim() || !sku?.trim()) {
+  if (typeof name !== 'string' || typeof sku !== 'string' || !name.trim() || !sku.trim()) {
     return res.status(400).json({ error: 'Name and SKU are required' });
   }
   const existing = db.prepare('SELECT id FROM products WHERE id = ?').get(id);

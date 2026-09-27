@@ -183,6 +183,10 @@ router.post('/', uploadInvoice.single('file'), async (req: Request, res: Respons
     res.status(400).json({ error: 'invoice_number, type, and amount are required' });
     return;
   }
+  if (!Number.isFinite(parseFloat(amount))) {
+    res.status(400).json({ error: 'amount must be a number' });
+    return;
+  }
 
   const file_path = req.file ? req.file.filename : null;
   const file_name = req.file ? req.file.originalname : null;
@@ -254,13 +258,23 @@ router.put('/:id', uploadInvoice.single('file'), async (req: Request, res: Respo
     file_name = req.file.originalname;
   }
 
+  // A field left out keeps its stored value; a field sent blank clears it
+  const keep = (sent: any, stored: any) => (sent === undefined ? stored : (sent === '' ? null : sent));
+  const today = new Date().toISOString().split('T')[0];
+  const finalType = type || existing.type;
+  const finalInvoiceDate = keep(invoice_date, existing.invoice_date);
+  const finalStatus = status || existing.status;
+  // Marking an invoice paid without a date records today
+  const finalPaymentDate = keep(payment_date, existing.payment_date)
+    ?? (finalStatus === 'paid' ? (existing.payment_date || today) : null);
+
   // Recompute EUR conversion when amount or currency changes
   const finalAmount = parseFloat(amount) || existing.amount;
   const finalCurrency = (currency || existing.currency || 'USD').toUpperCase();
   let fx_rate = existing.fx_rate;
   let eur_amount = existing.eur_amount;
   if (finalCurrency !== 'EUR') {
-    const dateForRate = invoice_date ?? existing.invoice_date ?? new Date().toISOString().split('T')[0];
+    const dateForRate = finalInvoiceDate || today;
     fx_rate = await getEurRate(finalCurrency, dateForRate);
     eur_amount = finalAmount * fx_rate;
   } else {
@@ -274,14 +288,14 @@ router.put('/:id', uploadInvoice.single('file'), async (req: Request, res: Respo
       WHERE id=?
     `).run(
       invoice_number || existing.invoice_number,
-      type === 'customer' ? (customer_id || null) : null,
-      type === 'supplier' ? (supplier_id || null) : null,
-      type || existing.type, finalAmount, currency || existing.currency,
-      status || existing.status, due_date || existing.due_date, invoice_date ?? existing.invoice_date,
-      // Auto-set payment_date to today when marking as paid and no date provided
-      payment_date ?? ((status === 'paid' && !existing.payment_date) ? new Date().toISOString().split('T')[0] : existing.payment_date),
-      notes ?? existing.notes,
-      file_path, file_name, our_ref ?? existing.our_ref, po_number ?? existing.po_number,
+      // Leaving the party out of the request must not unlink it
+      finalType === 'customer' ? keep(customer_id, existing.customer_id) : null,
+      finalType === 'supplier' ? keep(supplier_id, existing.supplier_id) : null,
+      finalType, finalAmount, currency ? finalCurrency : existing.currency,
+      finalStatus, keep(due_date, existing.due_date), finalInvoiceDate,
+      finalPaymentDate,
+      keep(notes, existing.notes),
+      file_path, file_name, keep(our_ref, existing.our_ref), keep(po_number, existing.po_number),
       operation_id !== undefined ? (operation_id ? Number(operation_id) : null) : existing.operation_id,
       fx_rate, eur_amount,
       quantity_mt !== undefined ? parseTonnage(quantity_mt) : existing.quantity_mt,

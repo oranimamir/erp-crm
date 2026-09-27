@@ -369,8 +369,8 @@ router.get('/:id/pdf', (req: Request, res: Response) => {
   const filePath = path.join(docsDir, row.file_path);
   if (!fs.existsSync(filePath)) { res.status(404).json({ error: 'File not found' }); return; }
 
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename="${row.file_name || 'order-confirmation.pdf'}"`);
+  res.attachment(row.file_name || 'order-confirmation.pdf');
+  res.type('application/pdf');
   fs.createReadStream(filePath).pipe(res);
 });
 

@@ -50,6 +50,9 @@ import { getEurRate } from './lib/fx.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
+// Railway fronts the app with one proxy hop; without this every client shares
+// the proxy's IP and the per-IP rate limits below throttle everyone at once
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3001;
 
 // Require JWT_SECRET in production; warn loudly in development
@@ -63,9 +66,29 @@ if (!process.env.JWT_SECRET) {
 }
 
 // ── Security headers ────────────────────────────────────────────────────────
+// The CSP is the backstop against XSS: the session token lives in
+// localStorage, so injected script must not run or reach another host.
+// blob: covers PDF/image previews, which are object URLs of fetched files.
 app.use(helmet({
   crossOriginEmbedderPolicy: false, // Allow file previews/embeds
-  contentSecurityPolicy: false,     // Managed by the SPA
+  contentSecurityPolicy: {
+    useDefaults: false,
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      scriptSrcAttr: ["'none'"],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
+      imgSrc: ["'self'", 'data:', 'blob:'],
+      frameSrc: ["'self'", 'blob:'],
+      objectSrc: ["'self'", 'blob:'],
+      workerSrc: ["'self'", 'blob:'],
+      connectSrc: ["'self'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'self'"],
+    },
+  },
 }));
 
 // ── CORS ────────────────────────────────────────────────────────────────────
@@ -80,6 +103,9 @@ app.use(cors({
 }));
 
 // ── Body parsing ─────────────────────────────────────────────────────────────
+// The public auth endpoints only ever take a few short fields — cap them so an
+// anonymous caller can't make the server parse a 50MB body
+app.use('/api/auth', express.json({ limit: '20kb' }));
 app.use(express.json({ limit: '50mb' }));
 
 // ── Rate limiters ─────────────────────────────────────────────────────────────
@@ -178,6 +204,8 @@ cron.schedule('*/15 * * * *', () => {
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/verify-otp', otpLimiter);
 app.use('/api/auth/accept-invite', authLimiter);
+app.use('/api/auth/resend-otp', authLimiter);
+app.use('/api/auth/invite-info', authLimiter);
 app.use('/api/auth', authRoutes);
 
 // ── Protected routes ──────────────────────────────────────────────────────────

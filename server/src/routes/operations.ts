@@ -24,7 +24,7 @@ router.get('/categories', (_req: Request, res: Response) => {
 
 router.post('/categories', (req: Request, res: Response) => {
   const { name } = req.body;
-  if (!name?.trim()) {
+  if (typeof name !== 'string' || !name.trim()) {
     res.status(400).json({ error: 'Category name is required' });
     return;
   }
@@ -677,7 +677,7 @@ router.delete('/:id', (req: Request, res: Response) => {
 
   const unlinkSafe = (folder: string, filePath: string | null | undefined) => {
     if (!filePath) return;
-    const fp = path.join(uploadsBase, folder, filePath);
+    const fp = path.join(uploadsBase, folder, path.basename(filePath));
     if (fs.existsSync(fp)) {
       try { fs.unlinkSync(fp); } catch (_) { /* ignore */ }
     }

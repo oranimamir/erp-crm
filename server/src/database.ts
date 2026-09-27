@@ -1040,6 +1040,7 @@ export async function initializeDatabase() {
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_warehouse_stock_batch ON warehouse_stock(batch_number)`); } catch (_) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_batch_documents_batch_id ON batch_documents(batch_id)`); } catch (_) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_login_otps_user_id ON login_otps(user_id)`); } catch (_) {}
+  try { db.exec(`ALTER TABLE login_otps ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`); } catch (_) {}
 
   // Activity log for in-app notifications
   db.exec(`

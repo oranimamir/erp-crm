@@ -21,8 +21,8 @@ export function safeName(label: string): string {
 
 /** Stream a set of files to the response as a single ZIP download, de-duplicating names. */
 export function streamZip(res: Response, zipName: string, files: { absPath: string; name: string }[]): void {
-  res.setHeader('Content-Type', 'application/zip');
-  res.setHeader('Content-Disposition', `attachment; filename="${zipName}"`);
+  res.attachment(zipName);
+  res.type('application/zip');
 
   const archive = archiver('zip', { zlib: { level: 6 } });
   archive.on('error', () => { if (!res.headersSent) res.status(500).end(); else res.end(); });

@@ -86,22 +86,6 @@ async function computeFxFields(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CATEGORY DEFINITIONS
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const DEMO_CATEGORIES = [
-  'Salaries', 'Cars', 'Overhead', 'Consumables', 'Materials',
-  'Utilities and Maintenance', 'Feedstock', 'Subcontractors and Consultants',
-  'Regulatory', 'Equipment', 'Couriers', 'Other',
-];
-
-const SALES_CATEGORIES = [
-  'Raw Materials', 'Logistics', 'Blenders', 'Shipping',
-];
-
-const ALL_CATEGORIES = [...DEMO_CATEGORIES, ...SALES_CATEGORIES];
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // HARDCODED DEMO SUPPLIER → CATEGORY MAPPING
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2014,13 +1998,6 @@ router.patch('/invoices/:id/category', (req: Request, res: Response) => {
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to update category' });
   }
-});
-
-router.get('/categories', (req: Request, res: Response) => {
-  const { domain } = req.query;
-  if (domain === 'sales') res.json(SALES_CATEGORIES);
-  else if (domain === 'demo') res.json(DEMO_CATEGORIES);
-  else res.json(ALL_CATEGORIES);
 });
 
 // Domain supplier list (hardcoded + user-defined mappings, filtered by domain)

@@ -7,6 +7,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
 const router = Router();
 
+// Only these render in the browser; anything else (e.g. an old batch document
+// that is HTML or SVG) is sent as a download so it can never run as a page on
+// the app's origin
+const INLINE_TYPES = new Set(['.pdf', '.jpg', '.jpeg', '.png', '.webp', '.gif']);
+
 function serveFile(subfolder: string) {
   return (req: Request, res: Response) => {
     const filename = req.params.filename as string;
@@ -19,6 +24,10 @@ function serveFile(subfolder: string) {
     if (!fs.existsSync(filePath)) {
       res.status(404).json({ error: 'File not found' });
       return;
+    }
+    if (!INLINE_TYPES.has(path.extname(filename).toLowerCase())) {
+      res.attachment(filename);
+      res.type('application/octet-stream');
     }
     res.sendFile(filePath);
   };

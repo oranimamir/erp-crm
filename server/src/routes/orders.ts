@@ -10,6 +10,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
 const router = Router();
 
+// file_path names a file that order-scan already saved under uploads/orders.
+// It arrives in the request body, and deleting the order unlinks it, so it
+// must be a bare filename, never a path.
+function badFilePath(filePath: unknown): boolean {
+  return filePath != null && filePath !== '' && !/^[a-zA-Z0-9._-]+$/.test(String(filePath));
+}
+
 // Bulk-download the attached documents of multiple orders as a single ZIP.
 // Registered before '/:id' so the literal path isn't captured as an id.
 router.get('/bulk-download', (req: Request, res: Response) => {
@@ -112,6 +119,10 @@ router.post('/', (req: Request, res: Response) => {
     res.status(400).json({ error: 'order_number and type are required' });
     return;
   }
+  if (badFilePath(file_path)) {
+    res.status(400).json({ error: 'Invalid file_path' });
+    return;
+  }
 
   const insertOrder = db.transaction(() => {
     let total_amount = 0;
@@ -212,6 +223,10 @@ router.put('/:id', (req: Request, res: Response) => {
     operation_number, file_path, file_name, link_operation_id,
     client_entity_name, client_tax_id,
   } = req.body;
+  if (badFilePath(file_path)) {
+    res.status(400).json({ error: 'Invalid file_path' });
+    return;
+  }
 
   const updateOrder = db.transaction(() => {
     let total_amount = existing.total_amount;
@@ -345,7 +360,7 @@ router.delete('/:id', (req: Request, res: Response) => {
   // serving it, so a preview of the deleted order still renders.
   if (existing.file_path) {
     try {
-      const orderFile = path.join(uploadsBase, 'orders', existing.file_path);
+      const orderFile = path.join(uploadsBase, 'orders', path.basename(existing.file_path));
       if (fs.existsSync(orderFile)) fs.unlinkSync(orderFile);
     } catch (err) {
       console.warn('[orders] Failed to delete order document:', err);
