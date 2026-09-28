@@ -189,7 +189,14 @@ async function renderAndFile(
   data: PackingListData,
   opts: { operationId: number | null; existing?: any; status: PlStatus }
 ): Promise<{ filePath: string; fileName: string; documentId: number | null }> {
-  const pdf = await buildDocumentPdf('packing_list', data);
+  // A draft carries a DRAFT watermark; the final one is clean. Each has its own
+  // file and its own operation document, so finalizing never replaces the draft.
+  const isFinal = opts.status === 'final';
+  const pdf = await buildDocumentPdf('packing_list', { ...data, watermark: isFinal ? null : 'DRAFT' });
+  const slot = {
+    file_path: isFinal ? opts.existing?.final_file_path : opts.existing?.file_path,
+    document_id: isFinal ? opts.existing?.final_document_id : opts.existing?.document_id,
+  };
 
   fs.mkdirSync(docsDir, { recursive: true });
   const storedName = `pl-${Date.now()}-${crypto.randomBytes(6).toString('hex')}.pdf`;
@@ -198,12 +205,12 @@ async function renderAndFile(
   const displayName = fileNameFor(data.doc_number ?? null, opts.status);
   const note = `Packing List ${data.doc_number || ''} (${opts.status})`.trim();
 
-  if (opts.existing?.file_path) {
-    const old = path.join(docsDir, opts.existing.file_path);
+  if (slot.file_path) {
+    const old = path.join(docsDir, slot.file_path);
     if (fs.existsSync(old)) { try { fs.unlinkSync(old); } catch { /* best effort */ } }
   }
 
-  let documentId: number | null = opts.existing?.document_id ?? null;
+  let documentId: number | null = slot.document_id ?? null;
   if (opts.operationId) {
     const categoryId = packingCategoryId();
     const stillLinked = documentId
@@ -246,11 +253,14 @@ export function deletePackingListsForInvoice(invoiceDocumentId: number) {
 }
 
 function removeRow(row: any) {
-  if (row.file_path) {
-    const filePath = path.join(docsDir, row.file_path);
+  for (const stored of [row.file_path, row.final_file_path]) {
+    if (!stored) continue;
+    const filePath = path.join(docsDir, stored);
     if (fs.existsSync(filePath)) { try { fs.unlinkSync(filePath); } catch { /* best effort */ } }
   }
-  if (row.document_id) db.prepare('DELETE FROM operation_documents WHERE id = ?').run(row.document_id);
+  for (const docId of [row.document_id, row.final_document_id]) {
+    if (docId) db.prepare('DELETE FROM operation_documents WHERE id = ?').run(docId);
+  }
   db.prepare('DELETE FROM packing_lists WHERE id = ?').run(row.id);
 }
 
@@ -500,12 +510,26 @@ async function setStatus(req: Request, res: Response, status: PlStatus) {
   const operationId = existing.operation_id ?? resolveOperationId(invoiceDoc(existing.invoice_document_id));
   let filed: { filePath: string; fileName: string; documentId: number | null } | null = null;
   try {
-    filed = await renderAndFile(withRows(record.data), { operationId, existing, status });
-    db.prepare(`
-      UPDATE packing_lists SET status = ?, finalized_at = ${status === 'final' ? "datetime('now')" : 'NULL'},
-        operation_id = ?, file_path = ?, file_name = ?, document_id = ?, updated_at = datetime('now')
-      WHERE id = ?
-    `).run(status, operationId, filed.filePath, filed.fileName, filed.documentId, existing.id);
+    if (status === 'final') {
+      // The final PL is the saved draft, without the watermark, filed beside it
+      filed = await renderAndFile(withRows(record.data), { operationId, existing, status });
+      db.prepare(`
+        UPDATE packing_lists SET status = 'final', finalized_at = datetime('now'), operation_id = ?,
+          final_file_path = ?, final_file_name = ?, final_document_id = ?, updated_at = datetime('now')
+        WHERE id = ?
+      `).run(operationId, filed.filePath, filed.fileName, filed.documentId, existing.id);
+    } else {
+      // Reopening keeps the finalized PDF; a draft is (re)made only if there is none
+      if (!existing.file_path) {
+        filed = await renderAndFile(withRows(record.data), { operationId, existing, status });
+        db.prepare('UPDATE packing_lists SET file_path = ?, file_name = ?, document_id = ? WHERE id = ?')
+          .run(filed.filePath, filed.fileName, filed.documentId, existing.id);
+      }
+      db.prepare(`
+        UPDATE packing_lists SET status = 'draft', finalized_at = NULL, operation_id = ?, updated_at = datetime('now')
+        WHERE id = ?
+      `).run(operationId, existing.id);
+    }
     const row = db.prepare('SELECT * FROM packing_lists WHERE id = ?').get(existing.id);
     notifyAdmin({
       action: 'updated', entity: 'Packing List', label: existing.pl_number,
@@ -514,7 +538,7 @@ async function setStatus(req: Request, res: Response, status: PlStatus) {
     });
     res.json({ record: parseRecord(row), bl_found: !!findBillOfLading(operationId) });
   } catch (err: any) {
-    if (filed) discardFiled(filed, existing.document_id);
+    if (filed) discardFiled(filed, status === 'final' ? existing.final_document_id : existing.document_id);
     console.error('[packing-lists] status change failed:', err?.message || err);
     res.status(500).json({ error: 'Failed to update the packing list' });
   }
@@ -536,10 +560,15 @@ router.get('/bl-for-invoice/:invoiceDocId', (req: Request, res: Response) => {
 
 router.get('/:id/pdf', (req: Request, res: Response) => {
   const row = db.prepare('SELECT * FROM packing_lists WHERE id = ?').get(Number(req.params.id)) as any;
-  if (!row?.file_path) { res.status(404).json({ error: 'Packing list not found' }); return; }
-  const filePath = path.join(docsDir, row.file_path);
+  if (!row) { res.status(404).json({ error: 'Packing list not found' }); return; }
+  // ?version=draft|final; by default the final one once there is one
+  const wantFinal = req.query.version === 'final'
+    || (req.query.version !== 'draft' && row.status === 'final' && !!row.final_file_path);
+  const stored = wantFinal ? row.final_file_path : row.file_path;
+  if (!stored) { res.status(404).json({ error: `No ${wantFinal ? 'final' : 'draft'} PDF for this packing list` }); return; }
+  const filePath = path.join(docsDir, stored);
   if (!fs.existsSync(filePath)) { res.status(404).json({ error: 'File not found' }); return; }
-  res.attachment(row.file_name || 'packing-list.pdf');
+  res.attachment((wantFinal ? row.final_file_name : row.file_name) || 'packing-list.pdf');
   res.type('application/pdf');
   fs.createReadStream(filePath).pipe(res);
 });

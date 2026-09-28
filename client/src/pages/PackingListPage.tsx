@@ -6,12 +6,12 @@ import { computePacking, kg, netKg, packagingLabel, type PackagingOption } from 
 import { formatDate } from '../lib/dates';
 import { useToast } from '../contexts/ToastContext';
 import Button from '../components/ui/Button';
-import OrderCompareModal from '../components/OrderCompareModal';
+import CompareButtons from '../components/CompareButtons';
 import PackingListLayoutEditor from '../components/PackingListLayoutEditor';
 import { plWithDefaults, type PackingListLayout } from '../lib/packingListLayout';
 import {
   ArrowLeft, Loader2, Eye, FileDown, CheckCircle, FileText, RefreshCw, User, Package, Truck,
-  AlertTriangle, RotateCcw, Trash2, Save, BadgeCheck, Columns2, Undo2, LayoutTemplate, ChevronDown, ChevronRight,
+  AlertTriangle, RotateCcw, Trash2, Save, BadgeCheck, Undo2, LayoutTemplate, ChevronDown, ChevronRight,
 } from 'lucide-react';
 
 // Packing list for a generated invoice: its goods with the packaging from
@@ -66,8 +66,12 @@ interface PackingList {
   id: number;
   pl_number: string;
   invoice_document_id: number | null;
+  order_id: number | null;
   operation_id: number | null;
+  /** The draft PDF (watermarked DRAFT) — kept after finalizing. */
   file_name: string | null;
+  /** The final PDF, filed beside the draft once finalized. */
+  final_file_name?: string | null;
   status: 'draft' | 'final';
   finalized_at: string | null;
   data: Partial<PlData>;
@@ -223,9 +227,8 @@ export default function PackingListPage() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [finalizing, setFinalizing] = useState(false);
   const [billOfLading, setBillOfLading] = useState<BillOfLading | null>(null);
-  const [invoiceFile, setInvoiceFile] = useState<{ file_path: string; file_name: string; number: string } | null>(null);
+  const [orderId, setOrderId] = useState<number | null>(null);
   // Which document is shown beside the packing list
-  const [comparing, setComparing] = useState<'bl' | 'invoice' | null>(null);
 
   // How this customer's packing lists are laid out — see PackingListLayoutEditor
   const [layout, setLayout] = useState<PackingListLayout>(plWithDefaults(null));
@@ -247,6 +250,7 @@ export default function PackingListPage() {
     setForm(toFormData(record.data));
     setInvoiceDocId(record.invoice_document_id);
     setOperationId(record.operation_id);
+    setOrderId(record.order_id ?? null);
     setLayout(plWithDefaults(record.data.layout));
     setLayoutSource('this packing list as it was saved');
   }, []);
@@ -286,6 +290,7 @@ export default function PackingListPage() {
           setLayout(plWithDefaults(data.draft?.layout));
           setLayoutSource(data.layout_source || 'the standard packing list template');
           setOperationId(data.invoice?.operation_id ?? null);
+          setOrderId(data.invoice?.order_id ?? null);
         }
       } catch (err: any) {
         if (!cancelled) {
@@ -299,15 +304,6 @@ export default function PackingListPage() {
     load();
     return () => { cancelled = true; };
   }, [id, invoiceParam]);
-
-  // The invoice this PL packs, for "Compare with invoice"
-  useEffect(() => {
-    if (!invoiceDocId) { setInvoiceFile(null); return; }
-    api.get(`/invoice-documents/${invoiceDocId}`)
-      .then(({ data }) => setInvoiceFile(data?.file_path
-        ? { file_path: data.file_path, file_name: data.file_name, number: data.invoice_number } : null))
-      .catch(() => setInvoiceFile(null));
-  }, [invoiceDocId]);
 
   // The operation's Bill of Lading, if uploaded — enables "Compare with BL"
   useEffect(() => {
@@ -349,34 +345,43 @@ export default function PackingListPage() {
     }
   }
 
-  async function handleSave() {
-    setSaving(true);
-    try {
-      const body = { invoice_document_id: invoiceDocId, data: toPayload(form, layout) };
-      const { data } = packingList
-        ? await api.put(`/packing-lists/${packingList.id}`, body)
-        : await api.post('/packing-lists', body);
-      adopt(data);
+  /** Saves the form as the draft PL (watermarked DRAFT); returns the saved record. */
+  async function saveDraft(quiet = false): Promise<PackingList | null> {
+    const body = { invoice_document_id: invoiceDocId, data: toPayload(form, layout) };
+    const { data } = packingList
+      ? await api.put(`/packing-lists/${packingList.id}`, body)
+      : await api.post('/packing-lists', body);
+    adopt(data);
+    if (!quiet) {
       addToast(data.operation_id
         ? `Draft saved — ${data.file_name} is in the operation's Documents`
         : `Draft saved as ${data.file_name} (no operation linked, so not filed under Documents)`, 'success');
-      if (!packingList) navigate(`/packing-lists/${data.id}`, { replace: true });
-    } catch (err: any) {
-      addToast(err.response?.data?.error || 'Failed to generate the packing list', 'error');
-    } finally {
-      setSaving(false);
     }
+    if (!packingList) navigate(`/packing-lists/${data.id}`, { replace: true });
+    return data;
   }
 
-  /** Final once the BL is in — allowed without one, with a warning. */
+  async function handleSave() {
+    setSaving(true);
+    try { await saveDraft(); }
+    catch (err: any) { addToast(err.response?.data?.error || 'Failed to save the packing list', 'error'); }
+    finally { setSaving(false); }
+  }
+
+  /**
+   * The final PL is made from the draft: what is on screen is saved as the
+   * draft first, then the final PDF is produced from it and filed beside the
+   * draft, which stays in the operation's Documents. Allowed without a BL.
+   */
   async function handleFinalize() {
-    if (!packingList) return;
     setFinalizing(true);
     try {
-      const { data } = await api.post(`/packing-lists/${packingList.id}/finalize`);
+      const draft = await saveDraft(true);
+      if (!draft) return;
+      const { data } = await api.post(`/packing-lists/${draft.id}/finalize`);
       adopt(data.record);
-      if (data.bl_found) addToast(`Packing list finalized — ${data.record.file_name}`, 'success');
-      else addToast('No BL found in the operation documents — finalized anyway', 'info');
+      if (data.bl_found) addToast(`Packing list finalized — ${data.record.final_file_name}`, 'success');
+      else addToast(`Finalized as ${data.record.final_file_name} — no BL in the operation documents yet`, 'info');
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Failed to finalize the packing list', 'error');
     } finally {
@@ -414,14 +419,14 @@ export default function PackingListPage() {
     }
   }
 
-  async function handleDownload() {
+  async function handleDownload(version: 'draft' | 'final') {
     if (!packingList) return;
     try {
-      const res = await api.get(`/packing-lists/${packingList.id}/pdf`, { responseType: 'blob' });
+      const res = await api.get(`/packing-lists/${packingList.id}/pdf`, { params: { version }, responseType: 'blob' });
       const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
       const a = document.createElement('a');
       a.href = url;
-      a.download = packingList.file_name || `${form.doc_number}.pdf`;
+      a.download = (version === 'final' ? packingList.final_file_name : packingList.file_name) || `${form.doc_number}.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -476,25 +481,13 @@ export default function PackingListPage() {
           <Button variant="secondary" size="sm" onClick={handlePreview} disabled={previewing}>
             {previewing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
           </Button>
-          <Button variant="secondary" size="sm" onClick={() => setComparing('invoice')} disabled={!invoiceFile}
-            title={invoiceFile ? `Show invoice ${invoiceFile.number} next to this packing list` : 'The invoice PDF is not available'}>
-            <Columns2 size={14} /> Compare with invoice
-          </Button>
-          <Button variant="secondary" size="sm" onClick={() => setComparing('bl')} disabled={!billOfLading}
-            title={billOfLading ? `Show ${billOfLading.file_name} next to this packing list` : 'No BL in the operation documents yet'}>
-            <Columns2 size={14} /> Compare with BL
-          </Button>
-          {comparing && (comparing === 'bl' ? billOfLading : invoiceFile) && (
-            <OrderCompareModal
-              key={comparing}
-              title="Packing list"
-              left={comparing === 'bl'
-                ? { title: 'Bill of Lading', filePath: billOfLading!.file_path, fileName: billOfLading!.file_name, subfolder: 'operation-docs' }
-                : { title: `Invoice ${invoiceFile!.number}`, filePath: invoiceFile!.file_path, fileName: invoiceFile!.file_name, subfolder: 'operation-docs' }}
-              renderPreview={async () => (await api.post('/packing-lists/preview', { data: toPayload(form, layout) }, { responseType: 'blob' })).data as Blob}
-              onClose={() => setComparing(null)}
-            />
-          )}
+          <CompareButtons
+            kinds={['order', 'oc', 'invoice', 'bl']}
+            orderId={orderId}
+            title="Packing list"
+            bl={billOfLading ? { number: '', file_path: billOfLading.file_path, file_name: billOfLading.file_name } : null}
+            renderPreview={async () => (await api.post('/packing-lists/preview', { data: toPayload(form, layout) }, { responseType: 'blob' })).data as Blob}
+          />
           <Button variant={packingList?.status === 'final' ? 'secondary' : 'primary'} size="sm" onClick={handleSave} disabled={saving}
             title={packingList?.status === 'final' ? 'Saving changes turns the packing list back into a draft' : undefined}>
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
@@ -505,14 +498,17 @@ export default function PackingListPage() {
               {finalizing ? <Loader2 size={14} className="animate-spin" /> : <Undo2 size={14} />} Reopen as draft
             </Button>
           ) : (
-            <Button size="sm" onClick={handleFinalize} disabled={!packingList || finalizing}
-              title={!packingList ? 'Save the draft first'
-                : billOfLading ? 'Finalize now that the BL is in' : 'No BL in the operation documents yet — you can still finalize'}>
+            <Button size="sm" onClick={handleFinalize} disabled={finalizing || saving}
+              title={`Saves this draft, then makes the final PL from it — the draft stays filed too${billOfLading ? '' : '. No BL in the operation documents yet — you can still finalize'}`}>
               {finalizing ? <Loader2 size={14} className="animate-spin" /> : <BadgeCheck size={14} />} Finalize the PL
             </Button>
           )}
-          <Button variant="secondary" size="sm" onClick={handleDownload} disabled={!packingList}>
-            <FileDown size={14} /> Download PDF
+          <Button variant="secondary" size="sm" onClick={() => handleDownload('draft')} disabled={!packingList?.file_name}>
+            <FileDown size={14} /> Download draft
+          </Button>
+          <Button variant="secondary" size="sm" onClick={() => handleDownload('final')} disabled={!packingList?.final_file_name}
+            title={packingList?.final_file_name ? undefined : 'Not finalized yet'}>
+            <FileDown size={14} /> Download final
           </Button>
           {packingList && (
             <Button variant="secondary" size="sm" onClick={handleDelete}>
@@ -538,21 +534,30 @@ export default function PackingListPage() {
         <p className="text-sm text-gray-500 mt-1">
           Built from invoice <strong className="text-gray-700">{form.invoice_number || '—'}</strong>. Packaging, units per pallet
           and weights come from <Link to="/inventory" className="text-primary-600 hover:underline">Inventory → Packaging</Link>.
-          Saved as <strong className="text-gray-700">
-            {(form.doc_number || 'packing-list').replace(/[^A-Za-z0-9._-]+/g, '-')}{packingList?.status === 'final' ? '' : '-DRAFT'}.pdf
-          </strong>
-          {operationId && ' in the operation\'s Documents'}. Save it as a draft first, then finalize it once the BL is in
+          The draft is saved as <strong className="text-gray-700">
+            {(form.doc_number || 'packing-list').replace(/[^A-Za-z0-9._-]+/g, '-')}-DRAFT.pdf
+          </strong> (watermarked DRAFT); finalizing makes <strong className="text-gray-700">
+            {(form.doc_number || 'packing-list').replace(/[^A-Za-z0-9._-]+/g, '-')}.pdf
+          </strong> from it and keeps the draft{operationId && ' — both in the operation\'s Documents'}. Finalize once the BL is in
           {billOfLading ? <> — <span className="text-green-700">BL found: {billOfLading.file_name}</span></> : ' — no BL in the operation documents yet'}.
         </p>
       </div>
 
       {packingList && (
-        <div className={`flex items-center gap-2 rounded-xl border px-4 py-3 text-sm ${packingList.status === 'final' ? 'border-green-200 bg-green-50' : 'border-amber-200 bg-amber-50'}`}>
-          <CheckCircle size={16} className={`flex-shrink-0 ${packingList.status === 'final' ? 'text-green-600' : 'text-amber-600'}`} />
-          <span className={packingList.status === 'final' ? 'text-green-800' : 'text-amber-800'}>
-            <strong>{packingList.file_name}</strong> {packingList.status === 'final' ? 'finalized' : 'saved as a draft'}
-            {operationId ? " — in the operation's Documents." : '.'}
-          </span>
+        <div className={`flex flex-col gap-1 rounded-xl border px-4 py-3 text-sm ${packingList.status === 'final' ? 'border-green-200 bg-green-50' : 'border-amber-200 bg-amber-50'}`}>
+          {packingList.final_file_name && (
+            <span className="flex items-center gap-2 text-green-800">
+              <BadgeCheck size={16} className="flex-shrink-0 text-green-600" />
+              <span><strong>{packingList.final_file_name}</strong> — final{packingList.status === 'final' ? '' : ' (reopened since: finalize again to replace it)'}</span>
+            </span>
+          )}
+          {packingList.file_name && (
+            <span className={`flex items-center gap-2 ${packingList.status === 'final' ? 'text-green-800' : 'text-amber-800'}`}>
+              <CheckCircle size={16} className={`flex-shrink-0 ${packingList.status === 'final' ? 'text-green-600' : 'text-amber-600'}`} />
+              <span><strong>{packingList.file_name}</strong> — draft, watermarked DRAFT{packingList.status === 'final' ? ', kept alongside the final' : ''}</span>
+            </span>
+          )}
+          {operationId && <span className="text-xs text-gray-500 pl-6">Both are in the operation&rsquo;s Documents.</span>}
         </div>
       )}
 

@@ -225,6 +225,8 @@ router.post('/', async (req: Request, res: Response) => {
   const { order_id, operation_id, supplier_id, data } = req.body as {
     order_id?: number; operation_id?: number | null; supplier_id?: number | null; data?: PurchaseOrderData;
   };
+  // A draft is only the saved form: no PDF, nothing filed under the operation
+  const isDraft = req.body?.status === 'draft';
 
   if (!order_id) { res.status(400).json({ error: 'order_id is required' }); return; }
   if (!data || typeof data !== 'object') { res.status(400).json({ error: 'data is required' }); return; }
@@ -236,13 +238,6 @@ router.post('/', async (req: Request, res: Response) => {
   if (operationId == null) {
     const linked = db.prepare('SELECT id FROM operations WHERE order_id = ? ORDER BY id DESC LIMIT 1').get(order_id) as any;
     operationId = linked?.id ?? null;
-  }
-  if (operationId) {
-    const op = db.prepare('SELECT category FROM operations WHERE id = ?').get(operationId) as any;
-    if (op && op.category !== 'trading') {
-      res.status(400).json({ error: 'Purchase orders are only generated for trading operations' });
-      return;
-    }
   }
 
   const payload: PurchaseOrderData = {
@@ -258,19 +253,20 @@ router.post('/', async (req: Request, res: Response) => {
 
   let filed: { filePath: string; fileName: string; documentId: number | null } | null = null;
   try {
-    filed = await renderAndFile(payload, { operationId });
+    if (!isDraft) filed = await renderAndFile(payload, { operationId });
 
     const result = db.prepare(`
-      INSERT INTO purchase_orders (po_number, order_id, operation_id, supplier_id, data, file_path, file_name, document_id, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO purchase_orders (po_number, order_id, operation_id, supplier_id, data, file_path, file_name, document_id, created_by, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       payload.po_number, order_id, operationId, supplier_id ?? null,
-      JSON.stringify(payload), filed.filePath, filed.fileName, filed.documentId, req.user?.userId ?? null
+      JSON.stringify(payload), filed?.filePath ?? null, filed?.fileName ?? null, filed?.documentId ?? null,
+      req.user?.userId ?? null, isDraft ? 'draft' : 'final'
     );
 
     const row = db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(result.lastInsertRowid);
     notifyAdmin({
-      action: 'created', entity: 'Purchase Order', label: payload.po_number!,
+      action: 'created', entity: isDraft ? 'Purchase Order draft' : 'Purchase Order', label: payload.po_number!,
       performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
     });
     res.status(201).json(parseRecord(row));
@@ -294,6 +290,13 @@ router.put('/:id', async (req: Request, res: Response) => {
   const { data, operation_id, supplier_id } = req.body as { data?: PurchaseOrderData; operation_id?: number | null; supplier_id?: number | null };
   if (!data || typeof data !== 'object') { res.status(400).json({ error: 'data is required' }); return; }
 
+  const isDraft = req.body?.status === 'draft';
+  const wasDraft = existing.status === 'draft';
+  if (isDraft && !wasDraft) {
+    res.status(400).json({ error: 'This purchase order is already generated — it cannot go back to a draft' });
+    return;
+  }
+
   const payload: PurchaseOrderData = {
     ...data,
     po_number: (data.po_number || '').trim() || existing.po_number,
@@ -307,20 +310,23 @@ router.put('/:id', async (req: Request, res: Response) => {
 
   let filed: { filePath: string; fileName: string; documentId: number | null } | null = null;
   try {
-    filed = await renderAndFile(payload, { operationId, existing });
+    if (!isDraft) filed = await renderAndFile(payload, { operationId, existing });
 
     db.prepare(`
       UPDATE purchase_orders
-      SET po_number = ?, operation_id = ?, supplier_id = ?, data = ?, file_path = ?, file_name = ?, document_id = ?, updated_at = datetime('now')
+      SET po_number = ?, operation_id = ?, supplier_id = ?, data = ?, file_path = ?, file_name = ?, document_id = ?,
+        status = ?, updated_at = datetime('now')
       WHERE id = ?
     `).run(
       payload.po_number, operationId, supplier_id !== undefined ? supplier_id : existing.supplier_id,
-      JSON.stringify(payload), filed.filePath, filed.fileName, filed.documentId, existing.id
+      JSON.stringify(payload), filed?.filePath ?? null, filed?.fileName ?? null, filed?.documentId ?? null,
+      isDraft ? 'draft' : 'final', existing.id
     );
 
     const row = db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(existing.id);
     notifyAdmin({
-      action: 'updated', entity: 'Purchase Order', label: payload.po_number!,
+      action: wasDraft && !isDraft ? 'created' : 'updated',
+      entity: isDraft ? 'Purchase Order draft' : 'Purchase Order', label: payload.po_number!,
       performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
     });
     res.json(parseRecord(row));
@@ -339,6 +345,7 @@ router.put('/:id', async (req: Request, res: Response) => {
 
 router.get('/:id/pdf', (req: Request, res: Response) => {
   const row = db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(Number(req.params.id)) as any;
+  if (row?.status === 'draft') { res.status(400).json({ error: 'Generate the purchase order first' }); return; }
   if (!row?.file_path) { res.status(404).json({ error: 'Purchase order not found' }); return; }
 
   const filePath = path.join(docsDir, row.file_path);
@@ -354,6 +361,7 @@ router.get('/:id/pdf', (req: Request, res: Response) => {
 router.post('/:id/email', async (req: Request, res: Response) => {
   const row = db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(Number(req.params.id)) as any;
   if (!row) { res.status(404).json({ error: 'Purchase order not found' }); return; }
+  if (row.status === 'draft') { res.status(400).json({ error: 'Generate the purchase order before sending it' }); return; }
 
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) { res.status(501).json({ error: 'Email sending is not configured (missing RESEND_API_KEY)' }); return; }

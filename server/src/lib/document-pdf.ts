@@ -174,6 +174,8 @@ export interface DocumentData {
   bank_address?: string | null;
   /** How this customer's invoice is laid out. Absent → the house default. */
   layout?: Partial<InvoiceLayout> | null;
+  /** Printed diagonally across every page — "DRAFT" on a draft packing list. */
+  watermark?: string | null;
   /** Packing list only: the invoice it packs, and its rows. */
   invoice_number?: string | null;
   packing?: PackingRow[];
@@ -409,7 +411,7 @@ export async function buildDocumentPdf(kind: DocumentKind, data: DocumentData): 
     y = drawNotes(doc, data, y);
     if (pl.origin) y = drawOriginBlock(doc, data, y);
     if (pl.show_terms && data.terms) drawFooterBlocks(doc, head, { terms: data.terms }, y + 16);
-    stampPageNumbers(doc);
+    stampPageNumbers(doc, data.watermark);
     doc.end();
     return done;
   }
@@ -1048,10 +1050,19 @@ function drawFooterBlocks(doc: any, layout: InvoiceLayout, data: DocumentData, t
 }
 
 // ── "Page N of M" ─────────────────────────────────────────────────────────
-function stampPageNumbers(doc: any) {
+function stampPageNumbers(doc: any, watermark?: string | null) {
   const range = doc.bufferedPageRange();
   for (let i = 0; i < range.count; i++) {
     doc.switchToPage(range.start + i);
+    if (watermark) {
+      // Big, pale and diagonal: readable through, unmistakable at a glance
+      doc.save();
+      doc.rotate(-40, { origin: [297.5, 421] });
+      doc.font('Helvetica-Bold').fontSize(130).fillColor('#9CA3AF').fillOpacity(0.28)
+        .text(watermark, 0, 360, { width: 595, align: 'center', lineBreak: false });
+      doc.restore();
+      doc.fillOpacity(1);
+    }
     doc.font('Helvetica').fontSize(9.5).fillColor(BLACK)
       .text(`Page ${i + 1} of ${range.count}`, L, 812, { width: W, align: 'right', lineBreak: false });
   }

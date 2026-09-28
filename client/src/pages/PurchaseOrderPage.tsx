@@ -2,13 +2,13 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom';
 import api from '../lib/api';
 import { acceptPlaceholderOnTab } from '../lib/placeholderTab';
-import OrderCompareModal from '../components/OrderCompareModal';
+import CompareButtons from '../components/CompareButtons';
 import { useCompanyEntities } from '../lib/useCompanyEntities';
 import { useToast } from '../contexts/ToastContext';
 import Button from '../components/ui/Button';
 import {
   ArrowLeft, Plus, Trash2, Loader2, Eye, X, FileDown, Mail,
-  CheckCircle, FileText, RefreshCw, Building2, Package, Truck, AlertTriangle, Columns2,
+  CheckCircle, FileText, RefreshCw, Building2, Package, Truck, AlertTriangle, Save,
 } from 'lucide-react';
 
 // Supplier purchase order for a trading operation — the order confirmation's
@@ -60,6 +60,8 @@ interface PurchaseOrder {
   file_name: string | null;
   sent_to: string | null;
   sent_at: string | null;
+  /** 'draft' = saved form only; 'final' = generated and filed. */
+  status?: 'draft' | 'final';
   data: Partial<PoData>;
 }
 
@@ -209,7 +211,6 @@ export default function PurchaseOrderPage() {
 
   const [saving, setSaving] = useState(false);
   const [previewing, setPreviewing] = useState(false);
-  const [comparing, setComparing] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   const [showEmail, setShowEmail] = useState(false);
@@ -356,20 +357,23 @@ export default function PurchaseOrderPage() {
     }
   }
 
-  async function handleSave() {
+  async function handleSave(status: 'draft' | 'final') {
     if (!orderId) { addToast('No order linked', 'error'); return; }
-    if (!form.client_name.trim()) { addToast('Choose the supplier first', 'error'); return; }
+    // A draft can be saved before the supplier is known
+    if (status === 'final' && !form.client_name.trim()) { addToast('Choose the supplier first', 'error'); return; }
     setSaving(true);
     try {
-      const body = { order_id: orderId, operation_id: operationId, supplier_id: supplierId, data: toPayload(form) };
+      const body = { order_id: orderId, operation_id: operationId, supplier_id: supplierId, status, data: toPayload(form) };
       const { data } = purchaseOrder
         ? await api.put(`/purchase-orders/${purchaseOrder.id}`, body)
         : await api.post('/purchase-orders', body);
       adopt(data);
-      addToast(`Generated ${data.file_name}${operationId ? ' — filed under the operation documents' : ''}`, 'success');
+      addToast(status === 'draft'
+        ? `Draft ${data.po_number} saved`
+        : `Generated ${data.file_name}${operationId ? ' — filed under the operation documents' : ''}`, 'success');
       if (!purchaseOrder) navigate(`/purchase-orders/${data.id}`, { replace: true });
     } catch (err: any) {
-      addToast(err.response?.data?.error || 'Failed to generate the purchase order', 'error');
+      addToast(err.response?.data?.error || (status === 'draft' ? 'Failed to save the draft' : 'Failed to generate the purchase order'), 'error');
     } finally {
       setSaving(false);
     }
@@ -422,6 +426,9 @@ export default function PurchaseOrderPage() {
   const currency = form.items.find(i => i.currency)?.currency || 'EUR';
   const unpriced = form.items.filter(i => i.unit_price === '' || Number(i.unit_price) === 0).length;
 
+  const isDraft = !purchaseOrder || purchaseOrder.status === 'draft';
+  const generated = !!purchaseOrder && !isDraft;
+
   const backTo = operationId ? `/operations/${operationId}` : '/operations';
 
   return (
@@ -434,26 +441,26 @@ export default function PurchaseOrderPage() {
           <Button variant="secondary" size="sm" onClick={handlePreview} disabled={previewing}>
             {previewing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
           </Button>
-          <Button variant="secondary" size="sm" onClick={() => setComparing(true)} disabled={!orderId}
-            title="Show the customer's order side by side with this document">
-            <Columns2 size={14} /> Compare with order
-          </Button>
-          {comparing && orderId && (
-            <OrderCompareModal
-              orderId={orderId}
-              title="Purchase order"
-              renderPreview={async () => (await api.post('/purchase-orders/preview', { data: toPayload(form) }, { responseType: 'blob' })).data as Blob}
-              onClose={() => setComparing(false)}
-            />
+          <CompareButtons
+            kinds={['order', 'oc']}
+            orderId={orderId}
+            title="Purchase order"
+            renderPreview={async () => (await api.post('/purchase-orders/preview', { data: toPayload(form) }, { responseType: 'blob' })).data as Blob}
+          />
+          {isDraft && (
+            <Button variant="secondary" size="sm" onClick={() => handleSave('draft')} disabled={saving}
+              title="Keep this purchase order as a draft — nothing is generated or filed yet">
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save draft
+            </Button>
           )}
-          <Button size="sm" onClick={handleSave} disabled={saving}>
+          <Button size="sm" onClick={() => handleSave('final')} disabled={saving}>
             {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
-            {purchaseOrder ? 'Confirm & regenerate' : 'Confirm & generate'}
+            {generated ? 'Confirm & regenerate' : 'Confirm & generate'}
           </Button>
-          <Button variant="secondary" size="sm" onClick={handleDownload} disabled={!purchaseOrder}>
+          <Button variant="secondary" size="sm" onClick={handleDownload} disabled={!generated}>
             <FileDown size={14} /> Download PDF
           </Button>
-          <Button variant="secondary" size="sm" onClick={() => setShowEmail(true)} disabled={!purchaseOrder}>
+          <Button variant="secondary" size="sm" onClick={() => setShowEmail(true)} disabled={!generated}>
             <Mail size={14} /> Send by email
           </Button>
         </div>
@@ -491,7 +498,16 @@ export default function PurchaseOrderPage() {
         </p>
       </div>
 
-      {purchaseOrder && (
+      {purchaseOrder && isDraft && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+          <Save size={16} className="text-amber-600 flex-shrink-0" />
+          <span className="text-amber-800">
+            <strong>Draft {purchaseOrder.po_number}</strong> — saved, not generated yet. Confirm &amp; generate when the details are complete.
+          </span>
+        </div>
+      )}
+
+      {generated && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm">
           <CheckCircle size={16} className="text-green-600 flex-shrink-0" />
           <span className="text-green-800"><strong>{purchaseOrder.file_name}</strong> generated.</span>
@@ -648,7 +664,7 @@ export default function PurchaseOrderPage() {
         </div>
       </div>
 
-      {showEmail && purchaseOrder && (
+      {showEmail && generated && purchaseOrder && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => !sending && setShowEmail(false)}>
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-200">

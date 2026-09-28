@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
+import DocumentGenerators from '../components/DocumentGenerators';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -195,10 +196,6 @@ export default function OperationDetailPage() {
   const [savingShip, setSavingShip] = useState(false);
 
   // Order confirmation issued for the linked order, if any
-  const [orderConfirmation, setOrderConfirmation] = useState<{ id: number; file_name: string | null } | null>(null);
-  const [purchaseOrder, setPurchaseOrder] = useState<{ id: number; file_name: string | null } | null>(null);
-  const [invoiceDoc, setInvoiceDoc] = useState<{ id: number; file_name: string | null; invoice_number: string; status?: 'draft' | 'final' } | null>(null);
-  const [packingList, setPackingList] = useState<{ id: number; file_name: string | null; status?: string } | null>(null);
 
   // Link Order modal
   const [showLinkOrder, setShowLinkOrder] = useState(false);
@@ -285,23 +282,6 @@ export default function OperationDetailPage() {
     fetchOperation();
     fetchCategories();
   }, [id]);
-
-  // The confirmation lives on the order, so re-check whenever the link changes
-  useEffect(() => {
-    if (!operation?.order_id) { setOrderConfirmation(null); setPurchaseOrder(null); return; }
-    api.get(`/order-confirmations/by-order/${operation.order_id}`)
-      .then(({ data }) => setOrderConfirmation(data?.[0] || null))
-      .catch(() => setOrderConfirmation(null));
-    api.get(`/purchase-orders/by-order/${operation.order_id}`)
-      .then(({ data }) => setPurchaseOrder(data?.[0] || null))
-      .catch(() => setPurchaseOrder(null));
-    api.get(`/invoice-documents/by-order/${operation.order_id}`)
-      .then(({ data }) => setInvoiceDoc(data?.[0] || null))
-      .catch(() => setInvoiceDoc(null));
-    api.get(`/packing-lists/by-order/${operation.order_id}`)
-      .then(({ data }) => setPackingList(data?.[0] || null))
-      .catch(() => setPackingList(null));
-  }, [operation?.order_id, operation?.documents.length]);
 
   // ── Preview ─────────────────────────────────────────────────────────────────
 
@@ -717,58 +697,7 @@ export default function OperationDetailPage() {
                   <Eye size={13} /> Preview
                 </button>
               )}
-              <button
-                onClick={() => navigate(
-                  orderConfirmation
-                    ? `/order-confirmations/${orderConfirmation.id}`
-                    : `/order-confirmations/new?order_id=${operation.order_id}&operation_id=${operation.id}`
-                )}
-                className="flex items-center gap-1 text-xs sm:text-sm text-primary-600 hover:text-primary-700 border border-primary-200 bg-primary-50 rounded-lg px-2 py-1"
-                title={orderConfirmation ? `Edit ${orderConfirmation.file_name || 'the order confirmation'}` : 'Generate an order confirmation from this order'}
-              >
-                <FileCheck2 size={13} /> Order Confirmation{orderConfirmation ? ' ✓' : ''}
-              </button>
-              {operation.category === 'trading' && (
-                <button
-                  onClick={() => navigate(
-                    purchaseOrder
-                      ? `/purchase-orders/${purchaseOrder.id}`
-                      : `/purchase-orders/new?order_id=${operation.order_id}&operation_id=${operation.id}`
-                  )}
-                  className="flex items-center gap-1 text-xs sm:text-sm text-primary-600 hover:text-primary-700 border border-primary-200 bg-primary-50 rounded-lg px-2 py-1"
-                  title={purchaseOrder ? `Edit ${purchaseOrder.file_name || 'the purchase order'}` : 'Generate a supplier purchase order from this order'}
-                >
-                  <ShoppingCart size={13} /> Supplier PO{purchaseOrder ? ' ✓' : ''}
-                </button>
-              )}
-              <button
-                onClick={() => navigate(
-                  invoiceDoc
-                    ? `/invoices/documents/${invoiceDoc.id}`
-                    : `/invoices/documents/new?order_id=${operation.order_id}&operation_id=${operation.id}`
-                )}
-                className="flex items-center gap-1 text-xs sm:text-sm text-primary-600 hover:text-primary-700 border border-primary-200 bg-primary-50 rounded-lg px-2 py-1"
-                title={invoiceDoc
-                  ? (invoiceDoc.status === 'draft' ? `Continue draft ${invoiceDoc.invoice_number}` : `Edit ${invoiceDoc.file_name || 'the invoice'}`)
-                  : 'Generate a commercial invoice from this order'}
-              >
-                <ReceiptIcon size={13} /> Invoice{invoiceDoc ? (invoiceDoc.status === 'draft' ? ' (draft)' : ' ✓') : ''}
-              </button>
-              {/* The packing list is built from the generated invoice */}
-              <button
-                onClick={() => navigate(
-                  packingList
-                    ? `/packing-lists/${packingList.id}`
-                    : `/packing-lists/new?invoice_document_id=${invoiceDoc?.id}`
-                )}
-                disabled={!packingList && (!invoiceDoc || invoiceDoc.status === 'draft')}
-                className="flex items-center gap-1 text-xs sm:text-sm text-primary-600 hover:text-primary-700 border border-primary-200 bg-primary-50 rounded-lg px-2 py-1 disabled:opacity-40 disabled:cursor-not-allowed"
-                title={packingList
-                  ? `Edit ${packingList.file_name || 'the packing list'}`
-                  : invoiceDoc && invoiceDoc.status !== 'draft' ? 'Generate the packing list from the invoice' : 'Generate the invoice first — the packing list is built from it'}
-              >
-                <Package size={13} /> Packing List{packingList ? (packingList.status === 'final' ? ' ✓' : ' (draft)') : ''}
-              </button>
+              <DocumentGenerators orderId={operation.order_id} operationId={operation.id} refreshKey={operation.documents.length} />
               <button
                 onClick={() => navigate(`/orders/${operation.order_id}/edit`)}
                 className="flex items-center gap-1 text-xs sm:text-sm text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2 py-1"

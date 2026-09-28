@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom';
 import api from '../lib/api';
 import { acceptPlaceholderOnTab } from '../lib/placeholderTab';
-import OrderCompareModal from '../components/OrderCompareModal';
+import CompareButtons from '../components/CompareButtons';
 import { useCompanyEntities } from '../lib/useCompanyEntities';
 import { useToast } from '../contexts/ToastContext';
 import Button from '../components/ui/Button';
@@ -12,7 +12,7 @@ import { withDefaults, type InvoiceLayout } from '../lib/invoiceLayout';
 import {
   ArrowLeft, Plus, Trash2, Loader2, Eye, X, FileDown, Mail,
   CheckCircle, FileText, RefreshCw, User, Package, Truck, Factory,
-  LayoutTemplate, ChevronDown, ChevronRight, Columns2, Save,
+  LayoutTemplate, ChevronDown, ChevronRight, Save,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -249,7 +249,6 @@ export default function InvoiceDocumentPage() {
 
   const [saving, setSaving] = useState(false);
   const [previewing, setPreviewing] = useState(false);
-  const [comparing, setComparing] = useState<'order' | 'oc' | null>(null);
   // The order confirmation the invoice is drafted from (and compared with)
   const [oc, setOc] = useState<{ oc_number: string; file_path: string | null; file_name: string | null } | null>(null);
   const [fromOc, setFromOc] = useState(false);
@@ -532,26 +531,12 @@ export default function InvoiceDocumentPage() {
           <Button variant="secondary" size="sm" onClick={handlePreview} disabled={previewing}>
             {previewing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
           </Button>
-          <Button variant="secondary" size="sm" onClick={() => setComparing('order')} disabled={!orderId}
-            title="Show the customer's order side by side with this document">
-            <Columns2 size={14} /> Compare with order
-          </Button>
-          <Button variant="secondary" size="sm" onClick={() => setComparing('oc')} disabled={!oc?.file_path}
-            title={oc?.file_path ? `Show order confirmation ${oc.oc_number} next to this invoice` : 'No order confirmation for this order'}>
-            <Columns2 size={14} /> Compare with OC
-          </Button>
-          {comparing && orderId && (comparing === 'order' || oc?.file_path) && (
-            <OrderCompareModal
-              key={comparing}
-              orderId={orderId}
-              title="Invoice"
-              left={comparing === 'oc'
-                ? { title: `Order confirmation ${oc!.oc_number}`, filePath: oc!.file_path!, fileName: oc!.file_name || undefined, subfolder: 'operation-docs' }
-                : undefined}
-              renderPreview={async () => (await api.post('/invoice-documents/preview', { data: toPayload(form, includeOrigin, layout) }, { responseType: 'blob' })).data as Blob}
-              onClose={() => setComparing(null)}
-            />
-          )}
+          <CompareButtons
+            kinds={['order', 'oc']}
+            orderId={orderId}
+            title="Invoice"
+            renderPreview={async () => (await api.post('/invoice-documents/preview', { data: toPayload(form, includeOrigin, layout) }, { responseType: 'blob' })).data as Blob}
+          />
           {isDraft && (
             <Button variant="secondary" size="sm" onClick={() => handleSave('draft')} disabled={saving}
               title="Keep this invoice as a draft — nothing is generated or filed yet">

@@ -1582,6 +1582,18 @@ export async function initializeDatabase() {
   // Draft until the BL is in, then final
   try { db.exec(`ALTER TABLE packing_lists ADD COLUMN status TEXT NOT NULL DEFAULT 'draft'`); } catch (_) { /* column may already exist */ }
   try { db.exec(`ALTER TABLE packing_lists ADD COLUMN finalized_at TEXT`); } catch (_) { /* column may already exist */ }
+  // The final PDF is its own document: the (watermarked) draft stays filed beside it
+  try {
+    db.exec(`ALTER TABLE packing_lists ADD COLUMN final_file_path TEXT`);
+    db.exec(`ALTER TABLE packing_lists ADD COLUMN final_file_name TEXT`);
+    db.exec(`ALTER TABLE packing_lists ADD COLUMN final_document_id INTEGER`);
+    // PLs finalized before this held their final PDF in the draft slot
+    db.exec(`
+      UPDATE packing_lists SET final_file_path = file_path, final_file_name = file_name, final_document_id = document_id,
+        file_path = NULL, file_name = NULL, document_id = NULL
+      WHERE status = 'final' AND file_path IS NOT NULL
+    `);
+  } catch (_) { /* columns may already exist */ }
   try {
     db.prepare(`INSERT OR IGNORE INTO document_categories (name) VALUES ('Bill of Lading')`).run();
   } catch { /* ignore */ }
@@ -1718,6 +1730,9 @@ export async function initializeDatabase() {
 
   // Which profile a document was drafted from, so regenerating never switches entity
   try { db.exec(`ALTER TABLE order_confirmations ADD COLUMN profile_id INTEGER`); } catch (_) { /* column may already exist */ }
+  // 'draft' = saved form only (no PDF, not filed); 'final' = generated and filed
+  try { db.exec(`ALTER TABLE order_confirmations ADD COLUMN status TEXT NOT NULL DEFAULT 'final'`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE purchase_orders ADD COLUMN status TEXT NOT NULL DEFAULT 'final'`); } catch (_) { /* column may already exist */ }
   try { db.exec(`ALTER TABLE invoice_documents ADD COLUMN profile_id INTEGER`); } catch (_) { /* column may already exist */ }
 
   // ── Repair FK references broken by an old rebuild migration ─────────────

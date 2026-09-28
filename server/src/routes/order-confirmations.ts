@@ -254,6 +254,8 @@ router.post('/', async (req: Request, res: Response) => {
   const { order_id, operation_id, profile_id, data } = req.body as {
     order_id?: number; operation_id?: number | null; profile_id?: number | null; data?: OrderConfirmationData;
   };
+  // A draft is only the saved form: no PDF, nothing filed under the operation
+  const isDraft = req.body?.status === 'draft';
 
   if (!order_id) { res.status(400).json({ error: 'order_id is required' }); return; }
   if (!data || typeof data !== 'object') { res.status(400).json({ error: 'data is required' }); return; }
@@ -285,19 +287,20 @@ router.post('/', async (req: Request, res: Response) => {
 
   let filed: { filePath: string; fileName: string; documentId: number | null } | null = null;
   try {
-    filed = await renderAndFile(payload, { operationId, userId: req.user?.userId });
+    if (!isDraft) filed = await renderAndFile(payload, { operationId, userId: req.user?.userId });
 
     const result = db.prepare(`
-      INSERT INTO order_confirmations (oc_number, order_id, operation_id, profile_id, data, file_path, file_name, document_id, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO order_confirmations (oc_number, order_id, operation_id, profile_id, data, file_path, file_name, document_id, created_by, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       payload.oc_number, order_id, operationId, profile_id ?? null,
-      JSON.stringify(payload), filed.filePath, filed.fileName, filed.documentId, req.user?.userId ?? null
+      JSON.stringify(payload), filed?.filePath ?? null, filed?.fileName ?? null, filed?.documentId ?? null,
+      req.user?.userId ?? null, isDraft ? 'draft' : 'final'
     );
 
     const row = db.prepare('SELECT * FROM order_confirmations WHERE id = ?').get(result.lastInsertRowid);
     notifyAdmin({
-      action: 'created', entity: 'Order Confirmation', label: payload.oc_number!,
+      action: 'created', entity: isDraft ? 'Order Confirmation draft' : 'Order Confirmation', label: payload.oc_number!,
       performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
     });
     res.status(201).json(parseRecord(row));
@@ -321,6 +324,13 @@ router.put('/:id', async (req: Request, res: Response) => {
   const { data, operation_id, profile_id } = req.body as { data?: OrderConfirmationData; operation_id?: number | null; profile_id?: number | null };
   if (!data || typeof data !== 'object') { res.status(400).json({ error: 'data is required' }); return; }
 
+  const isDraft = req.body?.status === 'draft';
+  const wasDraft = existing.status === 'draft';
+  if (isDraft && !wasDraft) {
+    res.status(400).json({ error: 'This order confirmation is already generated — it cannot go back to a draft' });
+    return;
+  }
+
   const payload: OrderConfirmationData = applyEntityBank({
     ...data,
     oc_number: (data.oc_number || '').trim() || existing.oc_number,
@@ -334,17 +344,22 @@ router.put('/:id', async (req: Request, res: Response) => {
 
   let filed: { filePath: string; fileName: string; documentId: number | null } | null = null;
   try {
-    filed = await renderAndFile(payload, { operationId, existing, userId: req.user?.userId });
+    if (!isDraft) filed = await renderAndFile(payload, { operationId, existing, userId: req.user?.userId });
 
     db.prepare(`
       UPDATE order_confirmations
-      SET oc_number = ?, operation_id = ?, profile_id = ?, data = ?, file_path = ?, file_name = ?, document_id = ?, updated_at = datetime('now')
+      SET oc_number = ?, operation_id = ?, profile_id = ?, data = ?, file_path = ?, file_name = ?, document_id = ?,
+        status = ?, updated_at = datetime('now')
       WHERE id = ?
-    `).run(payload.oc_number, operationId, profile_id ?? existing.profile_id ?? null, JSON.stringify(payload), filed.filePath, filed.fileName, filed.documentId, existing.id);
+    `).run(
+      payload.oc_number, operationId, profile_id ?? existing.profile_id ?? null, JSON.stringify(payload),
+      filed?.filePath ?? null, filed?.fileName ?? null, filed?.documentId ?? null, isDraft ? 'draft' : 'final', existing.id
+    );
 
     const row = db.prepare('SELECT * FROM order_confirmations WHERE id = ?').get(existing.id);
     notifyAdmin({
-      action: 'updated', entity: 'Order Confirmation', label: payload.oc_number!,
+      action: wasDraft && !isDraft ? 'created' : 'updated',
+      entity: isDraft ? 'Order Confirmation draft' : 'Order Confirmation', label: payload.oc_number!,
       performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
     });
     res.json(parseRecord(row));
@@ -364,6 +379,7 @@ router.put('/:id', async (req: Request, res: Response) => {
 
 router.get('/:id/pdf', (req: Request, res: Response) => {
   const row = db.prepare('SELECT * FROM order_confirmations WHERE id = ?').get(Number(req.params.id)) as any;
+  if (row?.status === 'draft') { res.status(400).json({ error: 'Generate the order confirmation first' }); return; }
   if (!row?.file_path) { res.status(404).json({ error: 'Order confirmation not found' }); return; }
 
   const filePath = path.join(docsDir, row.file_path);
@@ -379,6 +395,7 @@ router.get('/:id/pdf', (req: Request, res: Response) => {
 router.post('/:id/email', async (req: Request, res: Response) => {
   const row = db.prepare('SELECT * FROM order_confirmations WHERE id = ?').get(Number(req.params.id)) as any;
   if (!row) { res.status(404).json({ error: 'Order confirmation not found' }); return; }
+  if (row.status === 'draft') { res.status(400).json({ error: 'Generate the order confirmation before sending it' }); return; }
 
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) { res.status(501).json({ error: 'Email sending is not configured (missing RESEND_API_KEY)' }); return; }

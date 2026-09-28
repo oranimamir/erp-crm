@@ -42,7 +42,12 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 ## Operations
 - `operations.category`: 'blending' | 'trading' (required for new operations)
 - List filter All / BE / NL — entity read off the operation number (`entityFromOperationNumber`)
-- Trading ops: supplier Purchase Order via `/api/purchase-orders` — Order Confirmation template, entity from operation number, filed as `<op#>PO.pdf`, prices entered by hand
+- Supplier Purchase Order via `/api/purchase-orders` (any order, not only trading ops) — Order Confirmation template, entity from operation number, filed as `<op#>PO.pdf`, prices entered by hand
+
+## Document Generators (OC, supplier PO, invoice, PL)
+- Generated from an order: `DocumentGenerators` (operation page + order page) shows each as none / (draft) / ✓
+- OC, PO, invoice: `status` 'draft' | 'final' — "Save draft" keeps the form only (no PDF, not filed); "Confirm & generate" files the PDF under the operation; never back to draft
+- Compare buttons via `CompareButtons` (grey when the document is missing or still a draft): OC → order; PO, invoice → order, OC; PL → order, OC, invoice, BL
 
 ## Generated Invoices
 - `/api/invoice-documents`; each is also filed as an `invoices` row (`invoice_documents.invoice_id`, PDF copied to `uploads/invoices`) so it shows in the operation's Invoices and quick view; re-save updates it, delete removes it unless wired
@@ -58,7 +63,7 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - Weights (user's definitions): unit Net = product_mass (content); unit Gross = content + weight_packaging; Pallet net = units/pallet × unit net; Pallet gross = units/pallet × unit gross + pallet (20 kg default, per-line `pallet_weight_override`); line gross = net + units × packaging + pallets × pallet weight. units = ceil(net / product_mass), pallets = ceil(units / units_per_pallet); units/pallets overridable; server recomputes on save
 - Per-customer layout (`server/src/lib/packingListLayout.ts`, seeds read off the issued PLs): heading, header rows, column names/order, CBM column, kg or lb, HS code line/panel, origin, terms. Resolves profile `packing_list_layout` → last PL for the customer → seed → default; "Save as this customer's format" = `PUT /api/packing-lists/layout/:profileId`. Stored on the PL as `data.layout`
 - Deleted with its invoice
-- Draft → final: `packing_lists.status`; "Save as draft PL" files `<op#>PL-DRAFT.pdf`, "Finalize the PL" (`POST /:id/finalize`) files `<op#>PL.pdf` — allowed without a BL (warns); saving edits reverts to draft; `POST /:id/reopen`
+- Draft → final: `packing_lists.status`; the draft PDF (`file_path`, `document_id`) is watermarked DRAFT and filed as `<op#>PL-DRAFT.pdf`; finalizing saves the form as the draft, then renders the clean `<op#>PL.pdf` into `final_file_path` / `final_document_id` as its own operation document; the draft stays. Allowed without a BL (warns); saving edits reverts to draft (final kept until re-finalized); `POST /:id/reopen`; `/:id/pdf?version=draft|final`
 - Always filed under the operation (invoice's operation, else the order's); BL found by "Bill of Lading" category or BL in name/notes (`findBillOfLading`); "Compare with BL" uses `OrderCompareModal` `left` prop
 
 ## Backups
