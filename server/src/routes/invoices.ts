@@ -5,6 +5,7 @@ import { notifyAdmin } from '../lib/notify.js';
 import { getEurRate } from '../lib/fx.js';
 import { refreshEstimatedPaymentDate } from '../lib/paymentTerms.js';
 import { resolveUpload, streamZip, safeName } from '../lib/zipFiles.js';
+import { deleteInvoiceDocument } from './invoice-documents.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -351,6 +352,10 @@ router.patch('/:id/status', (req: Request, res: Response) => {
 router.delete('/:id', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Invoice not found' }); return; }
+
+  // A generated invoice goes with its recorded copy, freeing its number
+  const generated = db.prepare('SELECT * FROM invoice_documents WHERE invoice_id = ?').all(req.params.id) as any[];
+  for (const doc of generated) deleteInvoiceDocument(doc, { keepRecorded: true });
 
   if (existing.file_path) {
     try {

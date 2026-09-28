@@ -46,6 +46,9 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 
 ## Generated Invoices
 - `/api/invoice-documents`; each is also filed as an `invoices` row (`invoice_documents.invoice_id`, PDF copied to `uploads/invoices`) so it shows in the operation's Invoices and quick view; re-save updates it, delete removes it unless wired
+- `invoice_documents.status` 'draft' | 'final': "Save draft" keeps the form + number only (no PDF, not filed, not in revenue); generating turns it final (never back)
+- Deleting the recorded invoice (Invoices list) or its operation document deletes the generated invoice too (`deleteInvoiceDocument`), freeing the number; startup removes rows whose recorded invoice is gone. A taken number on generate/draft is renumbered to the series max + 1 (`renumbered_from`)
+- Drafted from the order's latest OC (`OC_CARRIED_FIELDS` + lines), order/profile fill its blanks; "Compare with OC" beside "Compare with order"
 - Line table uses one font size for every cell; optional `lot2` prints under `lot`; client block prints contact person, phone and email
 - Document forms (invoice/OC/PO): Tab on an empty field accepts its grey placeholder (`client/src/lib/placeholderTab.ts`)
 

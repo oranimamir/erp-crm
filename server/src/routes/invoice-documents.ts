@@ -263,10 +263,55 @@ async function syncRecordedInvoice(docId: number): Promise<void> {
   refreshEstimatedPaymentDate(db, docRow.operation_id ?? null);
 }
 
+/**
+ * Removes a generated invoice: its PDF, its operation document, its packing
+ * list and the row itself — which frees its number. The recorded copy goes
+ * too unless `keepRecorded` (the caller deletes it) or money is matched to it.
+ */
+export function deleteInvoiceDocument(row: any, opts: { keepRecorded?: boolean } = {}): void {
+  if (row.file_path) {
+    const filePath = path.join(docsDir, row.file_path);
+    if (fs.existsSync(filePath)) { try { fs.unlinkSync(filePath); } catch { /* best effort */ } }
+  }
+  if (row.document_id) db.prepare('DELETE FROM operation_documents WHERE id = ?').run(row.document_id);
+  // The packing list packs this invoice's goods, so it goes with it
+  deletePackingListsForInvoice(row.id);
+  db.prepare('DELETE FROM invoice_documents WHERE id = ?').run(row.id);
+
+  if (opts.keepRecorded || !row.invoice_id) return;
+  const recorded = db.prepare('SELECT * FROM invoices WHERE id = ?').get(row.invoice_id) as any;
+  const wires = db.prepare('SELECT COUNT(*) AS n FROM wire_transfers WHERE invoice_id = ?').get(row.invoice_id) as any;
+  if (recorded && !wires?.n) {
+    if (recorded.file_path) {
+      const recordedFile = path.join(invoicesDir, recorded.file_path);
+      if (fs.existsSync(recordedFile)) { try { fs.unlinkSync(recordedFile); } catch { /* best effort */ } }
+    }
+    try { db.prepare('DELETE FROM payments WHERE invoice_id = ?').run(recorded.id); } catch { /* table unavailable */ }
+    db.prepare(`DELETE FROM status_history WHERE entity_type = 'invoice' AND entity_id = ?`).run(recorded.id);
+    db.prepare('DELETE FROM invoices WHERE id = ?').run(recorded.id);
+    refreshEstimatedPaymentDate(db, recorded.operation_id ?? null);
+  }
+}
+
 /** Generated invoices made before they were filed as recorded invoices. */
 export async function backfillRecordedInvoices(): Promise<void> {
+  // A generated invoice whose recorded copy was deleted was deleted by the
+  // user — left behind, it would keep its number taken
+  try {
+    const orphans = db.prepare(`
+      SELECT d.* FROM invoice_documents d
+      WHERE d.invoice_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.id = d.invoice_id)
+    `).all() as any[];
+    for (const orphan of orphans) {
+      try {
+        deleteInvoiceDocument(orphan, { keepRecorded: true });
+        console.log(`[invoice-documents] removed ${orphan.invoice_number} — its recorded invoice was deleted`);
+      } catch (err: any) { console.error('[invoice-documents] orphan cleanup failed for', orphan.id, err?.message || err); }
+    }
+  } catch { /* table unavailable */ }
+
   let rows: Array<{ id: number }> = [];
-  try { rows = db.prepare('SELECT id FROM invoice_documents WHERE invoice_id IS NULL').all() as any[]; }
+  try { rows = db.prepare(`SELECT id FROM invoice_documents WHERE invoice_id IS NULL AND status = 'final'`).all() as any[]; }
   catch { return; }
   for (const row of rows) {
     try { await syncRecordedInvoice(row.id); }
@@ -275,6 +320,13 @@ export async function backfillRecordedInvoices(): Promise<void> {
 }
 
 // ── Prefill a draft from the order ────────────────────────────────────────
+
+/** Fields the invoice takes from the order confirmation when it sets them. */
+const OC_CARRIED_FIELDS = [
+  'sq_number', 'our_ref', 'po_number', 'client_code', 'attention', 'client_name', 'billing_address',
+  'client_contact', 'client_phone', 'tax_id', 'eori', 'contact_email', 'delivery', 'delivery_address',
+  'delivery_contact', 'delivery_date_text', 'payment_terms', 'incoterm', 'terms', 'remarks', 'freight',
+] as const;
 
 router.get('/prepare', (req: Request, res: Response) => {
   const orderId = parseInt(String(req.query.order_id || ''), 10);
@@ -307,12 +359,25 @@ router.get('/prepare', (req: Request, res: Response) => {
   const today = new Date().toISOString().slice(0, 10);
   const isSupplier = order.type === 'supplier';
 
+  // The order confirmation is what was agreed with the customer — the invoice
+  // is drafted from it, falling back to the order where it is silent
+  const ocRow = db.prepare(
+    'SELECT * FROM order_confirmations WHERE order_id = ? ORDER BY id DESC LIMIT 1'
+  ).get(orderId) as any;
+  let ocData: any = null;
+  if (ocRow) { try { ocData = JSON.parse(ocRow.data); } catch { /* corrupt OC → order only */ } }
+
   const requested = String(req.query.entity || '').toUpperCase();
   const entity: EntityCode = isEntityCode(requested)
     ? requested
-    : entityFromOperationNumber(operation?.operation_number || order.order_number);
+    : isEntityCode(ocData?.entity_code)
+      ? ocData.entity_code
+      : entityFromOperationNumber(operation?.operation_number || order.order_number);
   // The bank printed is the entity's account in the order's currency
-  const orderCurrency = String(items.find((i: any) => i.currency)?.currency || 'EUR').toUpperCase();
+  const ocItems: any[] = Array.isArray(ocData?.items) && ocData.items.length ? ocData.items : [];
+  const orderCurrency = String(
+    ocItems.find((i: any) => i?.currency)?.currency || items.find((i: any) => i.currency)?.currency || 'EUR'
+  ).toUpperCase();
   const issuer = entityProfile(entity, orderCurrency);
 
   // Which of the customer's legal entities this order belongs to. Never applied
@@ -386,9 +451,19 @@ router.get('/prepare', (req: Request, res: Response) => {
     layout,
   };
 
+  // What the OC says wins over the order and the profile; blanks on it don't
+  if (ocData) {
+    for (const key of OC_CARRIED_FIELDS) {
+      const value = ocData[key];
+      if (value != null && String(value).trim() !== '') (draft as any)[key] = value;
+    }
+    if (ocItems.length) draft.items = ocItems;
+  }
+
   res.json({
     existing: null,
     draft,
+    oc: ocRow ? { id: ocRow.id, oc_number: ocRow.oc_number } : null,
     entity,
     layout,
     layout_source: layoutSource,
@@ -468,6 +543,7 @@ router.post('/', async (req: Request, res: Response) => {
   const { order_id, operation_id, profile_id, data } = req.body as {
     order_id?: number; operation_id?: number | null; profile_id?: number | null; data?: DocumentData;
   };
+  const isDraft = req.body?.status === 'draft';
 
   if (!order_id) { res.status(400).json({ error: 'order_id is required' }); return; }
   if (!data || typeof data !== 'object') { res.status(400).json({ error: 'data is required' }); return; }
@@ -490,32 +566,35 @@ router.post('/', async (req: Request, res: Response) => {
     operation_number: data.operation_number || operationNumberFor(operationId) || '',
   });
 
-  if (numberTaken(payload.doc_number!)) {
-    res.status(409).json({ error: `Invoice ${payload.doc_number} already exists` });
-    return;
-  }
+  // A number already used goes on to the next free one in the series
+  const renumberedFrom = numberTaken(payload.doc_number!) ? payload.doc_number! : null;
+  if (renumberedFrom) payload.doc_number = nextInvoiceNumber(entity, payload.doc_date);
 
   let filed: { filePath: string; fileName: string; documentId: number | null } | null = null;
   try {
-    filed = await renderAndFile(payload, { operationId });
+    // A draft is only the saved form: no PDF, not filed, not in revenue
+    if (!isDraft) filed = await renderAndFile(payload, { operationId });
 
     const result = db.prepare(`
-      INSERT INTO invoice_documents (invoice_number, order_id, operation_id, profile_id, data, file_path, file_name, document_id, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO invoice_documents (invoice_number, order_id, operation_id, profile_id, data, file_path, file_name, document_id, created_by, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       payload.doc_number, order_id, operationId, profile_id ?? null,
-      JSON.stringify(payload), filed.filePath, filed.fileName, filed.documentId, req.user?.userId ?? null
+      JSON.stringify(payload), filed?.filePath ?? null, filed?.fileName ?? null, filed?.documentId ?? null,
+      req.user?.userId ?? null, isDraft ? 'draft' : 'final'
     );
 
-    try { await syncRecordedInvoice(Number(result.lastInsertRowid)); }
-    catch (err: any) { console.error('[invoice-documents] filing as recorded invoice failed:', err?.message || err); }
+    if (!isDraft) {
+      try { await syncRecordedInvoice(Number(result.lastInsertRowid)); }
+      catch (err: any) { console.error('[invoice-documents] filing as recorded invoice failed:', err?.message || err); }
+    }
 
     const row = db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(result.lastInsertRowid);
     notifyAdmin({
-      action: 'created', entity: 'Commercial Invoice', label: payload.doc_number!,
+      action: 'created', entity: isDraft ? 'Commercial Invoice draft' : 'Commercial Invoice', label: payload.doc_number!,
       performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
     });
-    res.status(201).json(parseRecord(row));
+    res.status(201).json({ ...parseRecord(row), renumbered_from: renumberedFrom });
   } catch (err: any) {
     if (filed) discardFiled(filed, null);
     if (err?.message?.includes('UNIQUE')) {
@@ -536,36 +615,60 @@ router.put('/:id', async (req: Request, res: Response) => {
   const { data, operation_id, profile_id } = req.body as { data?: DocumentData; operation_id?: number | null; profile_id?: number | null };
   if (!data || typeof data !== 'object') { res.status(400).json({ error: 'data is required' }); return; }
 
+  const isDraft = req.body?.status === 'draft';
+  const wasDraft = existing.status === 'draft';
+  if (isDraft && !wasDraft) {
+    res.status(400).json({ error: 'This invoice is already generated — it cannot go back to a draft' });
+    return;
+  }
+
   const payload: DocumentData = applyEntityBank({
     ...data,
     doc_number: (data.doc_number || '').trim() || existing.invoice_number,
   });
   const operationId = operation_id !== undefined ? operation_id : existing.operation_id;
 
+  let renumberedFrom: string | null = null;
   if (numberTaken(payload.doc_number!, existing.id, existing.invoice_id)) {
-    res.status(409).json({ error: `Invoice ${payload.doc_number} already exists` });
-    return;
+    if (!wasDraft) {
+      res.status(409).json({ error: `Invoice ${payload.doc_number} already exists` });
+      return;
+    }
+    // A draft has not been issued yet, so it simply takes the next free number
+    const entity = isEntityCode(payload.entity_code)
+      ? payload.entity_code
+      : entityFromOperationNumber(operationNumberFor(operationId) || payload.operation_number || '');
+    renumberedFrom = payload.doc_number!;
+    payload.doc_number = nextInvoiceNumber(entity, payload.doc_date);
   }
 
   let filed: { filePath: string; fileName: string; documentId: number | null } | null = null;
   try {
-    filed = await renderAndFile(payload, { operationId, existing });
+    if (!isDraft) filed = await renderAndFile(payload, { operationId, existing });
 
     db.prepare(`
       UPDATE invoice_documents
-      SET invoice_number = ?, operation_id = ?, profile_id = ?, data = ?, file_path = ?, file_name = ?, document_id = ?, updated_at = datetime('now')
+      SET invoice_number = ?, operation_id = ?, profile_id = ?, data = ?, file_path = ?, file_name = ?, document_id = ?,
+        status = ?, updated_at = datetime('now')
       WHERE id = ?
-    `).run(payload.doc_number, operationId, profile_id ?? existing.profile_id ?? null, JSON.stringify(payload), filed.filePath, filed.fileName, filed.documentId, existing.id);
+    `).run(
+      payload.doc_number, operationId, profile_id ?? existing.profile_id ?? null, JSON.stringify(payload),
+      filed?.filePath ?? null, filed?.fileName ?? null, filed?.documentId ?? null,
+      isDraft ? 'draft' : 'final', existing.id
+    );
 
-    try { await syncRecordedInvoice(existing.id); }
-    catch (err: any) { console.error('[invoice-documents] filing as recorded invoice failed:', err?.message || err); }
+    if (!isDraft) {
+      try { await syncRecordedInvoice(existing.id); }
+      catch (err: any) { console.error('[invoice-documents] filing as recorded invoice failed:', err?.message || err); }
+    }
 
     const row = db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(existing.id);
     notifyAdmin({
-      action: 'updated', entity: 'Commercial Invoice', label: payload.doc_number!,
+      action: wasDraft && !isDraft ? 'created' : 'updated',
+      entity: isDraft ? 'Commercial Invoice draft' : 'Commercial Invoice', label: payload.doc_number!,
       performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
     });
-    res.json(parseRecord(row));
+    res.json({ ...parseRecord(row), renumbered_from: renumberedFrom });
   } catch (err: any) {
     if (filed) discardFiled(filed, existing.document_id);
     console.error('[invoice-documents] update failed:', err?.message || err);
@@ -577,6 +680,7 @@ router.put('/:id', async (req: Request, res: Response) => {
 
 router.get('/:id/pdf', (req: Request, res: Response) => {
   const row = db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(Number(req.params.id)) as any;
+  if (row?.status === 'draft') { res.status(400).json({ error: 'Generate the invoice first' }); return; }
   if (!row?.file_path) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
   const filePath = path.join(docsDir, row.file_path);
@@ -592,6 +696,7 @@ router.get('/:id/pdf', (req: Request, res: Response) => {
 router.post('/:id/email', async (req: Request, res: Response) => {
   const row = db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(Number(req.params.id)) as any;
   if (!row) { res.status(404).json({ error: 'Invoice not found' }); return; }
+  if (row.status === 'draft') { res.status(400).json({ error: 'Generate the invoice before sending it' }); return; }
 
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) { res.status(501).json({ error: 'Email sending is not configured (missing RESEND_API_KEY)' }); return; }
@@ -658,30 +763,7 @@ router.delete('/:id', (req: Request, res: Response) => {
   const row = db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(Number(req.params.id)) as any;
   if (!row) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
-  if (row.file_path) {
-    const filePath = path.join(docsDir, row.file_path);
-    if (fs.existsSync(filePath)) { try { fs.unlinkSync(filePath); } catch { /* best effort */ } }
-  }
-  if (row.document_id) db.prepare('DELETE FROM operation_documents WHERE id = ?').run(row.document_id);
-  // The packing list packs this invoice's goods, so it goes with it
-  deletePackingListsForInvoice(row.id);
-  db.prepare('DELETE FROM invoice_documents WHERE id = ?').run(row.id);
-
-  // The recorded copy goes too — unless money has already been matched to it
-  if (row.invoice_id) {
-    const recorded = db.prepare('SELECT * FROM invoices WHERE id = ?').get(row.invoice_id) as any;
-    const wires = db.prepare('SELECT COUNT(*) AS n FROM wire_transfers WHERE invoice_id = ?').get(row.invoice_id) as any;
-    if (recorded && !wires?.n) {
-      if (recorded.file_path) {
-        const recordedFile = path.join(invoicesDir, recorded.file_path);
-        if (fs.existsSync(recordedFile)) { try { fs.unlinkSync(recordedFile); } catch { /* best effort */ } }
-      }
-      try { db.prepare('DELETE FROM payments WHERE invoice_id = ?').run(recorded.id); } catch { /* table unavailable */ }
-      db.prepare(`DELETE FROM status_history WHERE entity_type = 'invoice' AND entity_id = ?`).run(recorded.id);
-      db.prepare('DELETE FROM invoices WHERE id = ?').run(recorded.id);
-      refreshEstimatedPaymentDate(db, recorded.operation_id ?? null);
-    }
-  }
+  deleteInvoiceDocument(row);
 
   notifyAdmin({
     action: 'deleted', entity: 'Commercial Invoice', label: row.invoice_number,

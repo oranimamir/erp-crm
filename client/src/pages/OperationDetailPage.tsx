@@ -197,7 +197,7 @@ export default function OperationDetailPage() {
   // Order confirmation issued for the linked order, if any
   const [orderConfirmation, setOrderConfirmation] = useState<{ id: number; file_name: string | null } | null>(null);
   const [purchaseOrder, setPurchaseOrder] = useState<{ id: number; file_name: string | null } | null>(null);
-  const [invoiceDoc, setInvoiceDoc] = useState<{ id: number; file_name: string | null } | null>(null);
+  const [invoiceDoc, setInvoiceDoc] = useState<{ id: number; file_name: string | null; invoice_number: string; status?: 'draft' | 'final' } | null>(null);
   const [packingList, setPackingList] = useState<{ id: number; file_name: string | null; status?: string } | null>(null);
 
   // Link Order modal
@@ -748,9 +748,11 @@ export default function OperationDetailPage() {
                     : `/invoices/documents/new?order_id=${operation.order_id}&operation_id=${operation.id}`
                 )}
                 className="flex items-center gap-1 text-xs sm:text-sm text-primary-600 hover:text-primary-700 border border-primary-200 bg-primary-50 rounded-lg px-2 py-1"
-                title={invoiceDoc ? `Edit ${invoiceDoc.file_name || 'the invoice'}` : 'Generate a commercial invoice from this order'}
+                title={invoiceDoc
+                  ? (invoiceDoc.status === 'draft' ? `Continue draft ${invoiceDoc.invoice_number}` : `Edit ${invoiceDoc.file_name || 'the invoice'}`)
+                  : 'Generate a commercial invoice from this order'}
               >
-                <ReceiptIcon size={13} /> Invoice{invoiceDoc ? ' ✓' : ''}
+                <ReceiptIcon size={13} /> Invoice{invoiceDoc ? (invoiceDoc.status === 'draft' ? ' (draft)' : ' ✓') : ''}
               </button>
               {/* The packing list is built from the generated invoice */}
               <button
@@ -759,11 +761,11 @@ export default function OperationDetailPage() {
                     ? `/packing-lists/${packingList.id}`
                     : `/packing-lists/new?invoice_document_id=${invoiceDoc?.id}`
                 )}
-                disabled={!packingList && !invoiceDoc}
+                disabled={!packingList && (!invoiceDoc || invoiceDoc.status === 'draft')}
                 className="flex items-center gap-1 text-xs sm:text-sm text-primary-600 hover:text-primary-700 border border-primary-200 bg-primary-50 rounded-lg px-2 py-1 disabled:opacity-40 disabled:cursor-not-allowed"
                 title={packingList
                   ? `Edit ${packingList.file_name || 'the packing list'}`
-                  : invoiceDoc ? 'Generate the packing list from the invoice' : 'Generate the invoice first — the packing list is built from it'}
+                  : invoiceDoc && invoiceDoc.status !== 'draft' ? 'Generate the packing list from the invoice' : 'Generate the invoice first — the packing list is built from it'}
               >
                 <Package size={13} /> Packing List{packingList ? (packingList.status === 'final' ? ' ✓' : ' (draft)') : ''}
               </button>

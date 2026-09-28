@@ -12,7 +12,7 @@ import { withDefaults, type InvoiceLayout } from '../lib/invoiceLayout';
 import {
   ArrowLeft, Plus, Trash2, Loader2, Eye, X, FileDown, Mail,
   CheckCircle, FileText, RefreshCw, User, Package, Truck, Factory,
-  LayoutTemplate, ChevronDown, ChevronRight, Columns2,
+  LayoutTemplate, ChevronDown, ChevronRight, Columns2, Save,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -79,6 +79,8 @@ interface InvoiceRecord {
   file_name: string | null;
   sent_to: string | null;
   sent_at: string | null;
+  /** 'draft' = saved form only; 'final' = generated and filed. */
+  status?: 'draft' | 'final';
   data: Partial<InvData>;
 }
 
@@ -247,7 +249,11 @@ export default function InvoiceDocumentPage() {
 
   const [saving, setSaving] = useState(false);
   const [previewing, setPreviewing] = useState(false);
-  const [comparing, setComparing] = useState(false);
+  const [comparing, setComparing] = useState<'order' | 'oc' | null>(null);
+  // The order confirmation the invoice is drafted from (and compared with)
+  const [oc, setOc] = useState<{ oc_number: string; file_path: string | null; file_name: string | null } | null>(null);
+  const [fromOc, setFromOc] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   const [showEmail, setShowEmail] = useState(false);
@@ -292,6 +298,7 @@ export default function InvoiceDocumentPage() {
     });
     if (data.existing) { adopt(data.existing); return; }
     setForm(toFormData(data.draft));
+    setFromOc(!!data.oc);
     setLayout(withDefaults(data.layout));
     setLayoutSource(data.layout_source || 'the standard company template');
     setCustomerId(data.order?.customer_id ?? null);
@@ -334,6 +341,17 @@ export default function InvoiceDocumentPage() {
     load();
     return () => { cancelled = true; };
   }, [id, orderIdParam]);
+
+  // The order's confirmation, for "Compare with OC"
+  useEffect(() => {
+    if (!orderId) { setOc(null); return; }
+    api.get(`/order-confirmations/by-order/${orderId}`)
+      .then(({ data }) => {
+        const latest = data?.[0];
+        setOc(latest ? { oc_number: latest.oc_number, file_path: latest.file_path, file_name: latest.file_name } : null);
+      })
+      .catch(() => setOc(null));
+  }, [orderId]);
 
   // Whether this invoice already has its packing list
   useEffect(() => {
@@ -392,21 +410,42 @@ export default function InvoiceDocumentPage() {
     }
   }
 
-  async function handleSave() {
+  async function handleSave(status: 'draft' | 'final') {
     if (!orderId) { addToast('No order linked', 'error'); return; }
     setSaving(true);
     try {
-      const body = { order_id: orderId, operation_id: operationId, profile_id: profileId, data: toPayload(form, includeOrigin, layout) };
+      const body = { order_id: orderId, operation_id: operationId, profile_id: profileId, status, data: toPayload(form, includeOrigin, layout) };
       const { data } = record
         ? await api.put(`/invoice-documents/${record.id}`, body)
         : await api.post('/invoice-documents', body);
       adopt(data);
-      addToast(`Generated ${data.file_name}${operationId ? ' — filed under the operation documents' : ''}`, 'success');
+      if (data.renumbered_from) {
+        addToast(`${data.renumbered_from} was already used — numbered ${data.invoice_number}`, 'info');
+      }
+      addToast(status === 'draft'
+        ? `Draft ${data.invoice_number} saved`
+        : `Generated ${data.file_name}${operationId ? ' — filed under the operation documents' : ''}`, 'success');
       if (!record) navigate(`/invoices/documents/${data.id}`, { replace: true });
     } catch (err: any) {
-      addToast(err.response?.data?.error || 'Failed to generate the invoice', 'error');
+      addToast(err.response?.data?.error || (status === 'draft' ? 'Failed to save the draft' : 'Failed to generate the invoice'), 'error');
     } finally {
       setSaving(false);
+    }
+  }
+
+  /** Deletes the invoice (or draft) and frees its number. */
+  async function handleDelete() {
+    if (!record) return;
+    const draft = record.status === 'draft';
+    if (!window.confirm(`Delete ${draft ? 'draft ' : ''}invoice ${record.invoice_number}? Its number becomes free again.`)) return;
+    setDeleting(true);
+    try {
+      await api.delete(`/invoice-documents/${record.id}`);
+      addToast(`Invoice ${record.invoice_number} deleted`, 'success');
+      navigate(operationId ? `/operations/${operationId}` : orderId ? `/orders/${orderId}` : '/operations');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to delete the invoice', 'error');
+      setDeleting(false);
     }
   }
 
@@ -478,6 +517,9 @@ export default function InvoiceDocumentPage() {
   };
   const currency = form.items.find(i => i.currency)?.currency || 'EUR';
 
+  const isDraft = !record || record.status === 'draft';
+  const generated = !!record && !isDraft;
+
   const backTo = operationId ? `/operations/${operationId}` : orderId ? `/orders/${orderId}` : '/operations';
 
   return (
@@ -490,38 +532,58 @@ export default function InvoiceDocumentPage() {
           <Button variant="secondary" size="sm" onClick={handlePreview} disabled={previewing}>
             {previewing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
           </Button>
-          <Button variant="secondary" size="sm" onClick={() => setComparing(true)} disabled={!orderId}
+          <Button variant="secondary" size="sm" onClick={() => setComparing('order')} disabled={!orderId}
             title="Show the customer's order side by side with this document">
             <Columns2 size={14} /> Compare with order
           </Button>
-          {comparing && orderId && (
+          <Button variant="secondary" size="sm" onClick={() => setComparing('oc')} disabled={!oc?.file_path}
+            title={oc?.file_path ? `Show order confirmation ${oc.oc_number} next to this invoice` : 'No order confirmation for this order'}>
+            <Columns2 size={14} /> Compare with OC
+          </Button>
+          {comparing && orderId && (comparing === 'order' || oc?.file_path) && (
             <OrderCompareModal
+              key={comparing}
               orderId={orderId}
               title="Invoice"
+              left={comparing === 'oc'
+                ? { title: `Order confirmation ${oc!.oc_number}`, filePath: oc!.file_path!, fileName: oc!.file_name || undefined, subfolder: 'operation-docs' }
+                : undefined}
               renderPreview={async () => (await api.post('/invoice-documents/preview', { data: toPayload(form, includeOrigin, layout) }, { responseType: 'blob' })).data as Blob}
-              onClose={() => setComparing(false)}
+              onClose={() => setComparing(null)}
             />
+          )}
+          {isDraft && (
+            <Button variant="secondary" size="sm" onClick={() => handleSave('draft')} disabled={saving}
+              title="Keep this invoice as a draft — nothing is generated or filed yet">
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save draft
+            </Button>
           )}
           <Button
             size="sm"
-            onClick={handleSave}
+            onClick={() => handleSave('final')}
             disabled={saving || !entityReady}
             title={entityReady ? undefined : 'Confirm the customer entity first'}
           >
             {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
-            {record ? 'Confirm & regenerate' : 'Confirm & generate'}
+            {generated ? 'Confirm & regenerate' : 'Confirm & generate'}
           </Button>
-          <Button variant="secondary" size="sm" onClick={handleDownload} disabled={!record}>
+          <Button variant="secondary" size="sm" onClick={handleDownload} disabled={!generated}>
             <FileDown size={14} /> Download PDF
           </Button>
-          <Button variant="secondary" size="sm" onClick={() => setShowEmail(true)} disabled={!record}>
+          <Button variant="secondary" size="sm" onClick={() => setShowEmail(true)} disabled={!generated}>
             <Mail size={14} /> Send by email
           </Button>
-          <Button variant="secondary" size="sm" disabled={!record}
+          <Button variant="secondary" size="sm" disabled={!generated}
             onClick={() => record && navigate(packingListId ? `/packing-lists/${packingListId}` : `/packing-lists/new?invoice_document_id=${record.id}`)}
-            title={record ? 'Packing list for this invoice' : 'Generate the invoice first'}>
+            title={generated ? 'Packing list for this invoice' : 'Generate the invoice first'}>
             <Package size={14} /> Packing list{packingListId ? ' ✓' : ''}
           </Button>
+          {record && (
+            <Button variant="secondary" size="sm" onClick={handleDelete} disabled={deleting}
+              title="Delete this invoice and free its number">
+              {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />} Delete
+            </Button>
+          )}
         </div>
       </div>
 
@@ -546,9 +608,21 @@ export default function InvoiceDocumentPage() {
           <strong className="text-gray-700">{(form.doc_number || 'invoice').replace(/[^A-Za-z0-9._-]+/g, '-')}.pdf</strong>
           {operationId && ' under the operation documents'}.
         </p>
+        {fromOc && oc && !record && (
+          <p className="text-sm text-gray-500 mt-1">Drafted from order confirmation <strong className="text-gray-700">{oc.oc_number}</strong>.</p>
+        )}
       </div>
 
-      {record && (
+      {record && isDraft && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+          <Save size={16} className="text-amber-600 flex-shrink-0" />
+          <span className="text-amber-800">
+            <strong>Draft {record.invoice_number}</strong> — saved, not generated yet. Confirm &amp; generate when the details are complete.
+          </span>
+        </div>
+      )}
+
+      {generated && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm">
           <CheckCircle size={16} className="text-green-600 flex-shrink-0" />
           <span className="text-green-800"><strong>{record.file_name}</strong> generated.</span>
@@ -795,7 +869,7 @@ export default function InvoiceDocumentPage() {
         </div>
       </div>
 
-      {showEmail && record && (
+      {showEmail && generated && record && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => !sending && setShowEmail(false)}>
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-200">

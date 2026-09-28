@@ -7,6 +7,7 @@ import { resolveCountry } from '../lib/portCountry.js';
 import { scoreCandidate } from '../lib/wireMatch.js';
 import { entityFromOperationNumber, isEntityCode } from '../lib/companyEntity.js';
 import { uploadOperationDoc } from '../middleware/upload.js';
+import { deleteInvoiceDocument } from './invoice-documents.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -757,6 +758,15 @@ router.delete('/:id/documents/:docId', (req: Request, res: Response) => {
   ).get(Number(req.params.docId), Number(req.params.id)) as any;
 
   if (!doc) { res.status(404).json({ error: 'Document not found' }); return; }
+
+  // A generated invoice's PDF is the invoice — deleting it deletes the invoice
+  const generated = db.prepare('SELECT * FROM invoice_documents WHERE document_id = ?').get(doc.id) as any;
+  if (generated) {
+    deleteInvoiceDocument(generated);
+    notifyAdmin({ action: 'deleted', entity: 'Commercial Invoice', label: generated.invoice_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
+    res.json({ message: 'Invoice deleted' });
+    return;
+  }
 
   const fp = path.join(uploadsBase, 'operation-docs', doc.file_path);
   if (fs.existsSync(fp)) fs.unlinkSync(fp);

@@ -236,6 +236,7 @@ router.get('/prepare', (req: Request, res: Response) => {
 
   const invoice = invoiceDoc(invoiceId);
   if (!invoice) { res.status(404).json({ error: 'Invoice not found' }); return; }
+  if (invoice.status === 'draft') { res.status(400).json({ error: 'Generate the invoice first — it is still a draft' }); return; }
 
   const rows = listPackaging();
   const existing = db.prepare(
@@ -327,6 +328,7 @@ router.post('/', async (req: Request, res: Response) => {
 
   const invoice = invoice_document_id ? invoiceDoc(Number(invoice_document_id)) : null;
   if (!invoice) { res.status(400).json({ error: 'The invoice this packing list belongs to is required' }); return; }
+  if (invoice.status === 'draft') { res.status(400).json({ error: 'Generate the invoice first — it is still a draft' }); return; }
 
   const payload = withRows({
     ...data,
