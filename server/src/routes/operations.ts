@@ -8,6 +8,7 @@ import { scoreCandidate } from '../lib/wireMatch.js';
 import { entityFromOperationNumber, isEntityCode } from '../lib/companyEntity.js';
 import { uploadOperationDoc } from '../middleware/upload.js';
 import { deleteInvoiceDocument } from './invoice-documents.js';
+import { findBillOfLading } from './packing-lists.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -748,6 +749,12 @@ router.post('/:id/documents', uploadOperationDoc.single('file'), (req: Request, 
 
   notifyAdmin({ action: 'created', entity: 'Operation Document', label: req.file.originalname, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.status(201).json(doc);
+});
+
+// ── The operation's Bill of Lading, for the generators' "Compare with BL" ──
+
+router.get('/:id/bill-of-lading', (req: Request, res: Response) => {
+  res.json(findBillOfLading(Number(req.params.id)));
 });
 
 // ── Delete document ───────────────────────────────────────────────────────────

@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import { Resend } from 'resend';
 import db from '../database.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { buildDocumentPdf, type DocumentData, type PackingRow } from '../lib/document-pdf.js';
@@ -572,6 +573,69 @@ router.get('/:id/pdf', (req: Request, res: Response) => {
   res.type('application/pdf');
   fs.createReadStream(filePath).pipe(res);
 });
+
+// ── Email ─────────────────────────────────────────────────────────────────
+
+/** Sends the final PL, or the draft when it is not finalized yet (the email says so). */
+router.post('/:id/email', async (req: Request, res: Response) => {
+  const row = db.prepare('SELECT * FROM packing_lists WHERE id = ?').get(Number(req.params.id)) as any;
+  if (!row) { res.status(404).json({ error: 'Packing list not found' }); return; }
+
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) { res.status(501).json({ error: 'Email sending is not configured (missing RESEND_API_KEY)' }); return; }
+
+  const split = (v: unknown) => String(v || '').split(/[,;]/).map(s => s.trim()).filter(Boolean);
+  const recipients = split(req.body?.to);
+  const cc = split(req.body?.cc);
+  if (!recipients.length) { res.status(400).json({ error: 'At least one recipient email is required' }); return; }
+  const invalid = [...recipients, ...cc].filter(r => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r));
+  if (invalid.length) { res.status(400).json({ error: `Invalid email address: ${invalid.join(', ')}` }); return; }
+
+  const isFinal = !!row.final_file_path;
+  const stored = isFinal ? row.final_file_path : row.file_path;
+  const fileName = (isFinal ? row.final_file_name : row.file_name) || 'packing-list.pdf';
+  const filePath = stored ? path.join(docsDir, stored) : null;
+  if (!filePath || !fs.existsSync(filePath)) { res.status(404).json({ error: 'The packing list PDF is missing — save it again' }); return; }
+
+  const data = parseRecord(row).data as PackingListData;
+  const subject = String(req.body?.subject || '').trim()
+    || `Packing List ${row.pl_number}${isFinal ? '' : ' (draft)'}${data.client_name ? ` — ${data.client_name}` : ''}`;
+  const bodyText = String(req.body?.message || '').trim();
+
+  const html = `
+<div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#111827;">
+  <p style="font-size:15px;">Dear ${escapeHtml(data.client_name || 'Sir/Madam')},</p>
+  ${bodyText
+      ? `<p style="font-size:14px;white-space:pre-wrap;">${escapeHtml(bodyText)}</p>`
+      : `<p style="font-size:14px;">Please find attached our ${isFinal ? '' : '<strong>draft</strong> '}packing list <strong>${escapeHtml(row.pl_number)}</strong>${data.invoice_number ? ` for invoice ${escapeHtml(data.invoice_number)}` : ''}.</p>`}
+  <p style="font-size:14px;margin-top:20px;">Kind regards,<br/>${escapeHtml(data.company_name || 'TripleW BV')}</p>
+</div>`;
+
+  try {
+    const resend = new Resend(apiKey);
+    const from = process.env.RESEND_FROM_EMAIL || 'CirculERP <onboarding@resend.dev>';
+    const { error } = await resend.emails.send({
+      from, to: recipients, ...(cc.length ? { cc } : {}), subject, html,
+      attachments: [{ filename: fileName, content: fs.readFileSync(filePath).toString('base64') }],
+    });
+    if (error) throw new Error(error.message || 'Resend rejected the message');
+    notifyAdmin({
+      action: 'updated', entity: 'Packing List', label: row.pl_number,
+      detail: `emailed to ${recipients.join(', ')}`,
+      performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
+    });
+    res.json({ message: `${fileName} sent to ${recipients.join(', ')}` });
+  } catch (err: any) {
+    console.error('[packing-lists] email failed:', err?.message || err);
+    res.status(502).json({ error: `Failed to send email: ${err?.message || 'unknown error'}` });
+  }
+});
+
+function escapeHtml(value: string): string {
+  return String(value)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 
 // ── Delete ────────────────────────────────────────────────────────────────
 

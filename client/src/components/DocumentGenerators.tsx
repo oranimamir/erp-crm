@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FileCheck2, ShoppingCart, Receipt, Package } from 'lucide-react';
+import { FileCheck2, ShoppingCart, Receipt, Package, Eye } from 'lucide-react';
 import api from '../lib/api';
 
 /**
@@ -10,7 +10,17 @@ import api from '../lib/api';
  * the operation's Documents).
  */
 
-interface Doc { id: number; status?: string | null; file_name?: string | null }
+interface Doc {
+  id: number;
+  status?: string | null;
+  file_path?: string | null;
+  file_name?: string | null;
+  /** Packing lists: the final PDF, filed beside the draft. */
+  final_file_path?: string | null;
+  final_file_name?: string | null;
+}
+
+export interface PreviewTarget { fileName: string; filePath: string; subfolder: string; label?: string }
 
 type State = { oc: Doc | null; po: Doc | null; invoice: Doc | null; pl: Doc | null };
 
@@ -18,9 +28,11 @@ const btn = 'flex items-center gap-1 text-xs sm:text-sm text-primary-600 hover:t
 
 const mark = (doc: Doc | null) => (!doc ? '' : doc.status === 'draft' ? ' (draft)' : ' ✓');
 
-export default function DocumentGenerators({ orderId, operationId, refreshKey }: {
+export default function DocumentGenerators({ orderId, operationId, refreshKey, onPreview }: {
   orderId: number | null;
   operationId?: number | null;
+  /** When given, each document with a filed PDF gets an eye icon that opens it here. */
+  onPreview?: (item: PreviewTarget) => void;
   /** Changes when the documents may have changed (e.g. the operation's document count). */
   refreshKey?: unknown;
 }) {
@@ -46,20 +58,43 @@ export default function DocumentGenerators({ orderId, operationId, refreshKey }:
     ? `Generate the ${what} from this order`
     : doc.status === 'draft' ? `Continue the draft ${what}` : `Open the ${what}${doc.file_name ? ` (${doc.file_name})` : ''}`;
 
+  /** The PDF to preview: a generated document's, a PL's final (else its draft). */
+  const pdfOf = (doc: Doc | null): { path: string; name: string } | null => {
+    if (!doc) return null;
+    if (doc.final_file_path) return { path: doc.final_file_path, name: doc.final_file_name || 'packing-list.pdf' };
+    // OC / PO / invoice drafts have no file; a PL draft has its watermarked one
+    if (doc.file_path) return { path: doc.file_path, name: doc.file_name || 'document.pdf' };
+    return null;
+  };
+  const eye = (doc: Doc | null, label: string) => {
+    const pdf = onPreview ? pdfOf(doc) : null;
+    if (!pdf) return null;
+    return (
+      <button type="button" title={`Preview ${pdf.name}`}
+        onClick={() => onPreview!({ fileName: pdf.name, filePath: pdf.path, subfolder: 'operation-docs', label })}
+        className="-ml-1 p-1 rounded-lg text-gray-500 hover:text-gray-800 hover:bg-gray-100">
+        <Eye size={14} />
+      </button>
+    );
+  };
+
   return (
     <>
       <button className={btn} title={title(docs.oc, 'order confirmation')}
         onClick={() => navigate(docs.oc ? `/order-confirmations/${docs.oc.id}` : `/order-confirmations/new?${q}`)}>
         <FileCheck2 size={13} /> Order Confirmation{mark(docs.oc)}
       </button>
+      {eye(docs.oc, 'Order confirmation')}
       <button className={btn} title={title(docs.po, 'supplier purchase order')}
         onClick={() => navigate(docs.po ? `/purchase-orders/${docs.po.id}` : `/purchase-orders/new?${q}`)}>
         <ShoppingCart size={13} /> Supplier PO{mark(docs.po)}
       </button>
+      {eye(docs.po, 'Supplier purchase order')}
       <button className={btn} title={title(docs.invoice, 'invoice')}
         onClick={() => navigate(docs.invoice ? `/invoices/documents/${docs.invoice.id}` : `/invoices/documents/new?${q}`)}>
         <Receipt size={13} /> Invoice{mark(docs.invoice)}
       </button>
+      {eye(docs.invoice, 'Invoice')}
       {/* The packing list is built from the generated invoice */}
       <button className={btn} disabled={!docs.pl && !invoiceFinal}
         title={docs.pl ? title(docs.pl, 'packing list')
@@ -67,6 +102,7 @@ export default function DocumentGenerators({ orderId, operationId, refreshKey }:
         onClick={() => navigate(docs.pl ? `/packing-lists/${docs.pl.id}` : `/packing-lists/new?invoice_document_id=${docs.invoice?.id}`)}>
         <Package size={13} /> Packing List{mark(docs.pl)}
       </button>
+      {eye(docs.pl, docs.pl?.final_file_path ? 'Packing list' : 'Packing list (draft)')}
     </>
   );
 }

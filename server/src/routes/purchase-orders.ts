@@ -50,7 +50,10 @@ function parseRecord(row: any) {
   if (!row) return row;
   let data: PurchaseOrderData = {};
   try { data = JSON.parse(row.data); } catch { /* corrupt rows surface as empty */ }
-  return { ...row, data };
+  // Edits saved as a draft on top of the generated document, if any
+  let draft: any = null;
+  if (row.draft_data) { try { draft = JSON.parse(row.draft_data); } catch { /* ignore a corrupt draft */ } }
+  return { ...row, data, draft };
 }
 
 function supplierById(id: number | null | undefined): any {
@@ -293,7 +296,11 @@ router.put('/:id', async (req: Request, res: Response) => {
   const isDraft = req.body?.status === 'draft';
   const wasDraft = existing.status === 'draft';
   if (isDraft && !wasDraft) {
-    res.status(400).json({ error: 'This purchase order is already generated — it cannot go back to a draft' });
+    // Already generated: keep the edits as a pending draft. The filed PDF (and,
+    // for an invoice, the recorded amount) stays as generated until regenerated.
+    db.prepare(`UPDATE purchase_orders SET draft_data = ?, updated_at = datetime('now') WHERE id = ?`)
+      .run(JSON.stringify(data), existing.id);
+    res.json(parseRecord(db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(existing.id)));
     return;
   }
 
@@ -315,7 +322,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     db.prepare(`
       UPDATE purchase_orders
       SET po_number = ?, operation_id = ?, supplier_id = ?, data = ?, file_path = ?, file_name = ?, document_id = ?,
-        status = ?, updated_at = datetime('now')
+        status = ?, draft_data = NULL, updated_at = datetime('now')
       WHERE id = ?
     `).run(
       payload.po_number, operationId, supplier_id !== undefined ? supplier_id : existing.supplier_id,

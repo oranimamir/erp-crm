@@ -47,7 +47,12 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 ## Document Generators (OC, supplier PO, invoice, PL)
 - Generated from an order: `DocumentGenerators` (operation page + order page) shows each as none / (draft) / ✓
 - OC, PO, invoice: `status` 'draft' | 'final' — "Save draft" keeps the form only (no PDF, not filed); "Confirm & generate" files the PDF under the operation; never back to draft
-- Compare buttons via `CompareButtons` (grey when the document is missing or still a draft): OC → order; PO, invoice → order, OC; PL → order, OC, invoice, BL
+- Save draft on an already generated OC / PO / invoice stores the edits in `draft_data` (API returns it as `draft`); the filed PDF and recorded amount stay until Confirm & regenerate, which clears it
+- Compare buttons via `CompareButtons` (grey when the document is missing or still a draft): OC → order; PO → order, OC; invoice → order, OC, BL (`GET /api/operations/:id/bill-of-lading`); PL → order, OC, invoice, BL
+- PDFs leave off any table column nobody filled in (line/reference/name always kept) and the Terms heading when there are no terms
+- Operation page: eye icons beside each generator open its filed PDF (PL: final, else draft)
+- Invoice "Our ref" = the operation number
+- Default email recipients (To/CC) for invoices and PLs: Settings → Document emails, `app_settings.document_emails` via `/api/settings/document-emails`; pre-filled in both Send by email dialogs (PL: `POST /api/packing-lists/:id/email`, final PDF else draft)
 
 ## Generated Invoices
 - `/api/invoice-documents`; each is also filed as an `invoices` row (`invoice_documents.invoice_id`, PDF copied to `uploads/invoices`) so it shows in the operation's Invoices and quick view; re-save updates it, delete removes it unless wired

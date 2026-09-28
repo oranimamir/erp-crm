@@ -1733,6 +1733,10 @@ export async function initializeDatabase() {
   // 'draft' = saved form only (no PDF, not filed); 'final' = generated and filed
   try { db.exec(`ALTER TABLE order_confirmations ADD COLUMN status TEXT NOT NULL DEFAULT 'final'`); } catch (_) { /* column may already exist */ }
   try { db.exec(`ALTER TABLE purchase_orders ADD COLUMN status TEXT NOT NULL DEFAULT 'final'`); } catch (_) { /* column may already exist */ }
+  // Edits saved as a draft on top of an already generated document — the filed PDF stays as it was
+  for (const table of ['invoice_documents', 'order_confirmations', 'purchase_orders']) {
+    try { db.exec(`ALTER TABLE ${table} ADD COLUMN draft_data TEXT`); } catch (_) { /* column may already exist */ }
+  }
   try { db.exec(`ALTER TABLE invoice_documents ADD COLUMN profile_id INTEGER`); } catch (_) { /* column may already exist */ }
 
   // ── Repair FK references broken by an old rebuild migration ─────────────

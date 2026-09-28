@@ -6,6 +6,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDate } from '../lib/dates';
 import BackupEmailSettings from '../components/BackupEmailSettings';
+import DocumentEmailSettings from '../components/DocumentEmailSettings';
 
 interface SavedBackup { filename: string; size: number; created_at: string; }
 interface BackupSchedule { frequency: 'daily' | 'weekly' | 'monthly'; day: number; hour: number; minute: number; }
@@ -314,6 +315,9 @@ export default function SettingsPage() {
           </div>
         </div>
       )}
+
+      {/* Default recipients for emailed invoices and packing lists — admin only */}
+      {user?.role === 'admin' && <DocumentEmailSettings />}
 
       {/* Backup — admin only */}
       {user?.role === 'admin' && (

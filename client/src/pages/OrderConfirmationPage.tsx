@@ -47,6 +47,8 @@ interface OcData {
   freight: string;
   vat: string;
   terms: string;
+  /** Free text printed under the table. */
+  notes: string;
   [key: string]: unknown; // issuer + bank constants ride along untouched
 }
 
@@ -61,6 +63,8 @@ interface Confirmation {
   /** 'draft' = saved form only; 'final' = generated and filed. */
   status?: 'draft' | 'final';
   data: Partial<OcData>;
+  /** Edits saved as a draft on top of the generated document. */
+  draft?: Partial<OcData> | null;
 }
 
 const UNITS = ['KG', 'TONS', 'MT', 'LBS', 'L', 'PAIL', 'DRUM', 'IBC'];
@@ -71,7 +75,7 @@ const FORM_KEYS = [
   'oc_number', 'oc_date', 'sq_number', 'our_ref', 'po_number', 'client_code',
   'client_name', 'billing_address', 'client_phone', 'tax_id', 'contact_email',
   'delivery', 'delivery_address', 'delivery_contact', 'delivery_date_text',
-  'freight', 'vat', 'terms',
+  'freight', 'vat', 'terms', 'notes',
 ] as const;
 
 const emptyLine = (n: number): OcLine => ({
@@ -86,7 +90,7 @@ const blankData = (): OcData => ({
   client_name: '', billing_address: '', client_phone: '', tax_id: '', contact_email: '',
   items: [emptyLine(1)],
   delivery: '', delivery_address: '', delivery_contact: '', delivery_date_text: '',
-  freight: '0', vat: '0', terms: '',
+  freight: '0', vat: '0', terms: '', notes: '',
 });
 
 /** Server values arrive loosely typed (numbers, nulls) — normalise for the form. */
@@ -236,7 +240,8 @@ export default function OrderConfirmationPage() {
   const adopt = useCallback((record: Confirmation) => {
     setConfirmation(record);
     setEntityConfirmed(true);
-    setForm(toFormData(record.data));
+    // Edits saved as a draft on a generated confirmation pick up where they were left
+    setForm(toFormData(record.draft || record.data));
     setOrderId(record.order_id);
     setOperationId(record.operation_id);
   }, []);
@@ -437,12 +442,12 @@ export default function OrderConfirmationPage() {
             title="Order confirmation"
             renderPreview={async () => (await api.post('/order-confirmations/preview', { data: toPayload(form) }, { responseType: 'blob' })).data as Blob}
           />
-          {isDraft && (
-            <Button variant="secondary" size="sm" onClick={() => handleSave('draft')} disabled={saving}
-              title="Keep this order confirmation as a draft — nothing is generated or filed yet">
-              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save draft
-            </Button>
-          )}
+          <Button variant="secondary" size="sm" onClick={() => handleSave('draft')} disabled={saving}
+            title={generated
+              ? 'Keep these edits as a draft — the generated PDF stays as it is until you regenerate'
+              : 'Keep this order confirmation as a draft — nothing is generated or filed yet'}>
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save draft
+          </Button>
           <Button
             size="sm"
             onClick={() => handleSave('final')}
@@ -514,6 +519,15 @@ export default function OrderConfirmationPage() {
           <Save size={16} className="text-amber-600 flex-shrink-0" />
           <span className="text-amber-800">
             <strong>Draft {confirmation.oc_number}</strong> — saved, not generated yet. Confirm &amp; generate when the details are complete.
+          </span>
+        </div>
+      )}
+
+      {generated && confirmation.draft && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+          <Save size={16} className="text-amber-600 flex-shrink-0" />
+          <span className="text-amber-800">
+            Draft changes saved on top of the generated <strong>{confirmation.file_name}</strong> — Confirm &amp; regenerate to apply them.
           </span>
         </div>
       )}
@@ -620,6 +634,9 @@ export default function OrderConfirmationPage() {
                 className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50">
                 <Plus size={14} /> Add line
               </button>
+
+              <AreaField label="Notes (printed under the table)" value={form.notes} onChange={v => set('notes', v)}
+                rows={3} placeholder="e.g. Goods shipped in 2 x 20' containers" />
             </div>
           </Section>
 

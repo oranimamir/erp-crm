@@ -63,6 +63,8 @@ interface PurchaseOrder {
   /** 'draft' = saved form only; 'final' = generated and filed. */
   status?: 'draft' | 'final';
   data: Partial<PoData>;
+  /** Edits saved as a draft on top of the generated document. */
+  draft?: Partial<PoData> | null;
 }
 
 /** Supplier categories, the trading ones (listed by default) first. */
@@ -239,7 +241,8 @@ export default function PurchaseOrderPage() {
 
   const adopt = useCallback((record: PurchaseOrder) => {
     setPurchaseOrder(record);
-    setForm(toFormData(record.data));
+    // Edits saved as a draft on a generated PO pick up where they were left
+    setForm(toFormData(record.draft || record.data));
     setOrderId(record.order_id);
     setOperationId(record.operation_id);
     setSupplierId(record.supplier_id ?? null);
@@ -447,12 +450,12 @@ export default function PurchaseOrderPage() {
             title="Purchase order"
             renderPreview={async () => (await api.post('/purchase-orders/preview', { data: toPayload(form) }, { responseType: 'blob' })).data as Blob}
           />
-          {isDraft && (
-            <Button variant="secondary" size="sm" onClick={() => handleSave('draft')} disabled={saving}
-              title="Keep this purchase order as a draft — nothing is generated or filed yet">
-              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save draft
-            </Button>
-          )}
+          <Button variant="secondary" size="sm" onClick={() => handleSave('draft')} disabled={saving}
+            title={generated
+              ? 'Keep these edits as a draft — the generated PDF stays as it is until you regenerate'
+              : 'Keep this purchase order as a draft — nothing is generated or filed yet'}>
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save draft
+          </Button>
           <Button size="sm" onClick={() => handleSave('final')} disabled={saving}>
             {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
             {generated ? 'Confirm & regenerate' : 'Confirm & generate'}
@@ -503,6 +506,15 @@ export default function PurchaseOrderPage() {
           <Save size={16} className="text-amber-600 flex-shrink-0" />
           <span className="text-amber-800">
             <strong>Draft {purchaseOrder.po_number}</strong> — saved, not generated yet. Confirm &amp; generate when the details are complete.
+          </span>
+        </div>
+      )}
+
+      {generated && purchaseOrder.draft && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+          <Save size={16} className="text-amber-600 flex-shrink-0" />
+          <span className="text-amber-800">
+            Draft changes saved on top of the generated <strong>{purchaseOrder.file_name}</strong> — Confirm &amp; regenerate to apply them.
           </span>
         </div>
       )}

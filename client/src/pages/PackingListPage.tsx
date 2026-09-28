@@ -11,7 +11,7 @@ import PackingListLayoutEditor from '../components/PackingListLayoutEditor';
 import { plWithDefaults, type PackingListLayout } from '../lib/packingListLayout';
 import {
   ArrowLeft, Loader2, Eye, FileDown, CheckCircle, FileText, RefreshCw, User, Package, Truck,
-  AlertTriangle, RotateCcw, Trash2, Save, BadgeCheck, Undo2, LayoutTemplate, ChevronDown, ChevronRight,
+  AlertTriangle, RotateCcw, Trash2, Save, BadgeCheck, Undo2, LayoutTemplate, ChevronDown, ChevronRight, Mail, X,
 } from 'lucide-react';
 
 // Packing list for a generated invoice: its goods with the packaging from
@@ -226,6 +226,13 @@ export default function PackingListPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [finalizing, setFinalizing] = useState(false);
+
+  const [showEmail, setShowEmail] = useState(false);
+  const [emailTo, setEmailTo] = useState('');
+  const [emailCc, setEmailCc] = useState('');
+  const [emailSubject, setEmailSubject] = useState('');
+  const [emailMessage, setEmailMessage] = useState('');
+  const [sending, setSending] = useState(false);
   const [billOfLading, setBillOfLading] = useState<BillOfLading | null>(null);
   const [orderId, setOrderId] = useState<number | null>(null);
   // Which document is shown beside the packing list
@@ -405,6 +412,36 @@ export default function PackingListPage() {
     }
   }
 
+  /** Opens the email dialog pre-filled with the consignee and the defaults from Settings. */
+  async function openEmail() {
+    if (!packingList) return;
+    const join = (a: string, b: string[] = []) =>
+      [...new Set([...a.split(/[,;]/).map(x => x.trim()), ...b].filter(Boolean))].join(', ');
+    let defaults: any = null;
+    try { defaults = (await api.get('/settings/document-emails')).data?.packing_list; } catch { /* no defaults */ }
+    setEmailTo(prev => join(prev || form.contact_email || '', defaults?.to));
+    setEmailCc(prev => join(prev, defaults?.cc));
+    setEmailSubject(prev => prev || `Packing List ${packingList.pl_number}${packingList.final_file_name ? '' : ' (draft)'}${form.client_name ? ` — ${form.client_name}` : ''}`);
+    setShowEmail(true);
+  }
+
+  async function handleSend() {
+    if (!packingList) return;
+    if (!emailTo.trim()) { addToast('Enter at least one recipient', 'error'); return; }
+    setSending(true);
+    try {
+      const { data } = await api.post(`/packing-lists/${packingList.id}/email`, {
+        to: emailTo, cc: emailCc, subject: emailSubject, message: emailMessage,
+      });
+      addToast(data.message, 'success');
+      setShowEmail(false);
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to send the email', 'error');
+    } finally {
+      setSending(false);
+    }
+  }
+
   async function handleReopen() {
     if (!packingList) return;
     setFinalizing(true);
@@ -509,6 +546,10 @@ export default function PackingListPage() {
           <Button variant="secondary" size="sm" onClick={() => handleDownload('final')} disabled={!packingList?.final_file_name}
             title={packingList?.final_file_name ? undefined : 'Not finalized yet'}>
             <FileDown size={14} /> Download final
+          </Button>
+          <Button variant="secondary" size="sm" onClick={openEmail} disabled={!packingList}
+            title={packingList?.final_file_name ? 'Email the final packing list' : 'Email the draft packing list (not finalized yet)'}>
+            <Mail size={14} /> Send by email
           </Button>
           {packingList && (
             <Button variant="secondary" size="sm" onClick={handleDelete}>
@@ -737,6 +778,36 @@ export default function PackingListPage() {
           </Section>
         </div>
       </div>
+
+      {showEmail && packingList && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => !sending && setShowEmail(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-200">
+              <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                <Mail size={16} className="text-gray-400" /> Send {packingList.final_file_name || packingList.file_name}
+              </h3>
+              <button onClick={() => setShowEmail(false)} disabled={sending} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <Field label="To (comma-separated)" value={emailTo} onChange={setEmailTo} placeholder="buyer@example.com" />
+              <Field label="CC (comma-separated)" value={emailCc} onChange={setEmailCc} placeholder="logistics@example.com" />
+              <Field label="Subject" value={emailSubject} onChange={setEmailSubject} />
+              <AreaField label="Message (optional)" value={emailMessage} onChange={setEmailMessage} rows={4} placeholder="Leave empty to use the default covering note." />
+              <p className="text-xs text-gray-500 flex items-center gap-1.5">
+                <FileText size={12} /> {packingList.final_file_name || `${packingList.file_name} (draft — not finalized yet)`} will be attached.
+              </p>
+            </div>
+            <div className="px-5 py-3.5 border-t border-gray-200 flex justify-end gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setShowEmail(false)} disabled={sending}>Cancel</Button>
+              <Button size="sm" onClick={handleSend} disabled={sending || !emailTo.trim()}>
+                {sending ? <Loader2 size={14} className="animate-spin" /> : <Mail size={14} />} Send
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

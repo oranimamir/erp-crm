@@ -96,7 +96,10 @@ function parseRecord(row: any) {
   if (!row) return row;
   let data: DocumentData = {};
   try { data = JSON.parse(row.data); } catch { /* corrupt rows surface as empty */ }
-  return { ...row, data };
+  // Edits saved as a draft on top of the generated document, if any
+  let draft: any = null;
+  if (row.draft_data) { try { draft = JSON.parse(row.draft_data); } catch { /* ignore a corrupt draft */ } }
+  return { ...row, data, draft };
 }
 
 /**
@@ -323,7 +326,7 @@ export async function backfillRecordedInvoices(): Promise<void> {
 
 /** Fields the invoice takes from the order confirmation when it sets them. */
 const OC_CARRIED_FIELDS = [
-  'sq_number', 'our_ref', 'po_number', 'client_code', 'attention', 'client_name', 'billing_address',
+  'sq_number', 'po_number', 'client_code', 'attention', 'client_name', 'billing_address',
   'client_contact', 'client_phone', 'tax_id', 'eori', 'contact_email', 'delivery', 'delivery_address',
   'delivery_contact', 'delivery_date_text', 'payment_terms', 'incoterm', 'terms', 'remarks', 'freight',
 ] as const;
@@ -459,6 +462,8 @@ router.get('/prepare', (req: Request, res: Response) => {
     }
     if (ocItems.length) draft.items = ocItems;
   }
+  // "Our ref" on the invoice is the operation number
+  if (operation?.operation_number) draft.our_ref = operation.operation_number;
 
   res.json({
     existing: null,
@@ -618,7 +623,11 @@ router.put('/:id', async (req: Request, res: Response) => {
   const isDraft = req.body?.status === 'draft';
   const wasDraft = existing.status === 'draft';
   if (isDraft && !wasDraft) {
-    res.status(400).json({ error: 'This invoice is already generated — it cannot go back to a draft' });
+    // Already generated: keep the edits as a pending draft. The filed PDF (and,
+    // for an invoice, the recorded amount) stays as generated until regenerated.
+    db.prepare(`UPDATE invoice_documents SET draft_data = ?, updated_at = datetime('now') WHERE id = ?`)
+      .run(JSON.stringify(data), existing.id);
+    res.json(parseRecord(db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(existing.id)));
     return;
   }
 
@@ -649,7 +658,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     db.prepare(`
       UPDATE invoice_documents
       SET invoice_number = ?, operation_id = ?, profile_id = ?, data = ?, file_path = ?, file_name = ?, document_id = ?,
-        status = ?, updated_at = datetime('now')
+        status = ?, draft_data = NULL, updated_at = datetime('now')
       WHERE id = ?
     `).run(
       payload.doc_number, operationId, profile_id ?? existing.profile_id ?? null, JSON.stringify(payload),
@@ -704,7 +713,8 @@ router.post('/:id/email', async (req: Request, res: Response) => {
   const recipients = String(req.body?.to || '').split(/[,;]/).map(s => s.trim()).filter(Boolean);
   if (!recipients.length) { res.status(400).json({ error: 'At least one recipient email is required' }); return; }
 
-  const invalid = recipients.filter(r => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r));
+  const cc = String(req.body?.cc || '').split(/[,;]/).map(s => s.trim()).filter(Boolean);
+  const invalid = [...recipients, ...cc].filter(r => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r));
   if (invalid.length) { res.status(400).json({ error: `Invalid email address: ${invalid.join(', ')}` }); return; }
 
   const filePath = row.file_path ? path.join(docsDir, row.file_path) : null;
@@ -735,7 +745,7 @@ router.post('/:id/email', async (req: Request, res: Response) => {
     const resend = new Resend(apiKey);
     const from = process.env.RESEND_FROM_EMAIL || 'CirculERP <onboarding@resend.dev>';
     const { error } = await resend.emails.send({
-      from, to: recipients, subject, html,
+      from, to: recipients, ...(cc.length ? { cc } : {}), subject, html,
       attachments: [{ filename: row.file_name || 'invoice.pdf', content: fs.readFileSync(filePath).toString('base64') }],
     });
     if (error) throw new Error(error.message || 'Resend rejected the message');

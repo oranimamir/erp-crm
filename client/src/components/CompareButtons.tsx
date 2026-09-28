@@ -30,11 +30,13 @@ const MISSING: Record<CompareKind, string> = {
 
 const cls = (available: boolean) => available
   ? 'inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-semibold bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 hover:border-gray-400 transition-colors'
-  : 'inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-semibold bg-gray-50 text-gray-300 border border-gray-200 cursor-not-allowed';
+  : 'inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-semibold bg-gray-50 text-gray-400 border border-gray-200 cursor-not-allowed';
 
-export default function CompareButtons({ kinds, orderId, title, renderPreview, bl }: {
+export default function CompareButtons({ kinds, orderId, operationId, title, renderPreview, bl }: {
   kinds: CompareKind[];
   orderId: number | null;
+  /** Lets the BL be looked up among the operation's documents when not passed in. */
+  operationId?: number | null;
   /** What is being generated — "Invoice", "Packing list". */
   title: string;
   renderPreview: () => Promise<Blob>;
@@ -43,6 +45,14 @@ export default function CompareButtons({ kinds, orderId, title, renderPreview, b
 }) {
   const [oc, setOc] = useState<CompareFile | null>(null);
   const [invoice, setInvoice] = useState<CompareFile | null>(null);
+  const [foundBl, setFoundBl] = useState<CompareFile | null>(null);
+
+  useEffect(() => {
+    if (bl !== undefined || !kinds.includes('bl') || !operationId) { setFoundBl(null); return; }
+    api.get(`/operations/${operationId}/bill-of-lading`)
+      .then(({ data }) => setFoundBl(data?.file_path ? { number: '', file_path: data.file_path, file_name: data.file_name } : null))
+      .catch(() => setFoundBl(null));
+  }, [operationId, bl === undefined, kinds.join(',')]);
   const [open, setOpen] = useState<CompareKind | null>(null);
 
   useEffect(() => {
@@ -65,7 +75,7 @@ export default function CompareButtons({ kinds, orderId, title, renderPreview, b
     }
   }, [orderId, kinds.join(',')]);
 
-  const files: Record<CompareKind, CompareFile | null> = { order: null, oc, invoice, bl: bl ?? null };
+  const files: Record<CompareKind, CompareFile | null> = { order: null, oc, invoice, bl: bl !== undefined ? bl : foundBl };
   const available = (kind: CompareKind) => (kind === 'order' ? !!orderId : !!files[kind]);
 
   const left = (kind: CompareKind) => {

@@ -82,6 +82,8 @@ interface InvoiceRecord {
   /** 'draft' = saved form only; 'final' = generated and filed. */
   status?: 'draft' | 'final';
   data: Partial<InvData>;
+  /** Edits saved as a draft on top of the generated document. */
+  draft?: Partial<InvData> | null;
 }
 
 const UNITS = ['KG', 'TONS', 'MT', 'LBS', 'L', 'PAIL', 'DRUM', 'IBC'];
@@ -257,6 +259,7 @@ export default function InvoiceDocumentPage() {
 
   const [showEmail, setShowEmail] = useState(false);
   const [emailTo, setEmailTo] = useState('');
+  const [emailCc, setEmailCc] = useState('');
   const [emailSubject, setEmailSubject] = useState('');
   const [emailMessage, setEmailMessage] = useState('');
   const [sending, setSending] = useState(false);
@@ -282,12 +285,14 @@ export default function InvoiceDocumentPage() {
   const adopt = useCallback((rec: InvoiceRecord) => {
     setRecord(rec);
     setEntityConfirmed(true);
-    setForm(toFormData(rec.data));
+    // Edits saved as a draft on a generated invoice pick up where they were left
+    const shown = rec.draft || rec.data;
+    setForm(toFormData(shown));
     setOrderId(rec.order_id);
     setOperationId(rec.operation_id);
-    setIncludeOrigin(!!(rec.data.manufacturer || rec.data.country_of_origin));
-    setLayout(withDefaults(rec.data.layout));
-    setLayoutSource('this invoice as it was generated');
+    setIncludeOrigin(!!(shown.manufacturer || shown.country_of_origin));
+    setLayout(withDefaults(shown.layout));
+    setLayoutSource(rec.draft ? 'your saved draft of this invoice' : 'this invoice as it was generated');
   }, []);
 
   /** Re-fetch the draft when the entity or billing profile changes. */
@@ -363,6 +368,13 @@ export default function InvoiceDocumentPage() {
   useEffect(() => {
     if (!showEmail) return;
     setEmailTo(prev => prev || form.contact_email || '');
+    // The default recipients from Settings → Document emails join the customer's contact
+    api.get('/settings/document-emails').then(({ data }) => {
+      const join = (a: string, b: string[] = []) =>
+        [...new Set([...a.split(/[,;]/).map(x => x.trim()), ...b].filter(Boolean))].join(', ');
+      setEmailTo(prev => join(prev || form.contact_email || '', data?.invoice?.to));
+      setEmailCc(prev => join(prev, data?.invoice?.cc));
+    }).catch(() => { /* the dialog still works without defaults */ });
     setEmailSubject(prev => prev || `Commercial Invoice ${form.doc_number}${form.client_name ? ` — ${form.client_name}` : ''}`);
   }, [showEmail]);
 
@@ -487,7 +499,7 @@ export default function InvoiceDocumentPage() {
     setSending(true);
     try {
       const { data } = await api.post(`/invoice-documents/${record.id}/email`, {
-        to: emailTo, subject: emailSubject, message: emailMessage,
+        to: emailTo, cc: emailCc, subject: emailSubject, message: emailMessage,
       });
       setRecord(data.invoice);
       addToast(data.message, 'success');
@@ -532,17 +544,18 @@ export default function InvoiceDocumentPage() {
             {previewing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
           </Button>
           <CompareButtons
-            kinds={['order', 'oc']}
+            kinds={['order', 'oc', 'bl']}
             orderId={orderId}
+            operationId={operationId}
             title="Invoice"
             renderPreview={async () => (await api.post('/invoice-documents/preview', { data: toPayload(form, includeOrigin, layout) }, { responseType: 'blob' })).data as Blob}
           />
-          {isDraft && (
-            <Button variant="secondary" size="sm" onClick={() => handleSave('draft')} disabled={saving}
-              title="Keep this invoice as a draft — nothing is generated or filed yet">
-              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save draft
-            </Button>
-          )}
+          <Button variant="secondary" size="sm" onClick={() => handleSave('draft')} disabled={saving}
+            title={generated
+              ? 'Keep these edits as a draft — the generated PDF stays as it is until you regenerate'
+              : 'Keep this invoice as a draft — nothing is generated or filed yet'}>
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save draft
+          </Button>
           <Button
             size="sm"
             onClick={() => handleSave('final')}
@@ -603,6 +616,15 @@ export default function InvoiceDocumentPage() {
           <Save size={16} className="text-amber-600 flex-shrink-0" />
           <span className="text-amber-800">
             <strong>Draft {record.invoice_number}</strong> — saved, not generated yet. Confirm &amp; generate when the details are complete.
+          </span>
+        </div>
+      )}
+
+      {generated && record.draft && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+          <Save size={16} className="text-amber-600 flex-shrink-0" />
+          <span className="text-amber-800">
+            Draft changes saved on top of the generated <strong>{record.file_name}</strong> — Confirm &amp; regenerate to apply them.
           </span>
         </div>
       )}
@@ -866,7 +888,8 @@ export default function InvoiceDocumentPage() {
               </button>
             </div>
             <div className="p-5 space-y-4">
-              <Field label="To (comma-separated)" type="email" value={emailTo} onChange={setEmailTo} placeholder="buyer@example.com" />
+              <Field label="To (comma-separated)" value={emailTo} onChange={setEmailTo} placeholder="buyer@example.com" />
+              <Field label="CC (comma-separated)" value={emailCc} onChange={setEmailCc} placeholder="accounting@example.com" />
               <Field label="Subject" value={emailSubject} onChange={setEmailSubject} />
               <AreaField label="Message (optional)" value={emailMessage} onChange={setEmailMessage} rows={4} placeholder="Leave empty to use the default covering note." />
               <p className="text-xs text-gray-500 flex items-center gap-1.5">

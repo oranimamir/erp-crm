@@ -271,6 +271,9 @@ function layoutFor(kind: DocumentKind, data: DocumentData): InvoiceLayout {
 }
 
 /** Column widths are editable, so rescale them to fill exactly the page width. */
+/** Columns printed even when empty — the table's identity. */
+const ALWAYS_SHOWN = new Set<string>(['line', 'reference', 'commercial_name', 'product']);
+
 function fittedColumns(layout: InvoiceLayout): LayoutColumn[] {
   const total = layout.columns.reduce((sum, c) => sum + c.width, 0);
   if (!total) return layout.columns;
@@ -604,10 +607,14 @@ function drawSplitTitleAndMeta(doc: any, layout: InvoiceLayout, data: DocumentDa
 // ── Line-item table ───────────────────────────────────────────────────────
 function drawTable(doc: any, kind: DocumentKind, layout: InvoiceLayout, data: DocumentData, top: number): number {
   const items = Array.isArray(data.items) ? data.items : [];
-  const cols = fittedColumns(layout);
+  const rows = items.map((item, index) => cellValues(item, index, layout));
+  // A column nobody filled in is left off the page
+  const cols = fittedColumns({
+    ...layout,
+    columns: layout.columns.filter(c => ALWAYS_SHOWN.has(c.key) || rows.some(r => String(r[c.key] ?? '').trim())),
+  });
   const PAD = 5;
   const size = tableSizes(kind, cols);
-  const rows = items.map((item, index) => cellValues(item, index, layout));
   const cellSize = uniformCellSize(doc, cols, rows, size.cell, PAD);
 
   // A heading may wrap between words, never inside one — a word too wide for
@@ -765,12 +772,15 @@ function packingCell(row: PackingRow, index: number, key: PlColumnKey, pl: Packi
 
 function drawPackingTable(doc: any, pl: PackingListLayout, data: DocumentData, top: number): number {
   const rows = Array.isArray(data.packing) ? data.packing : [];
-  const total = pl.columns.reduce((sum, c) => sum + c.width, 0);
-  const cols = pl.columns.map(c => ({ ...c, width: c.width * (W / total), numeric: NUMERIC_PL.has(c.key) }));
+  const allTexts = rows.map((r, i) => Object.fromEntries(pl.columns.map(c => [c.key, packingCell(r, i, c.key, pl)])) as Record<string, string>);
+  // A column nobody filled in (no CBM typed, no lot…) is left off the page
+  const shown = pl.columns.filter(c => ALWAYS_SHOWN.has(c.key) || allTexts.some(t => String(t[c.key] ?? '').trim()));
+  const total = shown.reduce((sum, c) => sum + c.width, 0);
+  const cols = shown.map(c => ({ ...c, width: c.width * (W / total), numeric: NUMERIC_PL.has(c.key) }));
   const PAD = 4;
   const HEAD = 7.5;
 
-  const texts = rows.map((r, i) => Object.fromEntries(cols.map(c => [c.key, packingCell(r, i, c.key, pl)])) as Record<string, string>);
+  const texts = allTexts;
   // One size for every cell — the largest at which every figure fits whole
   let size = 8.5;
   doc.font('Helvetica');
@@ -999,15 +1009,14 @@ function drawOriginBlock(doc: any, data: DocumentData, top: number): number {
 
 // ── Terms & Conditions, then the bank block ───────────────────────────────
 function drawFooterBlocks(doc: any, layout: InvoiceLayout, data: DocumentData, top: number) {
-  doc.font('Helvetica').fontSize(BODY);
-  const termsH = HEADING * 1.4 + (data.terms ? doc.heightOfString(data.terms, { width: W }) : 0);
-  let y = ensureRoom(doc, top, termsH);
-
-  doc.font('Helvetica-Bold').fontSize(HEADING).fillColor(GREEN_TITLE)
-    .text(layout.terms_heading, L, y, { width: W, lineBreak: false });
-  y += HEADING * 1.4;
-
+  let y = top;
+  // No terms filled in → no Terms & Conditions heading either
   if (data.terms) {
+    doc.font('Helvetica').fontSize(BODY);
+    y = ensureRoom(doc, top, HEADING * 1.4 + doc.heightOfString(data.terms, { width: W }));
+    doc.font('Helvetica-Bold').fontSize(HEADING).fillColor(GREEN_TITLE)
+      .text(layout.terms_heading, L, y, { width: W, lineBreak: false });
+    y += HEADING * 1.4;
     doc.font('Helvetica').fontSize(BODY).fillColor(BLACK).text(data.terms, L, y, { width: W });
     y += doc.heightOfString(data.terms, { width: W });
   }
