@@ -72,7 +72,7 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - Always filed under the operation (invoice's operation, else the order's); BL found by "Bill of Lading" category or BL in name/notes (`findBillOfLading`); "Compare with BL" uses `OrderCompareModal` `left` prop
 
 ## Backups
-- Server ZIP on a schedule (`lib/backup-scheduler.ts`, Settings → Backup), plus the weekly email (`lib/backupEmail.ts`): Monday 06:00 Europe/Brussels by default; admin sets recipients and parts (database / all uploads / invoices by category) at `/api/backup/email`; one ZIP per part, parts > 25 MB are named, not attached (Resend limit)
+- Server ZIP on a schedule (`lib/backup-scheduler.ts`, Settings → Backup), plus the weekly email (`lib/backupEmail.ts`): Monday 06:00 Europe/Brussels by default; admin sets recipients (typed, or ticked from app users) and parts (database / all uploads / invoices by category / operations) at `/api/backup/email`; one ZIP per part, parts > 25 MB are named, not attached (Resend limit). Operations = `Operations/<op#> - <customer>/` (Order, documents by category, uploaded invoices) + `Operations overview.xlsx`, split into ~22 MB ZIPs by whole operation (`writeBackupPart` returns several paths)
 
 ## TripleW Entities
 - Table `company_entities` (edited on the TripleW Details page, `/api/company-entities`); `server/src/lib/companyEntity.ts`

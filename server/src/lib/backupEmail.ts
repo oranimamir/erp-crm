@@ -26,7 +26,7 @@ export const BACKUP_TIMEZONE = 'Europe/Brussels';
 export const BACKUP_PARTS = Object.keys(BACKUP_PART_LABELS) as BackupPart[];
 
 const DEFAULTS: BackupEmailSettings = {
-  enabled: true, recipients: [], parts: ['database', 'invoices'], day: 1, hour: 6, minute: 0,
+  enabled: true, recipients: [], parts: ['database', 'invoices', 'operations'], day: 1, hour: 6, minute: 0,
 };
 
 /** Resend caps a message at 40 MB after base64 (+33%), so stay under ~25 MB of ZIP per email. */
@@ -104,11 +104,19 @@ export async function sendBackupEmail(settings = getBackupEmailSettings()): Prom
   if (!settings.recipients.length) return finish(false, 'No recipients set');
 
   const stamp = at.replace(/[:.]/g, '-').slice(0, 19);
-  const files: Array<{ part: BackupPart; path: string; size: number }> = [];
+  // A part can come as several ZIPs (operations are split to stay emailable)
+  const files: Array<{ part: BackupPart; label: string; filename: string; path: string; size: number }> = [];
   try {
     for (const part of settings.parts) {
-      const filePath = await writeBackupPart(part, stamp);
-      files.push({ part, path: filePath, size: fs.statSync(filePath).size });
+      const paths = await writeBackupPart(part, stamp);
+      paths.forEach((filePath, i) => {
+        const of = paths.length > 1 ? ` (${i + 1} of ${paths.length})` : '';
+        files.push({
+          part, path: filePath, size: fs.statSync(filePath).size,
+          label: `${BACKUP_PART_LABELS[part]}${of}`,
+          filename: `erp-${part}-${at.slice(0, 10)}${paths.length > 1 ? `-${i + 1}of${paths.length}` : ''}.zip`,
+        });
+      });
     }
 
     // Pack the parts into as few emails as fit; a part too big for any email is only named
@@ -129,9 +137,9 @@ export async function sendBackupEmail(settings = getBackupEmailSettings()): Prom
       const batch = batches[i];
       const of = batches.length > 1 ? ` (${i + 1} of ${batches.length})` : '';
       const rows = [
-        ...batch.map(f => `<li>${BACKUP_PART_LABELS[f.part]} — attached (${mb(f.size)})</li>`),
+        ...batch.map(f => `<li>${f.label} — attached (${mb(f.size)})</li>`),
         ...(i === 0 ? tooLarge.map(f =>
-          `<li>${BACKUP_PART_LABELS[f.part]} — ${mb(f.size)}, too large to email: download it from Settings → Backup</li>`) : []),
+          `<li>${f.label} — ${mb(f.size)}, too large to email: download the full backup from Settings → Backup</li>`) : []),
       ];
       const html = `
 <div style="font-family:sans-serif;max-width:560px;color:#111827;">
@@ -142,17 +150,17 @@ export async function sendBackupEmail(settings = getBackupEmailSettings()): Prom
       const { error } = await resend.emails.send({
         from, to: settings.recipients, subject: `ERP backup — ${when.slice(0, 10)}${of}`, html,
         attachments: batch.map(f => ({
-          filename: `erp-${f.part}-${day}.zip`,
+          filename: f.filename,
           content: fs.readFileSync(f.path).toString('base64'),
         })),
       });
       if (error) throw new Error(error.message || 'Resend rejected the message');
     }
 
-    const sent = files.filter(f => f.size <= MAX_EMAIL_BYTES).map(f => BACKUP_PART_LABELS[f.part]);
+    const sent = [...new Set(files.filter(f => f.size <= MAX_EMAIL_BYTES).map(f => BACKUP_PART_LABELS[f.part]))];
     const summary = [
       sent.length ? `${sent.join(', ')} sent to ${settings.recipients.join(', ')}` : `Notice sent to ${settings.recipients.join(', ')}`,
-      ...tooLarge.map(f => `${BACKUP_PART_LABELS[f.part]} too large to email (${mb(f.size)})`),
+      ...tooLarge.map(f => `${f.label} too large to email (${mb(f.size)})`),
     ].join('; ');
     return finish(true, summary);
   } catch (err: any) {

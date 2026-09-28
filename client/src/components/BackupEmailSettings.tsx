@@ -9,7 +9,7 @@ import { useToast } from '../contexts/ToastContext';
  * when it goes out — Monday 06:00 Brussels time by default.
  */
 
-type Part = 'database' | 'documents' | 'invoices';
+type Part = 'database' | 'documents' | 'invoices' | 'operations';
 
 interface Settings {
   enabled: boolean;
@@ -28,6 +28,7 @@ const PART_HINTS: Record<Part, string> = {
   database: 'Every record — customers, orders, invoices, operations. Enough to restore the app.',
   documents: 'Every uploaded file (orders, invoices, BLs, wire transfers…). Usually too large to email.',
   invoices: 'Customer and supplier invoice PDFs in folders, with their original names.',
+  operations: 'A folder per operation (order, documents by category, invoices) plus an Excel overview of all operations. Split into several emails when large.',
 };
 
 const selectCls = 'border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500';
@@ -42,6 +43,8 @@ export default function BackupEmailSettings() {
   const [last, setLast] = useState<LastRun | null>(null);
   const [saving, setSaving] = useState(false);
   const [sending, setSending] = useState(false);
+  // App users with an email, offered as one-click recipients
+  const [users, setUsers] = useState<Array<{ id: number; display_name: string | null; username: string; email: string }>>([]);
 
   useEffect(() => {
     api.get('/backup/email').then(({ data }) => {
@@ -52,11 +55,20 @@ export default function BackupEmailSettings() {
       setConfigured(!!data.email_configured);
       setLast(data.last || null);
     }).catch(() => addToast('Failed to load the backup email settings', 'error'));
+    api.get('/users', { params: { limit: 1000 } })
+      .then(({ data }) => setUsers((data?.data || []).filter((u: any) => u.email)))
+      .catch(() => setUsers([]));
   }, []);
 
   if (!settings) return null;
 
   const set = (patch: Partial<Settings>) => setSettings(prev => (prev ? { ...prev, ...patch } : prev));
+  const recipientList = recipients.split(/[,;\s]+/).map(r => r.trim()).filter(Boolean);
+  const hasRecipient = (email: string) => recipientList.some(r => r.toLowerCase() === email.toLowerCase());
+  const toggleUser = (email: string) => setRecipients(
+    (hasRecipient(email) ? recipientList.filter(r => r.toLowerCase() !== email.toLowerCase()) : [...recipientList, email]).join(', ')
+  );
+
   const togglePart = (key: Part) =>
     set({ parts: settings.parts.includes(key) ? settings.parts.filter(p => p !== key) : [...settings.parts, key] });
 
@@ -118,6 +130,22 @@ export default function BackupEmailSettings() {
         <label className="block text-xs font-medium text-gray-600">Send to (comma-separated)</label>
         <input value={recipients} onChange={e => setRecipients(e.target.value)} placeholder="finance@example.com, ceo@example.com"
           className="block w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
+        {users.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 pt-1">
+            <span className="text-xs text-gray-500">Users:</span>
+            {users.map(u => {
+              const on = hasRecipient(u.email);
+              return (
+                <button key={u.id} type="button" onClick={() => toggleUser(u.email)} title={u.email}
+                  className={`px-2 py-0.5 rounded-full text-xs border transition-colors ${on
+                    ? 'bg-primary-50 border-primary-300 text-primary-700'
+                    : 'bg-white border-gray-300 text-gray-600 hover:bg-gray-50'}`}>
+                  {on ? '✓ ' : '+ '}{u.display_name || u.username}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="space-y-1.5">

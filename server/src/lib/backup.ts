@@ -2,6 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import archiver from 'archiver';
+import ExcelJS from 'exceljs';
 import db from '../database.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -169,18 +170,111 @@ export function listBackups(): { filename: string; size: number; created_at: str
 }
 
 /** What an emailed backup can hold — each goes out as its own ZIP. */
-export type BackupPart = 'database' | 'documents' | 'invoices';
+export type BackupPart = 'database' | 'documents' | 'invoices' | 'operations';
 
 export const BACKUP_PART_LABELS: Record<BackupPart, string> = {
   database: 'Database (all records)',
   documents: 'All uploaded documents',
   invoices: 'Invoices by category',
+  operations: 'Operations (folder per operation + overview)',
 };
 
-/** Writes one part's ZIP into the backups folder and returns its path. */
-export function writeBackupPart(part: BackupPart, stamp: string): Promise<string> {
-  if (!fs.existsSync(backupsDir)) fs.mkdirSync(backupsDir, { recursive: true });
-  const filePath = path.join(backupsDir, `email-${part}-${stamp}.zip`);
+// ── Operations: a folder per operation, and an overview spreadsheet ─────────
+
+/** Every operation with its order, parties and money, one row each. */
+function operationRows(): any[] {
+  return db.prepare(`
+    SELECT o.id, o.operation_number, o.category, o.status, o.country, o.ship_date, o.etd, o.eta, o.bl_date,
+           o.estimated_payment_date, o.notes, o.created_at,
+           c.name AS customer_name, s.name AS supplier_name,
+           ord.order_number, ord.file_path AS order_file_path, ord.file_name AS order_file_name,
+           (SELECT COUNT(*) FROM operation_documents d WHERE d.operation_id = o.id) AS document_count,
+           (SELECT COUNT(*) FROM invoices i WHERE i.operation_id = o.id AND i.type = 'customer') AS invoice_count,
+           (SELECT COALESCE(SUM(COALESCE(i.eur_amount, i.amount)), 0) FROM invoices i
+             WHERE i.operation_id = o.id AND i.type = 'customer') AS invoiced_eur,
+           (SELECT COALESCE(SUM(COALESCE(i.eur_amount, i.amount)), 0) FROM invoices i
+             WHERE i.operation_id = o.id AND i.type = 'customer' AND i.status = 'paid') AS paid_eur
+    FROM operations o
+    LEFT JOIN orders ord ON ord.id = o.order_id
+    LEFT JOIN customers c ON c.id = COALESCE(o.customer_id, ord.customer_id)
+    LEFT JOIN suppliers s ON s.id = COALESCE(o.supplier_id, ord.supplier_id)
+    ORDER BY o.operation_number
+  `).all() as any[];
+}
+
+async function operationsOverview(rows: any[]): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Operations');
+  ws.columns = [
+    { header: 'Operation', key: 'operation_number', width: 18 },
+    { header: 'Category', key: 'category', width: 11 },
+    { header: 'Status', key: 'status', width: 13 },
+    { header: 'Customer', key: 'customer_name', width: 30 },
+    { header: 'Supplier', key: 'supplier_name', width: 26 },
+    { header: 'Order', key: 'order_number', width: 18 },
+    { header: 'Country', key: 'country', width: 14 },
+    { header: 'Ship date', key: 'ship_date', width: 12 },
+    { header: 'ETD', key: 'etd', width: 12 },
+    { header: 'ETA', key: 'eta', width: 12 },
+    { header: 'BL date', key: 'bl_date', width: 12 },
+    { header: 'Est. payment', key: 'estimated_payment_date', width: 13 },
+    { header: 'Invoices', key: 'invoice_count', width: 9 },
+    { header: 'Invoiced (EUR)', key: 'invoiced_eur', width: 15 },
+    { header: 'Paid (EUR)', key: 'paid_eur', width: 13 },
+    { header: 'Documents', key: 'document_count', width: 11 },
+    { header: 'Notes', key: 'notes', width: 40 },
+  ];
+  ws.getRow(1).font = { bold: true };
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+  for (const r of rows) ws.addRow(r);
+  for (const key of ['invoiced_eur', 'paid_eur']) ws.getColumn(key).numFmt = '#,##0.00';
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+/** One file to put in the operations backup: where it is, where it goes in the ZIP. */
+interface OpFile { full: string; name: string; size: number }
+
+/**
+ * The operations backup as files: `Operations/<op#> - <customer>/` holding the
+ * order document, every operation document foldered by its category, and the
+ * uploaded invoices — grouped by operation so a ZIP never splits one.
+ */
+function operationFiles(rows: any[]): OpFile[][] {
+  const used = new Set<string>();
+  const docs = db.prepare(`
+    SELECT d.operation_id, d.file_path, d.file_name, c.name AS category
+    FROM operation_documents d LEFT JOIN document_categories c ON c.id = d.category_id
+  `).all() as any[];
+  // Generated invoices already sit among the operation documents — only uploaded ones are added
+  const invoices = db.prepare(`
+    SELECT i.operation_id, i.file_path, i.file_name, i.invoice_number FROM invoices i
+    WHERE i.operation_id IS NOT NULL AND i.file_path IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM invoice_documents g WHERE g.invoice_id = i.id)
+  `).all() as any[];
+
+  return rows.map(op => {
+    const folder = `Operations/${sanitizeName(`${op.operation_number}${op.customer_name || op.supplier_name ? ` - ${op.customer_name || op.supplier_name}` : ''}`)}`;
+    const files: OpFile[] = [];
+    const add = (full: string, sub: string, name: string) => {
+      if (!fs.existsSync(full)) return;
+      const dir = `${folder}/${sanitizeName(sub)}`;
+      files.push({ full, name: `${dir}/${uniqueName(used, dir, sanitizeName(name))}`, size: fs.statSync(full).size });
+    };
+    if (op.order_file_path) add(path.join(uploadsBase, 'orders', op.order_file_path), 'Order', op.order_file_name || op.order_file_path);
+    for (const d of docs.filter(d => d.operation_id === op.id)) {
+      add(path.join(uploadsBase, 'operation-docs', d.file_path), d.category || 'Other documents', d.file_name || d.file_path);
+    }
+    for (const inv of invoices.filter(i => i.operation_id === op.id)) {
+      add(path.join(uploadsBase, 'invoices', inv.file_path), 'Invoices', inv.file_name || `${inv.invoice_number}.pdf`);
+    }
+    return files;
+  });
+}
+
+/** Keeps each operations ZIP small enough to email (documents are mostly PDFs, which barely compress). */
+const OPERATIONS_ZIP_BYTES = 22 * 1024 * 1024;
+
+function writeZip(filePath: string, fill: (archive: archiver.Archiver) => void): Promise<string> {
   return new Promise((resolve, reject) => {
     const output = fs.createWriteStream(filePath);
     const archive = archiver('zip', { zlib: { level: 6 } });
@@ -188,6 +282,43 @@ export function writeBackupPart(part: BackupPart, stamp: string): Promise<string
     output.on('error', reject);
     output.on('close', () => resolve(filePath));
     archive.pipe(output);
+    fill(archive);
+    archive.finalize();
+  });
+}
+
+/** The operations backup, split into as many ZIPs as it takes; the overview is in the first. */
+async function writeOperationsParts(stamp: string): Promise<string[]> {
+  const rows = operationRows();
+  const overview = await operationsOverview(rows);
+  const groups: OpFile[][] = [];
+  let current: OpFile[] = [];
+  let size = overview.length;
+  for (const files of operationFiles(rows)) {
+    const opSize = files.reduce((acc, f) => acc + f.size, 0);
+    if (current.length && size + opSize > OPERATIONS_ZIP_BYTES) { groups.push(current); current = []; size = 0; }
+    current.push(...files);
+    size += opSize;
+  }
+  groups.push(current);
+
+  const paths: string[] = [];
+  for (let i = 0; i < groups.length; i++) {
+    const suffix = groups.length > 1 ? `-${i + 1}of${groups.length}` : '';
+    paths.push(await writeZip(path.join(backupsDir, `email-operations-${stamp}${suffix}.zip`), archive => {
+      if (i === 0) archive.append(overview, { name: 'Operations/Operations overview.xlsx' });
+      for (const f of groups[i]) archive.file(f.full, { name: f.name });
+    }));
+  }
+  return paths;
+}
+
+/** Writes one part's ZIP(s) into the backups folder and returns their paths. */
+export async function writeBackupPart(part: BackupPart, stamp: string): Promise<string[]> {
+  if (!fs.existsSync(backupsDir)) fs.mkdirSync(backupsDir, { recursive: true });
+  if (part === 'operations') return writeOperationsParts(stamp);
+  const filePath = path.join(backupsDir, `email-${part}-${stamp}.zip`);
+  return [await writeZip(filePath, archive => {
     if (part === 'database') {
       try { (db as any).saveToDisk?.(); } catch { /* the file on disk is still the last save */ }
       if (fs.existsSync(dbPath)) archive.file(dbPath, { name: 'erp.db' });
@@ -196,6 +327,5 @@ export function writeBackupPart(part: BackupPart, stamp: string): Promise<string
     } else {
       addCategorizedInvoices(archive);
     }
-    archive.finalize();
-  });
+  })];
 }
