@@ -5,6 +5,7 @@ import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDate } from '../lib/dates';
+import BackupEmailSettings from '../components/BackupEmailSettings';
 
 interface SavedBackup { filename: string; size: number; created_at: string; }
 interface BackupSchedule { frequency: 'daily' | 'weekly' | 'monthly'; day: number; hour: number; minute: number; }
@@ -428,6 +429,8 @@ export default function SettingsPage() {
                 </button>
               </div>
             </div>
+
+            <BackupEmailSettings />
 
             {/* Saved auto-backups */}
             <div className="border-t border-gray-100 pt-4">

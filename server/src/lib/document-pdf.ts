@@ -14,6 +14,7 @@
  * confirmation.
  */
 import fs from 'fs';
+import { normalizePlLayout, type PackingListLayout, type PlColumnKey } from './packingListLayout.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import {
@@ -66,10 +67,23 @@ export interface PackingRow {
   reference?: string | null;
   product?: string | null;
   lot?: string | null;
+  hs_code?: string | null;
+  description?: string | null;
   packaging_type?: string | null;
   units?: number | null;
   units_per_pallet?: number | null;
   pallets?: number | null;
+  /** Content of one unit. */
+  unit_net_kg?: number | null;
+  /** Content + packaging of one unit. */
+  unit_gross_kg?: number | null;
+  /** Units per pallet × unit net. */
+  pallet_net_kg?: number | null;
+  /** Units per pallet × unit gross + the pallet. */
+  pallet_gross_kg?: number | null;
+  pallet_weight_kg?: number | null;
+  /** As typed — some PLs give it per pallet, some per line. */
+  volume_cbm?: string | null;
   net_kg?: number | null;
   empty_kg?: number | null;
   gross_kg?: number | null;
@@ -196,19 +210,6 @@ const PO_LAYOUT: InvoiceLayout = {
   ],
 };
 
-/** The packing list: the invoice's header, addressed to the consignee. */
-const PL_LAYOUT: InvoiceLayout = {
-  ...DEFAULT_LAYOUT,
-  title: 'Packing List',
-  meta: [
-    { label: 'Date :', field: 'doc_date' },
-    { label: 'Invoice# :', field: 'invoice_number' as any },
-    { label: 'Your order# :', field: 'po_number' },
-    { label: 'Our order# :', field: 'operation_number' },
-  ],
-  labels: { ...DEFAULT_LAYOUT.labels, to: 'Consignee:' },
-};
-
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
@@ -264,7 +265,6 @@ export function computeTotals(data: DocumentData) {
 /** The layout in force: the customer's for an invoice, the fixed one for a confirmation. */
 function layoutFor(kind: DocumentKind, data: DocumentData): InvoiceLayout {
   if (kind === 'invoice') return normalizeLayout(data.layout);
-  if (kind === 'packing_list') return PL_LAYOUT;
   return kind === 'purchase_order' ? PO_LAYOUT : OC_LAYOUT;
 }
 
@@ -393,10 +393,22 @@ export async function buildDocumentPdf(kind: DocumentKind, data: DocumentData): 
   let y = drawHeader(doc, data);
 
   if (kind === 'packing_list') {
-    y = drawSplitTitleAndMeta(doc, layout, data, y);
-    y = drawPackingTable(doc, data, y + 10);
-    y = drawDeliveryLines(doc, data, y);
-    drawNotes(doc, data, y);
+    const pl = normalizePlLayout(data.layout);
+    // The header is the invoice's, set out the customer's way
+    const head: InvoiceLayout = {
+      ...DEFAULT_LAYOUT, title: pl.title, meta: pl.meta as InvoiceLayout['meta'],
+      labels: { ...pl.labels, eori: '' },
+    };
+    y = drawSplitTitleAndMeta(doc, head, { ...data, eori: '' }, y);
+    y = drawPackingTable(doc, pl, data, y + 10);
+    y = drawPackingSummary(doc, pl, data, y);
+    y = drawDetailPanel(doc, {
+      ...DEFAULT_LAYOUT, columns: [], hs_code: pl.hs_code, show_line_note: false,
+      show_description: pl.show_description, details: pl.details, totals: [],
+    }, { ...data, items: panelItems(data.packing || []) }, y);
+    y = drawNotes(doc, data, y);
+    if (pl.origin) y = drawOriginBlock(doc, data, y);
+    if (pl.show_terms && data.terms) drawFooterBlocks(doc, head, { terms: data.terms }, y + 16);
     stampPageNumbers(doc);
     doc.end();
     return done;
@@ -686,40 +698,86 @@ function drawQuantityTotalRow(doc: any, cols: LayoutColumn[], items: DocLine[], 
 }
 
 // ── Packing list table ────────────────────────────────────────────────────
-const PACKING_COLUMNS: Array<{ key: keyof PackingRow; label: string; width: number; numeric?: boolean }> = [
-  { key: 'reference', label: 'Reference', width: 62 },
-  { key: 'product', label: 'Product', width: 78 },
-  { key: 'lot', label: 'Lot', width: 56 },
-  { key: 'packaging_type', label: 'Packaging', width: 60 },
-  { key: 'units', label: 'Units', width: 38, numeric: true },
-  { key: 'units_per_pallet', label: 'Units / pallet', width: 40, numeric: true },
-  { key: 'pallets', label: 'Pallets', width: 40, numeric: true },
-  { key: 'net_kg', label: 'Net weight (kg)', width: 54, numeric: true },
-  { key: 'empty_kg', label: 'Empty packaging (kg)', width: 58, numeric: true },
-  { key: 'gross_kg', label: 'Gross weight (kg)', width: 54, numeric: true },
-];
+const LB_PER_KG = 2.2046226218;
 
-function packingText(row: PackingRow, key: keyof PackingRow, numeric?: boolean): string {
-  const value = row[key];
-  if (numeric) return value == null ? '' : fmt(num(value));
-  return String(value ?? '');
+const NUMERIC_PL = new Set<PlColumnKey>([
+  'unit_net', 'unit_gross', 'units_per_pallet', 'pallet_net', 'pallet_gross',
+  'volume_cbm', 'pallets', 'units', 'net_total', 'gross_total',
+]);
+
+/** "bag", "drum" — the unit a line ships in, as the per-unit weights name it. */
+function unitName(row: PackingRow): string {
+  const t = String(row.packaging_type || '').trim();
+  if (!t) return '';
+  return /^[A-Z0-9]+$/.test(t) ? t : t.toLowerCase();
 }
 
-function drawPackingTable(doc: any, data: DocumentData, top: number): number {
+function plural(name: string, n: number): string {
+  if (!name || n === 1 || /^[A-Z0-9]+$/.test(name) || name.endsWith('s')) return name;
+  return `${name}s`;
+}
+
+/** A weight as this customer reads it: kg, or lb per unit and kg + lb otherwise. */
+function weight(kg: unknown, pl: PackingListLayout, perUnit = false): string {
+  const n = num(kg);
+  if (!n) return '';
+  if (pl.weight_unit !== 'lb') return `${fmt(n)} kg`;
+  if (perUnit) return `${fmt(Math.round(n * LB_PER_KG))} lb`;
+  return `${fmt(n)} kg\n${fmt(n * LB_PER_KG)} lb`;
+}
+
+function packingCell(row: PackingRow, index: number, key: PlColumnKey, pl: PackingListLayout): string {
+  const per = unitName(row);
+  switch (key) {
+    case 'line': return String(index + 1);
+    case 'reference': return String(row.reference || '');
+    case 'product': {
+      const parts = [String(row.product || '')];
+      if (pl.hs_code === 'line' && row.hs_code) parts.push(`HS code: ${row.hs_code}`);
+      if (pl.show_lot && row.lot && !pl.columns.some(c => c.key === 'lot')) {
+        parts.push(...String(row.lot).split('\n').filter(Boolean).map(l => `Lot ${l}`));
+      }
+      return parts.filter(Boolean).join('\n');
+    }
+    case 'lot': return String(row.lot || '');
+    case 'packaging': return String(row.packaging_type || '');
+    case 'unit_net': {
+      const w = weight(row.unit_net_kg, pl, true);
+      return w && per ? `${w} /${per}` : w;
+    }
+    case 'unit_gross': {
+      const w = weight(row.unit_gross_kg, pl, true);
+      return w && per ? `${w} /${per}` : w;
+    }
+    case 'units_per_pallet': return row.units_per_pallet ? fmt(num(row.units_per_pallet)) : '';
+    case 'pallet_net': return weight(row.pallet_net_kg, pl);
+    case 'pallet_gross': return weight(row.pallet_gross_kg, pl);
+    case 'volume_cbm': return String(row.volume_cbm ?? '');
+    case 'pallets': return row.pallets == null ? '' : fmt(num(row.pallets));
+    case 'units': return row.units == null ? '' : fmt(num(row.units));
+    case 'net_total': return weight(row.net_kg, pl);
+    case 'gross_total': return weight(row.gross_kg, pl);
+    default: return '';
+  }
+}
+
+function drawPackingTable(doc: any, pl: PackingListLayout, data: DocumentData, top: number): number {
   const rows = Array.isArray(data.packing) ? data.packing : [];
-  const total = PACKING_COLUMNS.reduce((sum, c) => sum + c.width, 0);
-  const cols = PACKING_COLUMNS.map(c => ({ ...c, width: c.width * (W / total) }));
+  const total = pl.columns.reduce((sum, c) => sum + c.width, 0);
+  const cols = pl.columns.map(c => ({ ...c, width: c.width * (W / total), numeric: NUMERIC_PL.has(c.key) }));
   const PAD = 4;
   const HEAD = 7.5;
 
-  const texts = rows.map(r => Object.fromEntries(cols.map(c => [c.key, packingText(r, c.key, c.numeric)])) as Record<string, string>);
+  const texts = rows.map((r, i) => Object.fromEntries(cols.map(c => [c.key, packingCell(r, i, c.key, pl)])) as Record<string, string>);
   // One size for every cell — the largest at which every figure fits whole
   let size = 8.5;
   doc.font('Helvetica');
   for (const t of texts) {
     for (const c of cols) {
       if (!c.numeric || !t[c.key]) continue;
-      while (size > 6.5 && doc.fontSize(size).widthOfString(t[c.key]) > c.width - PAD * 2) size -= 0.5;
+      for (const part of t[c.key].split('\n')) {
+        while (size > 6.5 && doc.fontSize(size).widthOfString(part) > c.width - PAD * 2) size -= 0.5;
+      }
     }
   }
 
@@ -749,38 +807,61 @@ function drawPackingTable(doc: any, data: DocumentData, top: number): number {
     }
     y += rowH;
   }
-
-  // TOTAL row over the counts and weights
-  const sums: Record<string, string> = {};
-  for (const key of ['units', 'pallets', 'net_kg', 'empty_kg', 'gross_kg'] as const) {
-    sums[key] = fmt(rows.reduce((acc, r) => acc + num(r[key]), 0));
-  }
-  const rowH = 22;
-  y = ensureRoom(doc, y, rowH);
-  doc.rect(L, y, W, rowH).fill(GREEN_ROW);
-  doc.font('Helvetica-Bold').fontSize(size).fillColor(BLACK)
-    .text('TOTAL', L + PAD, y + 6, { width: 80, lineBreak: false });
-  let cx = L;
-  for (const c of cols) {
-    if (sums[c.key] !== undefined) {
-      doc.font('Helvetica-Bold').fontSize(size).fillColor(BLACK)
-        .text(sums[c.key], cx + PAD, y + 6, { width: c.width - PAD * 2, align: 'right', lineBreak: false });
-    }
-    cx += c.width;
-  }
-  return y + rowH;
+  return y;
 }
 
-/** Delivery terms and address under the packing table, when set. */
-function drawDeliveryLines(doc: any, data: DocumentData, top: number): number {
-  const rows = ([
-    ['Delivery :', data.delivery || ''],
-    ['Delivery address:', data.delivery_address || ''],
-  ] as Array<[string, string]>).filter(([, v]) => !!v);
+/**
+ * Total net weight, number of packages and total gross weight — the block
+ * every issued PL carries under its table.
+ */
+function drawPackingSummary(doc: any, pl: PackingListLayout, data: DocumentData, top: number): number {
+  const rows = Array.isArray(data.packing) ? data.packing : [];
   if (!rows.length) return top;
-  let y = ensureRoom(doc, top + 10, rows.length * BODY * 1.4);
-  for (const [label, value] of rows) y += labelled(doc, label, value, L, y, W, { size: BODY });
-  return y;
+
+  const net = rows.reduce((acc, r) => acc + num(r.net_kg), 0);
+  const gross = rows.reduce((acc, r) => acc + num(r.gross_kg), 0);
+  const pallets = rows.reduce((acc, r) => acc + num(r.pallets), 0);
+
+  // "80 drums", or "12 IBC + 160 pails" across packaging types
+  const byType = new Map<string, number>();
+  for (const r of rows) {
+    const units = num(r.units);
+    if (!units) continue;
+    const name = unitName(r) || 'units';
+    byType.set(name, (byType.get(name) || 0) + units);
+  }
+  const packages = [...byType].map(([name, n]) => `${fmt(n)} ${plural(name, n)}`).join(' + ');
+
+  const both = (kg: number) => pl.weight_unit === 'lb' ? `${fmt(kg)} kg / ${fmt(kg * LB_PER_KG)} lb` : `${fmt(kg)} kg`;
+  const lines: Array<[string, string]> = [['Total Net Weight:', both(net)]];
+  if (packages) {
+    lines.push(['Number of packages =', pallets
+      ? `${packages} (in ${fmt(pallets)} pallet${pallets === 1 ? '' : 's'})`
+      : `${packages} - no pallet`]);
+  }
+  lines.push(['Total Gross Weight:', both(gross)]);
+
+  const PAD = 7;
+  const lh = BODY * 1.32;
+  const height = 8 + lines.length * lh + 4;
+  const y0 = ensureRoom(doc, top, height);
+  doc.rect(L, y0, W, height).fill(GREEN_PANEL);
+  let y = y0 + 8;
+  for (const [label, value] of lines) y += labelled(doc, label, value, L + PAD, y, W - PAD * 2, { size: BODY, boldValue: true });
+  return y0 + height;
+}
+
+/** The lines' HS codes and descriptions for the panel, each product once. */
+function panelItems(rows: PackingRow[]): DocLine[] {
+  const seen = new Set<string>();
+  const out: DocLine[] = [];
+  for (const r of rows) {
+    const key = `${r.hs_code || ''}|${r.description || ''}`;
+    if (key === '|' || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ hs_code: r.hs_code || null, description: r.description || null });
+  }
+  return out;
 }
 
 // ── Merged detail cell: HS code, description, delivery, totals ────────────

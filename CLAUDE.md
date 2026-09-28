@@ -55,10 +55,14 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 ## Packing Lists
 - `/api/packing-lists`, page `/packing-lists/:id`; built from a generated invoice (`invoice_document_id`), numbered `<operation#>PL`, filed under the operation documents ("Packing list")
 - Packaging per line from Inventory → Packaging (`packaging` table) via `server/src/lib/packing.ts`: code token in the reference (BU25, DU25…) + longest product-name match; ties offered in a dropdown
-- units = ceil(net / product_mass); pallets = ceil(units / units_per_pallet); gross = net + units × weight_packaging + pallets × weight_pallet; units/pallets can be overridden; server recomputes on save
+- Weights (user's definitions): unit Net = product_mass (content); unit Gross = content + weight_packaging; Pallet net = units/pallet × unit net; Pallet gross = units/pallet × unit gross + pallet (20 kg default, per-line `pallet_weight_override`); line gross = net + units × packaging + pallets × pallet weight. units = ceil(net / product_mass), pallets = ceil(units / units_per_pallet); units/pallets overridable; server recomputes on save
+- Per-customer layout (`server/src/lib/packingListLayout.ts`, seeds read off the issued PLs): heading, header rows, column names/order, CBM column, kg or lb, HS code line/panel, origin, terms. Resolves profile `packing_list_layout` → last PL for the customer → seed → default; "Save as this customer's format" = `PUT /api/packing-lists/layout/:profileId`. Stored on the PL as `data.layout`
 - Deleted with its invoice
 - Draft → final: `packing_lists.status`; "Save as draft PL" files `<op#>PL-DRAFT.pdf`, "Finalize the PL" (`POST /:id/finalize`) files `<op#>PL.pdf` — allowed without a BL (warns); saving edits reverts to draft; `POST /:id/reopen`
 - Always filed under the operation (invoice's operation, else the order's); BL found by "Bill of Lading" category or BL in name/notes (`findBillOfLading`); "Compare with BL" uses `OrderCompareModal` `left` prop
+
+## Backups
+- Server ZIP on a schedule (`lib/backup-scheduler.ts`, Settings → Backup), plus the weekly email (`lib/backupEmail.ts`): Monday 06:00 Europe/Brussels by default; admin sets recipients and parts (database / all uploads / invoices by category) at `/api/backup/email`; one ZIP per part, parts > 25 MB are named, not attached (Resend limit)
 
 ## TripleW Entities
 - Table `company_entities` (edited on the TripleW Details page, `/api/company-entities`); `server/src/lib/companyEntity.ts`

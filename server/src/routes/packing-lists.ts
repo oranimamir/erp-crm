@@ -7,6 +7,8 @@ import db from '../database.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { buildDocumentPdf, type DocumentData, type PackingRow } from '../lib/document-pdf.js';
 import { computePacking, listPackaging, matchPackaging, netKg, packagingById, type PackagingRow } from '../lib/packing.js';
+import { normalizePlLayout, resolvePlLayout } from '../lib/packingListLayout.js';
+import { resolveProfile } from '../lib/documentPrefill.js';
 
 /**
  * Packing lists: the goods of a generated invoice with their packaging, unit
@@ -29,9 +31,15 @@ export interface PackingLineInput {
   quantity_unit?: string | null;
   lot?: string | null;
   lot2?: string | null;
+  hs_code?: string | null;
+  description?: string | null;
   packaging_id?: number | null;
   units_override?: number | null;
   pallets_override?: number | null;
+  /** What one empty pallet weighs on this line; blank = 20 kg. */
+  pallet_weight_override?: number | null;
+  /** Volume CBM as typed. */
+  volume_cbm?: string | null;
 }
 
 export interface PackingListData extends DocumentData {
@@ -91,6 +99,12 @@ function optionalCount(value: unknown): number | null {
   return Number.isFinite(n) && n >= 0 ? Math.round(n) : null;
 }
 
+function optionalWeight(value: unknown): number | null {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 /** The invoice lines as packing-list lines, each with the packaging matched to it. */
 function linesFromInvoice(items: any[], rows: PackagingRow[], keep: PackingLineInput[] = []): PackingLineInput[] {
   return (items || []).map((item: any, i: number) => {
@@ -103,12 +117,19 @@ function linesFromInvoice(items: any[], rows: PackagingRow[], keep: PackingLineI
       quantity_unit: item.quantity_unit || 'KG',
       lot: item.lot || '',
       lot2: item.lot2 || '',
+      hs_code: item.hs_code || '',
+      description: item.description || '',
     };
     // A packaging already chosen for this line survives a refresh from the invoice
     const packagingId = previous?.packaging_id && packagingById(previous.packaging_id)
       ? previous.packaging_id
       : matchPackaging(source, rows).best?.id ?? null;
-    return { ...source, packaging_id: packagingId, units_override: null, pallets_override: null };
+    return {
+      ...source, packaging_id: packagingId, units_override: null, pallets_override: null,
+      // What was typed for the pallet and volume is not on the invoice, so it stays
+      pallet_weight_override: previous?.pallet_weight_override ?? null,
+      volume_cbm: previous?.volume_cbm ?? '',
+    };
   });
 }
 
@@ -119,15 +140,24 @@ function packingRows(lines: PackingLineInput[]): PackingRow[] {
     const figures = computePacking(netKg(line.quantity, line.quantity_unit), pkg, {
       units: optionalCount(line.units_override),
       pallets: optionalCount(line.pallets_override),
+      pallet_weight: optionalWeight(line.pallet_weight_override),
     });
     return {
       reference: line.reference || '',
       product: line.commercial_name || '',
       lot: [line.lot, line.lot2].map(l => String(l || '').trim()).filter(Boolean).join('\n'),
+      hs_code: line.hs_code || '',
+      description: line.description || '',
       packaging_type: pkg ? pkg.type : (line.packaging || ''),
       units: pkg ? figures.units : null,
       units_per_pallet: figures.units_per_pallet,
       pallets: pkg ? figures.pallets : null,
+      unit_net_kg: pkg ? figures.unit_net_kg : null,
+      unit_gross_kg: pkg ? figures.unit_gross_kg : null,
+      pallet_net_kg: pkg ? figures.pallet_net_kg : null,
+      pallet_gross_kg: pkg ? figures.pallet_gross_kg : null,
+      pallet_weight_kg: figures.pallet_weight_kg,
+      volume_cbm: String(line.volume_cbm ?? '').trim() || null,
       net_kg: figures.net_kg,
       empty_kg: figures.empty_kg,
       gross_kg: figures.gross_kg,
@@ -137,7 +167,17 @@ function packingRows(lines: PackingLineInput[]): PackingRow[] {
 
 function withRows(data: PackingListData): PackingListData {
   const lines = Array.isArray(data.lines) ? data.lines : [];
-  return { ...data, lines, packing: packingRows(lines) };
+  return { ...data, lines, packing: packingRows(lines), layout: normalizePlLayout(data.layout) as any };
+}
+
+/** The customer (and their profile) a packing list is for, read off its invoice. */
+function customerFor(invoice: any): { customerId: number | null; customerName: string; profile: ReturnType<typeof resolveProfile> } {
+  const order = invoice?.order_id
+    ? db.prepare(`SELECT o.customer_id, c.name AS customer_name FROM orders o LEFT JOIN customers c ON c.id = o.customer_id WHERE o.id = ?`)
+      .get(invoice.order_id) as any
+    : null;
+  const customerId = order?.customer_id ?? null;
+  return { customerId, customerName: order?.customer_name || '', profile: resolveProfile(customerId, invoice?.profile_id ?? null) };
 }
 
 /** Candidate packaging per line, for the editor's dropdown. */
@@ -244,7 +284,11 @@ router.get('/prepare', (req: Request, res: Response) => {
   ).get(invoiceId) as any;
   if (existing) {
     const record = parseRecord(existing);
-    res.json({ existing: record, candidates: candidatesFor(record.data.lines || [], rows) });
+    const { profile } = customerFor(invoice);
+    res.json({
+      existing: record, candidates: candidatesFor(record.data.lines || [], rows),
+      profile_id: profile?.id ?? null, profile_name: profile?.name ?? null,
+    });
     return;
   }
 
@@ -253,11 +297,16 @@ router.get('/prepare', (req: Request, res: Response) => {
   const lines = linesFromInvoice(inv.items || [], rows);
 
   // The invoice's own header, minus everything about money
+  // (terms and origin stay: the customer's PL format decides whether they print)
   const {
-    items: _items, layout: _layout, terms: _terms, bank_name: _bn, iban: _iban, bic: _bic, bank_address: _ba,
-    freight: _f, vat: _v, insurance: _i, manufacturer: _m, country_of_origin: _c, notes: _n,
+    items: _items, layout: _layout, bank_name: _bn, iban: _iban, bic: _bic, bank_address: _ba,
+    freight: _f, vat: _v, insurance: _i, notes: _n,
     ...header
   } = inv;
+
+  // Laid out the way this customer's packing lists are
+  const { customerId, customerName, profile } = customerFor(invoice);
+  const { layout, source } = resolvePlLayout(customerId, profile, customerName);
 
   const draft: PackingListData = withRows({
     ...header,
@@ -266,11 +315,15 @@ router.get('/prepare', (req: Request, res: Response) => {
     invoice_number: invoice.invoice_number,
     notes: '',
     lines,
+    layout: layout as any,
   });
 
   res.json({
     existing: null,
     draft,
+    layout_source: source,
+    profile_id: profile?.id ?? null,
+    profile_name: profile?.name ?? null,
     candidates: candidatesFor(lines, rows),
     invoice: { id: invoice.id, invoice_number: invoice.invoice_number, order_id: invoice.order_id, operation_id: invoice.operation_id },
   });
@@ -303,7 +356,29 @@ router.get('/:id', (req: Request, res: Response) => {
   const row = db.prepare('SELECT * FROM packing_lists WHERE id = ?').get(Number(req.params.id));
   if (!row) { res.status(404).json({ error: 'Packing list not found' }); return; }
   const record = parseRecord(row);
-  res.json({ ...record, candidates: candidatesFor(record.data.lines || [], listPackaging()) });
+  const { profile } = customerFor(invoiceDoc(record.invoice_document_id));
+  res.json({
+    ...record, candidates: candidatesFor(record.data.lines || [], listPackaging()),
+    profile_id: profile?.id ?? null, profile_name: profile?.name ?? null,
+  });
+});
+
+// ── Save a layout as the customer's own ───────────────────────────────────
+
+/** Makes this PL layout the customer's standing format, like the invoice's. */
+router.put('/layout/:profileId', (req: Request, res: Response) => {
+  const profileId = Number(req.params.profileId);
+  const row = db.prepare('SELECT * FROM customer_document_profiles WHERE id = ?').get(profileId) as any;
+  if (!row) { res.status(404).json({ error: 'Customer profile not found' }); return; }
+
+  const layout = normalizePlLayout(req.body?.layout);
+  let data: any = {};
+  try { data = JSON.parse(row.data); } catch { /* corrupt row → start clean */ }
+  data.packing_list_layout = layout;
+  db.prepare(`UPDATE customer_document_profiles SET data = ?, updated_at = datetime('now') WHERE id = ?`)
+    .run(JSON.stringify(data), profileId);
+
+  res.json({ message: `Packing list format saved for ${row.name}`, layout });
 });
 
 // ── Live preview (nothing is persisted) ───────────────────────────────────

@@ -167,3 +167,35 @@ export function listBackups(): { filename: string; size: number; created_at: str
       return { filename: f, size: stats.size, created_at: stats.mtime.toISOString() };
     });
 }
+
+/** What an emailed backup can hold — each goes out as its own ZIP. */
+export type BackupPart = 'database' | 'documents' | 'invoices';
+
+export const BACKUP_PART_LABELS: Record<BackupPart, string> = {
+  database: 'Database (all records)',
+  documents: 'All uploaded documents',
+  invoices: 'Invoices by category',
+};
+
+/** Writes one part's ZIP into the backups folder and returns its path. */
+export function writeBackupPart(part: BackupPart, stamp: string): Promise<string> {
+  if (!fs.existsSync(backupsDir)) fs.mkdirSync(backupsDir, { recursive: true });
+  const filePath = path.join(backupsDir, `email-${part}-${stamp}.zip`);
+  return new Promise((resolve, reject) => {
+    const output = fs.createWriteStream(filePath);
+    const archive = archiver('zip', { zlib: { level: 6 } });
+    archive.on('error', reject);
+    output.on('error', reject);
+    output.on('close', () => resolve(filePath));
+    archive.pipe(output);
+    if (part === 'database') {
+      try { (db as any).saveToDisk?.(); } catch { /* the file on disk is still the last save */ }
+      if (fs.existsSync(dbPath)) archive.file(dbPath, { name: 'erp.db' });
+    } else if (part === 'documents') {
+      if (fs.existsSync(uploadsBase)) archive.directory(uploadsBase, 'uploads');
+    } else {
+      addCategorizedInvoices(archive);
+    }
+    archive.finalize();
+  });
+}

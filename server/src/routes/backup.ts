@@ -4,6 +4,11 @@ import fs from 'fs';
 import { createBackupArchive, createCategorizedInvoiceArchive, listBackups, getBackupsDir } from '../lib/backup.js';
 import { buildCronExpr, startBackupScheduler, BackupSchedule } from '../lib/backup-scheduler.js';
 import db from '../database.js';
+import {
+  BACKUP_PARTS, BACKUP_TIMEZONE, getBackupEmailSettings, getLastBackupEmail,
+  normalizeBackupEmailSettings, saveBackupEmailSettings, sendBackupEmail,
+} from '../lib/backupEmail.js';
+import { BACKUP_PART_LABELS } from '../lib/backup.js';
 
 const router = Router();
 
@@ -116,6 +121,44 @@ router.put('/schedule', (req: Request, res: Response) => {
   ).run(JSON.stringify(sched));
   startBackupScheduler(expr);
   res.json({ ok: true, expression: expr });
+});
+
+// ── Backup by email ────────────────────────────────────────────────────────
+
+// GET /api/backup/email — who gets the weekly backup, what it holds, when
+router.get('/email', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  res.json({
+    settings: getBackupEmailSettings(),
+    last: getLastBackupEmail(),
+    parts: BACKUP_PARTS.map(key => ({ key, label: BACKUP_PART_LABELS[key] })),
+    timezone: BACKUP_TIMEZONE,
+    email_configured: !!process.env.RESEND_API_KEY,
+  });
+});
+
+// PUT /api/backup/email — save the settings and reschedule
+router.put('/email', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const raw = req.body || {};
+  const typed = (Array.isArray(raw.recipients) ? raw.recipients : String(raw.recipients || '').split(/[,;\s]+/))
+    .map((s: unknown) => String(s).trim()).filter(Boolean);
+  const invalid = typed.filter((r: string) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r));
+  if (invalid.length) { res.status(400).json({ error: `Invalid email address: ${invalid.join(', ')}` }); return; }
+  if (!Array.isArray(raw.parts) || !raw.parts.some((p: any) => BACKUP_PARTS.includes(p))) {
+    res.status(400).json({ error: 'Choose at least one thing to include in the backup' });
+    return;
+  }
+  const settings = normalizeBackupEmailSettings(raw);
+  saveBackupEmailSettings(settings);
+  res.json({ settings });
+});
+
+// POST /api/backup/email/send — send the backup now with the saved settings
+router.post('/email/send', async (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const result = await sendBackupEmail();
+  res.status(result.ok ? 200 : 502).json(result.ok ? result : { ...result, error: result.message });
 });
 
 export default router;

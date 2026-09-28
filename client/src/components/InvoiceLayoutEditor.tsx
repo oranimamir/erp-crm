@@ -13,7 +13,7 @@ import {
 const input =
   'block w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-sm text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500';
 
-function Toggle({ label, hint, checked, onChange }: {
+export function Toggle({ label, hint, checked, onChange }: {
   label: string; hint?: string; checked: boolean; onChange: (v: boolean) => void;
 }) {
   return (
@@ -32,10 +32,12 @@ function Toggle({ label, hint, checked, onChange }: {
  * An ordered list of label/field rows — used for the meta column, the detail
  * panel and the totals, which differ only in which fields they offer.
  */
-function RowList<F extends string>({ title, hint, rows, fields, onChange }: {
+export function RowList<F extends string>({ title, hint, rows, fields, onChange, fieldLabels = FIELD_LABELS }: {
   title: string; hint: string;
   rows: Array<LayoutRow<F>>; fields: F[];
   onChange: (rows: Array<LayoutRow<F>>) => void;
+  /** Names for the fields in the dropdown, when they differ from the invoice's. */
+  fieldLabels?: Record<string, string>;
 }) {
   const unused = fields.filter(f => !rows.some(r => r.field === f));
 
@@ -54,7 +56,7 @@ function RowList<F extends string>({ title, hint, rows, fields, onChange }: {
         <p className="text-xs text-gray-400">{hint}</p>
       </div>
 
-      {rows.length === 0 && <p className="text-xs text-gray-400 italic">No rows — this block is left off the invoice.</p>}
+      {rows.length === 0 && <p className="text-xs text-gray-400 italic">No rows — this block is left off the document.</p>}
 
       {rows.map((row, index) => (
         <div key={`${row.field}-${index}`} className="flex items-center gap-1.5">
@@ -70,7 +72,7 @@ function RowList<F extends string>({ title, hint, rows, fields, onChange }: {
             className={`${input} flex-1`}
           >
             {[row.field, ...unused].map(f => (
-              <option key={f} value={f}>{FIELD_LABELS[f] || f}</option>
+              <option key={f} value={f}>{fieldLabels[f] || f}</option>
             ))}
           </select>
           <button type="button" onClick={() => move(index, -1)} disabled={index === 0}
@@ -91,10 +93,10 @@ function RowList<F extends string>({ title, hint, rows, fields, onChange }: {
       {unused.length > 0 && (
         <button
           type="button"
-          onClick={() => onChange([...rows, { label: `${FIELD_LABELS[unused[0]] || unused[0]} :`, field: unused[0] }])}
+          onClick={() => onChange([...rows, { label: `${fieldLabels[unused[0]] || unused[0]} :`, field: unused[0] }])}
           className="flex items-center gap-1.5 px-2.5 py-1 text-xs border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50"
         >
-          <Plus size={12} /> Add {FIELD_LABELS[unused[0]] || unused[0]}
+          <Plus size={12} /> Add {fieldLabels[unused[0]] || unused[0]}
         </button>
       )}
     </div>

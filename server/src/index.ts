@@ -46,6 +46,7 @@ import cron from 'node-cron';
 import { markOverdueInvoices } from './lib/overdue.js';
 import { checkEmailForStockUpdates } from './lib/email-stock.js';
 import { startBackupScheduler, buildCronExpr } from './lib/backup-scheduler.js';
+import { startBackupEmailScheduler } from './lib/backupEmail.js';
 import { getEurRate } from './lib/fx.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -180,6 +181,9 @@ try {
   const sched = schedRow ? JSON.parse(schedRow.value) : { frequency: 'weekly', day: 0, hour: 2, minute: 0 };
   startBackupScheduler(buildCronExpr(sched));
 }
+
+// The weekly backup by email — Monday 06:00 Brussels time unless an admin changed it
+try { startBackupEmailScheduler(); } catch (err) { console.warn('[BackupEmail] scheduler not started:', err); }
 
 // Sent invoices past their due date become overdue — at startup, then nightly
 {

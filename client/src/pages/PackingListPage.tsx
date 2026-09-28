@@ -7,13 +7,16 @@ import { formatDate } from '../lib/dates';
 import { useToast } from '../contexts/ToastContext';
 import Button from '../components/ui/Button';
 import OrderCompareModal from '../components/OrderCompareModal';
+import PackingListLayoutEditor from '../components/PackingListLayoutEditor';
+import { plWithDefaults, type PackingListLayout } from '../lib/packingListLayout';
 import {
   ArrowLeft, Loader2, Eye, FileDown, CheckCircle, FileText, RefreshCw, User, Package, Truck,
-  AlertTriangle, RotateCcw, Trash2, Save, BadgeCheck, Columns2, Undo2,
+  AlertTriangle, RotateCcw, Trash2, Save, BadgeCheck, Columns2, Undo2, LayoutTemplate, ChevronDown, ChevronRight,
 } from 'lucide-react';
 
 // Packing list for a generated invoice: its goods with the packaging from
-// Inventory → Packaging, unit and pallet counts, and net / empty / gross weight.
+// Inventory → Packaging, per-unit and per-pallet net / gross weights, and the
+// pallet count — laid out the way this customer's PLs are.
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -25,9 +28,14 @@ interface PlLine {
   quantity_unit: string;
   lot: string;
   lot2: string;
+  hs_code: string;
+  description: string;
   packaging_id: number | null;
   units_override: string;
   pallets_override: string;
+  /** Empty pallet weight in kg; blank = 20 kg. */
+  pallet_weight_override: string;
+  volume_cbm: string;
 }
 
 interface PlData {
@@ -44,8 +52,13 @@ interface PlData {
   tax_id: string;
   delivery: string;
   delivery_address: string;
+  delivery_date_text: string;
+  manufacturer: string;
+  country_of_origin: string;
+  terms: string;
   notes: string;
   lines: PlLine[];
+  layout?: Partial<PackingListLayout>;
   [key: string]: unknown; // issuer constants ride along untouched
 }
 
@@ -65,7 +78,7 @@ interface BillOfLading { id: number; file_path: string; file_name: string }
 const FORM_KEYS = [
   'doc_number', 'doc_date', 'invoice_number', 'po_number', 'operation_number',
   'client_name', 'billing_address', 'client_contact', 'client_phone', 'contact_email', 'tax_id',
-  'delivery', 'delivery_address', 'notes',
+  'delivery', 'delivery_address', 'delivery_date_text', 'manufacturer', 'country_of_origin', 'terms', 'notes',
 ] as const;
 
 function toLine(raw: any): PlLine {
@@ -77,9 +90,13 @@ function toLine(raw: any): PlLine {
     quantity_unit: raw?.quantity_unit || 'KG',
     lot: raw?.lot ?? '',
     lot2: raw?.lot2 ?? '',
+    hs_code: raw?.hs_code ?? '',
+    description: raw?.description ?? '',
     packaging_id: raw?.packaging_id ?? null,
     units_override: raw?.units_override == null ? '' : String(raw.units_override),
     pallets_override: raw?.pallets_override == null ? '' : String(raw.pallets_override),
+    pallet_weight_override: raw?.pallet_weight_override == null ? '' : String(raw.pallet_weight_override),
+    volume_cbm: raw?.volume_cbm == null ? '' : String(raw.volume_cbm),
   };
 }
 
@@ -90,14 +107,16 @@ function toFormData(raw: any): PlData {
   return merged as PlData;
 }
 
-function toPayload(form: PlData) {
+function toPayload(form: PlData, layout: PackingListLayout) {
   const { packing: _packing, ...rest } = form as any;
   return {
     ...rest,
+    layout,
     lines: form.lines.map(l => ({
       ...l,
       units_override: l.units_override === '' ? null : Number(l.units_override),
       pallets_override: l.pallets_override === '' ? null : Number(l.pallets_override),
+      pallet_weight_override: l.pallet_weight_override === '' ? null : Number(l.pallet_weight_override),
     })),
   };
 }
@@ -170,6 +189,16 @@ function CountField({ label, value, computed, onChange }: {
   );
 }
 
+/** Two figures side by side in the line's weight summary. */
+function Figure({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+  return (
+    <div>
+      <div className="text-gray-500">{label}</div>
+      <div className={strong ? 'font-semibold text-gray-900' : 'font-medium text-gray-900'}>{value}</div>
+    </div>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────
 
 export default function PackingListPage() {
@@ -198,6 +227,13 @@ export default function PackingListPage() {
   // Which document is shown beside the packing list
   const [comparing, setComparing] = useState<'bl' | 'invoice' | null>(null);
 
+  // How this customer's packing lists are laid out — see PackingListLayoutEditor
+  const [layout, setLayout] = useState<PackingListLayout>(plWithDefaults(null));
+  const [layoutSource, setLayoutSource] = useState('the standard packing list template');
+  const [showLayout, setShowLayout] = useState(false);
+  const [savingLayout, setSavingLayout] = useState(false);
+  const [profile, setProfile] = useState<{ id: number; name: string } | null>(null);
+
   const previewUrlRef = useRef<string | null>(null);
   previewUrlRef.current = previewUrl;
   useEffect(() => () => { if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current); }, []);
@@ -211,7 +247,13 @@ export default function PackingListPage() {
     setForm(toFormData(record.data));
     setInvoiceDocId(record.invoice_document_id);
     setOperationId(record.operation_id);
+    setLayout(plWithDefaults(record.data.layout));
+    setLayoutSource('this packing list as it was saved');
   }, []);
+
+  const takeProfile = (data: any) => {
+    if (data?.profile_id) setProfile({ id: data.profile_id, name: data.profile_name || 'this customer' });
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -223,6 +265,7 @@ export default function PackingListPage() {
           const { data } = await api.get(`/packing-lists/${id}`);
           if (cancelled) return;
           adopt(data);
+          takeProfile(data);
           setCandidates(data.candidates || []);
           return;
         }
@@ -234,11 +277,14 @@ export default function PackingListPage() {
         const { data } = await api.get('/packing-lists/prepare', { params: { invoice_document_id: invoiceParam } });
         if (cancelled) return;
         setCandidates(data.candidates || []);
+        takeProfile(data);
         if (data.existing) {
           adopt(data.existing);
           addToast('A packing list already exists for this invoice — opening it for editing', 'info');
         } else {
           setForm(toFormData(data.draft));
+          setLayout(plWithDefaults(data.draft?.layout));
+          setLayoutSource(data.layout_source || 'the standard packing list template');
           setOperationId(data.invoice?.operation_id ?? null);
         }
       } catch (err: any) {
@@ -278,7 +324,7 @@ export default function PackingListPage() {
     setRefreshing(true);
     try {
       const { data } = await api.post('/packing-lists/refresh-lines', {
-        invoice_document_id: invoiceDocId, lines: toPayload(form).lines,
+        invoice_document_id: invoiceDocId, lines: toPayload(form, layout).lines,
       });
       setForm(prev => ({ ...prev, lines: (data.lines || []).map(toLine) }));
       setCandidates(data.candidates || []);
@@ -293,7 +339,7 @@ export default function PackingListPage() {
   async function handlePreview() {
     setPreviewing(true);
     try {
-      const res = await api.post('/packing-lists/preview', { data: toPayload(form) }, { responseType: 'blob' });
+      const res = await api.post('/packing-lists/preview', { data: toPayload(form, layout) }, { responseType: 'blob' });
       if (previewUrl) URL.revokeObjectURL(previewUrl);
       setPreviewUrl(URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' })));
     } catch {
@@ -306,7 +352,7 @@ export default function PackingListPage() {
   async function handleSave() {
     setSaving(true);
     try {
-      const body = { invoice_document_id: invoiceDocId, data: toPayload(form) };
+      const body = { invoice_document_id: invoiceDocId, data: toPayload(form, layout) };
       const { data } = packingList
         ? await api.put(`/packing-lists/${packingList.id}`, body)
         : await api.post('/packing-lists', body);
@@ -335,6 +381,22 @@ export default function PackingListPage() {
       addToast(err.response?.data?.error || 'Failed to finalize the packing list', 'error');
     } finally {
       setFinalizing(false);
+    }
+  }
+
+  /** Makes this layout the customer's standing packing list format. */
+  async function handleSaveLayout() {
+    if (!profile) return;
+    setSavingLayout(true);
+    try {
+      const { data } = await api.put(`/packing-lists/layout/${profile.id}`, { layout });
+      setLayout(plWithDefaults(data.layout));
+      setLayoutSource(`saved on ${profile.name}`);
+      addToast(data.message || 'Packing list format saved', 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to save the packing list format', 'error');
+    } finally {
+      setSavingLayout(false);
     }
   }
 
@@ -390,12 +452,12 @@ export default function PackingListPage() {
   const byId = new Map(packaging.map(p => [p.id, p]));
   const figures = form.lines.map(l =>
     computePacking(netKg(l.quantity, l.quantity_unit), byId.get(l.packaging_id ?? -1), {
-      units: l.units_override, pallets: l.pallets_override,
+      units: l.units_override, pallets: l.pallets_override, pallet_weight: l.pallet_weight_override,
     }));
   const totals = figures.reduce((acc, f) => ({
     units: acc.units + f.units, pallets: acc.pallets + f.pallets,
-    net: acc.net + f.net_kg, empty: acc.empty + f.empty_kg, pallet: acc.pallet + f.pallet_kg, gross: acc.gross + f.gross_kg,
-  }), { units: 0, pallets: 0, net: 0, empty: 0, pallet: 0, gross: 0 });
+    net: acc.net + f.net_kg, gross: acc.gross + f.gross_kg,
+  }), { units: 0, pallets: 0, net: 0, gross: 0 });
   const unmatched = form.lines.filter(l => !l.packaging_id || !byId.has(l.packaging_id)).length;
 
   const backTo = operationId ? `/operations/${operationId}` : '/operations';
@@ -429,7 +491,7 @@ export default function PackingListPage() {
               left={comparing === 'bl'
                 ? { title: 'Bill of Lading', filePath: billOfLading!.file_path, fileName: billOfLading!.file_name, subfolder: 'operation-docs' }
                 : { title: `Invoice ${invoiceFile!.number}`, filePath: invoiceFile!.file_path, fileName: invoiceFile!.file_name, subfolder: 'operation-docs' }}
-              renderPreview={async () => (await api.post('/packing-lists/preview', { data: toPayload(form) }, { responseType: 'blob' })).data as Blob}
+              renderPreview={async () => (await api.post('/packing-lists/preview', { data: toPayload(form, layout) }, { responseType: 'blob' })).data as Blob}
               onClose={() => setComparing(null)}
             />
           )}
@@ -521,11 +583,47 @@ export default function PackingListPage() {
           <Section icon={<Truck size={16} />} title="Delivery & notes">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Field label="Delivery" value={form.delivery} onChange={v => set('delivery', v)} />
-              <Field label="Delivery address" value={form.delivery_address} onChange={v => set('delivery_address', v)} />
+              <Field label="Delivery date" value={form.delivery_date_text} onChange={v => set('delivery_date_text', v)} />
+              <Field label="Delivery address" value={form.delivery_address} onChange={v => set('delivery_address', v)} className="sm:col-span-2" />
               <AreaField label="Notes" value={form.notes} onChange={v => set('notes', v)} className="sm:col-span-2"
                 rows={3} placeholder="e.g. Goods shipped in 2 x 20' containers" />
+              {layout.origin && (
+                <>
+                  <AreaField label="Manufacturer" value={form.manufacturer} onChange={v => set('manufacturer', v)} className="sm:col-span-2" />
+                  <Field label="Country of origin" value={form.country_of_origin} onChange={v => set('country_of_origin', v)} />
+                </>
+              )}
+              {layout.show_terms && (
+                <AreaField label="Terms & conditions" value={form.terms} onChange={v => set('terms', v)} className="sm:col-span-2" />
+              )}
             </div>
           </Section>
+
+          {/* The customer's own packing list format */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            <button type="button" onClick={() => setShowLayout(v => !v)}
+              className="w-full px-5 py-3.5 border-b border-gray-100 flex items-center gap-2 text-left">
+              <span className="text-gray-400"><LayoutTemplate size={16} /></span>
+              <span className="font-semibold text-gray-800 text-sm flex-1 truncate">
+                Packing list format
+                <span className="ml-2 font-normal text-xs text-gray-400">from {layoutSource}</span>
+              </span>
+              {showLayout ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
+            </button>
+            {showLayout && (
+              <div className="p-5">
+                <PackingListLayoutEditor
+                  layout={layout}
+                  source={layoutSource}
+                  customerName={profile?.name || form.client_name}
+                  canSaveDefault={!!profile}
+                  saving={savingLayout}
+                  onChange={setLayout}
+                  onSaveDefault={handleSaveLayout}
+                />
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="space-y-5">
@@ -578,40 +676,39 @@ export default function PackingListPage() {
                       </select>
                       {pkg && (
                         <p className="text-xs text-gray-400">
-                          {pkg.product_mass} kg per unit · empty unit {pkg.weight_packaging ?? 0} kg · pallet {pkg.weight_pallet ?? 0} kg
+                          {pkg.product_mass} kg per unit · packaging {pkg.weight_packaging ?? 0} kg per unit · {pkg.units_per_pallet ?? '—'} per pallet
                         </p>
                       )}
                     </div>
 
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                       <CountField label="Units" value={line.units_override} computed={f.computed_units}
                         onChange={v => setLine(index, { units_override: v })} />
-                      <div className="space-y-1">
-                        <label className="block text-xs font-medium text-gray-500">Units / pallet</label>
-                        <div className="px-3 py-2 text-sm text-gray-700">{f.units_per_pallet ?? '—'}</div>
-                      </div>
                       <CountField label="Pallets" value={line.pallets_override} computed={f.computed_pallets}
                         onChange={v => setLine(index, { pallets_override: v })} />
+                      <CountField label="Pallet weight (kg)" value={line.pallet_weight_override} computed={20}
+                        onChange={v => setLine(index, { pallet_weight_override: v })} />
+                      <Field label="Volume CBM" value={line.volume_cbm} onChange={v => setLine(index, { volume_cbm: v })} />
                     </div>
 
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs rounded-lg bg-gray-50 px-3 py-2">
-                      <div><div className="text-gray-500">Net</div><div className="font-medium text-gray-900">{kg(f.net_kg)} kg</div></div>
-                      <div><div className="text-gray-500">Empty packaging</div><div className="font-medium text-gray-900">{kg(f.empty_kg)} kg</div></div>
-                      <div><div className="text-gray-500">Pallets</div><div className="font-medium text-gray-900">{kg(f.pallet_kg)} kg</div></div>
-                      <div><div className="text-gray-500">Gross</div><div className="font-semibold text-gray-900">{kg(f.gross_kg)} kg</div></div>
+                      <Figure label="Net weight (unit)" value={pkg ? `${kg(f.unit_net_kg)} kg` : '—'} />
+                      <Figure label="Gross weight (unit)" value={pkg ? `${kg(f.unit_gross_kg)} kg` : '—'} />
+                      <Figure label="Pallet net weight" value={f.units_per_pallet ? `${kg(f.pallet_net_kg)} kg` : '—'} />
+                      <Figure label="Pallet gross weight" value={f.units_per_pallet ? `${kg(f.pallet_gross_kg)} kg` : '—'} />
+                      <Figure label="Line net" value={`${kg(f.net_kg)} kg`} />
+                      <Figure label="Line gross" value={`${kg(f.gross_kg)} kg`} strong />
                     </div>
                   </div>
                 );
               })}
 
               {form.lines.length > 0 && (
-                <div className="border-t border-gray-100 pt-3 grid grid-cols-3 sm:grid-cols-6 gap-2 text-xs">
-                  <div><div className="text-gray-500">Units</div><div className="font-semibold">{kg(totals.units)}</div></div>
-                  <div><div className="text-gray-500">Pallets</div><div className="font-semibold">{kg(totals.pallets)}</div></div>
-                  <div><div className="text-gray-500">Net</div><div className="font-semibold">{kg(totals.net)} kg</div></div>
-                  <div><div className="text-gray-500">Empty pkg</div><div className="font-semibold">{kg(totals.empty)} kg</div></div>
-                  <div><div className="text-gray-500">Pallet wt</div><div className="font-semibold">{kg(totals.pallet)} kg</div></div>
-                  <div><div className="text-gray-500">Gross</div><div className="font-bold text-gray-900">{kg(totals.gross)} kg</div></div>
+                <div className="border-t border-gray-100 pt-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                  <Figure label="Total net weight" value={`${kg(totals.net)} kg`} />
+                  <Figure label="Packages" value={kg(totals.units)} />
+                  <Figure label="Pallets" value={kg(totals.pallets)} />
+                  <Figure label="Total gross weight" value={`${kg(totals.gross)} kg`} strong />
                 </div>
               )}
             </div>
