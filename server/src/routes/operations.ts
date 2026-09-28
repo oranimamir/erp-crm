@@ -144,6 +144,14 @@ router.get('/', async (req: Request, res: Response) => {
       o.payment_terms as order_payment_terms,
       o.file_path as order_file_path,
       o.file_name as order_file_name,
+      -- The generated documents' filed PDFs, for the list's Preview column (drafts have none;
+      -- a packing list shows its final PDF, else its watermarked draft)
+      (SELECT oc.file_path FROM order_confirmations oc WHERE oc.order_id = op.order_id AND oc.file_path IS NOT NULL ORDER BY oc.id DESC LIMIT 1) as oc_file_path,
+      (SELECT oc.file_name FROM order_confirmations oc WHERE oc.order_id = op.order_id AND oc.file_path IS NOT NULL ORDER BY oc.id DESC LIMIT 1) as oc_file_name,
+      (SELECT po.file_path FROM purchase_orders po WHERE po.order_id = op.order_id AND po.file_path IS NOT NULL ORDER BY po.id DESC LIMIT 1) as po_file_path,
+      (SELECT po.file_name FROM purchase_orders po WHERE po.order_id = op.order_id AND po.file_path IS NOT NULL ORDER BY po.id DESC LIMIT 1) as po_file_name,
+      (SELECT COALESCE(pl.final_file_path, pl.file_path) FROM packing_lists pl WHERE pl.order_id = op.order_id AND COALESCE(pl.final_file_path, pl.file_path) IS NOT NULL ORDER BY pl.id DESC LIMIT 1) as pl_file_path,
+      (SELECT COALESCE(pl.final_file_name, pl.file_name) FROM packing_lists pl WHERE pl.order_id = op.order_id AND COALESCE(pl.final_file_path, pl.file_path) IS NOT NULL ORDER BY pl.id DESC LIMIT 1) as pl_file_name,
       (SELECT COUNT(*) FROM operation_documents od WHERE od.operation_id = op.id) as doc_count,
       (SELECT COUNT(*) FROM invoices i WHERE i.operation_id = op.id) as invoice_count,
       COALESCE(wt_agg.wire_transfer_count, 0) as wire_transfer_count,

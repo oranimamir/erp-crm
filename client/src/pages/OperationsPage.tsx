@@ -5,7 +5,7 @@ import { useToast } from '../contexts/ToastContext';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
 import {
   Briefcase, Search, Plus, ChevronLeft, ChevronRight, FileText, Receipt,
-  FileSpreadsheet, ChevronUp, ChevronDown, Download, X, Truck, Loader2, ArrowLeftRight, Landmark, Filter, XCircle, Trash2, Pencil, Upload, RotateCcw,
+  FileSpreadsheet, ChevronUp, ChevronDown, Download, X, Truck, Loader2, ArrowLeftRight, Landmark, Filter, XCircle, Trash2, Pencil, Upload, RotateCcw, FileCheck2, ShoppingCart, Package,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import { paymentTermsDays, paymentTermsMentionsBL, paymentTermsEndOfMonth, computeEstimatedPaymentDate } from '../lib/paymentTerms';
@@ -20,6 +20,13 @@ interface Operation {
   order_date?: string;
   order_file_path?: string;
   order_file_name?: string;
+  /** Filed PDFs of the generated documents (a PL's final, else its draft). */
+  oc_file_path?: string | null;
+  oc_file_name?: string | null;
+  po_file_path?: string | null;
+  po_file_name?: string | null;
+  pl_file_path?: string | null;
+  pl_file_name?: string | null;
   customer_id?: number | null;
   supplier_id?: number | null;
   customer_name?: string;
@@ -944,6 +951,25 @@ export default function OperationsPage() {
                           <FileSpreadsheet size={14} />
                         </button>
                       ) : null}
+                      {/* Order confirmation, then supplier PO */}
+                      {op.oc_file_path && (
+                        <button
+                          onClick={() => openPreview({ fileName: op.oc_file_name || 'order-confirmation.pdf', filePath: op.oc_file_path!, subfolder: 'operation-docs' })}
+                          className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-purple-600"
+                          title={`Preview order confirmation${op.oc_file_name ? ` ${op.oc_file_name}` : ''}`}
+                        >
+                          <FileCheck2 size={14} />
+                        </button>
+                      )}
+                      {op.po_file_path && (
+                        <button
+                          onClick={() => openPreview({ fileName: op.po_file_name || 'purchase-order.pdf', filePath: op.po_file_path!, subfolder: 'operation-docs' })}
+                          className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-amber-600"
+                          title={`Preview supplier PO${op.po_file_name ? ` ${op.po_file_name}` : ''}`}
+                        >
+                          <ShoppingCart size={14} />
+                        </button>
+                      )}
                       {/* Invoice preview */}
                       {op.invoice_count > 0 && (
                         <button
@@ -954,6 +980,16 @@ export default function OperationsPage() {
                           {loadingInvoices.has(op.id)
                             ? <Loader2 size={14} className="animate-spin" />
                             : <Receipt size={14} />}
+                        </button>
+                      )}
+                      {/* Packing list: the final, else the draft */}
+                      {op.pl_file_path && (
+                        <button
+                          onClick={() => openPreview({ fileName: op.pl_file_name || 'packing-list.pdf', filePath: op.pl_file_path!, subfolder: 'operation-docs' })}
+                          className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-teal-600"
+                          title={`Preview packing list${op.pl_file_name ? ` ${op.pl_file_name}` : ''}`}
+                        >
+                          <Package size={14} />
                         </button>
                       )}
                       {/* Wire transfer preview */}
@@ -968,7 +1004,8 @@ export default function OperationsPage() {
                             : <Landmark size={14} />}
                         </button>
                       )}
-                      {!op.order_number && op.invoice_count === 0 && op.wire_transfer_count === 0 && (
+                      {!op.order_number && op.invoice_count === 0 && op.wire_transfer_count === 0
+                        && !op.oc_file_path && !op.po_file_path && !op.pl_file_path && (
                         <span className="text-gray-300">—</span>
                       )}
                     </div>
