@@ -43,6 +43,9 @@ interface Invoice {
   id: number; invoice_id: string; issue_date: string; supplier: string;
   category: string; domain: string; amount: number; vat_amount: number; currency: string;
   month: string; xml_filename: string; duplicate_warning: number; flagged: number; flag_comment: string; created_at: string;
+  eur_amount?: number | null; vat_eur_amount?: number | null;
+  supplier_vat?: string | null; supplier_country?: string | null; vat_rate?: number | null;
+  parse_source?: string | null; parse_warnings?: string | null;
 }
 
 interface Batch {
@@ -337,7 +340,15 @@ function InvoiceViewer({ invoiceId, onClose }: { invoiceId: number; onClose: () 
             <div className="px-5 py-3 border-b flex items-center justify-between shrink-0">
               <div className="min-w-0">
                 <h3 className="text-lg font-semibold text-gray-900 truncate">{inv.invoice_id}</h3>
-                <p className="text-sm text-gray-500">{inv.supplier}</p>
+                <p className="text-sm text-gray-500">
+                  {inv.supplier}
+                  {inv.supplier_vat && <span className="text-xs text-gray-400 ml-2">VAT {inv.supplier_vat}</span>}
+                </p>
+              </div>
+              <div className="flex items-center gap-5 text-sm ml-auto mr-4 shrink-0">
+                <div className="text-right"><p className="text-xs text-gray-400">Net</p><p className="font-medium text-gray-900 tabular-nums">{fmt(inv.amount, inv.currency)}</p></div>
+                <div className="text-right"><p className="text-xs text-gray-400">VAT{inv.vat_rate != null && inv.vat_amount ? ` (${Math.round(inv.vat_rate)}%)` : ''}</p><p className="font-medium text-amber-600 tabular-nums">{fmt(inv.vat_amount || 0, inv.currency)}</p></div>
+                <div className="text-right"><p className="text-xs text-gray-400">Total</p><p className="font-semibold text-gray-900 tabular-nums">{fmt(inv.amount + (inv.vat_amount || 0), inv.currency)}</p></div>
               </div>
               <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><X size={20} /></button>
             </div>
@@ -502,6 +513,7 @@ export default function SupplierInvoicesPage() {
   const [editCategory, setEditCategory] = useState('');
   const [editDomain, setEditDomain] = useState<'demo' | 'sales'>('demo');
   const [editAmount, setEditAmount] = useState<number>(0);
+  const [editVat, setEditVat] = useState<number>(0);
   const [editCurrency, setEditCurrency] = useState('EUR');
   const [editDate, setEditDate] = useState('');
 
@@ -700,13 +712,22 @@ export default function SupplierInvoicesPage() {
         // Always send both domain and category together to avoid race conditions
         promises.push(api.patch(`/demo-expenses/invoices/${id}/category`, { category: editCategory, domain: editDomain }));
       }
-      if (editAmount !== inv?.amount || editCurrency !== inv?.currency) {
+      const amountChanged = editAmount !== inv?.amount;
+      const vatChanged = editVat !== inv?.vat_amount;
+      if (editCurrency !== inv?.currency) {
+        // Currency first: the EUR figures are redone with the new currency
+        await api.patch(`/demo-expenses/invoices/${id}/amount`, { amount: editAmount, currency: editCurrency });
+      }
+      if (vatChanged) {
+        // Net and VAT go together so the EUR figures stay in step
+        promises.push(api.patch(`/demo-expenses/invoices/${id}/vat`, { vat_amount: editVat, amount: editAmount }));
+      } else if (amountChanged && editCurrency === inv?.currency) {
         promises.push(api.patch(`/demo-expenses/invoices/${id}/amount`, { amount: editAmount, currency: editCurrency }));
       }
       if (editDate !== (inv?.issue_date || '')) {
         promises.push(api.patch(`/demo-expenses/invoices/${id}/date`, { issue_date: editDate }));
       }
-      if (promises.length > 0) {
+      if (promises.length > 0 || editCurrency !== inv?.currency) {
         await Promise.all(promises);
         addToast('Invoice updated', 'success');
         fetchAll();
@@ -823,7 +844,11 @@ export default function SupplierInvoicesPage() {
         const badDate = res.data.warnings.filter((w: any) => w.issues.includes('date_uncertain')).length;
         const badSupplier = res.data.warnings.filter((w: any) => w.issues.includes('supplier_uncertain')).length;
         const ownCompany = res.data.warnings.filter((w: any) => w.issues.includes('own_company')).length;
+        const badTotals = res.data.warnings.filter((w: any) => w.issues.includes('totals_mismatch')).length;
+        const vatCheck = res.data.warnings.filter((w: any) => w.issues.includes('foreign_vat') || w.issues.includes('vat_rate_unusual')).length;
         const parts: string[] = [];
+        if (badTotals > 0) parts.push(`${badTotals} whose net + VAT don't add up to the total`);
+        if (vatCheck > 0) parts.push(`${vatCheck} with VAT to check`);
         if (zeroAmt > 0) parts.push(`${zeroAmt} with amount €0`);
         if (badDate > 0) parts.push(`${badDate} with uncertain date`);
         if (badSupplier > 0) parts.push(`${badSupplier} with unrecognised supplier`);
@@ -875,9 +900,10 @@ export default function SupplierInvoicesPage() {
         setUnknownAssignments(Object.fromEntries(allUnknowns.map((u: any) => {
           // For warning invoices that already have domain/category, pre-fill them
           const existing = res.data.parsed.find((p: any) => p.invoiceId === u.invoiceId);
+          // Unknown supplier: pre-fill with what Claude suggested from the invoice itself
           return [u.supplier, {
-            domain: existing?.domain || 'demo',
-            category: existing?.category || 'Other',
+            domain: existing?.domain || u.suggestedDomain || 'demo',
+            category: existing?.category || u.suggestedCategory || 'Other',
             remember: false,
           }];
         })));
@@ -1060,6 +1086,8 @@ export default function SupplierInvoicesPage() {
   };
 
   // ─── VAT AUDIT ─────────────────────────────────────────────────────────────
+  const [rereadingId, setRereadingId] = useState<number | null>(null);
+
   const handleVatAudit = async () => {
     setRunningVatAudit(true);
     try {
@@ -1077,10 +1105,14 @@ export default function SupplierInvoicesPage() {
     }
   };
 
-  const handleFixVat = async (id: number, newVat: number, action: string = 'set_to_0') => {
+  // `newAmount` also changes the net (when the stored amount turned out to include VAT)
+  const handleFixVat = async (id: number, newVat: number, action: string = 'set_to_0', newAmount?: number | null) => {
     setFixingVat(true);
     try {
-      await api.patch(`/demo-expenses/invoices/${id}/vat`, { vat_amount: newVat, audit_action: action });
+      await api.patch(`/demo-expenses/invoices/${id}/vat`, {
+        vat_amount: newVat, audit_action: action,
+        ...(newAmount != null ? { amount: newAmount } : {}),
+      });
       addToast('VAT updated', 'success');
       setActionTakenIds(prev => new Set(prev).add(id));
       setManualVatId(null);
@@ -1102,6 +1134,30 @@ export default function SupplierInvoicesPage() {
       addToast('Failed to log action', 'error');
     } finally {
       setFixingVat(false);
+    }
+  };
+
+  // Read the stored PDF again with Claude and offer its figures as the suggestion
+  const handleRereadVat = async (issue: any) => {
+    setRereadingId(issue.id);
+    try {
+      const res = await api.post(`/demo-expenses/invoices/${issue.id}/reread`, {});
+      const r = res.data.read;
+      const netChanged = Math.abs(r.amount - issue.amount) > 0.005;
+      setVatIssues(prev => (prev || []).map((i: any) => i.id !== issue.id ? i : {
+        ...i,
+        suggested_vat: r.vat_amount,
+        suggested_amount: netChanged ? r.amount : null,
+        suggestion_label: `Read from the invoice: net ${r.amount.toFixed(2)}, VAT ${r.vat_amount.toFixed(2)}, total ${r.total.toFixed(2)}`,
+        country: r.supplier_country || i.country,
+      }));
+      if (!netChanged && Math.abs(r.vat_amount - issue.current_vat) < 0.005) {
+        addToast('The invoice shows the same net and VAT as stored', 'info');
+      }
+    } catch (err: any) {
+      addToast(err?.response?.data?.error || 'Failed to re-read invoice', 'error');
+    } finally {
+      setRereadingId(null);
     }
   };
 
@@ -2258,12 +2314,14 @@ export default function SupplierInvoicesPage() {
                           { key: 'supplier', label: 'Supplier' },
                           { key: 'domain', label: 'Domain' },
                           { key: 'category', label: 'Category' },
-                          { key: 'amount', label: 'Amount (excl. BTW)' },
+                          { key: 'amount', label: 'Net (excl. BTW)', right: true },
+                          { key: 'vat_amount', label: 'VAT', right: true },
+                          { key: 'total', label: 'Total (incl. BTW)', right: true },
                           { key: 'month', label: 'Month' },
                         ].map(col => (
                           <th key={col.key} onClick={() => handleSort(col.key)}
-                            className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:text-gray-700 select-none">
-                            <div className="flex items-center gap-1">{col.label} <SortIcon col={col.key} /></div>
+                            className={`${col.right ? 'text-right' : 'text-left'} px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:text-gray-700 select-none whitespace-nowrap`}>
+                            <div className={`flex items-center gap-1 ${col.right ? 'justify-end' : ''}`}>{col.label} <SortIcon col={col.key} /></div>
                           </th>
                         ))}
                         <th className="px-4 py-3 w-10" />
@@ -2327,9 +2385,9 @@ export default function SupplierInvoicesPage() {
                                 </span>
                               )}
                             </td>
-                            <td className="px-4 py-3 text-gray-900 tabular-nums font-medium">
+                            <td className="px-4 py-3 text-gray-900 tabular-nums font-medium text-right whitespace-nowrap">
                               {isEditing ? (
-                                <div className="flex items-center gap-1">
+                                <div className="flex items-center gap-1 justify-end">
                                   <select value={editCurrency} onChange={e => setEditCurrency(e.target.value)}
                                     className="border border-gray-300 rounded px-1 py-0.5 text-xs bg-white focus:ring-2 focus:ring-primary-500 w-16">
                                     <option value="EUR">EUR</option>
@@ -2341,6 +2399,21 @@ export default function SupplierInvoicesPage() {
                                     className="border border-gray-300 rounded px-2 py-0.5 text-sm w-28 focus:ring-2 focus:ring-primary-500 focus:border-primary-500" />
                                 </div>
                               ) : fmt(inv.amount, inv.currency)}
+                            </td>
+                            <td className="px-4 py-3 text-gray-700 tabular-nums text-right whitespace-nowrap">
+                              {isEditing ? (
+                                <input type="number" step="0.01" value={editVat}
+                                  onChange={e => setEditVat(parseFloat(e.target.value) || 0)}
+                                  className="border border-gray-300 rounded px-2 py-0.5 text-sm w-24 text-right focus:ring-2 focus:ring-primary-500 focus:border-primary-500" />
+                              ) : (
+                                <span title={inv.vat_rate != null ? `${inv.vat_rate}%` : undefined}>
+                                  {fmt(inv.vat_amount || 0, inv.currency)}
+                                  {inv.vat_rate != null && inv.vat_amount !== 0 && <span className="text-xs text-gray-400 ml-1">{Math.round(inv.vat_rate)}%</span>}
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-gray-900 tabular-nums font-semibold text-right whitespace-nowrap">
+                              {fmt((isEditing ? editAmount + editVat : inv.amount + (inv.vat_amount || 0)), isEditing ? editCurrency : inv.currency)}
                             </td>
                             <td className="px-4 py-3 text-gray-500">{monthLabel(inv.month)}</td>
                             <td className="px-4 py-3">
@@ -2356,7 +2429,7 @@ export default function SupplierInvoicesPage() {
                                   </>
                                 ) : (
                                   <>
-                                      <button onClick={() => { setEditingRow(inv.id); setEditSupplier(inv.supplier); setEditCategory(inv.category); setEditDomain((inv.domain as 'demo' | 'sales') || 'demo'); setEditAmount(inv.amount); setEditCurrency(inv.currency || 'EUR'); setEditDate(inv.issue_date || ''); }}
+                                      <button onClick={() => { setEditingRow(inv.id); setEditSupplier(inv.supplier); setEditCategory(inv.category); setEditDomain((inv.domain as 'demo' | 'sales') || 'demo'); setEditAmount(inv.amount); setEditVat(inv.vat_amount || 0); setEditCurrency(inv.currency || 'EUR'); setEditDate(inv.issue_date || ''); }}
                                         className="text-gray-400 hover:text-primary-600 transition-colors" title="Edit invoice">
                                         <Pencil size={14} />
                                       </button>
@@ -2391,11 +2464,17 @@ export default function SupplierInvoicesPage() {
                     </tbody>
                     <tfoot>
                       <tr className="bg-gray-50 border-t border-gray-200">
-                        <td colSpan={5} className="px-4 py-3 text-sm font-medium text-gray-700 text-right">
+                        <td colSpan={6} className="px-4 py-3 text-sm font-medium text-gray-700 text-right">
                           Total ({invoices.length} invoices)
                         </td>
-                        <td className="px-4 py-3 text-sm font-bold text-gray-900 tabular-nums">
-                          {fmt(invoices.reduce((s, inv) => s + inv.amount, 0))}
+                        <td className="px-4 py-3 text-sm font-bold text-gray-900 tabular-nums text-right whitespace-nowrap" title="In EUR">
+                          {fmt(invoices.reduce((s, inv) => s + (inv.eur_amount ?? inv.amount), 0))}
+                        </td>
+                        <td className="px-4 py-3 text-sm font-bold text-amber-600 tabular-nums text-right whitespace-nowrap" title="In EUR">
+                          {fmt(invoices.reduce((s, inv) => s + (inv.vat_eur_amount ?? inv.vat_amount ?? 0), 0))}
+                        </td>
+                        <td className="px-4 py-3 text-sm font-bold text-gray-900 tabular-nums text-right whitespace-nowrap" title="In EUR">
+                          {fmt(invoices.reduce((s, inv) => s + (inv.eur_amount ?? inv.amount) + (inv.vat_eur_amount ?? inv.vat_amount ?? 0), 0))}
                         </td>
                         <td colSpan={2} />
                       </tr>
@@ -2516,6 +2595,10 @@ export default function SupplierInvoicesPage() {
                             {w.issues.includes('date_future') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Date is in the future — please correct</span>}
                             {w.issues.includes('date_illogical') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Date looks wrong (illogical year) — please correct</span>}
                             {w.issues.includes('supplier_uncertain') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Supplier not recognised — please verify</span>}
+                            {w.issues.includes('totals_mismatch') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Net + VAT ≠ invoice total — check the amounts</span>}
+                            {w.issues.includes('foreign_vat') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Foreign supplier charges VAT — check it is not reverse charge</span>}
+                            {w.issues.includes('vat_rate_unusual') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Unusual VAT rate — check the VAT</span>}
+                            {w.issues.includes('not_an_invoice') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Does not look like an invoice (quote / statement?)</span>}
                           </div>
                         );
                       })()}
@@ -2775,6 +2858,11 @@ export default function SupplierInvoicesPage() {
                         </td>
                         <td className="px-3 py-3 text-right font-medium text-green-600 whitespace-nowrap">
                           {issue.suggested_vat != null ? issue.suggested_vat.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
+                          {issue.suggested_amount != null && (
+                            <div className="text-[11px] font-normal text-gray-500" title="Suggested net amount">
+                              net {issue.suggested_amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </div>
+                          )}
                         </td>
                         <td className="px-3 py-3 text-xs text-gray-500 truncate" title={issue.issue}>{issue.issue}</td>
                         <td className="px-2 py-3">
@@ -2789,6 +2877,16 @@ export default function SupplierInvoicesPage() {
                               </button>
                             ) : (
                               <>
+                                {issue.suggested_vat != null && (
+                                  <button
+                                    onClick={() => handleFixVat(issue.id, issue.suggested_vat, 'apply_suggestion', issue.suggested_amount)}
+                                    disabled={fixingVat}
+                                    className="px-2 py-1 text-xs bg-primary-600 text-white rounded hover:bg-primary-700 font-medium disabled:opacity-50 whitespace-nowrap"
+                                    title={issue.suggestion_label || `Set VAT to ${issue.suggested_vat.toFixed(2)}`}
+                                  >
+                                    Apply suggestion
+                                  </button>
+                                )}
                                 <button
                                   onClick={() => handleKeepVat(issue)}
                                   disabled={fixingVat}
@@ -2806,15 +2904,31 @@ export default function SupplierInvoicesPage() {
                                   VAT = 0
                                 </button>
                                 <button
+                                  onClick={() => handleFixVat(issue.id, Math.round(issue.amount * 21) / 100, 'add_21')}
+                                  disabled={fixingVat}
+                                  className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200 font-medium disabled:opacity-50 whitespace-nowrap"
+                                  title={`The amount is the net: VAT = 21% of it = ${(Math.round(issue.amount * 21) / 100).toFixed(2)}`}
+                                >
+                                  +21% on net
+                                </button>
+                                <button
                                   onClick={() => {
-                                    const calculatedVat = Math.round((issue.amount - issue.amount / 1.21) * 100) / 100;
-                                    handleFixVat(issue.id, calculatedVat, 'calculate_vat');
+                                    const net = Math.round((issue.amount / 1.21) * 100) / 100;
+                                    handleFixVat(issue.id, Math.round((issue.amount - net) * 100) / 100, 'split_21', net);
                                   }}
                                   disabled={fixingVat}
                                   className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200 font-medium disabled:opacity-50 whitespace-nowrap"
-                                  title={`Calculate 21% VAT: €${(Math.round((issue.amount - issue.amount / 1.21) * 100) / 100).toFixed(2)}`}
+                                  title={`The amount includes 21% VAT: net ${(Math.round((issue.amount / 1.21) * 100) / 100).toFixed(2)}, VAT ${(Math.round((issue.amount - Math.round((issue.amount / 1.21) * 100) / 100) * 100) / 100).toFixed(2)}`}
                                 >
-                                  Calc 21%
+                                  Split 21% out
+                                </button>
+                                <button
+                                  onClick={() => handleRereadVat(issue)}
+                                  disabled={fixingVat || rereadingId === issue.id}
+                                  className="px-2 py-1 text-xs bg-purple-100 text-purple-700 rounded hover:bg-purple-200 font-medium disabled:opacity-50 whitespace-nowrap"
+                                  title="Read the invoice PDF again with AI and suggest its net and VAT"
+                                >
+                                  {rereadingId === issue.id ? 'Reading…' : 'Re-read'}
                                 </button>
                                 {manualVatId === issue.id ? (
                                   <form onSubmit={(e) => { e.preventDefault(); handleManualVatSubmit(issue.id); }} className="flex items-center gap-1">

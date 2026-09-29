@@ -8,6 +8,13 @@ import multer from 'multer';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { getEurRate } from '../lib/fx.js';
+import {
+  DEMO_SUPPLIER_MAP, SALES_CAT_DB_MAP, buildSupplierIndex, knownSupplierList, matchSupplier,
+  normalizeSupplierName, normalizeVat, levenshtein, type SupplierIndex,
+} from '../lib/supplierMatch.js';
+import {
+  readSupplierInvoice, checkAmounts, cachedInvoiceExtraction, type InvoiceExtraction,
+} from '../lib/supplierInvoiceReader.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
@@ -86,148 +93,26 @@ async function computeFxFields(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// HARDCODED DEMO SUPPLIER → CATEGORY MAPPING
+// SUPPLIER → DOMAIN + CATEGORY (lib/supplierMatch.ts)
 // ═══════════════════════════════════════════════════════════════════════════════
-
-const DEMO_SUPPLIER_MAP: { pattern: string; category: string }[] = [
-  // Salaries — Acerta always first, highest priority
-  { pattern: 'acerta', category: 'Salaries' },
-  { pattern: 'dutch taxes', category: 'Salaries' },
-  // Cars
-  { pattern: 'directlease', category: 'Cars' },
-  { pattern: 'ciac', category: 'Cars' },
-  { pattern: 'gas', category: 'Cars' },
-  { pattern: 'blossom', category: 'Cars' },
-  { pattern: 'modalizzy', category: 'Cars' },
-  // Overhead
-  { pattern: 'fruitsnack', category: 'Overhead' },
-  { pattern: 'clean shark', category: 'Overhead' },
-  { pattern: 'supermarket', category: 'Overhead' },
-  { pattern: 'katy corluy', category: 'Overhead' },
-  { pattern: 'internet', category: 'Overhead' },
-  { pattern: 'proximus', category: 'Overhead' },
-  { pattern: 'afval alternatief', category: 'Overhead' },
-  { pattern: 'kbc', category: 'Overhead' },
-  { pattern: 'port of antwerp', category: 'Overhead' },
-  { pattern: 'citymesh flex', category: 'Overhead' },
-  { pattern: 'arivic', category: 'Overhead' },
-  { pattern: 'spirax sarco', category: 'Overhead' },
-  { pattern: 'toolmax', category: 'Overhead' },
-  // Consumables
-  { pattern: 'gemu', category: 'Consumables' },
-  { pattern: 'roth', category: 'Consumables' },
-  { pattern: 'avantor', category: 'Consumables' },
-  { pattern: 'vwr', category: 'Consumables' },
-  { pattern: 'endress hauser', category: 'Consumables' },
-  { pattern: 'proforto', category: 'Consumables' },
-  { pattern: 'merck', category: 'Consumables' },
-  { pattern: 'bruco', category: 'Consumables' },
-  { pattern: 'klium', category: 'Consumables' },
-  // Materials
-  { pattern: 'durme natie', category: 'Materials' },
-  { pattern: 'lyphar', category: 'Materials' },
-  { pattern: 'brentag', category: 'Materials' },
-  { pattern: 'brenntag', category: 'Materials' },
-  { pattern: 'azelis', category: 'Materials' },
-  { pattern: 'altec', category: 'Materials' },
-  { pattern: 'fisher scientific', category: 'Materials' },
-  { pattern: 'imcd', category: 'Materials' },
-  { pattern: 'ractem', category: 'Materials' },
-  // Utilities and Maintenance
-  { pattern: 'bbc', category: 'Utilities and Maintenance' },
-  { pattern: 'bolt', category: 'Utilities and Maintenance' },
-  { pattern: 'water link', category: 'Utilities and Maintenance' },
-  { pattern: 'ecoson', category: 'Utilities and Maintenance' },
-  { pattern: 'eriks', category: 'Utilities and Maintenance' },
-  { pattern: 'gea', category: 'Utilities and Maintenance' },
-  { pattern: 'cebeo', category: 'Utilities and Maintenance' },
-  { pattern: 'fabory', category: 'Utilities and Maintenance' },
-  { pattern: 'conrad', category: 'Utilities and Maintenance' },
-  { pattern: 'renewi', category: 'Utilities and Maintenance' },
-  { pattern: 'dewofire', category: 'Utilities and Maintenance' },
-  { pattern: 'de smedt', category: 'Utilities and Maintenance' },
-  // Feedstock
-  { pattern: 'looop', category: 'Feedstock' },
-  { pattern: 'vandemoortel', category: 'Feedstock' },
-  // Subcontractors and Consultants
-  { pattern: 'growth', category: 'Subcontractors and Consultants' },
-  { pattern: 'bratavi', category: 'Subcontractors and Consultants' },
-  { pattern: 'cerda', category: 'Subcontractors and Consultants' },
-  { pattern: 'idewe', category: 'Subcontractors and Consultants' },
-  { pattern: 'ey', category: 'Subcontractors and Consultants' },
-  { pattern: '10am', category: 'Subcontractors and Consultants' },
-  { pattern: 'one4finance', category: 'Subcontractors and Consultants' },
-  { pattern: 'argo law', category: 'Subcontractors and Consultants' },
-  { pattern: 'regionis', category: 'Subcontractors and Consultants' },
-  { pattern: 'vta', category: 'Subcontractors and Consultants' },
-  // Regulatory
-  { pattern: 'apeiron', category: 'Regulatory' },
-  { pattern: 'normec', category: 'Regulatory' },
-  { pattern: 'profex', category: 'Regulatory' },
-  { pattern: 'echa', category: 'Regulatory' },
-  { pattern: 'corbion', category: 'Regulatory' },
-  // Equipment
-  { pattern: 'foeth', category: 'Equipment' },
-  { pattern: 'rvs', category: 'Equipment' },
-  { pattern: 'smolders', category: 'Equipment' },
-  { pattern: 'thyssenkruyp', category: 'Equipment' },
-  { pattern: 'thyssenkrupp', category: 'Equipment' },
-  { pattern: 'denios', category: 'Equipment' },
-  { pattern: 'eurodia', category: 'Equipment' },
-  { pattern: 'agidens', category: 'Equipment' },
-  // Couriers
-  { pattern: 'dhl', category: 'Couriers' },
-  { pattern: 'fedex', category: 'Couriers' },
-  // Other
-  { pattern: 'ais antwerp', category: 'Other' },
-];
-
-// Sales Activities category labels to DB category values
-const SALES_CAT_DB_MAP: Record<string, string> = {
-  logistics: 'Logistics',
-  blenders: 'Blenders',
-  raw_materials: 'Raw Materials',
-  shipping: 'Shipping',
-};
 
 /**
  * Classify a supplier into domain + category.
- * Returns { domain, category } or null if unknown.
+ * Returns null if unknown. `displayName` is the existing supplier's name to
+ * store instead of the spelling read off the invoice.
  */
-function classifySupplier(supplierName: string): { domain: string; category: string; displayName?: string } | null {
-  const lower = supplierName.toLowerCase();
-
-  // Acerta always takes priority → Demo / Salaries
-  if (lower.includes('acerta')) return { domain: 'demo', category: 'Salaries' };
-
-  // Check hardcoded demo list
-  for (const { pattern, category } of DEMO_SUPPLIER_MAP) {
-    if (lower.includes(pattern)) return { domain: 'demo', category };
-  }
-
-  // Check Sales Activities suppliers (from the suppliers table)
-  const salesSuppliers = db.prepare('SELECT name, category FROM suppliers').all() as any[];
-  for (const s of salesSuppliers) {
-    const sLower = s.name.toLowerCase();
-    if (lower.includes(sLower) || sLower.includes(lower)) {
-      const cat = SALES_CAT_DB_MAP[s.category] || s.category;
-      return { domain: 'sales', category: cat };
-    }
-  }
-
-  // Check user-defined mappings (may include display_name for renamed suppliers)
-  const userMappings = db.prepare('SELECT supplier_pattern, domain, category, display_name FROM demo_supplier_mappings').all() as any[];
-  for (const m of userMappings) {
-    if (lower.includes(m.supplier_pattern.toLowerCase())) {
-      return {
-        domain: m.domain || 'demo',
-        category: m.category,
-        displayName: m.display_name || undefined,
-      };
-    }
-  }
-
-  return null;
+function classifySupplier(
+  supplierName: string,
+  opts: { vat?: string | null; aiMatch?: string | null; index?: SupplierIndex } = {},
+): { domain: string; category: string; displayName?: string; matchedBy?: string } | null {
+  const m = matchSupplier(opts.index || buildSupplierIndex(), { name: supplierName, vat: opts.vat, aiMatch: opts.aiMatch });
+  if (!m) return null;
+  return {
+    domain: m.domain,
+    category: m.category,
+    displayName: m.supplierName !== supplierName ? m.supplierName : undefined,
+    matchedBy: m.matchedBy,
+  };
 }
 
 function isAcerta(supplierName: string): boolean {
@@ -307,9 +192,29 @@ function parseUBLInvoice(xmlString: string) {
     return '';
   }
   // The actual supplier's country (not our own company's)
-  const supplierCountry = supplierIsOwnCompany && customerParty
-    ? extractCountry(customerParty)
-    : extractCountry(supplierParty);
+  const realSupplierParty = supplierIsOwnCompany && customerParty ? customerParty : supplierParty;
+  const supplierCountry = extractCountry(realSupplierParty);
+
+  // Supplier VAT number: PartyTaxScheme/CompanyID, else PartyLegalEntity/CompanyID
+  function extractVat(party: any): string | null {
+    if (!party) return null;
+    const txt = (v: any) => (v == null ? '' : typeof v === 'object' ? String(v['#text'] ?? '') : String(v));
+    const schemes = Array.isArray(party['PartyTaxScheme']) ? party['PartyTaxScheme'] : [party['PartyTaxScheme']];
+    for (const s of schemes) {
+      const id = txt(s?.['CompanyID']).trim();
+      if (id) return id;
+    }
+    const legal = txt(party['PartyLegalEntity']?.['CompanyID']).trim();
+    return /^[A-Z]{2}/i.test(legal) ? legal : null;
+  }
+  const supplierVat = extractVat(realSupplierParty);
+
+  // Plain number from a UBL amount element ({ '#text': '12.34', '@_currencyID': 'EUR' } or '12.34')
+  const amountOf = (el: any): number | null => {
+    if (el == null) return null;
+    const n = parseFloat(typeof el === 'object' ? el['#text'] : el);
+    return isNaN(n) ? null : n;
+  };
 
   // Tax-exclusive amount
   const lmt = root['LegalMonetaryTotal'];
@@ -346,6 +251,25 @@ function parseUBLInvoice(xmlString: string) {
       vatAmount = parseFloat(ta) || 0;
     }
   }
+  // Per-rate VAT summary and the VAT-inclusive total, to check the figures add up
+  const taxTotals = Array.isArray(taxTotal) ? taxTotal : taxTotal ? [taxTotal] : [];
+  const subtotals = taxTotals.flatMap((t: any) => (Array.isArray(t?.['TaxSubtotal']) ? t['TaxSubtotal'] : t?.['TaxSubtotal'] ? [t['TaxSubtotal']] : []));
+  const vatLines = subtotals.map((st: any) => ({
+    rate: amountOf(st?.['TaxCategory']?.['Percent']) ?? 0,
+    base: Math.abs(amountOf(st?.['TaxableAmount']) ?? 0),
+    vat: Math.abs(amountOf(st?.['TaxAmount']) ?? 0),
+  }));
+  const reverseCharge = subtotals.some((st: any) => {
+    const code = st?.['TaxCategory']?.['ID'];
+    const c = String(typeof code === 'object' ? code?.['#text'] : code || '').toUpperCase();
+    return c === 'AE' || c === 'K'; // UNCL5305: AE = reverse charge, K = intra-community
+  });
+  const totalIncl = amountOf(lmt?.['TaxInclusiveAmount']) ?? amountOf(lmt?.['PayableAmount']);
+  const check = checkAmounts({
+    net: Math.abs(amount), vat: Math.abs(vatAmount), total: totalIncl != null ? Math.abs(totalIncl) : null,
+    vatLines, country: supplierCountry, reverseCharge,
+  });
+
   if (isCreditNote && vatAmount > 0) vatAmount = -vatAmount;
 
   // Line items
@@ -402,6 +326,10 @@ function parseUBLInvoice(xmlString: string) {
     vatAmount,
     currency: typeof currency === 'object' ? (currency as any)['#text'] || 'EUR' : String(currency),
     supplierCountry,
+    supplierVat,
+    vatRate: check.vatRate,
+    parseSource: 'xml' as 'xml' | 'ai' | 'text',
+    parseWarnings: check.warnings,
     lineItems,
     embeddedPdf,
     pdfFilename,
@@ -517,6 +445,11 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
       amount: 0,
       vatAmount: 0,
       currency: 'EUR',
+      supplierCountry: '',
+      supplierVat: null as string | null,
+      vatRate: null as number | null,
+      parseSource: 'text' as 'xml' | 'ai' | 'text',
+      parseWarnings: [] as string[],
       lineItems: [] as { description: string; amount: number }[],
       embeddedPdf: null as string | null,
       pdfFilename,
@@ -991,10 +924,105 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
     vatAmount,
     currency,
     supplierCountry,
+    supplierVat: null as string | null,
+    vatRate: amount > 0 ? Math.round((vatAmount / amount) * 10000) / 100 : null,
+    parseSource: 'text' as 'xml' | 'ai' | 'text',
+    parseWarnings: [] as string[],
     lineItems: [] as { description: string; amount: number }[],
     embeddedPdf: null as string | null,
     pdfFilename,
   };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PDF READING — Claude first, the regex reader above as fallback and cross-check
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const BASE_DEMO_CATEGORIES = ['Salaries', 'Cars', 'Overhead', 'Consumables', 'Materials', 'Utilities and Maintenance', 'Feedstock', 'Subcontractors and Consultants', 'Regulatory', 'Equipment', 'Couriers', 'Other'];
+const BASE_SALES_CATEGORIES = ['Raw Materials', 'Logistics', 'Blenders', 'Shipping', 'Other'];
+
+function invoiceCategories(): { demo: string[]; sales: string[] } {
+  const custom = db.prepare('SELECT name, domain FROM demo_custom_categories').all() as any[];
+  return {
+    demo: [...new Set([...BASE_DEMO_CATEGORIES, ...custom.filter(c => c.domain === 'demo').map(c => c.name)])],
+    sales: [...new Set([...BASE_SALES_CATEGORIES, ...custom.filter(c => c.domain === 'sales').map(c => c.name)])],
+  };
+}
+
+/** Parsed invoice in the shape the upload endpoints use, from Claude's reading. */
+function fromExtraction(x: InvoiceExtraction, textResult: Awaited<ReturnType<typeof parsePDFInvoice>>) {
+  const check = checkAmounts({
+    net: x.net_amount, vat: x.vat_amount, total: x.total_amount,
+    vatLines: x.vat_lines, country: x.supplier_country, reverseCharge: x.reverse_charge,
+  });
+  const warnings = [...check.warnings];
+  if (!x.is_invoice) warnings.push('not_an_invoice');
+  // Log when the text reader saw a different net — not a review flag, the text
+  // reader is the less reliable of the two
+  if (textResult.amount > 0 && check.net > 0 && Math.abs(textResult.amount - check.net) > Math.max(1, check.net * 0.01)) {
+    console.log(`[invoice-reader] ${textResult.pdfFilename}: text reader net ${textResult.amount} vs Claude ${check.net}`);
+  }
+  const sign = x.is_credit_note ? -1 : 1;
+  const supplierName = x.supplier_name && !isOwnCompany(x.supplier_name) ? x.supplier_name : textResult.supplierName;
+  return {
+    ...textResult,
+    // Keep a filename-derived ID only when Claude found no invoice number
+    invoiceId: x.invoice_number || textResult.invoiceId,
+    issueDate: x.issue_date || textResult.issueDate,
+    supplierName,
+    amount: sign * check.net,
+    vatAmount: sign * check.vat,
+    currency: x.currency || textResult.currency,
+    supplierCountry: x.supplier_country || textResult.supplierCountry,
+    supplierVat: x.supplier_vat_number,
+    vatRate: check.vatRate,
+    parseSource: 'ai' as 'xml' | 'ai' | 'text',
+    parseWarnings: warnings,
+    lineItems: x.description ? [{ description: x.description, amount: sign * check.net }] : textResult.lineItems,
+  };
+}
+
+type ReadInvoice = Awaited<ReturnType<typeof parsePDFInvoice>> & {
+  aiMatch?: string | null;
+  suggestedDomain?: 'demo' | 'sales' | null;
+  suggestedCategory?: string | null;
+};
+
+async function readPdfInvoice(buf: Buffer, fileName: string, fileHash: string, index: SupplierIndex, force = false): Promise<ReadInvoice> {
+  const textResult = await parsePDFInvoice(buf, fileName);
+  let x: InvoiceExtraction | null = null;
+  try {
+    x = await readSupplierInvoice({
+      fileHash, file: buf, fileName,
+      knownSuppliers: knownSupplierList(index),
+      categories: invoiceCategories(),
+      force,
+    });
+  } catch (err: any) {
+    console.warn(`[invoice-reader] Claude read failed for ${fileName}, using text reader:`, err?.message || err);
+  }
+  if (!x) return textResult;
+  const inv = fromExtraction(x, textResult);
+  console.log(`[invoice-reader] ${fileName}: id="${inv.invoiceId}" supplier="${inv.supplierName}" vat_no=${inv.supplierVat || '-'} country=${inv.supplierCountry || '??'} net=${inv.amount} vat=${inv.vatAmount} ${inv.currency} warnings=${inv.parseWarnings.join(',') || '-'}`);
+  return {
+    ...inv,
+    aiMatch: x.matched_known_supplier,
+    suggestedDomain: x.suggested_domain,
+    suggestedCategory: x.suggested_category,
+  };
+}
+
+/** Run `fn` over `items`, at most `limit` at a time, keeping order. */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  }));
+  return out;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1080,30 +1108,36 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       if (pdfFiles.has(xmlBaseName)) pairedPdfNames.add(xmlBaseName);
     }
 
-    // Parse standalone PDFs (not paired with XML)
-    for (const [name, entry] of Object.entries(zip.files)) {
-      if (entry.dir) continue;
-      if (!name.toLowerCase().endsWith('.pdf')) continue;
+    // Parse standalone PDFs (not paired with XML) — Claude reads them, a few at a time
+    const supplierIndex = buildSupplierIndex();
+    const standalonePdfs = Object.entries(zip.files).filter(([name, entry]) => {
+      if (entry.dir || !name.toLowerCase().endsWith('.pdf')) return false;
       const pdfBaseName = (name.replace(/\.pdf$/i, '').split('/').pop() || '').trim().toLowerCase();
-      if (pairedPdfNames.has(pdfBaseName)) continue; // already paired with XML
+      return !pairedPdfNames.has(pdfBaseName); // paired ones come from their XML
+    });
+    const pdfResults = await mapLimit(standalonePdfs, 4, async ([name, entry]) => {
       try {
         const pdfBuffer = await entry.async('nodebuffer');
-        const inv = await parsePDFInvoice(pdfBuffer, name);
-        if (!inv) {
-          failedFiles.push({ name, type: 'pdf', reason: 'PDF parser returned no data' });
-          continue;
-        }
-        parsed.push({
-          ...inv,
-          xmlFilename: null,
-          embeddedPdf: pdfBuffer.toString('base64'),
-          pdfFilename: name,
-          fileHash: sha256(pdfBuffer),
-        });
+        const fileHash = sha256(pdfBuffer);
+        const inv = await readPdfInvoice(pdfBuffer, name, fileHash, supplierIndex);
+        return { name, inv, pdfBuffer, fileHash };
       } catch (err: any) {
-        failedFiles.push({ name, type: 'pdf', reason: err?.message || 'Exception during PDF parsing' });
         console.error(`[upload-zip] Failed to parse PDF ${name}:`, err);
+        return { name, error: err?.message || 'Exception during PDF parsing' };
       }
+    });
+    for (const r of pdfResults) {
+      if (!('inv' in r) || !r.inv) {
+        failedFiles.push({ name: r.name, type: 'pdf', reason: (r as any).error || 'PDF parser returned no data' });
+        continue;
+      }
+      parsed.push({
+        ...r.inv,
+        xmlFilename: null,
+        embeddedPdf: r.pdfBuffer!.toString('base64'),
+        pdfFilename: r.name,
+        fileHash: r.fileHash,
+      });
     }
 
     if (failedFiles.length > 0) {
@@ -1171,13 +1205,15 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
 
     // Classify each invoice into domain + category
     const classified = deduped.map(inv => {
-      const match = classifySupplier(inv.supplierName);
+      const match = classifySupplier(inv.supplierName, { vat: inv.supplierVat, aiMatch: inv.aiMatch, index: supplierIndex });
       return {
         ...inv,
-        // Apply display name if the mapping has one (renamed supplier)
+        // Store the existing supplier's name when matched (renamed / differently spelled)
         supplierName: match?.displayName || inv.supplierName,
+        readName: inv.supplierName,
         domain: match?.domain || null,
         category: match?.category || null,
+        matchedBy: match?.matchedBy || null,
         isAcerta: isAcerta(inv.supplierName),
       };
     });
@@ -1195,6 +1231,10 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
         currency: inv.currency,
         lineItems: inv.lineItems,
         embeddedPdf: inv.embeddedPdf || null,
+        supplierVat: inv.supplierVat || null,
+        // Claude's guess, to pre-fill the review
+        suggestedDomain: inv.suggestedDomain || null,
+        suggestedCategory: inv.suggestedCategory || null,
       }));
     // Show ALL unknown invoices (not just unique-per-supplier) so user reviews each one
     const uniqueUnknowns = [...new Map(unknownSuppliers.map(u => [u.invoiceId, u])).values()];
@@ -1342,6 +1382,7 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       if (inv.supplierName === 'Unknown' || inv.supplierName === pdfBase) {
         issues.push('supplier_uncertain');
       }
+      for (const w of inv.parseWarnings || []) issues.push(w);
       if (issues.length > 0) {
         warnings.push({ invoiceId: inv.invoiceId, supplier: inv.supplierName, issues });
       }
@@ -1365,6 +1406,13 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
         amount: inv.amount,
         vatAmount: inv.vatAmount || 0,
         currency: inv.currency,
+        supplierVat: inv.supplierVat || null,
+        supplierCountry: inv.supplierCountry || null,
+        vatRate: inv.vatRate ?? null,
+        parseSource: inv.parseSource || null,
+        parseWarnings: inv.parseWarnings || [],
+        matchedBy: inv.matchedBy || null,
+        readName: inv.readName,
         lineItems: inv.lineItems,
         xmlFilename: inv.xmlFilename,
         hasPdf: !!inv.embeddedPdf,
@@ -1416,6 +1464,13 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
         amount: inv.amount,
         vatAmount: inv.vatAmount || 0,
         currency: inv.currency,
+        supplierVat: inv.supplierVat || null,
+        supplierCountry: inv.supplierCountry || null,
+        vatRate: inv.vatRate ?? null,
+        parseSource: inv.parseSource || null,
+        parseWarnings: inv.parseWarnings || [],
+        matchedBy: inv.matchedBy || null,
+        readName: inv.readName,
         lineItems: JSON.stringify(inv.lineItems),
         embeddedPdf: inv.embeddedPdf,
         pdfFilename: inv.pdfFilename,
@@ -1433,6 +1488,17 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONFIRM IMPORT — creates batches per domain
 // ═══════════════════════════════════════════════════════════════════════════════
+
+/** VAT rate in % for storage: the reader's rate unless the amounts were edited since. */
+function invoiceVatRate(amount: number, vat: number, readRate?: number | null): number | null {
+  if (!amount) return null;
+  const eff = Math.round(((vat || 0) / amount) * 10000) / 100;
+  return readRate != null && Math.abs(readRate - eff) < 0.3 ? readRate : eff;
+}
+
+function warningsText(w: unknown): string | null {
+  return Array.isArray(w) && w.length ? w.join(',') : null;
+}
 
 router.post('/confirm-import', async (req: Request, res: Response) => {
   try {
@@ -1490,14 +1556,16 @@ router.post('/confirm-import', async (req: Request, res: Response) => {
       // Save remembered supplier mappings (with optional display_name for renamed suppliers)
       if (rememberSuppliers && categoryOverrides) {
         const upsert = db.prepare(
-          'INSERT OR REPLACE INTO demo_supplier_mappings (supplier_pattern, domain, category, display_name) VALUES (?, ?, ?, ?)'
+          'INSERT OR REPLACE INTO demo_supplier_mappings (supplier_pattern, domain, category, display_name, vat_number) VALUES (?, ?, ?, ?, ?)'
         );
         for (const supplier of rememberSuppliers) {
           const override = categoryOverrides[supplier];
           if (override) {
-            // Store the original extracted name as pattern, corrected name as display_name
+            // Store the original extracted name as pattern, corrected name as display_name,
+            // and the VAT number read off its invoice so the next one matches on that
             const correctedName = nameOverrides?.[supplier] || '';
-            upsert.run(supplier.toLowerCase(), override.domain || 'demo', override.category, correctedName);
+            const vat = (invoices as any[]).find(i => i.supplier === supplier && i.supplierVat)?.supplierVat;
+            upsert.run(supplier.toLowerCase(), override.domain || 'demo', override.category, correctedName, normalizeVat(vat));
           }
         }
       }
@@ -1608,8 +1676,9 @@ router.post('/confirm-import', async (req: Request, res: Response) => {
 
       const results: any[] = [];
       const insertInv = db.prepare(`
-        INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, line_items, embedded_pdf, pdf_filename, xml_filename, duplicate_warning, flagged, fx_rate, eur_amount, vat_eur_amount, file_hash)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, line_items, embedded_pdf, pdf_filename, xml_filename, duplicate_warning, flagged, fx_rate, eur_amount, vat_eur_amount, file_hash,
+          supplier_vat, supplier_country, vat_rate, parse_source, parse_warnings)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       for (const [domain, domainInvoices] of Object.entries(byDomain)) {
@@ -1634,6 +1703,8 @@ router.post('/confirm-import', async (req: Request, res: Response) => {
             inv.xmlFilename || null, isDuplicateIncluded ? 1 : 0, inv.flagged ? 1 : 0,
             fx.fx_rate, fx.eur_amount, fx.vat_eur_amount,
             inv.fileHash || null,
+            normalizeVat(inv.supplierVat), inv.supplierCountry || null, invoiceVatRate(inv.amount, inv.vatAmount, inv.vatRate),
+            inv.parseSource || null, warningsText(inv.parseWarnings),
           );
         }
 
@@ -1789,7 +1860,7 @@ router.get('/data-quality', (req: Request, res: Response) => {
 router.get('/invoices', (req: Request, res: Response) => {
   try {
     const { domain, categories, suppliers, month, date_from, date_to, sort_by, sort_dir, search, flagged } = req.query;
-    let sql = 'SELECT id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, fx_rate, eur_amount, vat_eur_amount, month, xml_filename, duplicate_warning, flagged, flag_comment, created_at FROM demo_invoices WHERE 1=1';
+    let sql = 'SELECT id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, fx_rate, eur_amount, vat_eur_amount, month, xml_filename, duplicate_warning, flagged, flag_comment, created_at, supplier_vat, supplier_country, vat_rate, parse_source, parse_warnings FROM demo_invoices WHERE 1=1';
     const params: any[] = [];
 
     if (search) {
@@ -1815,8 +1886,13 @@ router.get('/invoices', (req: Request, res: Response) => {
     if (date_to) { sql += ' AND issue_date <= ?'; params.push(date_to); }
     if (flagged === '1') { sql += ' AND flagged = 1'; }
 
-    const validSortCols = ['invoice_id', 'issue_date', 'supplier', 'category', 'domain', 'amount', 'month', 'created_at'];
-    const sortCol = validSortCols.includes(sort_by as string) ? sort_by : 'issue_date';
+    const sortExprs: Record<string, string> = {
+      invoice_id: 'invoice_id', issue_date: 'issue_date', supplier: 'supplier', category: 'category', domain: 'domain',
+      amount: 'COALESCE(eur_amount, amount)', vat_amount: 'COALESCE(vat_eur_amount, vat_amount)',
+      total: '(COALESCE(eur_amount, amount) + COALESCE(vat_eur_amount, vat_amount))',
+      month: 'month', created_at: 'created_at',
+    };
+    const sortCol = sortExprs[sort_by as string] || 'issue_date';
     const sortDirection = (sort_dir as string)?.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
     sql += ` ORDER BY ${sortCol} ${sortDirection}`;
 
@@ -2148,6 +2224,7 @@ router.post('/upload-single', upload.single('file'), async (req: Request, res: R
 
     const filename = file.originalname.toLowerCase();
     let parsed: any = null;
+    const supplierIndex = buildSupplierIndex();
 
     if (filename.endsWith('.xml')) {
       const xmlString = file.buffer.toString('utf-8');
@@ -2158,7 +2235,7 @@ router.post('/upload-single', upload.single('file'), async (req: Request, res: R
         parsed.embeddedPdf = null;
       }
     } else if (filename.endsWith('.pdf')) {
-      parsed = await parsePDFInvoice(file.buffer, file.originalname);
+      parsed = await readPdfInvoice(file.buffer, file.originalname, fileHash, supplierIndex);
       if (parsed) {
         parsed.pdfFilename = file.originalname;
         parsed.embeddedPdf = file.buffer.toString('base64');
@@ -2175,13 +2252,16 @@ router.post('/upload-single', upload.single('file'), async (req: Request, res: R
     }
 
     // Auto-classify
-    const classification = classifySupplier(parsed.supplierName || '');
+    const classification = classifySupplier(parsed.supplierName || '', { vat: parsed.supplierVat, aiMatch: parsed.aiMatch, index: supplierIndex });
+    parsed.readName = parsed.supplierName;
     if (classification) {
       parsed.domain = classification.domain;
       parsed.category = classification.category;
+      if (classification.displayName) parsed.supplierName = classification.displayName;
     } else {
-      parsed.domain = 'demo';
-      parsed.category = 'Other';
+      // Unknown supplier: Claude's guess, else Demo / Other
+      parsed.domain = parsed.suggestedDomain || 'demo';
+      parsed.category = parsed.suggestedCategory || 'Other';
     }
 
     // Derive month
@@ -2216,6 +2296,13 @@ router.post('/upload-single', upload.single('file'), async (req: Request, res: R
         xmlFilename: parsed.xmlFilename || null,
         embeddedPdf: parsed.embeddedPdf || null,
         fileHash,
+        supplierVat: parsed.supplierVat || null,
+        supplierCountry: parsed.supplierCountry || null,
+        vatRate: parsed.vatRate ?? null,
+        parseSource: parsed.parseSource || null,
+        parseWarnings: parsed.parseWarnings || [],
+        matchedBy: classification?.matchedBy || null,
+        readName: parsed.readName,
       },
     });
   } catch (err: any) {
@@ -2263,8 +2350,9 @@ router.post('/confirm-single', async (req: Request, res: Response) => {
     const batchId = batchResult.lastInsertRowid;
 
     db.prepare(
-      `INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, line_items, embedded_pdf, pdf_filename, xml_filename, duplicate_warning, fx_rate, eur_amount, vat_eur_amount, file_hash)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`
+      `INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, line_items, embedded_pdf, pdf_filename, xml_filename, duplicate_warning, fx_rate, eur_amount, vat_eur_amount, file_hash,
+         supplier_vat, supplier_country, vat_rate, parse_source, parse_warnings)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       batchId,
       invoice.invoiceId || '',
@@ -2284,6 +2372,9 @@ router.post('/confirm-single', async (req: Request, res: Response) => {
       fx.eur_amount,
       fx.vat_eur_amount,
       invoice.fileHash || null,
+      normalizeVat(invoice.supplierVat), invoice.supplierCountry || null,
+      invoiceVatRate(invoice.amount || 0, invoice.vatAmount || 0, invoice.vatRate),
+      invoice.parseSource || null, warningsText(invoice.parseWarnings),
     );
 
     db.saveToDisk();
@@ -2427,19 +2518,29 @@ router.patch('/invoices/:id/flag', (req: Request, res: Response) => {
   }
 });
 
-router.patch('/invoices/:id/vat', (req: Request, res: Response) => {
+// Sets the VAT; with `amount` also the net (e.g. "split 21% out of the amount"),
+// so net and VAT always change together.
+router.patch('/invoices/:id/vat', async (req: Request, res: Response) => {
   try {
-    const { vat_amount, audit_action } = req.body;
+    const { vat_amount, amount, audit_action } = req.body;
     if (vat_amount == null) { res.status(400).json({ error: 'vat_amount required' }); return; }
-    const inv = db.prepare('SELECT id, invoice_id, supplier, vat_amount FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
+    const inv = db.prepare('SELECT id, invoice_id, supplier, amount, vat_amount, currency, issue_date, batch_id FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
     if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
     const newVat = Number(vat_amount);
-    if (isNaN(newVat) || newVat < 0) { res.status(400).json({ error: 'Invalid vat_amount' }); return; }
+    // Credit notes carry negative amounts, so only reject a VAT whose sign fights the net
+    if (isNaN(newVat)) { res.status(400).json({ error: 'Invalid vat_amount' }); return; }
+    const newAmount = amount != null ? Number(amount) : inv.amount;
+    if (isNaN(newAmount)) { res.status(400).json({ error: 'Invalid amount' }); return; }
+    if ((newAmount >= 0 && newVat < 0) || (newAmount < 0 && newVat > 0)) { res.status(400).json({ error: 'VAT and amount must have the same sign' }); return; }
     const oldVat = inv.vat_amount;
-    // Keep the EUR VAT in step for foreign-currency invoices
-    db.prepare(`UPDATE demo_invoices SET vat_amount = ?,
-      vat_eur_amount = CASE WHEN fx_rate IS NOT NULL THEN ROUND(? * fx_rate, 2) ELSE vat_eur_amount END
-      WHERE id = ?`).run(newVat, newVat, req.params.id);
+    const fx = await computeFxFields(newAmount, newVat, inv.currency, inv.issue_date);
+    db.prepare(`UPDATE demo_invoices SET amount = ?, vat_amount = ?, vat_rate = ?,
+      fx_rate = ?, eur_amount = ?, vat_eur_amount = ? WHERE id = ?`)
+      .run(newAmount, newVat, invoiceVatRate(newAmount, newVat), fx.fx_rate, fx.eur_amount, fx.vat_eur_amount, req.params.id);
+    if (amount != null && inv.batch_id) {
+      const totals = db.prepare('SELECT COALESCE(SUM(amount), 0) as total FROM demo_invoices WHERE batch_id = ?').get(inv.batch_id) as any;
+      db.prepare('UPDATE demo_upload_batches SET total_amount = ? WHERE id = ?').run(totals.total, inv.batch_id);
+    }
     if (audit_action) {
       db.prepare('INSERT INTO vat_audit_log (invoice_id, action, old_vat, new_vat, performed_by) VALUES (?, ?, ?, ?, ?)').run(
         inv.id, audit_action, oldVat, newVat, (req as any).user?.display_name || 'Unknown'
@@ -2449,7 +2550,7 @@ router.patch('/invoices/:id/vat', (req: Request, res: Response) => {
     notifyAdmin({
       entity: 'Supplier Invoice',
       action: 'updated',
-      label: `VAT updated to ${newVat} for ${inv.invoice_id} (${inv.supplier})`,
+      label: `VAT updated to ${newVat}${amount != null ? ` (net ${newAmount})` : ''} for ${inv.invoice_id} (${inv.supplier})`,
       performedBy: (req as any).user?.display_name || 'Unknown',
       performedById: (req as any).user?.userId,
     });
@@ -2645,33 +2746,6 @@ router.patch('/supplier-mappings/:id', (req: Request, res: Response) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // SUPPLIER DUPLICATES — fuzzy-find similarly-named suppliers and merge them
 // ═══════════════════════════════════════════════════════════════════════════════
-
-function normalizeSupplierName(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[.,\-_/&'"`()]/g, ' ')
-    .replace(/\b(bv|bvba|nv|sa|sarl|sprl|ltd|limited|gmbh|inc|llc|srl|spa|comm\s*v|cv|sl|plc|co|corporation|corp|company)\b/g, '')
-    .replace(/[^a-z0-9]/g, '')
-    .trim();
-}
-
-function levenshtein(a: string, b: string): number {
-  if (a === b) return 0;
-  if (a.length === 0) return b.length;
-  if (b.length === 0) return a.length;
-  let prev = new Array(b.length + 1);
-  let curr = new Array(b.length + 1);
-  for (let j = 0; j <= b.length; j++) prev[j] = j;
-  for (let i = 1; i <= a.length; i++) {
-    curr[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
-    }
-    [prev, curr] = [curr, prev];
-  }
-  return prev[b.length];
-}
 
 router.get('/supplier-duplicates', (req: Request, res: Response) => {
   try {
@@ -3031,7 +3105,8 @@ router.get('/vat-audit', async (_req: Request, res: Response) => {
     // Include already-reviewed rows if they have implausibly-high VAT —
     // those are always wrong regardless of prior review status.
     const allInvoices = db.prepare(
-      `SELECT id, invoice_id, issue_date, supplier, amount, vat_amount, currency, domain, category, embedded_pdf, xml_filename
+      `SELECT id, invoice_id, issue_date, supplier, amount, vat_amount, currency, domain, category, embedded_pdf, xml_filename,
+              file_hash, supplier_country
        FROM demo_invoices
        WHERE vat_reviewed = 0
           OR (amount > 0 AND vat_amount > amount * 0.30)`
@@ -3044,6 +3119,9 @@ router.get('/vat-audit', async (_req: Request, res: Response) => {
       amount: number;
       current_vat: number;
       suggested_vat: number | null;
+      // Set when the suggestion also changes the net (stored amount was VAT-inclusive, or re-read)
+      suggested_amount: number | null;
+      suggestion_label: string;
       currency: string;
       domain: string;
       issue: string;
@@ -3069,12 +3147,34 @@ router.get('/vat-audit', async (_req: Request, res: Response) => {
       'ethias', 'edenred', 'coolblue', 'bnp', 'axa', 'dhl express belgium',
     ];
 
+    const r2 = (n: number) => Math.round(n * 100) / 100;
     for (const inv of allInvoices) {
       const supplierLower = inv.supplier.toLowerCase();
-      let country = '';
+      let country = (inv.supplier_country || '').toUpperCase();
+
+      // Claude has read this file: its figures are the suggestion when they differ
+      const ext = cachedInvoiceExtraction(inv.file_hash);
+      if (ext && ext.net_amount != null) {
+        const chk = checkAmounts({ net: ext.net_amount, vat: ext.vat_amount, total: ext.total_amount, vatLines: ext.vat_lines, country: ext.supplier_country, reverseCharge: ext.reverse_charge });
+        const sign = ext.is_credit_note ? -1 : 1;
+        const net = sign * chk.net, vat = sign * chk.vat;
+        if (Math.abs(net - inv.amount) > 0.02 || Math.abs(vat - inv.vat_amount) > 0.02) {
+          issues.push({
+            id: inv.id, invoice_id: inv.invoice_id, supplier: inv.supplier, amount: inv.amount,
+            current_vat: inv.vat_amount, suggested_vat: vat,
+            suggested_amount: Math.abs(net - inv.amount) > 0.02 ? net : null,
+            suggestion_label: `As printed on the invoice: net ${net.toFixed(2)}, VAT ${vat.toFixed(2)}`,
+            currency: inv.currency, domain: inv.domain,
+            issue: `Invoice shows net ${net.toFixed(2)} / VAT ${vat.toFixed(2)} (stored ${Number(inv.amount).toFixed(2)} / ${Number(inv.vat_amount).toFixed(2)})`,
+            country: ext.supplier_country || country,
+          });
+        }
+        // The stored figures match what is printed — nothing else to question
+        continue;
+      }
 
       // Determine country from known patterns
-      for (const { pattern, country: c } of NON_BE_SUPPLIERS) {
+      if (!country) for (const { pattern, country: c } of NON_BE_SUPPLIERS) {
         if (supplierLower.includes(pattern)) { country = c; break; }
       }
       if (!country) {
@@ -3136,6 +3236,8 @@ router.get('/vat-audit', async (_req: Request, res: Response) => {
           amount: inv.amount,
           current_vat: inv.vat_amount,
           suggested_vat: 0,
+          suggested_amount: null,
+          suggestion_label: 'Set VAT to 0 (reverse charge)',
           currency: inv.currency,
           domain: inv.domain,
           issue: `Non-Belgian supplier (${country}) should not charge VAT — reverse charge applies`,
@@ -3155,7 +3257,10 @@ router.get('/vat-audit', async (_req: Request, res: Response) => {
           supplier: inv.supplier,
           amount: inv.amount,
           current_vat: inv.vat_amount,
-          suggested_vat: 0,
+          // Belgian (or unknown) supplier: 21% of the net is the likely VAT; foreign: none
+          suggested_vat: isNonBelgian ? 0 : r2(inv.amount * 0.21),
+          suggested_amount: null,
+          suggestion_label: isNonBelgian ? 'Set VAT to 0 (reverse charge)' : `21% of net: ${r2(inv.amount * 0.21).toFixed(2)}`,
           currency: inv.currency,
           domain: inv.domain,
           issue: `VAT ${inv.vat_amount.toFixed(2)} is ${((inv.vat_amount / inv.amount) * 100).toFixed(0)}% of amount — likely parse error`,
@@ -3178,7 +3283,10 @@ router.get('/vat-audit', async (_req: Request, res: Response) => {
             supplier: inv.supplier,
             amount: inv.amount,
             current_vat: 0,
-            suggested_vat: Math.round(possibleVat * 100) / 100,
+            suggested_vat: r2(possibleVat),
+            // The stored amount then included the VAT: the net goes down by the same VAT
+            suggested_amount: r2(inv.amount - r2(possibleVat)),
+            suggestion_label: `Split 21% out: net ${r2(inv.amount - r2(possibleVat)).toFixed(2)}, VAT ${r2(possibleVat).toFixed(2)}`,
             currency: inv.currency,
             domain: inv.domain,
             issue: `Belgian supplier with 0 VAT — amount ${inv.amount} could be incl. 21% BTW (excl. would be ${possibleExcl.toFixed(2)})`,
@@ -3190,6 +3298,8 @@ router.get('/vat-audit', async (_req: Request, res: Response) => {
 
     // Sort: non-Belgian with VAT first (clear errors), then Belgian with 0 VAT (potential issues)
     issues.sort((a, b) => {
+      if (a.suggested_amount != null && b.suggested_amount == null) return -1;
+      if (a.suggested_amount == null && b.suggested_amount != null) return 1;
       if (a.suggested_vat === 0 && b.suggested_vat !== 0) return -1;
       if (a.suggested_vat !== 0 && b.suggested_vat === 0) return 1;
       return Math.abs(b.current_vat) - Math.abs(a.current_vat);
@@ -3203,6 +3313,44 @@ router.get('/vat-audit', async (_req: Request, res: Response) => {
   } catch (err: any) {
     console.error('[demo-expenses] vat-audit error:', err);
     res.status(500).json({ error: 'Failed to run VAT audit' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RE-READ — read a stored invoice PDF again with Claude; the user decides what to apply
+// ═══════════════════════════════════════════════════════════════════════════════
+router.post('/invoices/:id/reread', async (req: Request, res: Response) => {
+  try {
+    const inv = db.prepare('SELECT id, invoice_id, issue_date, supplier, domain, category, amount, vat_amount, currency, embedded_pdf, pdf_filename, file_hash FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
+    if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
+    if (!inv.embedded_pdf) { res.status(400).json({ error: 'No PDF stored for this invoice' }); return; }
+    if (!process.env.ANTHROPIC_API_KEY) { res.status(400).json({ error: 'AI reading is not configured (ANTHROPIC_API_KEY)' }); return; }
+    const buf = Buffer.from(inv.embedded_pdf, 'base64');
+    const fileHash = inv.file_hash || sha256(buf);
+    const index = buildSupplierIndex();
+    const read = await readPdfInvoice(buf, inv.pdf_filename || 'invoice.pdf', fileHash, index, req.body?.force === true);
+    if (read.parseSource !== 'ai') { res.status(502).json({ error: 'Claude could not read this invoice' }); return; }
+    const match = classifySupplier(read.supplierName, { vat: read.supplierVat, aiMatch: read.aiMatch, index });
+    // Keep what the document says about the supplier, whatever the user applies
+    db.prepare('UPDATE demo_invoices SET supplier_vat = COALESCE(?, supplier_vat), supplier_country = COALESCE(?, supplier_country), parse_warnings = ? WHERE id = ?')
+      .run(normalizeVat(read.supplierVat), read.supplierCountry || null, warningsText(read.parseWarnings), inv.id);
+    db.saveToDisk();
+    res.json({
+      stored: { invoice_id: inv.invoice_id, issue_date: inv.issue_date, supplier: inv.supplier, domain: inv.domain, category: inv.category, amount: inv.amount, vat_amount: inv.vat_amount, currency: inv.currency },
+      read: {
+        invoice_id: read.invoiceId, issue_date: read.issueDate,
+        supplier: match?.displayName || read.supplierName, supplier_as_printed: read.supplierName,
+        supplier_vat: read.supplierVat, supplier_country: read.supplierCountry,
+        domain: match?.domain || read.suggestedDomain || null, category: match?.category || read.suggestedCategory || null,
+        matched_by: match?.matchedBy || null,
+        amount: read.amount, vat_amount: read.vatAmount,
+        total: Math.round(((read.amount || 0) + (read.vatAmount || 0)) * 100) / 100,
+        currency: read.currency, vat_rate: read.vatRate, warnings: read.parseWarnings,
+      },
+    });
+  } catch (err: any) {
+    console.error('[demo-expenses] reread error:', err);
+    res.status(500).json({ error: 'Failed to re-read invoice: ' + (err?.message || '') });
   }
 });
 

@@ -283,6 +283,72 @@ router.get('/open-operations', (_req: Request, res: Response) => {
   res.json(ops);
 });
 
+// Order quantity in metric tons, per order (same unit conversion as /tons-ytd)
+const ORDER_TONS_SQL = `
+  SELECT COALESCE(SUM(
+    CASE
+      WHEN LOWER(oi.unit) IN ('mt', 'metric ton', 'metric tons', 'tonne', 'tonnes', 'tons', 'ton', 't') THEN oi.quantity
+      WHEN LOWER(oi.unit) IN ('kg', 'kgs', 'kilogram', 'kilograms') THEN oi.quantity / 1000.0
+      WHEN LOWER(oi.unit) IN ('lbs', 'lb', 'pound', 'pounds') THEN oi.quantity / 2204.6226218
+      ELSE NULL
+    END
+  ), 0) FROM order_items oi WHERE oi.order_id = op.order_id`;
+
+// Totals for the Open Operations and Pending Invoices cards
+router.get('/open-totals', async (_req: Request, res: Response) => {
+  try {
+    // Every open operation (the card lists a few, the totals cover all)
+    const ops = db.prepare(`
+      SELECT op.id, (${ORDER_TONS_SQL}) as tons,
+        o.total_amount as order_total,
+        (SELECT UPPER(COALESCE(oi.currency, 'USD')) FROM order_items oi WHERE oi.order_id = op.order_id ORDER BY oi.id LIMIT 1) as order_currency,
+        (SELECT COUNT(*) FROM invoices i WHERE i.operation_id = op.id) as invoice_count
+      FROM operations op
+      LEFT JOIN orders o ON op.order_id = o.id
+      WHERE op.status != 'delivered'
+    `).all() as any[];
+    const uninvoiced = ops.filter(o => !o.invoice_count);
+    const uninvoicedEur = await sumLiveEur(uninvoiced.map(o => ({ amount: o.order_total || 0, currency: o.order_currency || 'USD' })));
+
+    // Same set as /pending-invoices
+    const invoices = db.prepare(`
+      SELECT i.id, i.amount, i.currency, i.status, i.due_date, i.operation_id
+      FROM invoices i
+      WHERE i.type = 'customer' AND i.status IN ('draft', 'sent', 'overdue')
+    `).all() as any[];
+    await attachLiveEur(invoices);
+    const today = new Date().toISOString().substring(0, 10);
+    let openEur = 0, overdueEur = 0;
+    for (const inv of invoices) {
+      openEur += inv.live_eur_amount || 0;
+      if (inv.status === 'overdue' || (inv.due_date && inv.due_date < today)) overdueEur += inv.live_eur_amount || 0;
+    }
+    // Tonnage of the invoiced operations, each operation counted once
+    const opIds = [...new Set(invoices.map(i => i.operation_id).filter(Boolean))];
+    const invoiceTons = opIds.length
+      ? (db.prepare(`SELECT COALESCE(SUM((${ORDER_TONS_SQL})), 0) as tons FROM operations op WHERE op.id IN (${opIds.map(() => '?').join(',')})`).get(...opIds) as any).tons
+      : 0;
+
+    res.json({
+      operations: {
+        count: ops.length,
+        tons: ops.reduce((s, o) => s + (o.tons || 0), 0),
+        uninvoiced_count: uninvoiced.length,
+        uninvoiced_eur: uninvoicedEur,
+      },
+      invoices: {
+        count: invoices.length,
+        open_eur: openEur,
+        overdue_eur: overdueEur,
+        tons: invoiceTons,
+      },
+    });
+  } catch (err: any) {
+    console.error('[dashboard] open-totals error:', err);
+    res.status(500).json({ error: 'Failed to compute totals' });
+  }
+});
+
 router.get('/forecast', async (_req: Request, res: Response) => {
   const year = new Date().getFullYear();
   const now = new Date();

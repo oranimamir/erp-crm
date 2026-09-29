@@ -50,8 +50,16 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [activeInfo, setActiveInfo] = useState<string | null>(null);
   const [breakdown, setBreakdown] = useState<null | 'paid' | 'pending' | 'expected' | 'total'>(null);
+  const [openTotals, setOpenTotals] = useState<{
+    operations: { count: number; tons: number; uninvoiced_count: number; uninvoiced_eur: number };
+    invoices: { count: number; open_eur: number; overdue_eur: number; tons: number };
+  } | null>(null);
 
   useEffect(() => {
+    // Card totals load on their own so a failure here never blanks the dashboard
+    api.get('/dashboard/open-totals')
+      .then(r => setOpenTotals(r.data))
+      .catch(err => console.error('[Dashboard] open totals failed:', err));
     Promise.all([
       api.get('/dashboard/stats'),
       api.get('/dashboard/open-operations'),
@@ -86,6 +94,7 @@ export default function DashboardPage() {
   if (loading) return <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" /></div>;
 
   const fmt = (n: number) => `€${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const fmtMT = (n: number) => `${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MT`;
   const fmtAxis = (n: number): string => {
     if (n === 0) return '0';
     if (n >= 1_000_000) return `€${(n / 1_000_000).toFixed(1)}M`;
@@ -277,6 +286,27 @@ export default function DashboardPage() {
             <h2 className="font-semibold text-gray-900">Open Operations</h2>
             <Link to="/operations" className="text-xs text-primary-600 hover:underline">View all</Link>
           </div>
+          {openTotals && (
+            <div className="px-5 py-2.5 border-b border-gray-100 bg-gray-50 grid grid-cols-3 gap-3 text-xs">
+              <div>
+                <p className="text-gray-400">Open operations</p>
+                <p className="font-semibold text-gray-900 tabular-nums">{openTotals.operations.count}</p>
+              </div>
+              <div>
+                <p className="text-gray-400">Tonnage</p>
+                <p className="font-semibold text-gray-900 tabular-nums">{fmtMT(openTotals.operations.tons)}</p>
+              </div>
+              <div>
+                <p className="text-gray-400 flex items-center">Not yet invoiced
+                  <InfoBadge id="ops-uninvoiced" text="Order value of the open operations that have no invoice yet, converted to EUR at today's rates." />
+                </p>
+                <p className="font-semibold text-amber-600 tabular-nums">
+                  {fmt(openTotals.operations.uninvoiced_eur)}
+                  <span className="text-gray-400 font-normal ml-1">({openTotals.operations.uninvoiced_count} ops)</span>
+                </p>
+              </div>
+            </div>
+          )}
           <div className="divide-y divide-gray-100">
             {openOperations.length === 0 ? (
               <p className="px-5 py-8 text-center text-sm text-gray-500">No open operations</p>
@@ -300,6 +330,24 @@ export default function DashboardPage() {
             <h2 className="font-semibold text-gray-900">Pending Invoices</h2>
             <span className="text-xs text-gray-400">{pendingInvoices.length} total</span>
           </div>
+          {openTotals && (
+            <div className="px-5 py-2.5 border-b border-gray-100 bg-gray-50 grid grid-cols-3 gap-3 text-xs shrink-0">
+              <div>
+                <p className="text-gray-400">Open amount</p>
+                <p className="font-semibold text-gray-900 tabular-nums">{fmt(openTotals.invoices.open_eur)}</p>
+              </div>
+              <div>
+                <p className="text-gray-400">Of which overdue</p>
+                <p className={`font-semibold tabular-nums ${openTotals.invoices.overdue_eur > 0 ? 'text-red-600' : 'text-gray-900'}`}>{fmt(openTotals.invoices.overdue_eur)}</p>
+              </div>
+              <div>
+                <p className="text-gray-400 flex items-center">Tonnage
+                  <InfoBadge id="inv-tons" text="Order quantity of the operations these invoices belong to, in metric tons (each operation counted once)." />
+                </p>
+                <p className="font-semibold text-gray-900 tabular-nums">{fmtMT(openTotals.invoices.tons)}</p>
+              </div>
+            </div>
+          )}
           <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-gray-100">
             {pendingInvoices.length === 0 ? (
               <p className="px-5 py-8 text-center text-sm text-gray-500">No pending invoices</p>

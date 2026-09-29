@@ -1275,6 +1275,21 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN vat_eur_amount REAL`); } catch (_) {}
   try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN file_hash TEXT`); } catch (_) {}
   try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_demo_invoices_file_hash ON demo_invoices(file_hash) WHERE file_hash IS NOT NULL`); } catch (_) {}
+  // What the invoice reader found on the document (supplier VAT no. drives supplier matching)
+  try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN supplier_vat TEXT`); } catch (_) {}
+  try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN supplier_country TEXT`); } catch (_) {}
+  try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN vat_rate REAL`); } catch (_) {}
+  try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN parse_source TEXT`); } catch (_) {}
+  try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN parse_warnings TEXT`); } catch (_) {}
+  try { db.exec(`ALTER TABLE demo_supplier_mappings ADD COLUMN vat_number TEXT`); } catch (_) {}
+  // Claude's reading of a supplier invoice, keyed by the file's sha256 — each file is read once
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS invoice_extractions (
+      file_hash TEXT PRIMARY KEY,
+      result TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
 
   // VAT audit log table
   db.exec(`
