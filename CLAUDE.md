@@ -89,6 +89,7 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - PDFs read by Claude first (`lib/supplierInvoiceReader.ts`, cached in `invoice_extractions` by file sha256), regex `parsePDFInvoice` as fallback; UBL XML parsed directly. `checkAmounts` flags net + VAT ≠ total, odd rates, foreign VAT → upload review warnings
 - Supplier allocation `lib/supplierMatch.ts`: VAT no. → name (exact / whole-word / near spelling) over mappings > Suppliers (sales) > earlier invoices > built-in demo list → Claude's pick. Short names match whole words only
 - Stored: `supplier_vat`, `supplier_country`, `vat_rate`, `parse_source`, `parse_warnings`; remembered mappings keep the VAT no.
+- Full check (Summary → Full check, `InvoiceFullCheck.tsx`): `POST /full-check` reads every stored PDF in the background (4 at a time, in-memory progress, cache only); `GET /full-check` compares cache vs stored (net, VAT, currency, supplier, number, date) — report + Excel only, never changes invoices
 - `PATCH /invoices/:id/vat` with optional `amount` changes net + VAT together (FX redone); VAT audit: Apply suggestion / Keep / VAT 0 / +21% on net / Split 21% out / Re-read (`POST /invoices/:id/reread`)
 
 ## Deployment

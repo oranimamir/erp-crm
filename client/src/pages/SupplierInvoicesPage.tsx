@@ -15,6 +15,7 @@ import { useCategories } from '../lib/categories';
 import SearchBar from '../components/ui/SearchBar';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import PdfPreview from '../components/ui/PdfPreview';
+import InvoiceFullCheck from '../components/InvoiceFullCheck';
 
 const CAT_COLORS: Record<string, string> = {
   'Salaries': '#6366f1', 'Cars': '#8b5cf6', 'Overhead': '#3b82f6',
@@ -457,6 +458,7 @@ export default function SupplierInvoicesPage() {
 
   // Invoice viewer
   const [viewingInvoice, setViewingInvoice] = useState<number | null>(null);
+  const [showFullCheck, setShowFullCheck] = useState(false);
 
   // Category override
   const [overrideTarget, setOverrideTarget] = useState<{ id: number; supplier: string; category: string } | null>(null);
@@ -1804,6 +1806,10 @@ export default function SupplierInvoicesPage() {
                 {runningVatAudit ? <Loader2 size={16} className="animate-spin" /> : <FileSpreadsheet size={16} />}
                 {runningVatAudit ? 'Auditing...' : 'VAT Audit'}
               </Button>
+              <Button variant="secondary" onClick={() => setShowFullCheck(true)}>
+                <FileSpreadsheet size={16} />
+                Full check
+              </Button>
             </div>
 
             {monthlySummary && (
@@ -2500,6 +2506,7 @@ export default function SupplierInvoicesPage() {
         )}
 
       {/* Invoice Viewer Modal */}
+      {showFullCheck && <InvoiceFullCheck onClose={() => { setShowFullCheck(false); fetchAll(); }} onView={setViewingInvoice} />}
       {viewingInvoice && <InvoiceViewer invoiceId={viewingInvoice} onClose={() => setViewingInvoice(null)} />}
 
       {/* Delete Invoice Confirm */}

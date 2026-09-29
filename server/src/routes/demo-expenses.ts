@@ -10,7 +10,7 @@ import { notifyAdmin } from '../lib/notify.js';
 import { getEurRate } from '../lib/fx.js';
 import {
   DEMO_SUPPLIER_MAP, SALES_CAT_DB_MAP, buildSupplierIndex, knownSupplierList, matchSupplier,
-  normalizeSupplierName, normalizeVat, levenshtein, type SupplierIndex,
+  normalizeSupplierName, normalizeVat, levenshtein, supplierTokens, type SupplierIndex,
 } from '../lib/supplierMatch.js';
 import {
   readSupplierInvoice, checkAmounts, cachedInvoiceExtraction, type InvoiceExtraction,
@@ -3351,6 +3351,183 @@ router.post('/invoices/:id/reread', async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error('[demo-expenses] reread error:', err);
     res.status(500).json({ error: 'Failed to re-read invoice: ' + (err?.message || '') });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FULL CHECK — read every stored invoice PDF with Claude and report where the
+// stored figures differ from the printed ones. Report only: never changes an
+// invoice; the readings go to the invoice_extractions cache, so a re-run (or a
+// restart mid-run) only reads what is not read yet.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const fullCheckJob: {
+  running: boolean; total: number; done: number;
+  failed: { id: number; invoice_id: string; supplier: string; reason: string }[];
+  startedAt: string | null; finishedAt: string | null;
+} = { running: false, total: 0, done: 0, failed: [], startedAt: null, finishedAt: null };
+
+function pdfHashOf(row: { id: number; file_hash: string | null }): { hash: string; pdf: Buffer } | null {
+  const r = db.prepare('SELECT embedded_pdf FROM demo_invoices WHERE id = ?').get(row.id) as any;
+  if (!r?.embedded_pdf) return null;
+  const pdf = Buffer.from(r.embedded_pdf, 'base64');
+  if (pdf.length === 0) return null;
+  return { hash: row.file_hash || sha256(pdf), pdf };
+}
+
+router.post('/full-check', (req: Request, res: Response) => {
+  if (fullCheckJob.running) { res.status(409).json({ error: 'A full check is already running' }); return; }
+  if (!process.env.ANTHROPIC_API_KEY) { res.status(400).json({ error: 'AI reading is not configured (ANTHROPIC_API_KEY)' }); return; }
+  const force = req.body?.force === true;
+  // Dev-only cap for testing on a copy of the data
+  const limit = process.env.NODE_ENV !== 'production' && req.query.limit ? Number(req.query.limit) : null;
+  let rows = db.prepare(`
+    SELECT id, invoice_id, supplier, pdf_filename, file_hash FROM demo_invoices
+    WHERE embedded_pdf IS NOT NULL AND embedded_pdf != '' ORDER BY id
+  `).all() as any[];
+  if (limit) rows = rows.slice(0, limit);
+
+  Object.assign(fullCheckJob, { running: true, total: rows.length, done: 0, failed: [], startedAt: new Date().toISOString(), finishedAt: null });
+  res.json({ started: true, total: rows.length });
+
+  (async () => {
+    const index = buildSupplierIndex();
+    const knownSuppliers = knownSupplierList(index);
+    const categories = invoiceCategories();
+    await mapLimit(rows, 4, async (row: any) => {
+      try {
+        const file = pdfHashOf(row);
+        if (!file) throw new Error('PDF is empty');
+        if (!force && cachedInvoiceExtraction(file.hash)) return;
+        const x = await readSupplierInvoice({
+          fileHash: file.hash, file: file.pdf, fileName: row.pdf_filename || 'invoice.pdf',
+          knownSuppliers, categories, force,
+        });
+        if (!x) throw new Error('Claude could not read it');
+      } catch (err: any) {
+        fullCheckJob.failed.push({ id: row.id, invoice_id: row.invoice_id, supplier: row.supplier, reason: err?.message || String(err) });
+      } finally {
+        fullCheckJob.done++;
+      }
+    });
+    db.saveToDisk();
+    console.log(`[full-check] Done: ${fullCheckJob.done} invoices, ${fullCheckJob.failed.length} failed`);
+  })().catch(err => console.error('[full-check] job error:', err))
+    .finally(() => { fullCheckJob.running = false; fullCheckJob.finishedAt = new Date().toISOString(); });
+});
+
+const compactId = (s: string | null | undefined) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '').replace(/^0+/, '');
+
+/** Same number printed differently: spacing / punctuation / leading zeros, a
+ *  filename around it ("invoice_FCB…"), or the same running number at the end
+ *  ("5.178/11 2026 000.633" ↔ "202611000633"). */
+function sameInvoiceNumber(stored: string, read: string): boolean {
+  const a = compactId(stored), b = compactId(read);
+  if (!b || a === b || a.includes(b) || b.includes(a) && a.length >= 4) return true;
+  const tail = (s: string) => s.replace(/\D/g, '').slice(-6);
+  return tail(a).length === 6 && tail(a) === tail(b);
+}
+
+/** Same supplier: same name once legal forms / punctuation go, or one's words inside the other's. */
+function sameSupplier(a: string, b: string): boolean {
+  const na = normalizeSupplierName(a), nb = normalizeSupplierName(b);
+  if (na === nb) return true;
+  // Near spelling (a typo or missing letter in the stored name)
+  if (Math.min(na.length, nb.length) >= 5 && levenshtein(na, nb) / Math.max(na.length, nb.length) <= 0.15) return true;
+  const ta = supplierTokens(a), tb = supplierTokens(b);
+  const [short, long] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
+  if (short.join('').length < 3) return false;
+  for (let i = 0; i + short.length <= long.length; i++) {
+    if (short.every((w, k) => long[i + k] === w)) return true;
+  }
+  return false;
+}
+
+router.get('/full-check', async (_req: Request, res: Response) => {
+  try {
+    const rows = db.prepare(`
+      SELECT id, invoice_id, issue_date, supplier, domain, category, amount, vat_amount, currency, fx_rate, eur_amount, vat_eur_amount,
+        file_hash, (embedded_pdf IS NOT NULL AND embedded_pdf != '') as has_pdf
+      FROM demo_invoices ORDER BY issue_date DESC, id DESC
+    `).all() as any[];
+    const index = buildSupplierIndex();
+    const failedIds = new Set(fullCheckJob.failed.map(f => f.id));
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+
+    const report: any[] = [];
+    let matching = 0, notCheckable = 0, notReadYet = 0;
+    for (const row of rows) {
+      const base = {
+        id: row.id, domain: row.domain, category: row.category,
+        stored: { invoice_id: row.invoice_id, issue_date: row.issue_date, supplier: row.supplier, currency: row.currency, amount: row.amount, vat_amount: row.vat_amount, total: r2(row.amount + (row.vat_amount || 0)) },
+      };
+      if (!row.has_pdf) { notCheckable++; report.push({ ...base, status: 'no_pdf', diffs: [], warnings: [] }); continue; }
+      let hash = row.file_hash;
+      if (!hash) hash = pdfHashOf(row)?.hash ?? null;
+      const x = cachedInvoiceExtraction(hash);
+      if (!x || x.net_amount == null) {
+        if (failedIds.has(row.id)) { notCheckable++; report.push({ ...base, status: 'failed', diffs: [], warnings: [] }); }
+        else { notReadYet++; report.push({ ...base, status: 'not_read', diffs: [], warnings: [] }); }
+        continue;
+      }
+
+      const chk = checkAmounts({ net: x.net_amount, vat: x.vat_amount, total: x.total_amount, vatLines: x.vat_lines, country: x.supplier_country, reverseCharge: x.reverse_charge });
+      const sign = x.is_credit_note ? -1 : 1;
+      const readName = x.supplier_name && !isOwnCompany(x.supplier_name) ? x.supplier_name : '';
+      const match = readName ? matchSupplier(index, { name: readName, vat: x.supplier_vat_number, aiMatch: x.matched_known_supplier }) : null;
+      const read = {
+        invoice_id: x.invoice_number, issue_date: x.issue_date,
+        supplier: match?.supplierName || readName || null, supplier_as_printed: readName || null,
+        supplier_vat: x.supplier_vat_number, supplier_country: x.supplier_country,
+        currency: x.currency, amount: sign * chk.net, vat_amount: sign * chk.vat,
+        total: sign * r2(chk.net + chk.vat), vat_rate: chk.vatRate,
+      };
+
+      const diffs: string[] = [];
+      if (Math.abs(read.amount - row.amount) > 0.02) diffs.push('net');
+      if (Math.abs(read.vat_amount - (row.vat_amount || 0)) > 0.02) diffs.push('vat');
+      if (read.currency && read.currency !== (row.currency || 'EUR').toUpperCase()) diffs.push('currency');
+      if (read.issue_date && read.issue_date !== row.issue_date) diffs.push('date');
+      if (read.invoice_id && !sameInvoiceNumber(row.invoice_id, read.invoice_id)) diffs.push('invoice_number');
+      if (read.supplier && !sameSupplier(read.supplier, row.supplier) && !(readName && sameSupplier(readName, row.supplier))) diffs.push('supplier');
+      if (!x.is_invoice) chk.warnings.push('not_an_invoice');
+
+      // Effect in EUR of correcting net and VAT
+      let eurNetDiff = 0, eurVatDiff = 0;
+      if (diffs.includes('net') || diffs.includes('vat') || diffs.includes('currency')) {
+        const readCur = (read.currency || row.currency || 'EUR').toUpperCase();
+        let rate = 1;
+        if (readCur !== 'EUR') {
+          rate = readCur === (row.currency || '').toUpperCase() && row.fx_rate
+            ? row.fx_rate
+            : await getEurRate(readCur, /^\d{4}-\d{2}-\d{2}$/.test(read.issue_date || row.issue_date || '') ? (read.issue_date || row.issue_date) : 'latest') || 1;
+        }
+        eurNetDiff = r2(read.amount * rate - (row.eur_amount ?? row.amount));
+        eurVatDiff = r2(read.vat_amount * rate - (row.vat_eur_amount ?? row.vat_amount ?? 0));
+      }
+      if (diffs.length === 0) matching++;
+      report.push({ ...base, status: diffs.length ? 'differs' : 'ok', read, diffs, warnings: chk.warnings, eur_net_diff: eurNetDiff, eur_vat_diff: eurVatDiff });
+    }
+
+    const differing = report.filter(r => r.status === 'differs');
+    res.json({
+      job: fullCheckJob,
+      summary: {
+        total: rows.length,
+        checked: matching + differing.length,
+        matching,
+        differing: differing.length,
+        not_checkable: notCheckable,
+        not_read: notReadYet,
+        amount_diffs: differing.filter(r => r.diffs.includes('net') || r.diffs.includes('vat')).length,
+        eur_net_diff: r2(differing.reduce((s, r) => s + r.eur_net_diff, 0)),
+        eur_vat_diff: r2(differing.reduce((s, r) => s + r.eur_vat_diff, 0)),
+      },
+      report,
+    });
+  } catch (err: any) {
+    console.error('[demo-expenses] full-check report error:', err);
+    res.status(500).json({ error: 'Failed to build the check report' });
   }
 });
 
