@@ -2506,7 +2506,7 @@ export default function SupplierInvoicesPage() {
         )}
 
       {/* Invoice Viewer Modal */}
-      {showFullCheck && <InvoiceFullCheck onClose={() => { setShowFullCheck(false); fetchAll(); }} onView={setViewingInvoice} />}
+      {showFullCheck && <InvoiceFullCheck onClose={() => { setShowFullCheck(false); fetchAll(); }} />}
       {viewingInvoice && <InvoiceViewer invoiceId={viewingInvoice} onClose={() => setViewingInvoice(null)} />}
 
       {/* Delete Invoice Confirm */}

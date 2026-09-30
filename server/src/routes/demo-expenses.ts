@@ -15,6 +15,9 @@ import {
 import {
   readSupplierInvoice, checkAmounts, cachedInvoiceExtraction, type InvoiceExtraction,
 } from '../lib/supplierInvoiceReader.js';
+import {
+  runTriage, triageJob, stageCandidates, sendStage, pollBatches, startBatchPoller, invoiceSignature,
+} from '../lib/invoiceCheck.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
@@ -992,12 +995,7 @@ async function readPdfInvoice(buf: Buffer, fileName: string, fileHash: string, i
   const textResult = await parsePDFInvoice(buf, fileName);
   let x: InvoiceExtraction | null = null;
   try {
-    x = await readSupplierInvoice({
-      fileHash, file: buf, fileName,
-      knownSuppliers: knownSupplierList(index),
-      categories: invoiceCategories(),
-      force,
-    });
+    x = await readSupplierInvoice({ fileHash, file: buf, categories: invoiceCategories(), force });
   } catch (err: any) {
     console.warn(`[invoice-reader] Claude read failed for ${fileName}, using text reader:`, err?.message || err);
   }
@@ -3355,65 +3353,34 @@ router.post('/invoices/:id/reread', async (req: Request, res: Response) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// FULL CHECK — read every stored invoice PDF with Claude and report where the
-// stored figures differ from the printed ones. Report only: never changes an
-// invoice; the readings go to the invoice_extractions cache, so a re-run (or a
-// restart mid-run) only reads what is not read yet.
+// FULL CHECK — cheapest first (lib/invoiceCheck.ts): free text check, then Haiku
+// on the text and Sonnet on the PDF through the Batches API, each stage only for
+// what the one before could not settle. Report only: never changes an invoice.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const fullCheckJob: {
-  running: boolean; total: number; done: number;
-  failed: { id: number; invoice_id: string; supplier: string; reason: string }[];
-  startedAt: string | null; finishedAt: string | null;
-} = { running: false, total: 0, done: 0, failed: [], startedAt: null, finishedAt: null };
+startBatchPoller();
 
-function pdfHashOf(row: { id: number; file_hash: string | null }): { hash: string; pdf: Buffer } | null {
-  const r = db.prepare('SELECT embedded_pdf FROM demo_invoices WHERE id = ?').get(row.id) as any;
-  if (!r?.embedded_pdf) return null;
-  const pdf = Buffer.from(r.embedded_pdf, 'base64');
-  if (pdf.length === 0) return null;
-  return { hash: row.file_hash || sha256(pdf), pdf };
-}
+// Stage 1 — free
+router.post('/full-check/triage', (req: Request, res: Response) => {
+  if (triageJob.running) { res.status(409).json({ error: 'The text check is already running' }); return; }
+  runTriage(req.body?.force === true).catch(err => console.error('[full-check] text check error:', err));
+  res.json({ started: true });
+});
 
-router.post('/full-check', (req: Request, res: Response) => {
-  if (fullCheckJob.running) { res.status(409).json({ error: 'A full check is already running' }); return; }
-  if (!process.env.ANTHROPIC_API_KEY) { res.status(400).json({ error: 'AI reading is not configured (ANTHROPIC_API_KEY)' }); return; }
-  const force = req.body?.force === true;
-  // Dev-only cap for testing on a copy of the data
-  const limit = process.env.NODE_ENV !== 'production' && req.query.limit ? Number(req.query.limit) : null;
-  let rows = db.prepare(`
-    SELECT id, invoice_id, supplier, pdf_filename, file_hash FROM demo_invoices
-    WHERE embedded_pdf IS NOT NULL AND embedded_pdf != '' ORDER BY id
-  `).all() as any[];
-  if (limit) rows = rows.slice(0, limit);
-
-  Object.assign(fullCheckJob, { running: true, total: rows.length, done: 0, failed: [], startedAt: new Date().toISOString(), finishedAt: null });
-  res.json({ started: true, total: rows.length });
-
-  (async () => {
-    const index = buildSupplierIndex();
-    const knownSuppliers = knownSupplierList(index);
-    const categories = invoiceCategories();
-    await mapLimit(rows, 4, async (row: any) => {
-      try {
-        const file = pdfHashOf(row);
-        if (!file) throw new Error('PDF is empty');
-        if (!force && cachedInvoiceExtraction(file.hash)) return;
-        const x = await readSupplierInvoice({
-          fileHash: file.hash, file: file.pdf, fileName: row.pdf_filename || 'invoice.pdf',
-          knownSuppliers, categories, force,
-        });
-        if (!x) throw new Error('Claude could not read it');
-      } catch (err: any) {
-        fullCheckJob.failed.push({ id: row.id, invoice_id: row.invoice_id, supplier: row.supplier, reason: err?.message || String(err) });
-      } finally {
-        fullCheckJob.done++;
-      }
-    });
-    db.saveToDisk();
-    console.log(`[full-check] Done: ${fullCheckJob.done} invoices, ${fullCheckJob.failed.length} failed`);
-  })().catch(err => console.error('[full-check] job error:', err))
-    .finally(() => { fullCheckJob.running = false; fullCheckJob.finishedAt = new Date().toISOString(); });
+// Stages 2 and 3 — send a batch, capped at max_usd (estimated)
+router.post('/full-check/batch', async (req: Request, res: Response) => {
+  try {
+    const mode = req.body?.mode === 'sonnet-pdf' ? 'sonnet-pdf' : req.body?.mode === 'haiku-text' ? 'haiku-text' : null;
+    const maxUsd = Number(req.body?.max_usd);
+    if (!mode) { res.status(400).json({ error: 'mode must be haiku-text or sonnet-pdf' }); return; }
+    if (!(maxUsd > 0)) { res.status(400).json({ error: 'Set a spending limit (max_usd)' }); return; }
+    if (!process.env.ANTHROPIC_API_KEY) { res.status(400).json({ error: 'AI reading is not configured (ANTHROPIC_API_KEY)' }); return; }
+    if (triageJob.running) { res.status(409).json({ error: 'Wait for the text check to finish' }); return; }
+    res.json(await sendStage(mode, maxUsd));
+  } catch (err: any) {
+    console.error('[full-check] batch error:', err);
+    res.status(400).json({ error: err?.message || 'Failed to send the batch' });
+  }
 });
 
 const compactId = (s: string | null | undefined) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '').replace(/^0+/, '');
@@ -3443,31 +3410,100 @@ function sameSupplier(a: string, b: string): boolean {
   return false;
 }
 
+// Fix from the full check: the reading's values ("Fix") or the user's own (manual).
+// Fields left out keep their stored value; net, VAT and currency are saved together
+// so the EUR figures are redone once.
+router.post('/invoices/:id/apply-check', async (req: Request, res: Response) => {
+  try {
+    const inv = db.prepare('SELECT id, invoice_id, issue_date, supplier, amount, vat_amount, currency, batch_id FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
+    if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
+    const f = req.body?.fields || {};
+    const amount = f.amount != null ? Number(f.amount) : inv.amount;
+    const vat = f.vat_amount != null ? Number(f.vat_amount) : inv.vat_amount;
+    if (isNaN(amount) || isNaN(vat)) { res.status(400).json({ error: 'Invalid amount' }); return; }
+    if ((amount >= 0 && vat < 0) || (amount < 0 && vat > 0)) { res.status(400).json({ error: 'VAT and net must have the same sign' }); return; }
+    const currency = f.currency ? String(f.currency).toUpperCase().slice(0, 3) : inv.currency;
+    const issueDate = f.issue_date || inv.issue_date;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(issueDate)) { res.status(400).json({ error: 'Invalid date, expected YYYY-MM-DD' }); return; }
+    const supplier = f.supplier != null && String(f.supplier).trim() ? String(f.supplier).trim() : inv.supplier;
+    const invoiceId = f.invoice_id != null && String(f.invoice_id).trim() ? String(f.invoice_id).trim() : inv.invoice_id;
+
+    const fx = await computeFxFields(amount, vat, currency, issueDate);
+    db.prepare(`UPDATE demo_invoices SET amount = ?, vat_amount = ?, currency = ?, vat_rate = ?, fx_rate = ?, eur_amount = ?, vat_eur_amount = ?,
+      issue_date = ?, month = ?, supplier = ?, invoice_id = ? WHERE id = ?`)
+      .run(amount, vat, currency, invoiceVatRate(amount, vat), fx.fx_rate, fx.eur_amount, fx.vat_eur_amount,
+        issueDate, issueDate.substring(0, 7), supplier, invoiceId, inv.id);
+    if (inv.batch_id && amount !== inv.amount) {
+      const totals = db.prepare('SELECT COALESCE(SUM(amount), 0) as total FROM demo_invoices WHERE batch_id = ?').get(inv.batch_id) as any;
+      db.prepare('UPDATE demo_upload_batches SET total_amount = ? WHERE id = ?').run(totals.total, inv.batch_id);
+    }
+    const action = req.body?.source === 'manual' ? 'check_manual' : 'check_fix';
+    if (vat !== inv.vat_amount) {
+      db.prepare('INSERT INTO vat_audit_log (invoice_id, action, old_vat, new_vat, performed_by) VALUES (?, ?, ?, ?, ?)')
+        .run(inv.id, action, inv.vat_amount, vat, (req as any).user?.display_name || 'Unknown');
+    }
+    db.saveToDisk();
+
+    const changed: string[] = [];
+    if (amount !== inv.amount) changed.push(`net ${inv.amount} → ${amount}`);
+    if (vat !== inv.vat_amount) changed.push(`VAT ${inv.vat_amount} → ${vat}`);
+    if (currency !== inv.currency) changed.push(`currency ${inv.currency} → ${currency}`);
+    if (supplier !== inv.supplier) changed.push(`supplier "${inv.supplier}" → "${supplier}"`);
+    if (invoiceId !== inv.invoice_id) changed.push(`number ${inv.invoice_id} → ${invoiceId}`);
+    if (issueDate !== inv.issue_date) changed.push(`date ${inv.issue_date} → ${issueDate}`);
+    if (changed.length) {
+      notifyAdmin({
+        entity: 'Supplier Invoice',
+        action: 'updated',
+        label: `${invoiceId} (${supplier}) — ${changed.join(', ')}`,
+        performedBy: (req as any).user?.display_name || 'Unknown',
+        performedById: (req as any).user?.userId,
+      });
+    }
+    res.json({ success: true, changed });
+  } catch (err: any) {
+    console.error('[demo-expenses] apply-check error:', err);
+    res.status(500).json({ error: 'Failed to update invoice' });
+  }
+});
+
+const VERIFIED_BY: Record<string, string> = {
+  text: 'Text check', 'haiku-text': 'AI (text)', 'sonnet-pdf': 'AI (PDF)', 'opus-pdf': 'AI (PDF)',
+};
+
 router.get('/full-check', async (_req: Request, res: Response) => {
   try {
+    await pollBatches();
     const rows = db.prepare(`
-      SELECT id, invoice_id, issue_date, supplier, domain, category, amount, vat_amount, currency, fx_rate, eur_amount, vat_eur_amount,
-        file_hash, (embedded_pdf IS NOT NULL AND embedded_pdf != '') as has_pdf
-      FROM demo_invoices ORDER BY issue_date DESC, id DESC
+      SELECT i.id, i.invoice_id, i.issue_date, i.supplier, i.domain, i.category, i.amount, i.vat_amount, i.currency,
+        i.fx_rate, i.eur_amount, i.vat_eur_amount, COALESCE(i.file_hash, t.file_hash) as file_hash,
+        (i.embedded_pdf IS NOT NULL AND i.embedded_pdf != '') as has_pdf,
+        t.signature as t_sig, t.status as t_status, t.reasons as t_reasons
+      FROM demo_invoices i LEFT JOIN invoice_triage t ON t.invoice_id = i.id
+      ORDER BY i.issue_date DESC, i.id DESC
     `).all() as any[];
+    const pending = new Set<string>();
+    for (const b of db.prepare("SELECT items FROM invoice_read_batches WHERE status = 'in_progress'").all() as any[]) {
+      try { for (const h of JSON.parse(b.items || '[]')) pending.add(h); } catch { /* ignore */ }
+    }
     const index = buildSupplierIndex();
-    const failedIds = new Set(fullCheckJob.failed.map(f => f.id));
     const r2 = (n: number) => Math.round(n * 100) / 100;
 
     const report: any[] = [];
-    let matching = 0, notCheckable = 0, notReadYet = 0;
     for (const row of rows) {
       const base = {
         id: row.id, domain: row.domain, category: row.category,
         stored: { invoice_id: row.invoice_id, issue_date: row.issue_date, supplier: row.supplier, currency: row.currency, amount: row.amount, vat_amount: row.vat_amount, total: r2(row.amount + (row.vat_amount || 0)) },
+        diffs: [] as string[], warnings: [] as string[], reasons: [] as string[],
       };
-      if (!row.has_pdf) { notCheckable++; report.push({ ...base, status: 'no_pdf', diffs: [], warnings: [] }); continue; }
-      let hash = row.file_hash;
-      if (!hash) hash = pdfHashOf(row)?.hash ?? null;
-      const x = cachedInvoiceExtraction(hash);
+      if (!row.has_pdf) { report.push({ ...base, status: 'no_pdf' }); continue; }
+      const triageCurrent = row.t_sig && row.t_sig === invoiceSignature(row);
+      const x = cachedInvoiceExtraction(row.file_hash);
+
       if (!x || x.net_amount == null) {
-        if (failedIds.has(row.id)) { notCheckable++; report.push({ ...base, status: 'failed', diffs: [], warnings: [] }); }
-        else { notReadYet++; report.push({ ...base, status: 'not_read', diffs: [], warnings: [] }); }
+        if (!triageCurrent) { report.push({ ...base, status: 'not_checked' }); continue; }
+        if (row.t_status === 'confirmed') { report.push({ ...base, status: 'ok', verified_by: VERIFIED_BY.text }); continue; }
+        report.push({ ...base, status: pending.has(row.file_hash) ? 'waiting' : 'not_read', reasons: (row.t_reasons || '').split(',').filter(Boolean) });
         continue;
       }
 
@@ -3482,7 +3518,6 @@ router.get('/full-check', async (_req: Request, res: Response) => {
         currency: x.currency, amount: sign * chk.net, vat_amount: sign * chk.vat,
         total: sign * r2(chk.net + chk.vat), vat_rate: chk.vatRate,
       };
-
       const diffs: string[] = [];
       if (Math.abs(read.amount - row.amount) > 0.02) diffs.push('net');
       if (Math.abs(read.vat_amount - (row.vat_amount || 0)) > 0.02) diffs.push('vat');
@@ -3491,8 +3526,9 @@ router.get('/full-check', async (_req: Request, res: Response) => {
       if (read.invoice_id && !sameInvoiceNumber(row.invoice_id, read.invoice_id)) diffs.push('invoice_number');
       if (read.supplier && !sameSupplier(read.supplier, row.supplier) && !(readName && sameSupplier(readName, row.supplier))) diffs.push('supplier');
       if (!x.is_invoice) chk.warnings.push('not_an_invoice');
+      // A text reading that doesn't add up waits for the PDF reading (stage 3)
+      if (x.read_by === 'haiku-text' && chk.warnings.includes('totals_mismatch')) chk.warnings.push('needs_pdf_read');
 
-      // Effect in EUR of correcting net and VAT
       let eurNetDiff = 0, eurVatDiff = 0;
       if (diffs.includes('net') || diffs.includes('vat') || diffs.includes('currency')) {
         const readCur = (read.currency || row.currency || 'EUR').toUpperCase();
@@ -3505,23 +3541,36 @@ router.get('/full-check', async (_req: Request, res: Response) => {
         eurNetDiff = r2(read.amount * rate - (row.eur_amount ?? row.amount));
         eurVatDiff = r2(read.vat_amount * rate - (row.vat_eur_amount ?? row.vat_amount ?? 0));
       }
-      if (diffs.length === 0) matching++;
-      report.push({ ...base, status: diffs.length ? 'differs' : 'ok', read, diffs, warnings: chk.warnings, eur_net_diff: eurNetDiff, eur_vat_diff: eurVatDiff });
+      report.push({
+        ...base, status: diffs.length ? 'differs' : 'ok', read, diffs, warnings: chk.warnings,
+        verified_by: VERIFIED_BY[x.read_by || 'opus-pdf'], eur_net_diff: eurNetDiff, eur_vat_diff: eurVatDiff,
+      });
     }
 
+    const count = (st: string) => report.filter(r => r.status === st).length;
     const differing = report.filter(r => r.status === 'differs');
+    const stage = (mode: 'haiku-text' | 'sonnet-pdf') => {
+      const c = stageCandidates(mode);
+      return { count: c.length, estimated_usd: Math.round(c.reduce((a, x) => a + x.estUsd, 0) * 100) / 100 };
+    };
+    const spent = db.prepare('SELECT COALESCE(SUM(cost_usd), 0) as usd FROM ai_usage').get() as any;
     res.json({
-      job: fullCheckJob,
+      triage: triageJob,
+      stages: { text: stage('haiku-text'), pdf: stage('sonnet-pdf') },
+      batches: db.prepare('SELECT id, mode, request_count, estimated_usd, status, succeeded, failed, cost_usd, created_at, ended_at FROM invoice_read_batches ORDER BY created_at DESC').all(),
+      spent_usd: Math.round(spent.usd * 100) / 100,
       summary: {
         total: rows.length,
-        checked: matching + differing.length,
-        matching,
+        ok: count('ok'),
+        confirmed_free: report.filter(r => r.status === 'ok' && r.verified_by === VERIFIED_BY.text).length,
         differing: differing.length,
-        not_checkable: notCheckable,
-        not_read: notReadYet,
         amount_diffs: differing.filter(r => r.diffs.includes('net') || r.diffs.includes('vat')).length,
-        eur_net_diff: r2(differing.reduce((s, r) => s + r.eur_net_diff, 0)),
-        eur_vat_diff: r2(differing.reduce((s, r) => s + r.eur_vat_diff, 0)),
+        waiting: count('waiting'),
+        not_read: count('not_read'),
+        not_checked: count('not_checked'),
+        no_pdf: count('no_pdf'),
+        eur_net_diff: r2(differing.reduce((a, r) => a + r.eur_net_diff, 0)),
+        eur_vat_diff: r2(differing.reduce((a, r) => a + r.eur_vat_diff, 0)),
       },
       report,
     });

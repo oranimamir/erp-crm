@@ -1290,6 +1290,52 @@ export async function initializeDatabase() {
       created_at TEXT DEFAULT (datetime('now'))
     )
   `);
+  // Full check of supplier invoices (lib/invoiceCheck.ts)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS invoice_texts (
+      file_hash TEXT PRIMARY KEY,
+      text TEXT NOT NULL,
+      pages INTEGER NOT NULL DEFAULT 1
+    )
+  `);
+  // Free text check per invoice; `signature` = the stored figures it checked (an edit re-checks)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS invoice_triage (
+      invoice_id INTEGER PRIMARY KEY,
+      signature TEXT NOT NULL,
+      file_hash TEXT,
+      status TEXT NOT NULL,
+      reasons TEXT,
+      checked_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS invoice_read_batches (
+      id TEXT PRIMARY KEY,
+      mode TEXT NOT NULL,
+      request_count INTEGER NOT NULL,
+      estimated_usd REAL,
+      items TEXT,
+      status TEXT NOT NULL DEFAULT 'in_progress',
+      succeeded INTEGER DEFAULT 0,
+      failed INTEGER DEFAULT 0,
+      cost_usd REAL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      ended_at TEXT
+    )
+  `);
+  // Token use of every AI call (invoice reading), for the spend shown in the app
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ai_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      at TEXT DEFAULT (datetime('now')),
+      purpose TEXT,
+      model TEXT,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      cost_usd REAL
+    )
+  `);
 
   // VAT audit log table
   db.exec(`
