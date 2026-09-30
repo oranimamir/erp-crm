@@ -338,7 +338,7 @@ export async function pollBatches(): Promise<void> {
   const open = db.prepare("SELECT id, mode, items FROM invoice_read_batches WHERE status = 'in_progress'").all() as any[];
   if (open.length === 0) return;
   polling = true;
-  const client = new Anthropic();
+  const client = new Anthropic({ timeout: 60_000, maxRetries: 1 });
   try {
     for (const b of open) {
       const info: any = await client.messages.batches.retrieve(b.id);

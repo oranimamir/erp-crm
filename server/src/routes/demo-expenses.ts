@@ -3473,7 +3473,8 @@ const VERIFIED_BY: Record<string, string> = {
 
 router.get('/full-check', async (_req: Request, res: Response) => {
   try {
-    await pollBatches();
+    // Collect finished batches in the background — the report never waits on Anthropic
+    pollBatches().catch(() => {});
     const rows = db.prepare(`
       SELECT i.id, i.invoice_id, i.issue_date, i.supplier, i.domain, i.category, i.amount, i.vat_amount, i.currency,
         i.fx_rate, i.eur_amount, i.vat_eur_amount, COALESCE(i.file_hash, t.file_hash) as file_hash,
