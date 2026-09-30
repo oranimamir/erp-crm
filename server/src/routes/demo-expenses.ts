@@ -16,7 +16,7 @@ import {
   readSupplierInvoice, checkAmounts, cachedInvoiceExtraction, type InvoiceExtraction,
 } from '../lib/supplierInvoiceReader.js';
 import {
-  runTriage, triageJob, stageCandidates, sendStage, pollBatches, startBatchPoller, invoiceSignature,
+  runTriage, triageJob, stageCandidates, sendStage, pollBatches, startBatchPoller, invoiceSignature, scopeOf,
 } from '../lib/invoiceCheck.js';
 
 const router = Router();
@@ -2969,13 +2969,15 @@ router.delete('/supplier-mappings/:id', (req: Request, res: Response) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // CHECK DUPLICATES — scan all demo_invoices for suspected duplicates
 // ═══════════════════════════════════════════════════════════════════════════════
-router.get('/check-duplicates', (_req: Request, res: Response) => {
+router.get('/check-duplicates', (req: Request, res: Response) => {
+  const scope = scopeOf(req.query.domain);
   try {
     const allInvoices = db.prepare(`
       SELECT i.id, i.invoice_id, i.issue_date, i.supplier, i.category, i.domain, i.amount, i.vat_amount, i.currency, i.month,
         COALESCE(i.file_hash, t.file_hash) as file_hash
       FROM demo_invoices i LEFT JOIN invoice_triage t ON t.invoice_id = i.id
-    `).all() as { id: number; invoice_id: string; issue_date: string; supplier: string; category: string; domain: string; amount: number; vat_amount: number; currency: string; month: string; file_hash: string | null; printed_invoice_id?: string | null; printed_supplier?: string | null }[];
+      ${scope ? 'WHERE i.domain = ?' : ''}
+    `).all(...(scope ? [scope] : [])) as { id: number; invoice_id: string; issue_date: string; supplier: string; category: string; domain: string; amount: number; vat_amount: number; currency: string; month: string; file_hash: string | null; printed_invoice_id?: string | null; printed_supplier?: string | null }[];
     // Track which id-pairs we've already grouped to avoid duplicates across strategies
     const seenPairs = new Set<string>();
     const pairKey = (a: number, b: number) => a < b ? `${a}|${b}` : `${b}|${a}`;
@@ -3200,7 +3202,7 @@ startBatchPoller();
 // Stage 1 — free
 router.post('/full-check/triage', (req: Request, res: Response) => {
   if (triageJob.running) { res.status(409).json({ error: 'The text check is already running' }); return; }
-  runTriage(req.body?.force === true).catch(err => console.error('[full-check] text check error:', err));
+  runTriage(req.body?.force === true, scopeOf(req.body?.domain)).catch(err => console.error('[full-check] text check error:', err));
   res.json({ started: true });
 });
 
@@ -3213,7 +3215,7 @@ router.post('/full-check/batch', async (req: Request, res: Response) => {
     if (!(maxUsd > 0)) { res.status(400).json({ error: 'Set a spending limit (max_usd)' }); return; }
     if (!process.env.ANTHROPIC_API_KEY) { res.status(400).json({ error: 'AI reading is not configured (ANTHROPIC_API_KEY)' }); return; }
     if (triageJob.running) { res.status(409).json({ error: 'Wait for the text check to finish' }); return; }
-    res.json(await sendStage(mode, maxUsd));
+    res.json(await sendStage(mode, maxUsd, scopeOf(req.body?.domain)));
   } catch (err: any) {
     console.error('[full-check] batch error:', err);
     res.status(400).json({ error: err?.message || 'Failed to send the batch' });
@@ -3308,7 +3310,8 @@ const VERIFIED_BY: Record<string, string> = {
   text: 'Text check', 'haiku-text': 'AI (text)', 'sonnet-pdf': 'AI (PDF)', 'opus-pdf': 'AI (PDF)', rules: 'VAT rules (no PDF)',
 };
 
-router.get('/full-check', async (_req: Request, res: Response) => {
+router.get('/full-check', async (req: Request, res: Response) => {
+  const scope = scopeOf(req.query.domain);
   try {
     // Collect finished batches in the background — the report never waits on Anthropic
     pollBatches().catch(() => {});
@@ -3322,8 +3325,9 @@ router.get('/full-check', async (_req: Request, res: Response) => {
       FROM demo_invoices i
       LEFT JOIN invoice_triage t ON t.invoice_id = i.id
       LEFT JOIN invoice_check_accepted a ON a.invoice_id = i.id
+      ${scope ? 'WHERE i.domain = ?' : ''}
       ORDER BY i.issue_date DESC, i.id DESC
-    `).all() as any[];
+    `).all(...(scope ? [scope] : [])) as any[];
     const pending = new Set<string>();
     for (const b of db.prepare("SELECT items FROM invoice_read_batches WHERE status = 'in_progress'").all() as any[]) {
       try { for (const h of JSON.parse(b.items || '[]')) pending.add(h); } catch { /* ignore */ }
@@ -3407,7 +3411,7 @@ router.get('/full-check', async (_req: Request, res: Response) => {
     const count = (st: string) => report.filter(r => r.status === st).length;
     const differing = report.filter(r => r.status === 'differs');
     const stage = (mode: 'haiku-text' | 'sonnet-pdf') => {
-      const c = stageCandidates(mode);
+      const c = stageCandidates(mode, scope);
       return { count: c.length, estimated_usd: Math.round(c.reduce((a, x) => a + x.estUsd, 0) * 100) / 100 };
     };
     const spent = db.prepare('SELECT COALESCE(SUM(cost_usd), 0) as usd FROM ai_usage').get() as any;

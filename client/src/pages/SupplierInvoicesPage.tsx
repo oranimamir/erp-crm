@@ -15,7 +15,7 @@ import { useCategories } from '../lib/categories';
 import SearchBar from '../components/ui/SearchBar';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import PdfPreview from '../components/ui/PdfPreview';
-import InvoiceFullCheck from '../components/InvoiceFullCheck';
+import InvoiceFullCheck, { ScopeSwitch, type CheckScope } from '../components/InvoiceFullCheck';
 
 const CAT_COLORS: Record<string, string> = {
   'Salaries': '#6366f1', 'Cars': '#8b5cf6', 'Overhead': '#3b82f6',
@@ -459,6 +459,8 @@ export default function SupplierInvoicesPage() {
   // Invoice viewer
   const [viewingInvoice, setViewingInvoice] = useState<number | null>(null);
   const [showFullCheck, setShowFullCheck] = useState(false);
+  // Which invoices Check Duplicates and Full check look at
+  const [checkScope, setCheckScope] = useState<CheckScope>('all');
 
   // Category override
   const [overrideTarget, setOverrideTarget] = useState<{ id: number; supplier: string; category: string } | null>(null);
@@ -1024,7 +1026,7 @@ export default function SupplierInvoicesPage() {
   const handleCheckDuplicates = async () => {
     setCheckingDuplicates(true);
     try {
-      const res = await api.get('/demo-expenses/check-duplicates');
+      const res = await api.get('/demo-expenses/check-duplicates', { params: checkScope === 'all' ? {} : { domain: checkScope } });
       if (res.data.totalGroups === 0) {
         addToast('No duplicates found', 'success');
       } else {
@@ -1686,6 +1688,10 @@ export default function SupplierInvoicesPage() {
                 {singleUploading ? <Loader2 size={16} className="animate-spin" /> : <FileSpreadsheet size={16} />}
                 {singleUploading ? 'Parsing...' : 'Upload Single Invoice'}
               </Button>
+              <div className="flex items-center gap-2 ml-auto sm:ml-0">
+                <span className="text-xs text-gray-500">Check:</span>
+                <ScopeSwitch value={checkScope} onChange={setCheckScope} />
+              </div>
               <Button variant="secondary" onClick={handleCheckDuplicates} disabled={checkingDuplicates}>
                 {checkingDuplicates ? <Loader2 size={16} className="animate-spin" /> : <AlertTriangle size={16} />}
                 {checkingDuplicates ? 'Scanning...' : 'Check Duplicates'}
@@ -2390,7 +2396,7 @@ export default function SupplierInvoicesPage() {
         )}
 
       {/* Invoice Viewer Modal */}
-      {showFullCheck && <InvoiceFullCheck onClose={() => { setShowFullCheck(false); fetchAll(); }} />}
+      {showFullCheck && <InvoiceFullCheck scope={checkScope} onScopeChange={setCheckScope} onClose={() => { setShowFullCheck(false); fetchAll(); }} />}
       {viewingInvoice && <InvoiceViewer invoiceId={viewingInvoice} onClose={() => setViewingInvoice(null)} />}
 
       {/* Delete Invoice Confirm */}

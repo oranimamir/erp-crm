@@ -176,14 +176,20 @@ export function triageInvoice(text: string, row: any): TriageResult {
 export const triageJob = { running: false, total: 0, done: 0, startedAt: null as string | null, finishedAt: null as string | null };
 
 /** Stage 1 over every invoice with a stored PDF. Skips invoices already checked with the same stored figures. */
-export async function runTriage(force = false): Promise<void> {
+export type Scope = 'demo' | 'sales' | null;  // null = all supplier invoices
+
+export function scopeOf(v: unknown): Scope {
+  return v === 'demo' || v === 'sales' ? v : null;
+}
+
+export async function runTriage(force = false, scope: Scope = null): Promise<void> {
   const rows = db.prepare(`
     SELECT i.id, i.invoice_id, i.issue_date, i.supplier, i.amount, i.vat_amount, i.currency, i.file_hash,
       t.signature as t_sig
     FROM demo_invoices i LEFT JOIN invoice_triage t ON t.invoice_id = i.id
-    WHERE i.embedded_pdf IS NOT NULL AND i.embedded_pdf != ''
+    WHERE i.embedded_pdf IS NOT NULL AND i.embedded_pdf != ''${scope ? ' AND i.domain = ?' : ''}
     ORDER BY i.id
-  `).all() as any[];
+  `).all(...(scope ? [scope] : [])) as any[];
   const todo = force ? rows : rows.filter(r => r.t_sig !== invoiceSignature(r));
   Object.assign(triageJob, { running: true, total: todo.length, done: 0, startedAt: new Date().toISOString(), finishedAt: null });
   const upsert = db.prepare('INSERT OR REPLACE INTO invoice_triage (invoice_id, signature, file_hash, status, reasons, checked_at) VALUES (?, ?, ?, ?, ?, datetime(\'now\'))');
@@ -235,15 +241,15 @@ function pendingHashes(): Set<string> {
 export interface Candidate { invoiceId: number; hash: string; estTokens: number; estUsd: number }
 
 /** Invoices that the given stage would send, with an estimated batch cost each. */
-export function stageCandidates(mode: ReadMode): Candidate[] {
+export function stageCandidates(mode: ReadMode, scope: Scope = null): Candidate[] {
   const pending = pendingHashes();
   const rows = db.prepare(`
     SELECT t.invoice_id, t.file_hash, t.status, x.text_len, x.pages
     FROM invoice_triage t
     JOIN demo_invoices i ON i.id = t.invoice_id
     LEFT JOIN (SELECT file_hash, LENGTH(text) as text_len, pages FROM invoice_texts) x ON x.file_hash = t.file_hash
-    WHERE t.file_hash IS NOT NULL
-  `).all() as any[];
+    WHERE t.file_hash IS NOT NULL${scope ? ' AND i.domain = ?' : ''}
+  `).all(...(scope ? [scope] : [])) as any[];
   const seen = new Set<string>();
   const out: Candidate[] = [];
   for (const r of rows) {
@@ -280,8 +286,8 @@ export function invoiceCategoriesForAi(): { demo: string[]; sales: string[] } {
 const MAX_BATCH_BYTES = 80 * 1024 * 1024; // API limit is 256 MB per batch; stay well under
 
 /** Send one stage as batch(es), up to `maxUsd` estimated. */
-export async function sendStage(mode: ReadMode, maxUsd: number): Promise<{ sent: number; estimatedUsd: number; batches: string[]; skippedOverBudget: number }> {
-  const all = stageCandidates(mode);
+export async function sendStage(mode: ReadMode, maxUsd: number, scope: Scope = null): Promise<{ sent: number; estimatedUsd: number; batches: string[]; skippedOverBudget: number }> {
+  const all = stageCandidates(mode, scope);
   const chosen: Candidate[] = [];
   let est = 0;
   for (const c of all) {

@@ -17,6 +17,28 @@ import PdfPreview from './ui/PdfPreview';
 
 type Field = 'net' | 'vat' | 'currency' | 'supplier' | 'invoice_number' | 'date';
 
+export type CheckScope = 'all' | 'demo' | 'sales';
+
+const SCOPES: { key: CheckScope; label: string }[] = [
+  { key: 'all', label: 'All suppliers' },
+  { key: 'demo', label: 'Demo expenses' },
+  { key: 'sales', label: 'Sales activities' },
+];
+
+/** All / Demo expenses / Sales activities */
+export function ScopeSwitch({ value, onChange }: { value: CheckScope; onChange: (v: CheckScope) => void }) {
+  return (
+    <div className="inline-flex rounded-lg border border-gray-300 overflow-hidden text-xs">
+      {SCOPES.map(s => (
+        <button key={s.key} onClick={() => onChange(s.key)}
+          className={`px-2.5 py-1.5 font-medium ${value === s.key ? 'bg-primary-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'} ${s.key !== 'all' ? 'border-l border-gray-300' : ''}`}>
+          {s.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 interface Read {
   invoice_id: string | null; issue_date: string | null; supplier: string | null; supplier_as_printed: string | null;
   supplier_vat: string | null; supplier_country: string | null; currency: string | null;
@@ -96,7 +118,10 @@ function suggestedFields(r: Row): Record<string, any> {
   return f;
 }
 
-export default function InvoiceFullCheck({ onClose }: { onClose: () => void }) {
+export default function InvoiceFullCheck({ onClose, scope, onScopeChange }: {
+  onClose: () => void; scope: CheckScope; onScopeChange: (s: CheckScope) => void;
+}) {
+  const domain = scope === 'all' ? undefined : scope;
   const { addToast } = useToast();
   const [data, setData] = useState<CheckData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -107,16 +132,16 @@ export default function InvoiceFullCheck({ onClose }: { onClose: () => void }) {
 
   const load = useCallback(async () => {
     try {
-      const res = await api.get('/demo-expenses/full-check');
+      const res = await api.get('/demo-expenses/full-check', { params: domain ? { domain } : {} });
       setData(res.data);
     } catch (err: any) {
       addToast(err?.response?.data?.error || 'Failed to load the check', 'error');
     } finally {
       setLoading(false);
     }
-  }, [addToast]);
+  }, [addToast, domain]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { setLoading(true); load(); }, [load]);
 
   // Poll while the text check runs (fast) or a batch is out (slow)
   const triageRunning = !!data?.triage.running;
@@ -129,7 +154,7 @@ export default function InvoiceFullCheck({ onClose }: { onClose: () => void }) {
 
   const runTriage = async (force: boolean) => {
     setBusy('triage');
-    try { await api.post('/demo-expenses/full-check/triage', { force }); await load(); }
+    try { await api.post('/demo-expenses/full-check/triage', { force, domain }); await load(); }
     catch (err: any) { addToast(err?.response?.data?.error || 'Failed to start the text check', 'error'); }
     finally { setBusy(null); }
   };
@@ -140,7 +165,7 @@ export default function InvoiceFullCheck({ onClose }: { onClose: () => void }) {
     if (!(cap > 0)) { addToast('Enter a spending limit', 'error'); return; }
     setBusy(key);
     try {
-      const res = await api.post('/demo-expenses/full-check/batch', { mode, max_usd: cap });
+      const res = await api.post('/demo-expenses/full-check/batch', { mode, max_usd: cap, domain });
       const d = res.data;
       addToast(d.sent
         ? `Sent ${d.sent} invoices (~${usd(d.estimatedUsd)}). Results usually arrive within an hour.${d.skippedOverBudget ? ` ${d.skippedOverBudget} left over the limit.` : ''}`
@@ -231,7 +256,10 @@ export default function InvoiceFullCheck({ onClose }: { onClose: () => void }) {
       <div className="bg-white rounded-xl shadow-2xl max-w-[1400px] w-full mx-4 max-h-[94vh] flex flex-col">
         <div className="px-5 py-4 border-b flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-lg font-bold text-gray-900">Full check of supplier invoices</h2>
+            <div className="flex flex-wrap items-center gap-3">
+              <h2 className="text-lg font-bold text-gray-900">Full check of supplier invoices</h2>
+              <ScopeSwitch value={scope} onChange={onScopeChange} />
+            </div>
             <p className="text-sm text-gray-500 mt-0.5">
               Cheapest first: a free text check, then AI only for what it cannot confirm. AI spent so far: <strong>{usd(data?.spent_usd || 0)}</strong>
             </p>
