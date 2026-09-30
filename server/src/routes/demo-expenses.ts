@@ -2558,32 +2558,6 @@ router.patch('/invoices/:id/vat', async (req: Request, res: Response) => {
   }
 });
 
-router.patch('/invoices/:id/vat-review', (req: Request, res: Response) => {
-  try {
-    const inv = db.prepare('SELECT id FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
-    if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
-    db.prepare('UPDATE demo_invoices SET vat_reviewed = 1 WHERE id = ?').run(req.params.id);
-    db.saveToDisk();
-    res.json({ success: true });
-  } catch (err: any) {
-    res.status(500).json({ error: 'Failed to mark as reviewed' });
-  }
-});
-
-router.post('/invoices/:id/vat-keep', (req: Request, res: Response) => {
-  try {
-    const inv = db.prepare('SELECT id, vat_amount FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
-    if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
-    db.prepare('INSERT INTO vat_audit_log (invoice_id, action, old_vat, new_vat, performed_by) VALUES (?, ?, ?, ?, ?)').run(
-      inv.id, 'keep_vat', inv.vat_amount, inv.vat_amount, (req as any).user?.display_name || 'Unknown'
-    );
-    db.saveToDisk();
-    res.json({ success: true });
-  } catch (err: any) {
-    res.status(500).json({ error: 'Failed to log keep VAT action' });
-  }
-});
-
 router.get('/vat-audit-log', (_req: Request, res: Response) => {
   try {
     const logs = db.prepare(`
@@ -3096,221 +3070,54 @@ router.get('/check-duplicates', (_req: Request, res: Response) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// VAT AUDIT — check existing invoices for VAT issues
+// VAT RULES — for invoices without a stored PDF, which the full check cannot read
 // ═══════════════════════════════════════════════════════════════════════════════
-router.get('/vat-audit', async (_req: Request, res: Response) => {
-  try {
-    // Include already-reviewed rows if they have implausibly-high VAT —
-    // those are always wrong regardless of prior review status.
-    const allInvoices = db.prepare(
-      `SELECT id, invoice_id, issue_date, supplier, amount, vat_amount, currency, domain, category, embedded_pdf, xml_filename,
-              file_hash, supplier_country
-       FROM demo_invoices
-       WHERE vat_reviewed = 0
-          OR (amount > 0 AND vat_amount > amount * 0.30)`
-    ).all() as any[];
 
-    const issues: {
-      id: number;
-      invoice_id: string;
-      supplier: string;
-      amount: number;
-      current_vat: number;
-      suggested_vat: number | null;
-      // Set when the suggestion also changes the net (stored amount was VAT-inclusive, or re-read)
-      suggested_amount: number | null;
-      suggestion_label: string;
-      currency: string;
-      domain: string;
-      issue: string;
-      country: string;
-    }[] = [];
+const NON_BE_SUPPLIERS = [
+  { pattern: 'chemoxy', country: 'GB' }, { pattern: 'henan', country: 'CN' }, { pattern: 'jindan', country: 'CN' },
+  { pattern: 'seqens', country: 'FR' }, { pattern: 'brenntag nederland', country: 'NL' },
+  { pattern: 'jungbunzlauer', country: 'DE' }, { pattern: 'corbion', country: 'NL' },
+];
+const BE_SUPPLIERS = [
+  'acerta', 'kbc', 'belfius', 'proximus', 'telenet', 'elia', 'engie', 'bpost', 'securitas', 'athlon', 'modalizy',
+  'lyreco', 'vanbreda', 'ethias', 'edenred', 'coolblue', 'bnp', 'axa', 'dhl express belgium',
+];
 
-    // Known non-Belgian supplier patterns (common ones from the supplier map)
-    const NON_BE_SUPPLIERS = [
-      { pattern: 'chemoxy', country: 'GB' },
-      { pattern: 'henan', country: 'CN' },
-      { pattern: 'jindan', country: 'CN' },
-      { pattern: 'seqens', country: 'FR' },
-      { pattern: 'brenntag nederland', country: 'NL' },
-      { pattern: 'caldic', country: 'NL' },
-      { pattern: 'jungbunzlauer', country: 'DE' },
-      { pattern: 'corbion', country: 'NL' },
-    ];
-
-    // Known Belgian supplier patterns
-    const BE_SUPPLIERS = [
-      'acerta', 'kbc', 'belfius', 'proximus', 'telenet', 'elia', 'engie',
-      'bpost', 'securitas', 'athlon', 'modalizy', 'lyreco', 'vanbreda',
-      'ethias', 'edenred', 'coolblue', 'bnp', 'axa', 'dhl express belgium',
-    ];
-
-    const r2 = (n: number) => Math.round(n * 100) / 100;
-    for (const inv of allInvoices) {
-      const supplierLower = inv.supplier.toLowerCase();
-      let country = (inv.supplier_country || '').toUpperCase();
-
-      // Claude has read this file: its figures are the suggestion when they differ
-      const ext = cachedInvoiceExtraction(inv.file_hash);
-      if (ext && ext.net_amount != null) {
-        const chk = checkAmounts({ net: ext.net_amount, vat: ext.vat_amount, total: ext.total_amount, vatLines: ext.vat_lines, country: ext.supplier_country, reverseCharge: ext.reverse_charge });
-        const sign = ext.is_credit_note ? -1 : 1;
-        const net = sign * chk.net, vat = sign * chk.vat;
-        if (Math.abs(net - inv.amount) > 0.02 || Math.abs(vat - inv.vat_amount) > 0.02) {
-          issues.push({
-            id: inv.id, invoice_id: inv.invoice_id, supplier: inv.supplier, amount: inv.amount,
-            current_vat: inv.vat_amount, suggested_vat: vat,
-            suggested_amount: Math.abs(net - inv.amount) > 0.02 ? net : null,
-            suggestion_label: `As printed on the invoice: net ${net.toFixed(2)}, VAT ${vat.toFixed(2)}`,
-            currency: inv.currency, domain: inv.domain,
-            issue: `Invoice shows net ${net.toFixed(2)} / VAT ${vat.toFixed(2)} (stored ${Number(inv.amount).toFixed(2)} / ${Number(inv.vat_amount).toFixed(2)})`,
-            country: ext.supplier_country || country,
-          });
-        }
-        // The stored figures match what is printed — nothing else to question
-        continue;
-      }
-
-      // Determine country from known patterns
-      if (!country) for (const { pattern, country: c } of NON_BE_SUPPLIERS) {
-        if (supplierLower.includes(pattern)) { country = c; break; }
-      }
-      if (!country) {
-        for (const p of BE_SUPPLIERS) {
-          if (supplierLower.includes(p)) { country = 'BE'; break; }
-        }
-      }
-
-      // If we have XML, try to extract country from it
-      if (!country && inv.xml_filename) {
-        // Can't re-parse XML without the original file, but we can check the supplier name
-        // for common Belgian legal suffixes (BV, NV, BVBA with Belgian-sounding names)
-      }
-
-      // If we have embedded PDF, check for country indicators
-      if (!country && inv.embedded_pdf) {
-        try {
-          const pdfBuf = Buffer.from(inv.embedded_pdf, 'base64');
-          const result = await (pdfParse as any)(pdfBuf);
-          const text = result.text || '';
-
-          const beVatAll = text.match(/\bBE\s?0[\d.\s]{8,12}\b/g) || [];
-          if (beVatAll.length >= 2) {
-            country = 'BE';
-          } else if (beVatAll.length === 1) {
-            const hasNonBE = /\b(united kingdom|UK|germany|deutschland|france|nederland|netherlands|china|india|usa|ireland)\b/i.test(text);
-            if (hasNonBE) {
-              // Detect which non-BE country
-              if (/\b(United Kingdom|England)\b/i.test(text)) country = 'GB';
-              else if (/\b(Deutschland|Germany)\b/i.test(text)) country = 'DE';
-              else if (/\b(Nederland|Netherlands)\b/i.test(text)) country = 'NL';
-              else if (/\b(France)\b/i.test(text)) country = 'FR';
-              else if (/\b(China)\b/i.test(text)) country = 'CN';
-              else if (/\b(India)\b/i.test(text)) country = 'IN';
-              else if (/\b(Ireland)\b/i.test(text)) country = 'IE';
-            } else {
-              country = 'BE';
-            }
-          } else {
-            if (/\b(United Kingdom|England)\b/i.test(text)) country = 'GB';
-            else if (/\b(Deutschland|Germany)\b/i.test(text)) country = 'DE';
-            else if (/\b(Nederland|Netherlands|Pays-Bas)\b/i.test(text)) country = 'NL';
-            else if (/\b(France)\b/i.test(text)) country = 'FR';
-            else if (/\b(China|中国)\b/i.test(text)) country = 'CN';
-            else if (/\b(India)\b/i.test(text)) country = 'IN';
-          }
-        } catch { /* PDF parse failed, skip */ }
-      }
-
-      const isBelgian = country === 'BE';
-      const isNonBelgian = country !== '' && country !== 'BE';
-
-      // Issue 1: Non-Belgian supplier has VAT > 0
-      if (isNonBelgian && inv.vat_amount > 0) {
-        issues.push({
-          id: inv.id,
-          invoice_id: inv.invoice_id,
-          supplier: inv.supplier,
-          amount: inv.amount,
-          current_vat: inv.vat_amount,
-          suggested_vat: 0,
-          suggested_amount: null,
-          suggestion_label: 'Set VAT to 0 (reverse charge)',
-          currency: inv.currency,
-          domain: inv.domain,
-          issue: `Non-Belgian supplier (${country}) should not charge VAT — reverse charge applies`,
-          country,
-        });
-      }
-
-      // Issue 3: VAT is implausibly high relative to net amount
-      // (higher than 30% — well above any EU standard VAT rate).
-      // This almost always means the parser grabbed the wrong number.
-      // Checked before Issue 2 so a single invoice surfaces the most
-      // important issue rather than only the "zero VAT" heuristic.
-      if (inv.amount > 0 && inv.vat_amount > inv.amount * 0.30) {
-        issues.push({
-          id: inv.id,
-          invoice_id: inv.invoice_id,
-          supplier: inv.supplier,
-          amount: inv.amount,
-          current_vat: inv.vat_amount,
-          // Belgian (or unknown) supplier: 21% of the net is the likely VAT; foreign: none
-          suggested_vat: isNonBelgian ? 0 : r2(inv.amount * 0.21),
-          suggested_amount: null,
-          suggestion_label: isNonBelgian ? 'Set VAT to 0 (reverse charge)' : `21% of net: ${r2(inv.amount * 0.21).toFixed(2)}`,
-          currency: inv.currency,
-          domain: inv.domain,
-          issue: `VAT ${inv.vat_amount.toFixed(2)} is ${((inv.vat_amount / inv.amount) * 100).toFixed(0)}% of amount — likely parse error`,
-          country,
-        });
-        continue;
-      }
-
-      // Issue 2: Belgian supplier, has amount but 0 VAT, and amount looks like it could be 21% off
-      if (isBelgian && inv.vat_amount === 0 && inv.amount > 100) {
-        // Check if amount / 1.21 gives a round-ish number (suggesting incl. VAT total was stored)
-        const possibleExcl = inv.amount / 1.21;
-        const possibleVat = inv.amount - possibleExcl;
-        const isRoundExcl = Math.abs(possibleExcl - Math.round(possibleExcl)) < 0.5;
-        // Only flag if the amount is suspicious — exact multiples of 1.21
-        if (isRoundExcl && inv.amount > 200) {
-          issues.push({
-            id: inv.id,
-            invoice_id: inv.invoice_id,
-            supplier: inv.supplier,
-            amount: inv.amount,
-            current_vat: 0,
-            suggested_vat: r2(possibleVat),
-            // The stored amount then included the VAT: the net goes down by the same VAT
-            suggested_amount: r2(inv.amount - r2(possibleVat)),
-            suggestion_label: `Split 21% out: net ${r2(inv.amount - r2(possibleVat)).toFixed(2)}, VAT ${r2(possibleVat).toFixed(2)}`,
-            currency: inv.currency,
-            domain: inv.domain,
-            issue: `Belgian supplier with 0 VAT — amount ${inv.amount} could be incl. 21% BTW (excl. would be ${possibleExcl.toFixed(2)})`,
-            country,
-          });
-        }
-      }
+/** A VAT suggestion from rules alone: { warning, vat, amount (net, when it changes) } or null. */
+function vatRuleSuggestion(inv: { supplier: string; amount: number; vat_amount: number; supplier_country?: string | null; supplier_vat?: string | null }):
+  { warning: string; vat: number; amount: number | null } | null {
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const lower = (inv.supplier || '').toLowerCase();
+  let country = (inv.supplier_country || inv.supplier_vat?.slice(0, 2) || '').toUpperCase();
+  if (!country) country = NON_BE_SUPPLIERS.find(x => lower.includes(x.pattern))?.country || (BE_SUPPLIERS.some(p => lower.includes(p)) ? 'BE' : '');
+  const amount = inv.amount || 0, vat = inv.vat_amount || 0;
+  if (country && country !== 'BE' && vat > 0) return { warning: 'rule_foreign_vat', vat: 0, amount: null };
+  if (amount > 0 && vat > amount * 0.3) return country && country !== 'BE' ? { warning: 'rule_vat_too_high', vat: 0, amount: null } : { warning: 'rule_vat_too_high', vat: r2(amount * 0.21), amount: null };
+  if (country === 'BE' && vat === 0 && amount > 200) {
+    const excl = amount / 1.21;
+    if (Math.abs(excl - Math.round(excl)) < 0.5) {
+      const v = r2(amount - r2(excl));
+      return { warning: 'rule_may_include_vat', vat: v, amount: r2(amount - v) };
     }
+  }
+  return null;
+}
 
-    // Sort: non-Belgian with VAT first (clear errors), then Belgian with 0 VAT (potential issues)
-    issues.sort((a, b) => {
-      if (a.suggested_amount != null && b.suggested_amount == null) return -1;
-      if (a.suggested_amount == null && b.suggested_amount != null) return 1;
-      if (a.suggested_vat === 0 && b.suggested_vat !== 0) return -1;
-      if (a.suggested_vat !== 0 && b.suggested_vat === 0) return 1;
-      return Math.abs(b.current_vat) - Math.abs(a.current_vat);
-    });
-
-    res.json({
-      totalInvoices: allInvoices.length,
-      issuesFound: issues.length,
-      issues,
-    });
+// "Correct as stored": the user checked a flagged invoice and keeps it. Holds
+// until the invoice's figures change (signature).
+router.post('/invoices/:id/accept-check', (req: Request, res: Response) => {
+  try {
+    const inv = db.prepare('SELECT id, invoice_id, issue_date, supplier, amount, vat_amount, currency FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
+    if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
+    const by = (req as any).user?.display_name || 'Unknown';
+    db.prepare("INSERT OR REPLACE INTO invoice_check_accepted (invoice_id, signature, accepted_by, accepted_at) VALUES (?, ?, ?, datetime('now'))")
+      .run(inv.id, invoiceSignature(inv), by);
+    db.prepare('INSERT INTO vat_audit_log (invoice_id, action, old_vat, new_vat, performed_by) VALUES (?, ?, ?, ?, ?)')
+      .run(inv.id, 'check_keep', inv.vat_amount, inv.vat_amount, by);
+    db.saveToDisk();
+    res.json({ success: true });
   } catch (err: any) {
-    console.error('[demo-expenses] vat-audit error:', err);
-    res.status(500).json({ error: 'Failed to run VAT audit' });
+    res.status(500).json({ error: 'Failed to save' });
   }
 });
 
@@ -3468,7 +3275,7 @@ router.post('/invoices/:id/apply-check', async (req: Request, res: Response) => 
 });
 
 const VERIFIED_BY: Record<string, string> = {
-  text: 'Text check', 'haiku-text': 'AI (text)', 'sonnet-pdf': 'AI (PDF)', 'opus-pdf': 'AI (PDF)',
+  text: 'Text check', 'haiku-text': 'AI (text)', 'sonnet-pdf': 'AI (PDF)', 'opus-pdf': 'AI (PDF)', rules: 'VAT rules (no PDF)',
 };
 
 router.get('/full-check', async (_req: Request, res: Response) => {
@@ -3479,8 +3286,12 @@ router.get('/full-check', async (_req: Request, res: Response) => {
       SELECT i.id, i.invoice_id, i.issue_date, i.supplier, i.domain, i.category, i.amount, i.vat_amount, i.currency,
         i.fx_rate, i.eur_amount, i.vat_eur_amount, COALESCE(i.file_hash, t.file_hash) as file_hash,
         (i.embedded_pdf IS NOT NULL AND i.embedded_pdf != '') as has_pdf,
-        t.signature as t_sig, t.status as t_status, t.reasons as t_reasons
-      FROM demo_invoices i LEFT JOIN invoice_triage t ON t.invoice_id = i.id
+        i.supplier_country, i.supplier_vat,
+        t.signature as t_sig, t.status as t_status, t.reasons as t_reasons,
+        a.signature as a_sig, a.accepted_by, a.accepted_at
+      FROM demo_invoices i
+      LEFT JOIN invoice_triage t ON t.invoice_id = i.id
+      LEFT JOIN invoice_check_accepted a ON a.invoice_id = i.id
       ORDER BY i.issue_date DESC, i.id DESC
     `).all() as any[];
     const pending = new Set<string>();
@@ -3497,8 +3308,23 @@ router.get('/full-check', async (_req: Request, res: Response) => {
         stored: { invoice_id: row.invoice_id, issue_date: row.issue_date, supplier: row.supplier, currency: row.currency, amount: row.amount, vat_amount: row.vat_amount, total: r2(row.amount + (row.vat_amount || 0)) },
         diffs: [] as string[], warnings: [] as string[], reasons: [] as string[],
       };
-      if (!row.has_pdf) { report.push({ ...base, status: 'no_pdf' }); continue; }
-      const triageCurrent = row.t_sig && row.t_sig === invoiceSignature(row);
+      const sig = invoiceSignature(row);
+      const accepted = row.a_sig && row.a_sig === sig ? { accepted_by: row.accepted_by, accepted_at: row.accepted_at } : null;
+      if (!row.has_pdf) {
+        // Nothing to read: the VAT rules are all we have
+        const rule = vatRuleSuggestion(row);
+        if (!rule) { report.push({ ...base, status: 'no_pdf' }); continue; }
+        const amount = rule.amount ?? row.amount;
+        const diffs = [...(rule.amount != null ? ['net'] : []), 'vat'];
+        report.push({
+          ...base, status: accepted ? 'accepted' : 'differs', ...accepted,
+          read: { ...base.stored, supplier_as_printed: null, supplier_vat: row.supplier_vat, supplier_country: row.supplier_country, amount, vat_amount: rule.vat, total: r2(amount + rule.vat), vat_rate: amount ? r2((rule.vat / amount) * 100) : null },
+          diffs, warnings: [rule.warning], verified_by: VERIFIED_BY.rules,
+          eur_net_diff: r2((amount - row.amount) * (row.fx_rate || 1)), eur_vat_diff: r2((rule.vat - (row.vat_amount || 0)) * (row.fx_rate || 1)),
+        });
+        continue;
+      }
+      const triageCurrent = row.t_sig && row.t_sig === sig;
       const x = cachedInvoiceExtraction(row.file_hash);
 
       if (!x || x.net_amount == null) {
@@ -3543,7 +3369,7 @@ router.get('/full-check', async (_req: Request, res: Response) => {
         eurVatDiff = r2(read.vat_amount * rate - (row.vat_eur_amount ?? row.vat_amount ?? 0));
       }
       report.push({
-        ...base, status: diffs.length ? 'differs' : 'ok', read, diffs, warnings: chk.warnings,
+        ...base, status: diffs.length ? (accepted ? 'accepted' : 'differs') : 'ok', ...(diffs.length ? accepted : null), read, diffs, warnings: chk.warnings,
         verified_by: VERIFIED_BY[x.read_by || 'opus-pdf'], eur_net_diff: eurNetDiff, eur_vat_diff: eurVatDiff,
       });
     }
@@ -3563,6 +3389,7 @@ router.get('/full-check', async (_req: Request, res: Response) => {
       summary: {
         total: rows.length,
         ok: count('ok'),
+        accepted: count('accepted'),
         confirmed_free: report.filter(r => r.status === 'ok' && r.verified_by === VERIFIED_BY.text).length,
         differing: differing.length,
         amount_diffs: differing.filter(r => r.diffs.includes('net') || r.diffs.includes('vat')).length,

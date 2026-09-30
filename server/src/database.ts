@@ -1309,6 +1309,15 @@ export async function initializeDatabase() {
       checked_at TEXT DEFAULT (datetime('now'))
     )
   `);
+  // "Correct as stored" on a flagged invoice; holds while the figures match `signature`
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS invoice_check_accepted (
+      invoice_id INTEGER PRIMARY KEY,
+      signature TEXT NOT NULL,
+      accepted_by TEXT,
+      accepted_at TEXT
+    )
+  `);
   db.exec(`
     CREATE TABLE IF NOT EXISTS invoice_read_batches (
       id TEXT PRIMARY KEY,

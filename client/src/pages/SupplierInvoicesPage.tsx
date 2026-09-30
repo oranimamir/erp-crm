@@ -477,7 +477,7 @@ export default function SupplierInvoicesPage() {
   const [reviewedIds, setReviewedIds] = useState<Set<string>>(new Set());
   const [showReviewed, setShowReviewed] = useState(false);
   const [flagOverrides, setFlagOverrides] = useState<Record<string, boolean>>({});
-  const [flagCommentModal, setFlagCommentModal] = useState<{ id: number; currentlyFlagged: boolean; fromVatAudit?: boolean } | null>(null);
+  const [flagCommentModal, setFlagCommentModal] = useState<{ id: number; currentlyFlagged: boolean } | null>(null);
   const [flagComment, setFlagComment] = useState('');
 
   // Check duplicates
@@ -487,16 +487,7 @@ export default function SupplierInvoicesPage() {
   const [selectedForDelete, setSelectedForDelete] = useState<Set<number>>(new Set());
   const [deletingDuplicates, setDeletingDuplicates] = useState(false);
 
-  // VAT audit
-  const [runningVatAudit, setRunningVatAudit] = useState(false);
-  const [vatIssues, setVatIssues] = useState<any[] | null>(null);
-  const [showVatModal, setShowVatModal] = useState(false);
-  const [fixingVat, setFixingVat] = useState(false);
-  const [manualVatId, setManualVatId] = useState<number | null>(null);
-  const [manualVatValue, setManualVatValue] = useState('');
-  const [actionTakenIds, setActionTakenIds] = useState<Set<number>>(new Set());
-
-  // Quick preview for duplicates / VAT audit modals
+  // Quick preview for the duplicates modal
   const [previewInvoiceId, setPreviewInvoiceId] = useState<number | null>(null);
   const [previewPdf, setPreviewPdf] = useState<string | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
@@ -1087,107 +1078,16 @@ export default function SupplierInvoicesPage() {
     });
   };
 
-  // ─── VAT AUDIT ─────────────────────────────────────────────────────────────
-  const [rereadingId, setRereadingId] = useState<number | null>(null);
-
-  const handleVatAudit = async () => {
-    setRunningVatAudit(true);
-    try {
-      const res = await api.get('/demo-expenses/vat-audit');
-      if (res.data.issuesFound === 0) {
-        addToast(`VAT audit complete — no issues found (${res.data.totalInvoices} invoices checked)`, 'success');
-      } else {
-        setVatIssues(res.data.issues);
-        setShowVatModal(true);
-      }
-    } catch {
-      addToast('Failed to run VAT audit', 'error');
-    } finally {
-      setRunningVatAudit(false);
-    }
-  };
-
-  // `newAmount` also changes the net (when the stored amount turned out to include VAT)
-  const handleFixVat = async (id: number, newVat: number, action: string = 'set_to_0', newAmount?: number | null) => {
-    setFixingVat(true);
-    try {
-      await api.patch(`/demo-expenses/invoices/${id}/vat`, {
-        vat_amount: newVat, audit_action: action,
-        ...(newAmount != null ? { amount: newAmount } : {}),
-      });
-      addToast('VAT updated', 'success');
-      setActionTakenIds(prev => new Set(prev).add(id));
-      setManualVatId(null);
-      fetchAll();
-    } catch {
-      addToast('Failed to update VAT', 'error');
-    } finally {
-      setFixingVat(false);
-    }
-  };
-
-  const handleKeepVat = async (issue: any) => {
-    setFixingVat(true);
-    try {
-      await api.post(`/demo-expenses/invoices/${issue.id}/vat-keep`);
-      addToast('VAT kept as-is', 'success');
-      setActionTakenIds(prev => new Set(prev).add(issue.id));
-    } catch {
-      addToast('Failed to log action', 'error');
-    } finally {
-      setFixingVat(false);
-    }
-  };
-
-  // Read the stored PDF again with Claude and offer its figures as the suggestion
-  const handleRereadVat = async (issue: any) => {
-    setRereadingId(issue.id);
-    try {
-      const res = await api.post(`/demo-expenses/invoices/${issue.id}/reread`, {});
-      const r = res.data.read;
-      const netChanged = Math.abs(r.amount - issue.amount) > 0.005;
-      setVatIssues(prev => (prev || []).map((i: any) => i.id !== issue.id ? i : {
-        ...i,
-        suggested_vat: r.vat_amount,
-        suggested_amount: netChanged ? r.amount : null,
-        suggestion_label: `Read from the invoice: net ${r.amount.toFixed(2)}, VAT ${r.vat_amount.toFixed(2)}, total ${r.total.toFixed(2)}`,
-        country: r.supplier_country || i.country,
-      }));
-      if (!netChanged && Math.abs(r.vat_amount - issue.current_vat) < 0.005) {
-        addToast('The invoice shows the same net and VAT as stored', 'info');
-      }
-    } catch (err: any) {
-      addToast(err?.response?.data?.error || 'Failed to re-read invoice', 'error');
-    } finally {
-      setRereadingId(null);
-    }
-  };
-
-  const handleManualVatSubmit = async (id: number) => {
-    const val = Number(manualVatValue);
-    if (isNaN(val) || val < 0) { addToast('Enter a valid VAT amount', 'error'); return; }
-    await handleFixVat(id, val, 'manual_insert');
-  };
-
-  const handleFlagForLater = (id: number, fromVatAudit = false) => {
-    setFlagCommentModal({ id, currentlyFlagged: false, fromVatAudit });
-    setFlagComment('');
-  };
-
   const submitFlag = async () => {
     if (!flagCommentModal) return;
-    const { id, currentlyFlagged, fromVatAudit } = flagCommentModal;
+    const { id, currentlyFlagged } = flagCommentModal;
     const newFlagged = !currentlyFlagged;
     try {
       await api.patch(`/demo-expenses/invoices/${id}/flag`, {
         flagged: newFlagged,
         comment: newFlagged ? flagComment : '',
-        from_vat_audit: fromVatAudit,
       });
       addToast(newFlagged ? 'Flagged for later' : 'Flag removed', 'success');
-      if (fromVatAudit) {
-        setActionTakenIds(prev => new Set(prev).add(id));
-      }
       fetchAll();
     } catch {
       addToast('Failed to update flag', 'error');
@@ -1197,19 +1097,7 @@ export default function SupplierInvoicesPage() {
     }
   };
 
-  const handleMarkReviewed = async (id: number) => {
-    try {
-      await api.patch(`/demo-expenses/invoices/${id}/vat-review`);
-      setVatIssues(prev => prev ? prev.filter(i => i.id !== id) : null);
-      setActionTakenIds(prev => { const s = new Set(prev); s.delete(id); return s; });
-      if (vatIssues && vatIssues.length <= 1) { setShowVatModal(false); setPreviewInvoiceId(null); setPreviewPdf(null); }
-      addToast('Marked as reviewed', 'success');
-    } catch {
-      addToast('Failed to mark as reviewed', 'error');
-    }
-  };
-
-  // ─── QUICK PREVIEW (for duplicate / VAT modals) ─────────────────────────────
+  // ─── QUICK PREVIEW (for the duplicates modal) ─────────────────────────────
   const toggleQuickPreview = async (id: number) => {
     if (previewInvoiceId === id) {
       setPreviewInvoiceId(null);
@@ -1801,10 +1689,6 @@ export default function SupplierInvoicesPage() {
               <Button variant="secondary" onClick={handleCheckDuplicates} disabled={checkingDuplicates}>
                 {checkingDuplicates ? <Loader2 size={16} className="animate-spin" /> : <AlertTriangle size={16} />}
                 {checkingDuplicates ? 'Scanning...' : 'Check Duplicates'}
-              </Button>
-              <Button variant="secondary" onClick={handleVatAudit} disabled={runningVatAudit}>
-                {runningVatAudit ? <Loader2 size={16} className="animate-spin" /> : <FileSpreadsheet size={16} />}
-                {runningVatAudit ? 'Auditing...' : 'VAT Audit'}
               </Button>
               <Button variant="secondary" onClick={() => setShowFullCheck(true)}>
                 <FileSpreadsheet size={16} />
@@ -2812,207 +2696,6 @@ export default function SupplierInvoicesPage() {
         </div>
       )}
 
-
-      {/* VAT Audit Modal */}
-      {showVatModal && vatIssues && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-xl shadow-2xl max-w-7xl w-full mx-4 max-h-[90vh] flex flex-col">
-            <div className="p-6 border-b flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-bold text-gray-900">VAT Audit Results</h2>
-                <p className="text-sm text-gray-500 mt-1">
-                  Found {vatIssues.length} invoice(s) with potential VAT issues. Review and fix as needed.
-                </p>
-              </div>
-              <button onClick={() => { setShowVatModal(false); setPreviewInvoiceId(null); setPreviewPdf(null); setActionTakenIds(new Set()); setManualVatId(null); }} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100">
-                <X size={20} />
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto">
-              <table className="w-full text-sm table-fixed">
-                <thead className="sticky top-0 bg-gray-50">
-                  <tr className="border-b">
-                    <th className="text-left px-3 py-3 font-medium text-gray-600 w-[110px]">Invoice ID</th>
-                    <th className="text-left px-3 py-3 font-medium text-gray-600 w-[160px]">Supplier</th>
-                    <th className="text-center px-2 py-3 font-medium text-gray-600 w-[60px]">Country</th>
-                    <th className="text-right px-3 py-3 font-medium text-gray-600 w-[90px]">Amount</th>
-                    <th className="text-right px-3 py-3 font-medium text-gray-600 w-[90px]">Current VAT</th>
-                    <th className="text-right px-3 py-3 font-medium text-gray-600 w-[80px]">Suggested</th>
-                    <th className="text-left px-3 py-3 font-medium text-gray-600">Issue</th>
-                    <th className="text-center px-2 py-3 font-medium text-gray-600 w-[340px]">Action</th>
-                    <th className="w-10 px-2 py-3"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {vatIssues.map((issue: any) => (
-                    <React.Fragment key={issue.id}>
-                      <tr className={`hover:bg-gray-50 ${actionTakenIds.has(issue.id) ? 'bg-green-50/50' : ''}`}>
-                        <td className="px-3 py-3 font-medium text-gray-900 truncate" title={issue.invoice_id}>{issue.invoice_id}</td>
-                        <td className="px-3 py-3 text-gray-600 truncate" title={issue.supplier}>{issue.supplier}</td>
-                        <td className="px-2 py-3 text-center">
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                            issue.country === 'BE' ? 'bg-yellow-100 text-yellow-700' : 'bg-blue-100 text-blue-700'
-                          }`}>
-                            {issue.country || '??'}
-                          </span>
-                        </td>
-                        <td className="px-3 py-3 text-right font-medium whitespace-nowrap">
-                          {issue.currency === 'GBP' ? '\u00A3' : issue.currency === 'USD' ? '$' : '\u20AC'}
-                          {issue.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </td>
-                        <td className={`px-3 py-3 text-right font-medium whitespace-nowrap ${issue.suggested_vat === 0 && issue.current_vat > 0 ? 'text-red-600' : ''}`}>
-                          {issue.current_vat.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </td>
-                        <td className="px-3 py-3 text-right font-medium text-green-600 whitespace-nowrap">
-                          {issue.suggested_vat != null ? issue.suggested_vat.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
-                          {issue.suggested_amount != null && (
-                            <div className="text-[11px] font-normal text-gray-500" title="Suggested net amount">
-                              net {issue.suggested_amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </div>
-                          )}
-                        </td>
-                        <td className="px-3 py-3 text-xs text-gray-500 truncate" title={issue.issue}>{issue.issue}</td>
-                        <td className="px-2 py-3">
-                          <div className="flex items-center gap-1 justify-center">
-                            {actionTakenIds.has(issue.id) ? (
-                              <button
-                                onClick={() => handleMarkReviewed(issue.id)}
-                                disabled={fixingVat}
-                                className="px-3 py-1 text-xs bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium disabled:opacity-50 whitespace-nowrap"
-                              >
-                                ✓ Mark as reviewed
-                              </button>
-                            ) : (
-                              <>
-                                {issue.suggested_vat != null && (
-                                  <button
-                                    onClick={() => handleFixVat(issue.id, issue.suggested_vat, 'apply_suggestion', issue.suggested_amount)}
-                                    disabled={fixingVat}
-                                    className="px-2 py-1 text-xs bg-primary-600 text-white rounded hover:bg-primary-700 font-medium disabled:opacity-50 whitespace-nowrap"
-                                    title={issue.suggestion_label || `Set VAT to ${issue.suggested_vat.toFixed(2)}`}
-                                  >
-                                    Apply suggestion
-                                  </button>
-                                )}
-                                <button
-                                  onClick={() => handleKeepVat(issue)}
-                                  disabled={fixingVat}
-                                  className="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 font-medium disabled:opacity-50 whitespace-nowrap"
-                                  title="Keep current VAT — no changes"
-                                >
-                                  Keep as is
-                                </button>
-                                <button
-                                  onClick={() => handleFixVat(issue.id, 0, 'set_to_0')}
-                                  disabled={fixingVat}
-                                  className="px-2 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200 font-medium disabled:opacity-50 whitespace-nowrap"
-                                  title="Set VAT to 0"
-                                >
-                                  VAT = 0
-                                </button>
-                                <button
-                                  onClick={() => handleFixVat(issue.id, Math.round(issue.amount * 21) / 100, 'add_21')}
-                                  disabled={fixingVat}
-                                  className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200 font-medium disabled:opacity-50 whitespace-nowrap"
-                                  title={`The amount is the net: VAT = 21% of it = ${(Math.round(issue.amount * 21) / 100).toFixed(2)}`}
-                                >
-                                  +21% on net
-                                </button>
-                                <button
-                                  onClick={() => {
-                                    const net = Math.round((issue.amount / 1.21) * 100) / 100;
-                                    handleFixVat(issue.id, Math.round((issue.amount - net) * 100) / 100, 'split_21', net);
-                                  }}
-                                  disabled={fixingVat}
-                                  className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200 font-medium disabled:opacity-50 whitespace-nowrap"
-                                  title={`The amount includes 21% VAT: net ${(Math.round((issue.amount / 1.21) * 100) / 100).toFixed(2)}, VAT ${(Math.round((issue.amount - Math.round((issue.amount / 1.21) * 100) / 100) * 100) / 100).toFixed(2)}`}
-                                >
-                                  Split 21% out
-                                </button>
-                                <button
-                                  onClick={() => handleRereadVat(issue)}
-                                  disabled={fixingVat || rereadingId === issue.id}
-                                  className="px-2 py-1 text-xs bg-purple-100 text-purple-700 rounded hover:bg-purple-200 font-medium disabled:opacity-50 whitespace-nowrap"
-                                  title="Read the invoice PDF again with AI and suggest its net and VAT"
-                                >
-                                  {rereadingId === issue.id ? 'Reading…' : 'Re-read'}
-                                </button>
-                                {manualVatId === issue.id ? (
-                                  <form onSubmit={(e) => { e.preventDefault(); handleManualVatSubmit(issue.id); }} className="flex items-center gap-1">
-                                    <input
-                                      type="number"
-                                      step="0.01"
-                                      min="0"
-                                      value={manualVatValue}
-                                      onChange={e => setManualVatValue(e.target.value)}
-                                      className="w-16 px-1.5 py-0.5 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
-                                      placeholder="VAT"
-                                      autoFocus
-                                    />
-                                    <button type="submit" disabled={fixingVat} className="px-1.5 py-0.5 text-xs bg-primary-600 text-white rounded hover:bg-primary-700 disabled:opacity-50">OK</button>
-                                    <button type="button" onClick={() => setManualVatId(null)} className="px-1 py-0.5 text-xs text-gray-400 hover:text-gray-600">✕</button>
-                                  </form>
-                                ) : (
-                                  <button
-                                    onClick={() => { setManualVatId(issue.id); setManualVatValue(''); }}
-                                    disabled={fixingVat}
-                                    className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200 font-medium disabled:opacity-50 whitespace-nowrap"
-                                    title="Manually insert VAT amount"
-                                  >
-                                    Manual
-                                  </button>
-                                )}
-                                <button
-                                  onClick={() => handleFlagForLater(issue.id, true)}
-                                  disabled={fixingVat}
-                                  className="px-2 py-1 text-xs bg-amber-100 text-amber-700 rounded hover:bg-amber-200 font-medium disabled:opacity-50 whitespace-nowrap"
-                                  title="Flag for later review"
-                                >
-                                  Flag
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-2 py-3 text-center">
-                          <button
-                            onClick={() => toggleQuickPreview(issue.id)}
-                            className={`p-1 rounded hover:bg-gray-100 ${previewInvoiceId === issue.id ? 'text-primary-600' : 'text-gray-400 hover:text-gray-600'}`}
-                            title="Preview invoice PDF"
-                          >
-                            {loadingPreview && previewInvoiceId === issue.id ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
-                          </button>
-                        </td>
-                      </tr>
-                      {previewInvoiceId === issue.id && (
-                        <tr>
-                          <td colSpan={9} className="p-0">
-                            <div className="bg-gray-50 border-t border-b border-gray-200 p-3">
-                              {loadingPreview ? (
-                                <div className="flex items-center justify-center py-8 text-gray-400"><Loader2 size={20} className="animate-spin mr-2" /> Loading preview...</div>
-                              ) : previewPdf ? (
-                                <PdfPreview base64={previewPdf} className="w-full h-[400px] rounded-lg border border-gray-200 bg-white" title="Invoice preview" />
-                              ) : (
-                                <p className="text-center py-6 text-sm text-gray-400">No PDF preview available for this invoice</p>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="p-4 border-t flex items-center justify-between">
-              <span className="text-sm text-gray-500">{vatIssues.length} issue(s) remaining</span>
-              <button onClick={() => { setShowVatModal(false); setPreviewInvoiceId(null); setPreviewPdf(null); setActionTakenIds(new Set()); setManualVatId(null); }} className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50">
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Flag Comment Modal */}
       {flagCommentModal && (

@@ -25,7 +25,8 @@ interface Read {
 
 interface Row {
   id: number; domain: string; category: string;
-  status: 'ok' | 'differs' | 'no_pdf' | 'not_read' | 'waiting' | 'not_checked';
+  status: 'ok' | 'differs' | 'accepted' | 'no_pdf' | 'not_read' | 'waiting' | 'not_checked';
+  accepted_by?: string; accepted_at?: string;
   stored: { invoice_id: string; issue_date: string; supplier: string; currency: string; amount: number; vat_amount: number; total: number };
   read?: Read;
   diffs: Field[]; warnings: string[]; reasons: string[];
@@ -41,13 +42,13 @@ interface CheckData {
   batches: Batch[];
   spent_usd: number;
   summary: {
-    total: number; ok: number; confirmed_free: number; differing: number; amount_diffs: number;
+    total: number; ok: number; accepted: number; confirmed_free: number; differing: number; amount_diffs: number;
     waiting: number; not_read: number; not_checked: number; no_pdf: number; eur_net_diff: number; eur_vat_diff: number;
   };
   report: Row[];
 }
 
-type FilterKey = 'all' | 'amounts' | 'currency' | 'supplier' | 'number_date' | 'warnings' | 'open';
+type FilterKey = 'all' | 'amounts' | 'currency' | 'supplier' | 'number_date' | 'warnings' | 'rules' | 'accepted' | 'open';
 
 const FILTERS: { key: FilterKey; label: string; test: (r: Row) => boolean }[] = [
   { key: 'all', label: 'All differences', test: r => r.status === 'differs' },
@@ -55,7 +56,9 @@ const FILTERS: { key: FilterKey; label: string; test: (r: Row) => boolean }[] = 
   { key: 'currency', label: 'Currency', test: r => r.diffs.includes('currency') },
   { key: 'supplier', label: 'Supplier', test: r => r.diffs.includes('supplier') },
   { key: 'number_date', label: 'Number & date', test: r => r.diffs.includes('invoice_number') || r.diffs.includes('date') },
-  { key: 'warnings', label: 'Warnings', test: r => r.warnings.length > 0 },
+  { key: 'warnings', label: 'Warnings', test: r => r.status === 'differs' && r.warnings.length > 0 },
+  { key: 'rules', label: 'No PDF (VAT rules)', test: r => r.status === 'differs' && r.warnings.some(w => w.startsWith('rule_')) },
+  { key: 'accepted', label: 'Marked correct', test: r => r.status === 'accepted' },
   { key: 'open', label: 'Not checked yet', test: r => ['not_read', 'waiting', 'not_checked', 'no_pdf'].includes(r.status) },
 ];
 
@@ -65,6 +68,9 @@ const WARNING_LABELS: Record<string, string> = {
   foreign_vat: 'Foreign supplier charges VAT',
   not_an_invoice: 'Not an invoice (statement / tax filing?)',
   needs_pdf_read: 'Text reading unsure — PDF read pending (step 3)',
+  rule_foreign_vat: 'No PDF · foreign supplier charging VAT (reverse charge expected)',
+  rule_vat_too_high: 'No PDF · VAT above 30% of net',
+  rule_may_include_vat: 'No PDF · Belgian supplier without VAT — amount may include 21%',
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -155,6 +161,19 @@ export default function InvoiceFullCheck({ onClose }: { onClose: () => void }) {
       return true;
     } catch (err: any) {
       addToast(err?.response?.data?.error || 'Failed to update', 'error');
+      return false;
+    } finally { setBusy(null); }
+  };
+
+  const accept = async (r: Row) => {
+    setBusy(`fix-${r.id}`);
+    try {
+      await api.post(`/demo-expenses/invoices/${r.id}/accept-check`);
+      addToast('Marked correct as stored', 'success');
+      await load();
+      return true;
+    } catch (err: any) {
+      addToast(err?.response?.data?.error || 'Failed to save', 'error');
       return false;
     } finally { setBusy(null); }
   };
@@ -286,7 +305,7 @@ export default function InvoiceFullCheck({ onClose }: { onClose: () => void }) {
             <div className="px-5 py-3 border-b space-y-2">
               <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 text-sm">
                 <div><p className="text-xs text-gray-400">Invoices</p><p className="font-semibold tabular-nums">{s!.total}</p></div>
-                <div><p className="text-xs text-gray-400">Correct</p><p className="font-semibold text-green-600 tabular-nums">{s!.ok}</p></div>
+                <div><p className="text-xs text-gray-400">Correct</p><p className="font-semibold text-green-600 tabular-nums">{s!.ok}{s!.accepted > 0 && <span className="text-gray-400 font-normal"> + {s!.accepted} marked</span>}</p></div>
                 <div><p className="text-xs text-gray-400">With differences</p><p className="font-semibold text-red-600 tabular-nums">{s!.differing}<span className="text-gray-400 font-normal"> ({s!.amount_diffs} amounts)</span></p></div>
                 <div><p className="text-xs text-gray-400">Not checked yet</p><p className="font-semibold tabular-nums">{s!.not_read + s!.waiting + s!.not_checked}<span className="text-gray-400 font-normal">{s!.no_pdf > 0 && ` + ${s!.no_pdf} no PDF`}</span></p></div>
                 <div><p className="text-xs text-gray-400">Net difference</p><p className="font-semibold tabular-nums">{eur(s!.eur_net_diff)}</p></div>
@@ -348,6 +367,7 @@ export default function InvoiceFullCheck({ onClose }: { onClose: () => void }) {
                           {STATUS_LABELS[r.status] && <div>{STATUS_LABELS[r.status]}</div>}
                           {r.warnings.map(w => <div key={w} className="text-amber-700">{WARNING_LABELS[w] || w}</div>)}
                           {r.verified_by && <div className="text-gray-400">Checked by: {r.verified_by}</div>}
+                          {r.status === 'accepted' && <div className="text-green-700">Marked correct{r.accepted_by ? ` by ${r.accepted_by}` : ''}{r.accepted_at ? `, ${formatDate(r.accepted_at.substring(0, 10))}` : ''}</div>}
                         </td>
                         <td className="px-3 py-2 align-top">
                           <div className="flex items-center justify-end gap-1">
@@ -356,6 +376,13 @@ export default function InvoiceFullCheck({ onClose }: { onClose: () => void }) {
                                 className="px-2 py-1 bg-primary-600 text-white rounded hover:bg-primary-700 disabled:opacity-50 flex items-center gap-1 whitespace-nowrap"
                                 title="Save the values printed on the invoice for the fields that differ">
                                 {busy === `fix-${r.id}` ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />} Fix
+                              </button>
+                            )}
+                            {r.status === 'differs' && (
+                              <button onClick={() => accept(r)} disabled={!!busy}
+                                className="px-2 py-1 border border-gray-300 text-gray-700 rounded hover:bg-gray-100 disabled:opacity-50 flex items-center gap-1 whitespace-nowrap"
+                                title="The stored values are right — stop flagging this invoice (until it is edited)">
+                                <Check size={12} /> Correct as stored
                               </button>
                             )}
                             <button onClick={() => setQuickView(r)}
@@ -372,7 +399,7 @@ export default function InvoiceFullCheck({ onClose }: { onClose: () => void }) {
               )}
             </div>
             <div className="px-5 py-2 border-t text-xs text-gray-400">
-              Crossed out = stored, red = printed on the invoice. Fix saves the printed values; Quick view lets you check and edit by hand.
+              Crossed out = stored, red = printed on the invoice (or the VAT-rule suggestion when there is no PDF). Fix saves it; Correct as stored keeps what is there; Quick view shows the invoice to check and edit by hand.
             </div>
           </>
         )}
@@ -384,6 +411,7 @@ export default function InvoiceFullCheck({ onClose }: { onClose: () => void }) {
           busy={busy === `fix-${quickView.id}`}
           onClose={() => setQuickView(null)}
           onSave={async (fields, source) => { if (await applyFix(quickView, fields, source)) setQuickView(null); }}
+          onAccept={async () => { if (await accept(quickView)) setQuickView(null); }}
         />
       )}
     </div>
@@ -401,9 +429,10 @@ const QV_FIELDS: { key: string; field: Field | null; label: string; type: 'text'
   { key: 'vat_amount', field: 'vat', label: 'VAT', type: 'number', stored: r => r.stored.vat_amount, read: r => r.read?.vat_amount },
 ];
 
-function QuickView({ row, busy, onClose, onSave }: {
+function QuickView({ row, busy, onClose, onSave, onAccept }: {
   row: Row; busy: boolean; onClose: () => void;
   onSave: (fields: Record<string, any>, source: 'check' | 'manual') => void;
+  onAccept: () => void;
 }) {
   const [pdf, setPdf] = useState<string | null>(null);
   const [loadingPdf, setLoadingPdf] = useState(true);
@@ -435,7 +464,7 @@ function QuickView({ row, busy, onClose, onSave }: {
         <div className="flex-1 bg-gray-100 min-w-0">
           {loadingPdf ? <div className="flex justify-center py-20"><Loader2 className="animate-spin text-primary-600" /></div>
             : pdf ? <PdfPreview base64={pdf} className="w-full h-full border-0" title="Invoice PDF" />
-              : <p className="p-6 text-sm text-gray-500">No PDF stored for this invoice.</p>}
+              : <p className="p-6 text-sm text-gray-500">No PDF stored for this invoice — the suggestion comes from the VAT rules only. Check it against your records.</p>}
         </div>
         <div className="w-[400px] shrink-0 border-l flex flex-col">
           <div className="px-4 py-3 border-b flex items-center justify-between">
@@ -456,7 +485,7 @@ function QuickView({ row, busy, onClose, onSave }: {
                   <label className="block text-xs font-medium text-gray-500 mb-0.5">{f.label}</label>
                   <div className="flex items-center gap-2 text-xs mb-1">
                     <span className={differs ? 'text-gray-400 line-through' : 'text-gray-600'}>Stored: {show(stored)}</span>
-                    {row.read && <span className={differs ? 'text-red-700 font-medium' : 'text-green-700'}>Invoice: {show(read)}</span>}
+                    {row.read && <span className={differs ? 'text-red-700 font-medium' : 'text-green-700'}>{row.verified_by?.startsWith('VAT rules') ? 'Suggested' : 'Invoice'}: {show(read)}</span>}
                   </div>
                   <input type={f.type} step={f.type === 'number' ? '0.01' : undefined} value={values[f.key]}
                     onChange={e => setValues(v => ({ ...v, [f.key]: e.target.value }))}
@@ -476,9 +505,15 @@ function QuickView({ row, busy, onClose, onSave }: {
                 {busy ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />} Fix — use the values on the invoice
               </button>
             )}
+            {row.status === 'differs' && (
+              <button onClick={onAccept} disabled={busy}
+                className="w-full px-3 py-2 text-sm border border-gray-300 text-gray-800 rounded-lg hover:bg-gray-50 disabled:opacity-50 flex items-center justify-center gap-1.5">
+                <Check size={14} /> Correct as stored — keep it
+              </button>
+            )}
             <button onClick={() => onSave(changed(), 'manual')} disabled={busy}
               className="w-full px-3 py-2 text-sm border border-gray-300 text-gray-800 rounded-lg hover:bg-gray-50 disabled:opacity-50 flex items-center justify-center gap-1.5">
-              {row.status === 'differs' ? <Pencil size={14} /> : <Check size={14} />} Save the values above
+              <Pencil size={14} /> Save the values above
             </button>
           </div>
         </div>
