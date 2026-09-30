@@ -2971,15 +2971,55 @@ router.delete('/supplier-mappings/:id', (req: Request, res: Response) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 router.get('/check-duplicates', (_req: Request, res: Response) => {
   try {
-    const allInvoices = db.prepare(
-      'SELECT id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month FROM demo_invoices'
-    ).all() as { id: number; invoice_id: string; issue_date: string; supplier: string; category: string; domain: string; amount: number; vat_amount: number; currency: string; month: string }[];
-
+    const allInvoices = db.prepare(`
+      SELECT i.id, i.invoice_id, i.issue_date, i.supplier, i.category, i.domain, i.amount, i.vat_amount, i.currency, i.month,
+        COALESCE(i.file_hash, t.file_hash) as file_hash
+      FROM demo_invoices i LEFT JOIN invoice_triage t ON t.invoice_id = i.id
+    `).all() as { id: number; invoice_id: string; issue_date: string; supplier: string; category: string; domain: string; amount: number; vat_amount: number; currency: string; month: string; file_hash: string | null; printed_invoice_id?: string | null; printed_supplier?: string | null }[];
     // Track which id-pairs we've already grouped to avoid duplicates across strategies
     const seenPairs = new Set<string>();
     const pairKey = (a: number, b: number) => a < b ? `${a}|${b}` : `${b}|${a}`;
-
     const groups: { reason: string; invoices: typeof allInvoices }[] = [];
+
+    // What the full check read off each PDF (no new AI calls): the printed invoice
+    // number and the seller — far more reliable than stored IDs, which are often file names
+    const printed = new Map<number, { no: string; seller: string }>();
+    for (const inv of allInvoices) {
+      const x = cachedInvoiceExtraction(inv.file_hash);
+      if (!x) continue;
+      inv.printed_invoice_id = x.invoice_number;
+      inv.printed_supplier = x.supplier_name;
+      const no = compactId(x.invoice_number);
+      const seller = normalizeVat(x.supplier_vat_number) || normalizeSupplierName(x.supplier_name || inv.supplier);
+      if (no.length >= 3 && seller) printed.set(inv.id, { no, seller });
+    }
+    // Both read, same seller, different printed numbers → two real invoices, never duplicates
+    const provenDifferent = (a: number, b: number) => {
+      const pa = printed.get(a), pb = printed.get(b);
+      return !!pa && !!pb && pa.seller === pb.seller && pa.no !== pb.no;
+    };
+    const addGroup = (reason: string, invs: typeof allInvoices) => {
+      const keep = invs.filter(a => invs.some(b => b.id !== a.id && !provenDifferent(a.id, b.id)));
+      if (keep.length < 2) return;
+      for (let i = 0; i < keep.length; i++) for (let j = i + 1; j < keep.length; j++) seenPairs.add(pairKey(keep[i].id, keep[j].id));
+      groups.push({ reason, invoices: keep });
+    };
+
+    // --- Strategy A: the very same file stored twice ---
+    const byHash = new Map<string, typeof allInvoices>();
+    for (const inv of allInvoices) if (inv.file_hash) byHash.set(inv.file_hash, [...(byHash.get(inv.file_hash) || []), inv]);
+    for (const [, invs] of byHash) if (invs.length >= 2) addGroup('same_file', invs);
+
+    // --- Strategy B: same seller + same invoice number as printed on the PDF ---
+    const byPrinted = new Map<string, typeof allInvoices>();
+    for (const inv of allInvoices) {
+      const p = printed.get(inv.id);
+      if (p) byPrinted.set(`${p.seller}|${p.no}`, [...(byPrinted.get(`${p.seller}|${p.no}`) || []), inv]);
+    }
+    for (const [, invs] of byPrinted) {
+      const fresh = invs.filter(a => invs.some(b => b.id !== a.id && !seenPairs.has(pairKey(a.id, b.id))));
+      if (fresh.length >= 2) addGroup('printed_match', fresh);
+    }
 
     // --- Strategy 1: Exact invoice_id match ---
     const exactIdMap = new Map<string, typeof allInvoices>();
@@ -2990,13 +3030,7 @@ router.get('/check-duplicates', (_req: Request, res: Response) => {
     }
     for (const [, invs] of exactIdMap) {
       if (invs.length < 2) continue;
-      // Mark all pairs as seen
-      for (let i = 0; i < invs.length; i++) {
-        for (let j = i + 1; j < invs.length; j++) {
-          seenPairs.add(pairKey(invs[i].id, invs[j].id));
-        }
-      }
-      groups.push({ reason: 'exact_id', invoices: invs });
+      addGroup('exact_id', invs.filter(a => invs.some(b => b.id !== a.id && !seenPairs.has(pairKey(a.id, b.id)))));
     }
 
     // --- Strategy 2: Copy-suffix match (e.g. "SI037954" vs "SI037954 (2)") ---
@@ -3027,9 +3061,7 @@ router.get('/check-duplicates', (_req: Request, res: Response) => {
           }
         }
       }
-      if (matched.length >= 2) {
-        groups.push({ reason: 'copy_suffix', invoices: matched });
-      }
+      if (matched.length >= 2) addGroup('copy_suffix', matched);
     }
 
     // --- Strategy 3: Combo match (same supplier + amount + date, different IDs) ---
@@ -3056,9 +3088,7 @@ router.get('/check-duplicates', (_req: Request, res: Response) => {
           seenPairs.add(pairKey(invs[i].id, invs[j].id));
         }
       }
-      if (unseen.length >= 2) {
-        groups.push({ reason: 'combo_match', invoices: unseen });
-      }
+      if (unseen.length >= 2) addGroup('combo_match', unseen);
     }
 
     const totalSuspected = groups.reduce((s, g) => s + g.invoices.length, 0);

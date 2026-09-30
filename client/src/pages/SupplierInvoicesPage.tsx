@@ -2750,10 +2750,12 @@ export default function SupplierInvoicesPage() {
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
               {duplicateGroups.map((group, gi) => {
-                const reasonLabel = group.reason === 'exact_id' ? 'Exact ID Match'
+                const reasonLabel = group.reason === 'same_file' ? 'Same file uploaded twice'
+                  : group.reason === 'printed_match' ? 'Same supplier + invoice number on the PDF'
+                  : group.reason === 'exact_id' ? 'Exact ID Match'
                   : group.reason === 'copy_suffix' ? 'Copy Suffix Match'
                   : 'Same Supplier + Amount + Date';
-                const reasonColor = group.reason === 'exact_id' ? 'bg-red-100 text-red-700'
+                const reasonColor = group.reason === 'same_file' || group.reason === 'printed_match' || group.reason === 'exact_id' ? 'bg-red-100 text-red-700'
                   : group.reason === 'copy_suffix' ? 'bg-orange-100 text-orange-700'
                   : 'bg-yellow-100 text-yellow-700';
                 return (
@@ -2794,7 +2796,12 @@ export default function SupplierInvoicesPage() {
                                   className="rounded border-gray-300 text-red-600 focus:ring-red-500"
                                 />
                               </td>
-                              <td className="px-3 py-2 font-medium text-gray-900">{inv.invoice_id}</td>
+                              <td className="px-3 py-2 font-medium text-gray-900">
+                                {inv.invoice_id}
+                                {inv.printed_invoice_id && inv.printed_invoice_id !== inv.invoice_id && (
+                                  <span className="block text-xs font-normal text-gray-400" title="Invoice number printed on the PDF (from the full check)">on PDF: {inv.printed_invoice_id}</span>
+                                )}
+                              </td>
                               <td className="px-3 py-2 text-gray-600">{inv.supplier}</td>
                               <td className="px-3 py-2 text-right font-medium text-gray-900">
                                 {inv.currency === 'GBP' ? '\u00A3' : inv.currency === 'USD' ? '$' : '\u20AC'}
