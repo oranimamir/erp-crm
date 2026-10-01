@@ -18,6 +18,7 @@ import {
   cachedInvoiceExtraction, costUsd, isCreditError, MODELS, type ReadMode,
 } from './supplierInvoiceReader.js';
 import { supplierTokens } from './supplierMatch.js';
+import { aiBudgetLeft } from './aiBudget.js';
 
 const sha256 = (buf: Buffer) => crypto.createHash('sha256').update(buf).digest('hex');
 
@@ -285,21 +286,9 @@ export function invoiceCategoriesForAi(): { demo: string[]; sales: string[] } {
 
 const MAX_BATCH_BYTES = 80 * 1024 * 1024; // API limit is 256 MB per batch; stay well under
 
-/** Send one stage as batch(es), up to `maxUsd` estimated. */
-let sending = false;
-
-export async function sendStage(mode: ReadMode, maxUsd: number, scope: Scope = null): Promise<{ sent: number; estimatedUsd: number; batches: string[]; skippedOverBudget: number }> {
-  // One send at a time: two users clicking Send together would otherwise send the same invoices twice
-  if (sending) throw new Error('Someone is already sending a batch — try again in a moment');
-  sending = true;
-  try {
-    return await sendStageInner(mode, maxUsd, scope);
-  } finally {
-    sending = false;
-  }
-}
-
-async function sendStageInner(mode: ReadMode, maxUsd: number, scope: Scope): Promise<{ sent: number; estimatedUsd: number; batches: string[]; skippedOverBudget: number }> {
+/** Send one stage as batch(es), up to `maxUsd` estimated (never more than the monthly budget left). */
+async function sendStage(mode: ReadMode, maxUsd: number, scope: Scope, runId: number | null): Promise<{ sent: number; estimatedUsd: number; batches: string[]; skippedOverBudget: number }> {
+  maxUsd = Math.min(maxUsd, aiBudgetLeft());
   const all = stageCandidates(mode, scope);
   const chosen: Candidate[] = [];
   let est = 0;
@@ -317,8 +306,8 @@ async function sendStageInner(mode: ReadMode, maxUsd: number, scope: Scope): Pro
   const flush = async () => {
     if (requests.length === 0) return;
     const batch: any = await client.messages.batches.create({ requests });
-    db.prepare('INSERT INTO invoice_read_batches (id, mode, request_count, estimated_usd, items) VALUES (?, ?, ?, ?, ?)')
-      .run(batch.id, mode, requests.length, Math.round(chunkEst * 100) / 100, JSON.stringify(items));
+    db.prepare('INSERT INTO invoice_read_batches (id, mode, request_count, estimated_usd, items, run_id) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(batch.id, mode, requests.length, Math.round(chunkEst * 100) / 100, JSON.stringify(items), runId);
     db.saveToDisk();
     batchIds.push(batch.id);
     requests = []; items = []; bytes = 0; chunkEst = 0;
@@ -396,7 +385,160 @@ export async function pollBatches(): Promise<void> {
   }
 }
 
-/** Check open batches every 2 minutes. */
+// ═══════════════════════════════════════════════════════════════════════════════
+// THE CHECK — one run moves through the stages by itself:
+//   text  → free text check of every PDF in scope
+//   ai_text → Haiku batch for what the text check could not confirm
+//   ai_pdf  → Sonnet batch for scans and text readings that don't add up
+//   done    → the user gets the result list (or 'stopped' with a reason)
+// Kept in check_runs, so a server restart picks it up again.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface CheckRun {
+  id: number; scope: string; status: 'text' | 'ai_text' | 'ai_pdf' | 'done' | 'stopped';
+  started_by: string | null; started_at: string; finished_at: string | null; message: string | null;
+}
+
+export function currentRun(): CheckRun | null {
+  return (db.prepare('SELECT * FROM check_runs ORDER BY id DESC LIMIT 1').get() as CheckRun) || null;
+}
+
+function activeRun(): CheckRun | null {
+  const r = currentRun();
+  return r && (r.status === 'text' || r.status === 'ai_text' || r.status === 'ai_pdf') ? r : null;
+}
+
+function runScope(r: CheckRun): Scope { return r.scope === 'demo' || r.scope === 'sales' ? r.scope : null; }
+
+function setRun(id: number, status: CheckRun['status'], message?: string | null) {
+  const done = status === 'done' || status === 'stopped';
+  db.prepare(`UPDATE check_runs SET status = ?, message = COALESCE(?, message)${done ? ", finished_at = datetime('now')" : ''} WHERE id = ?`)
+    .run(status, message ?? null, id);
+  db.saveToDisk();
+}
+
+
+/** Invoices in scope whose stored figures have not been text-checked yet. */
+function untriagedCount(scope: Scope): number {
+  const rows = db.prepare(`
+    SELECT i.amount, i.vat_amount, i.currency, i.invoice_id, i.issue_date, i.supplier, t.signature
+    FROM demo_invoices i LEFT JOIN invoice_triage t ON t.invoice_id = i.id
+    WHERE i.embedded_pdf IS NOT NULL AND i.embedded_pdf != ''${scope ? ' AND i.domain = ?' : ''}
+  `).all(...(scope ? [scope] : [])) as any[];
+  return rows.filter(r => r.signature !== invoiceSignature(r)).length;
+}
+
+export function startRun(scope: Scope, startedBy: string): CheckRun {
+  const active = activeRun();
+  if (active) throw new Error('A check is already running');
+  const info = db.prepare("INSERT INTO check_runs (scope, status, started_by, started_at) VALUES (?, 'text', ?, datetime('now'))")
+    .run(scope || 'all', startedBy);
+  db.saveToDisk();
+  runTriage(false, scope).catch(err => console.error('[invoice-check] text check error:', err))
+    .finally(() => { advanceRun().catch(() => {}); });
+  return db.prepare('SELECT * FROM check_runs WHERE id = ?').get(info.lastInsertRowid) as CheckRun;
+}
+
+let advancing = false;
+
+/** Move the active run on to its next stage when the current one is finished. */
+export async function advanceRun(): Promise<void> {
+  if (advancing) return;
+  advancing = true;
+  try {
+    for (let guard = 0; guard < 4; guard++) {
+      const run = activeRun();
+      if (!run) return;
+      const scope = runScope(run);
+      const openOfRun = (mode: ReadMode) =>
+        (db.prepare("SELECT COUNT(*) as c FROM invoice_read_batches WHERE run_id = ? AND mode = ? AND status = 'in_progress'").get(run.id, mode) as any).c as number;
+
+      if (run.status === 'text') {
+        if (triageJob.running) return;
+        // e.g. after a restart mid-way: finish the text check first
+        if (untriagedCount(scope) > 0) {
+          runTriage(false, scope).catch(() => {}).finally(() => { advanceRun().catch(() => {}); });
+          return;
+        }
+        if (!(await sendForRun(run, 'haiku-text'))) return;
+        setRun(run.id, 'ai_text');
+        continue;
+      }
+      if (run.status === 'ai_text') {
+        if (openOfRun('haiku-text') > 0) return;
+        if (!(await sendForRun(run, 'sonnet-pdf'))) return;
+        setRun(run.id, 'ai_pdf');
+        continue;
+      }
+      if (run.status === 'ai_pdf') {
+        if (openOfRun('sonnet-pdf') > 0) return;
+        try { learnSupplierVats(); } catch { /* best effort */ }
+        setRun(run.id, 'done');
+        return;
+      }
+      return;
+    }
+  } finally {
+    advancing = false;
+  }
+}
+
+/** Send a stage for the run within the monthly budget. False = the run was stopped. */
+async function sendForRun(run: CheckRun, mode: ReadMode): Promise<boolean> {
+  const scope = runScope(run);
+  if (stageCandidates(mode, scope).length === 0) return true;
+  if (!process.env.ANTHROPIC_API_KEY) {
+    setRun(run.id, 'stopped', 'AI reading is not set up on the server (ANTHROPIC_API_KEY) — only the free text check ran.');
+    return false;
+  }
+  try {
+    const r = await sendStage(mode, Number.POSITIVE_INFINITY, scope, run.id);
+    if (r.skippedOverBudget > 0) {
+      // One line for the whole run, however many stages hit the limit
+      const prev = (db.prepare('SELECT message FROM check_runs WHERE id = ?').get(run.id) as any)?.message || '';
+      const before = Number(prev.match(/Spending limit reached: (\d+)/)?.[1] || 0);
+      const line = `Spending limit reached: ${before + r.skippedOverBudget} invoice(s) were not read by AI — raise the limit in Settings and check again.`;
+      db.prepare('UPDATE check_runs SET message = ? WHERE id = ?').run(before ? prev.replace(/Spending limit reached: \d+ invoice\(s\) were not read by AI — raise the limit in Settings and check again\./, line) : [prev, line].filter(Boolean).join(' '), run.id);
+    }
+    return true;
+  } catch (err: any) {
+    const why = isCreditError(err) ? 'the Anthropic API credit is used up — top it up and run the check again' : (err?.message || 'the AI service did not respond');
+    setRun(run.id, 'stopped', `Stopped: ${why}.`);
+    return false;
+  }
+}
+
+/**
+ * Learn suppliers' VAT numbers from readings: when what is printed is the stored
+ * supplier (same name words), keep its VAT number and country on the invoice.
+ * Supplier details only — amounts are never touched. Uploads then recognise the
+ * supplier by VAT number (and can skip AI when the text check confirms them).
+ */
+export function learnSupplierVats(): number {
+  const rows = db.prepare(`
+    SELECT i.id, i.supplier, COALESCE(i.file_hash, t.file_hash) as file_hash
+    FROM demo_invoices i LEFT JOIN invoice_triage t ON t.invoice_id = i.id
+    WHERE (i.supplier_vat IS NULL OR i.supplier_vat = '')
+  `).all() as any[];
+  const upd = db.prepare('UPDATE demo_invoices SET supplier_vat = ?, supplier_country = COALESCE(supplier_country, ?) WHERE id = ?');
+  let n = 0;
+  for (const r of rows) {
+    const x = cachedInvoiceExtraction(r.file_hash);
+    const vat = (x?.supplier_vat_number || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!x || vat.length < 8 || !x.supplier_name) continue;
+    const stored = supplierTokens(r.supplier || '').filter(w => w.length >= 3);
+    const printed = new Set(supplierTokens(x.supplier_name));
+    if (stored.length === 0 || !stored.every(w => printed.has(w))) continue;
+    upd.run(vat, x.supplier_country, r.id);
+    n++;
+  }
+  if (n) db.saveToDisk();
+  return n;
+}
+
+/** Collect batches and move runs on every 2 minutes; pick up a run left mid-way by a restart. */
 export function startBatchPoller(): void {
-  setInterval(() => { pollBatches().catch(() => {}); }, 120_000).unref?.();
+  const tick = () => pollBatches().catch(() => {}).then(() => advanceRun()).catch(() => {});
+  setInterval(tick, 120_000).unref?.();
+  setTimeout(tick, 15_000).unref?.();
 }

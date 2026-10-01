@@ -14,6 +14,7 @@ import Anthropic from '@anthropic-ai/sdk';
 // @ts-ignore — import lib directly to avoid pdf-parse's debug-mode crash in ESM
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import db from '../database.js';
+import { assertAiBudget } from './aiBudget.js';
 
 export interface InvoiceExtraction {
   is_invoice: boolean;
@@ -275,6 +276,7 @@ export async function readSupplierInvoice(opts: {
   const text = opts.text ?? (isPdf(opts.file) ? (await pdfText(opts.file)).text : '');
   let result: InvoiceExtraction | null = null;
   if (hasUsableText(text)) {
+    assertAiBudget(0.01);
     const res: any = await client.messages.create(buildReadParams('haiku-text', { text }, opts.categories));
     logUsage('invoice read', 'haiku-text', res.usage, false);
     result = parseReadResponse(res, 'haiku-text');
@@ -282,6 +284,7 @@ export async function readSupplierInvoice(opts: {
   if (!readingHolds(result)) {
     const params = buildReadParams('sonnet-pdf', { file: opts.file }, opts.categories);
     if (params) {
+      assertAiBudget(0.05);
       const res: any = await client.messages.create(params);
       logUsage('invoice read', 'sonnet-pdf', res.usage, false);
       result = parseReadResponse(res, 'sonnet-pdf') ?? result;

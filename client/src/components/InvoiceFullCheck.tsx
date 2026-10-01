@@ -56,13 +56,16 @@ interface Row {
   eur_net_diff?: number; eur_vat_diff?: number;
 }
 
-interface Batch { id: string; mode: string; request_count: number; estimated_usd: number; status: string; succeeded: number; failed: number; cost_usd: number; created_at: string }
+interface CheckRun {
+  id: number; scope: string; status: 'text' | 'ai_text' | 'ai_pdf' | 'done' | 'stopped';
+  started_by: string | null; started_at: string; finished_at: string | null; message: string | null;
+  text_progress: { running: boolean; done: number; total: number };
+  ai_reading: number; ai_read: number; cost_usd: number;
+}
 
 interface CheckData {
-  triage: { running: boolean; total: number; done: number; startedAt: string | null; finishedAt: string | null };
-  stages: { text: { count: number; estimated_usd: number }; pdf: { count: number; estimated_usd: number } };
-  batches: Batch[];
-  spent_usd: number;
+  run: CheckRun | null;
+  budget: { monthly_usd: number; spent_usd: number; left_usd: number };
   summary: {
     total: number; ok: number; accepted: number; confirmed_free: number; differing: number; amount_diffs: number;
     waiting: number; not_read: number; not_checked: number; no_pdf: number; eur_net_diff: number; eur_vat_diff: number;
@@ -89,15 +92,15 @@ const WARNING_LABELS: Record<string, string> = {
   vat_rate_unusual: 'Unusual VAT rate',
   foreign_vat: 'Foreign supplier charges VAT',
   not_an_invoice: 'Not an invoice (statement / tax filing?)',
-  needs_pdf_read: 'Text reading unsure — PDF read pending (step 3)',
+  needs_pdf_read: 'Text reading unsure — the PDF itself was not read (spending limit?)',
   rule_foreign_vat: 'No PDF · foreign supplier charging VAT (reverse charge expected)',
   rule_vat_too_high: 'No PDF · VAT above 30% of net',
   rule_may_include_vat: 'No PDF · Belgian supplier without VAT — amount may include 21%',
 };
 
 const STATUS_LABELS: Record<string, string> = {
-  no_pdf: 'No PDF stored', not_read: 'Not confirmed by the text check — waiting for AI', waiting: 'AI reading in progress',
-  not_checked: 'Not checked yet',
+  no_pdf: 'No PDF stored', not_read: 'Not confirmed for free and not read by AI (spending limit or AI unavailable)', waiting: 'AI reading in progress',
+  not_checked: 'Not checked yet — run the check',
 };
 
 const money = (n: number | null | undefined) =>
@@ -127,7 +130,6 @@ export default function InvoiceFullCheck({ onClose, scope, onScopeChange }: {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterKey>('all');
-  const [limits, setLimits] = useState<{ text: string; pdf: string }>({ text: '', pdf: '' });
   const [quickView, setQuickView] = useState<Row | null>(null);
 
   const load = useCallback(async () => {
@@ -143,37 +145,20 @@ export default function InvoiceFullCheck({ onClose, scope, onScopeChange }: {
 
   useEffect(() => { setLoading(true); load(); }, [load]);
 
-  // Poll while the text check runs (fast) or a batch is out (slow)
-  const triageRunning = !!data?.triage.running;
-  const batchOpen = !!data?.batches.some(b => b.status === 'in_progress');
+  // While a check runs: refresh often during the text check, every minute while AI reads
+  const run = data?.run || null;
+  const running = !!run && (run.status === 'text' || run.status === 'ai_text' || run.status === 'ai_pdf');
   useEffect(() => {
-    if (!triageRunning && !batchOpen) return;
-    const t = setInterval(load, triageRunning ? 2000 : 60000);
+    if (!running) return;
+    const t = setInterval(load, run?.status === 'text' ? 2000 : 60000);
     return () => clearInterval(t);
-  }, [triageRunning, batchOpen, load]);
+  }, [running, run?.status, load]);
 
-  const runTriage = async (force: boolean) => {
-    setBusy('triage');
-    try { await api.post('/demo-expenses/full-check/triage', { force, domain }); await load(); }
-    catch (err: any) { addToast(err?.response?.data?.error || 'Failed to start the text check', 'error'); }
+  const startCheck = async () => {
+    setBusy('start');
+    try { await api.post('/demo-expenses/full-check/run', { domain }); await load(); }
+    catch (err: any) { addToast(err?.response?.data?.error || 'Could not start the check', 'error'); }
     finally { setBusy(null); }
-  };
-
-  const sendBatch = async (mode: 'haiku-text' | 'sonnet-pdf', est: number) => {
-    const key = mode === 'haiku-text' ? 'text' : 'pdf';
-    const cap = Number(limits[key] || est.toFixed(2));
-    if (!(cap > 0)) { addToast('Enter a spending limit', 'error'); return; }
-    setBusy(key);
-    try {
-      const res = await api.post('/demo-expenses/full-check/batch', { mode, max_usd: cap, domain });
-      const d = res.data;
-      addToast(d.sent
-        ? `Sent ${d.sent} invoices (~${usd(d.estimatedUsd)}). Results usually arrive within an hour.${d.skippedOverBudget ? ` ${d.skippedOverBudget} left over the limit.` : ''}`
-        : 'Nothing fits within that limit', d.sent ? 'success' : 'error');
-      await load();
-    } catch (err: any) {
-      addToast(err?.response?.data?.error || 'Failed to send', 'error');
-    } finally { setBusy(null); }
   };
 
   const applyFix = async (r: Row, fields: Record<string, any>, source: 'check' | 'manual') => {
@@ -229,8 +214,7 @@ export default function InvoiceFullCheck({ onClose, scope, onScopeChange }: {
   };
 
   const s = data?.summary;
-  const tj = data?.triage;
-  const triageDone = !!data && (data.summary.not_checked === 0 || !!tj?.finishedAt);
+  const scopeLabel = (sc: string) => sc === 'demo' ? 'Demo expenses' : sc === 'sales' ? 'Sales activities' : 'all supplier invoices';
 
   const Cell = ({ r, field, stored, read, className = '' }: { r: Row; field: Field; stored: ReactNode; read: ReactNode; className?: string }) => {
     const differs = r.diffs.includes(field);
@@ -242,15 +226,6 @@ export default function InvoiceFullCheck({ onClose, scope, onScopeChange }: {
     );
   };
 
-  const StepCard = ({ n, title, children }: { n: number; title: string; children: ReactNode }) => (
-    <div className="border border-gray-200 rounded-lg p-3 flex-1 min-w-[250px]">
-      <p className="text-xs font-semibold text-gray-500 uppercase mb-1.5">Step {n} · {title}</p>
-      {children}
-    </div>
-  );
-
-  const openBatches = (mode: string) => (data?.batches || []).filter(b => b.mode === mode && b.status === 'in_progress');
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="bg-white rounded-xl shadow-2xl max-w-[1400px] w-full mx-4 max-h-[94vh] flex flex-col">
@@ -258,10 +233,11 @@ export default function InvoiceFullCheck({ onClose, scope, onScopeChange }: {
           <div>
             <div className="flex flex-wrap items-center gap-3">
               <h2 className="text-lg font-bold text-gray-900">Full check of supplier invoices</h2>
-              <ScopeSwitch value={scope} onChange={onScopeChange} />
+              {!running && <ScopeSwitch value={scope} onChange={onScopeChange} />}
             </div>
             <p className="text-sm text-gray-500 mt-0.5">
-              Cheapest first: a free text check, then AI only for what it cannot confirm. AI spent so far: <strong>{usd(data?.spent_usd || 0)}</strong>
+              Every invoice is compared with its PDF — free where possible, AI only where needed.
+              {data && <> AI this month: <strong>{usd(data.budget.spent_usd)}</strong> of {usd(data.budget.monthly_usd)} (limit in Settings).</>}
             </p>
           </div>
           <button onClick={onClose} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"><X size={20} /></button>
@@ -271,64 +247,52 @@ export default function InvoiceFullCheck({ onClose, scope, onScopeChange }: {
           <div className="flex justify-center py-16"><Loader2 className="animate-spin text-primary-600" size={28} /></div>
         ) : (
           <>
-            {/* Steps */}
-            <div className="px-5 py-3 border-b flex flex-wrap gap-3 text-sm">
-              <StepCard n={1} title="Text check (free)">
-                {tj?.running ? (
-                  <>
-                    <div className="flex justify-between text-xs text-gray-600 mb-1"><span>Checking PDFs…</span><span className="tabular-nums">{tj.done} / {tj.total}</span></div>
-                    <div className="h-1.5 bg-gray-100 rounded-full"><div className="h-1.5 bg-primary-600 rounded-full" style={{ width: `${tj.total ? (tj.done / tj.total) * 100 : 0}%` }} /></div>
-                  </>
-                ) : (
-                  <>
-                    <p className="text-gray-700">{s!.confirmed_free} confirmed without AI{s!.not_checked > 0 && <>, <strong>{s!.not_checked}</strong> not checked yet</>}</p>
-                    <button onClick={() => runTriage(false)} disabled={!!busy}
-                      className="mt-2 px-3 py-1 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 flex items-center gap-1">
-                      {busy === 'triage' ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-                      {s!.not_checked > 0 ? 'Run text check' : 'Run again'}
-                    </button>
-                  </>
-                )}
-              </StepCard>
-              {([['text', 'haiku-text', 2, 'AI reads the text (cheap, batch)'], ['pdf', 'sonnet-pdf', 3, 'AI reads the PDF (scans / unsure, batch)']] as const).map(([key, mode, n, title]) => {
-                const st = data.stages[key];
-                const open = openBatches(mode);
-                return (
-                  <StepCard key={key} n={n} title={title}>
-                    {open.length > 0 ? (
-                      <p className="text-gray-700 flex items-center gap-1.5"><Loader2 size={13} className="animate-spin" />
-                        {open.reduce((a, b) => a + b.request_count, 0)} invoices with Anthropic — checked every few minutes
-                      </p>
-                    ) : st.count === 0 ? (
-                      <p className="text-gray-500">{triageDone ? 'Nothing to send' : 'Run step 1 first'}</p>
-                    ) : (
-                      <>
-                        <p className="text-gray-700"><strong>{st.count}</strong> invoices · estimated <strong>{usd(st.estimated_usd)}</strong></p>
-                        <div className="mt-2 flex items-center gap-1.5">
-                          <span className="text-xs text-gray-500">Limit $</span>
-                          <input type="number" step="0.01" min="0" value={limits[key]} placeholder={st.estimated_usd.toFixed(2)}
-                            onChange={e => setLimits(l => ({ ...l, [key]: e.target.value }))}
-                            className="w-20 px-1.5 py-0.5 text-xs border border-gray-300 rounded" />
-                          <button onClick={() => sendBatch(mode, st.estimated_usd)} disabled={!!busy || triageRunning || (key === 'pdf' && openBatches('haiku-text').length > 0)}
-                            className="px-3 py-1 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 flex items-center gap-1">
-                            {busy === key && <Loader2 size={12} className="animate-spin" />} Send
-                          </button>
-                        </div>
-                      </>
-                    )}
-                    {(() => {
-                      const done = (data.batches || []).filter(b => b.mode === mode && b.status === 'ended');
-                      return done.length > 0 && (
-                        <p className="text-xs text-gray-400 mt-1">
-                          Done: {done.reduce((a, b) => a + b.succeeded, 0)} read · cost {usd(done.reduce((a, b) => a + (b.cost_usd || 0), 0))}
-                        </p>
-                      );
-                    })()}
-                  </StepCard>
-                );
-              })}
+            {/* The check: one button, the server does the rest */}
+            <div className="px-5 py-4 border-b">
+              {running && run ? (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-gray-900 flex items-center gap-2">
+                    <Loader2 size={16} className="animate-spin text-primary-600" />
+                    Checking {scopeLabel(run.scope)}…
+                  </p>
+                  {run.status === 'text' ? (
+                    <>
+                      <p className="text-sm text-gray-600">Comparing the stored figures with the PDFs (free){run.text_progress.total > 0 && ` — ${run.text_progress.done} of ${run.text_progress.total}`}</p>
+                      {run.text_progress.total > 0 && (
+                        <div className="h-1.5 bg-gray-100 rounded-full max-w-md"><div className="h-1.5 bg-primary-600 rounded-full" style={{ width: `${(run.text_progress.done / run.text_progress.total) * 100}%` }} /></div>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-sm text-gray-600">
+                      AI is reading {run.ai_reading} invoice(s) that could not be confirmed for free
+                      {run.status === 'ai_pdf' ? ' (scanned or unclear ones, from the PDF itself)' : ''}.
+                      This usually takes under an hour — you can close this window and come back; the results will be here.
+                    </p>
+                  )}
+                  <p className="text-xs text-gray-400">Started by {run.started_by || '—'}, {formatDate(run.started_at.substring(0, 10))}</p>
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-4">
+                  <button onClick={startCheck} disabled={!!busy}
+                    className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 flex items-center gap-1.5 font-medium">
+                    {busy === 'start' ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+                    {run ? 'Check again' : 'Check invoices'} — {scopeLabel(scope)}
+                  </button>
+                  {run && (
+                    <div className="text-sm text-gray-600">
+                      <span className={run.status === 'stopped' ? 'text-red-700 font-medium' : ''}>
+                        {run.status === 'stopped' ? 'Last check stopped' : 'Last check finished'}
+                      </span>
+                      {' '}{formatDate((run.finished_at || run.started_at).substring(0, 10))} · {scopeLabel(run.scope)}
+                      {run.ai_read > 0 && <> · AI read {run.ai_read} invoice(s) for {usd(run.cost_usd)}</>}
+                      {run.message && <p className={`text-xs mt-0.5 ${run.status === 'stopped' ? 'text-red-700' : 'text-amber-700'}`}>{run.message}</p>}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
+            {!running && (<>
             {/* Summary + filters */}
             <div className="px-5 py-3 border-b space-y-2">
               <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 text-sm">
@@ -429,6 +393,7 @@ export default function InvoiceFullCheck({ onClose, scope, onScopeChange }: {
             <div className="px-5 py-2 border-t text-xs text-gray-400">
               Crossed out = stored, red = printed on the invoice (or the VAT-rule suggestion when there is no PDF). Fix saves it; Correct as stored keeps what is there; Quick view shows the invoice to check and edit by hand.
             </div>
+            </>)}
           </>
         )}
       </div>

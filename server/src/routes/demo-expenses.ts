@@ -8,16 +8,18 @@ import multer from 'multer';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { getEurRate } from '../lib/fx.js';
+import { AiBudgetError, aiBudgetLeft, getAiMonthlyLimit, aiSpentThisMonth } from '../lib/aiBudget.js';
 import {
   DEMO_SUPPLIER_MAP, SALES_CAT_DB_MAP, buildSupplierIndex, knownSupplierList, matchSupplier,
   normalizeSupplierName, normalizeVat, levenshtein, supplierTokens, type SupplierIndex,
 } from '../lib/supplierMatch.js';
 import {
-  readSupplierInvoice, checkAmounts, cachedInvoiceExtraction, rememberExtraction, isCreditError, invoiceReaderConfigured,
+  readSupplierInvoice, checkAmounts, cachedInvoiceExtraction, rememberExtraction, isCreditError, invoiceReaderConfigured, pdfText,
   type InvoiceExtraction,
 } from '../lib/supplierInvoiceReader.js';
 import {
-  runTriage, triageJob, stageCandidates, sendStage, pollBatches, startBatchPoller, invoiceSignature, scopeOf,
+  triageJob, stageCandidates, pollBatches, startBatchPoller, invoiceSignature, scopeOf,
+  startRun, advanceRun, currentRun, triageInvoice,
 } from '../lib/invoiceCheck.js';
 
 const router = Router();
@@ -1026,6 +1028,29 @@ type ReadInvoice = Awaited<ReturnType<typeof parsePDFInvoice>> & {
 // After "credit used up", skip AI for a few minutes instead of failing on every file of the ZIP
 let creditOutUntil = 0;
 
+/**
+ * Step 1 on upload (free): the basic reader's figures count when the PDF text
+ * confirms them (net, VAT, total, currency, number, date — the full check's
+ * text check) and exactly one known supplier's VAT number is printed on it.
+ * Then no AI is needed for this invoice.
+ */
+function verifyBasicReading(text: string, r: Awaited<ReturnType<typeof parsePDFInvoice>>, index: SupplierIndex): { supplier: string; vat: string } | null {
+  if (!(Math.abs(r.amount) > 0)) return null;
+  // Credit notes need the sign right — leave them to the AI
+  if (/credit\s*-?\s*no(ta|te)|creditnota|note\s+de\s+cr[ée]dit|gutschrift|\bavoir\b/i.test(text)) return null;
+  const t = triageInvoice(text, { amount: r.amount, vat_amount: r.vatAmount, currency: r.currency, invoice_id: r.invoiceId, issue_date: r.issueDate, supplier: '' });
+  if (t.status !== 'needs_ai' && t.status !== 'confirmed') return null;
+  if (t.reasons.some(x => x !== 'supplier_not_found')) return null;
+  const compact = text.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const hits = new Map<string, string>();
+  for (const sup of knownSupplierList(index)) {
+    if (sup.vat && !isOwnCompany(sup.name) && compact.includes(sup.vat)) hits.set(sup.vat, sup.name);
+  }
+  if (hits.size !== 1) return null;
+  const [[vat, name]] = [...hits];
+  return { supplier: name, vat };
+}
+
 async function readPdfInvoice(buf: Buffer, fileName: string, fileHash: string, index: SupplierIndex, force = false): Promise<ReadInvoice> {
   const textResult = await parsePDFInvoice(buf, fileName);
   let x: InvoiceExtraction | null = null;
@@ -1033,12 +1058,25 @@ async function readPdfInvoice(buf: Buffer, fileName: string, fileHash: string, i
   // A saved reading needs no AI, credit or not
   const saved = force ? null : cachedInvoiceExtraction(fileHash);
   if (saved) x = saved;
+  else {
+    // Step 1: free — confirmed by the PDF text, no AI
+    if (!force) {
+      const { text } = await pdfText(buf);
+      const ok = verifyBasicReading(text, textResult, index);
+      if (ok) {
+        console.log(`[invoice-reader] ${fileName}: confirmed by the text check (no AI) — ${ok.supplier} net=${textResult.amount} vat=${textResult.vatAmount}`);
+        return { ...textResult, supplierName: ok.supplier, supplierVat: ok.vat, parseWarnings: [] };
+      }
+    }
+  }
+  if (x) { /* saved reading */ }
   else if (Date.now() < creditOutUntil) aiProblem = 'credit';
   else {
+    // Steps 2–3: AI on the text, then the PDF when needed
     try {
       x = await readSupplierInvoice({ fileHash, file: buf, categories: invoiceCategories(), force });
     } catch (err: any) {
-      aiProblem = isCreditError(err) ? 'credit' : 'error';
+      aiProblem = err instanceof AiBudgetError ? 'limit' : isCreditError(err) ? 'credit' : 'error';
       if (aiProblem === 'credit') creditOutUntil = Date.now() + 5 * 60_000;
       console.warn(`[invoice-reader] Claude read failed for ${fileName}, using text reader:`, err?.message || err);
     }
@@ -1488,7 +1526,7 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       aiUnavailable: (() => {
         const hit = parsed.filter((p: any) => p.aiProblem);
         if (hit.length === 0) return null;
-        const order = ['credit', 'not_configured', 'error', 'unreadable'];
+        const order = ['credit', 'limit', 'not_configured', 'error', 'unreadable'];
         const reason = order.find(r => hit.some((p: any) => p.aiProblem === r)) || 'error';
         return { count: hit.length, reason };
       })(),
@@ -3258,26 +3296,13 @@ router.post('/invoices/:id/reread', async (req: Request, res: Response) => {
 
 startBatchPoller();
 
-// Stage 1 — free
-router.post('/full-check/triage', (req: Request, res: Response) => {
-  if (triageJob.running) { res.status(409).json({ error: 'The text check is already running' }); return; }
-  runTriage(req.body?.force === true, scopeOf(req.body?.domain)).catch(err => console.error('[full-check] text check error:', err));
-  res.json({ started: true });
-});
-
-// Stages 2 and 3 — send a batch, capped at max_usd (estimated)
-router.post('/full-check/batch', async (req: Request, res: Response) => {
+// Start the check: the server runs text check → AI on text → AI on PDF by itself
+router.post('/full-check/run', (req: Request, res: Response) => {
   try {
-    const mode = req.body?.mode === 'sonnet-pdf' ? 'sonnet-pdf' : req.body?.mode === 'haiku-text' ? 'haiku-text' : null;
-    const maxUsd = Number(req.body?.max_usd);
-    if (!mode) { res.status(400).json({ error: 'mode must be haiku-text or sonnet-pdf' }); return; }
-    if (!(maxUsd > 0)) { res.status(400).json({ error: 'Set a spending limit (max_usd)' }); return; }
-    if (!process.env.ANTHROPIC_API_KEY) { res.status(400).json({ error: 'AI reading is not configured (ANTHROPIC_API_KEY)' }); return; }
-    if (triageJob.running) { res.status(409).json({ error: 'Wait for the text check to finish' }); return; }
-    res.json(await sendStage(mode, maxUsd, scopeOf(req.body?.domain)));
+    const run = startRun(scopeOf(req.body?.domain), (req as any).user?.display_name || 'Unknown');
+    res.json({ run });
   } catch (err: any) {
-    console.error('[full-check] batch error:', err);
-    res.status(400).json({ error: err?.message || 'Failed to send the batch' });
+    res.status(409).json({ error: err?.message || 'Could not start the check' });
   }
 });
 
@@ -3372,8 +3397,8 @@ const VERIFIED_BY: Record<string, string> = {
 router.get('/full-check', async (req: Request, res: Response) => {
   const scope = scopeOf(req.query.domain);
   try {
-    // Collect finished batches in the background — the report never waits on Anthropic
-    pollBatches().catch(() => {});
+    // Collect finished batches and move the run on, in the background — the report never waits on Anthropic
+    pollBatches().catch(() => {}).then(() => advanceRun()).catch(() => {});
     const rows = db.prepare(`
       SELECT i.id, i.invoice_id, i.issue_date, i.supplier, i.domain, i.category, i.amount, i.vat_amount, i.currency,
         i.fx_rate, i.eur_amount, i.vat_eur_amount, COALESCE(i.file_hash, t.file_hash) as file_hash,
@@ -3469,16 +3494,18 @@ router.get('/full-check', async (req: Request, res: Response) => {
 
     const count = (st: string) => report.filter(r => r.status === st).length;
     const differing = report.filter(r => r.status === 'differs');
-    const stage = (mode: 'haiku-text' | 'sonnet-pdf') => {
-      const c = stageCandidates(mode, scope);
-      return { count: c.length, estimated_usd: Math.round(c.reduce((a, x) => a + x.estUsd, 0) * 100) / 100 };
-    };
-    const spent = db.prepare('SELECT COALESCE(SUM(cost_usd), 0) as usd FROM ai_usage').get() as any;
+    const run = currentRun();
+    const runBatches = run ? db.prepare('SELECT mode, request_count, status, cost_usd FROM invoice_read_batches WHERE run_id = ?').all(run.id) as any[] : [];
+    const limit = getAiMonthlyLimit(), spentMonth = aiSpentThisMonth();
     res.json({
-      triage: triageJob,
-      stages: { text: stage('haiku-text'), pdf: stage('sonnet-pdf') },
-      batches: db.prepare('SELECT id, mode, request_count, estimated_usd, status, succeeded, failed, cost_usd, created_at, ended_at FROM invoice_read_batches ORDER BY created_at DESC').all(),
-      spent_usd: Math.round(spent.usd * 100) / 100,
+      run: run && {
+        ...run,
+        text_progress: { running: triageJob.running, done: triageJob.done, total: triageJob.total },
+        ai_reading: runBatches.filter(b => b.status === 'in_progress').reduce((a, b) => a + b.request_count, 0),
+        ai_read: runBatches.filter(b => b.status === 'ended').reduce((a, b) => a + b.request_count, 0),
+        cost_usd: Math.round(runBatches.reduce((a, b) => a + (b.cost_usd || 0), 0) * 1000) / 1000,
+      },
+      budget: { monthly_usd: limit, spent_usd: Math.round(spentMonth * 100) / 100, left_usd: Math.round(aiBudgetLeft() * 100) / 100 },
       summary: {
         total: rows.length,
         ok: count('ok'),

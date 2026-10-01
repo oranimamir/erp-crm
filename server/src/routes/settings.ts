@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
+import { getAiMonthlyLimit, setAiMonthlyLimit, aiSpentThisMonth } from '../lib/aiBudget.js';
 
 /**
  * App-wide settings edited on the Settings page. For now: the default
@@ -52,6 +53,22 @@ router.put('/document-emails', (req: Request, res: Response) => {
   db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('document_emails', ?, datetime('now'))")
     .run(JSON.stringify(value));
   res.json(value);
+});
+
+// GET /api/settings/ai-limit — monthly AI spending limit for invoice reading, and this month's spend
+router.get('/ai-limit', (_req: Request, res: Response) => {
+  const limit = getAiMonthlyLimit(), spent = aiSpentThisMonth();
+  res.json({ monthly_usd: limit, spent_usd: Math.round(spent * 100) / 100, left_usd: Math.max(0, Math.round((limit - spent) * 100) / 100) });
+});
+
+// PUT /api/settings/ai-limit — admin only
+router.put('/ai-limit', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const n = Number(req.body?.monthly_usd);
+  if (!isFinite(n) || n < 0 || n > 10000) { res.status(400).json({ error: 'Enter an amount between 0 and 10000' }); return; }
+  setAiMonthlyLimit(n);
+  const spent = aiSpentThisMonth();
+  res.json({ monthly_usd: n, spent_usd: Math.round(spent * 100) / 100, left_usd: Math.max(0, Math.round((n - spent) * 100) / 100) });
 });
 
 export default router;

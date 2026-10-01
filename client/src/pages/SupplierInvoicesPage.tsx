@@ -74,6 +74,7 @@ interface MonthlySummary {
 
 const AI_PROBLEM_TEXT: Record<string, string> = {
   credit: 'the Anthropic API credit is used up — top it up',
+  limit: 'the monthly AI spending limit is reached — raise it in Settings',
   not_configured: 'AI reading is not set up on the server (ANTHROPIC_API_KEY)',
   error: 'the AI service did not respond',
   unreadable: 'the AI could not read the file',

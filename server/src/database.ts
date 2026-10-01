@@ -1309,6 +1309,18 @@ export async function initializeDatabase() {
       checked_at TEXT DEFAULT (datetime('now'))
     )
   `);
+  // One full check at a time; it moves through its stages by itself (lib/invoiceCheck.ts)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS check_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      scope TEXT NOT NULL DEFAULT 'all',
+      status TEXT NOT NULL,
+      started_by TEXT,
+      started_at TEXT,
+      finished_at TEXT,
+      message TEXT
+    )
+  `);
   // "Correct as stored" on a flagged invoice; holds while the figures match `signature`
   db.exec(`
     CREATE TABLE IF NOT EXISTS invoice_check_accepted (
@@ -1333,6 +1345,7 @@ export async function initializeDatabase() {
       ended_at TEXT
     )
   `);
+  try { db.exec(`ALTER TABLE invoice_read_batches ADD COLUMN run_id INTEGER`); } catch (_) {}
   // Token use of every AI call (invoice reading), for the spend shown in the app
   db.exec(`
     CREATE TABLE IF NOT EXISTS ai_usage (
