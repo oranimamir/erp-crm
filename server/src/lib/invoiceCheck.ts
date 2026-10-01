@@ -286,7 +286,20 @@ export function invoiceCategoriesForAi(): { demo: string[]; sales: string[] } {
 const MAX_BATCH_BYTES = 80 * 1024 * 1024; // API limit is 256 MB per batch; stay well under
 
 /** Send one stage as batch(es), up to `maxUsd` estimated. */
+let sending = false;
+
 export async function sendStage(mode: ReadMode, maxUsd: number, scope: Scope = null): Promise<{ sent: number; estimatedUsd: number; batches: string[]; skippedOverBudget: number }> {
+  // One send at a time: two users clicking Send together would otherwise send the same invoices twice
+  if (sending) throw new Error('Someone is already sending a batch — try again in a moment');
+  sending = true;
+  try {
+    return await sendStageInner(mode, maxUsd, scope);
+  } finally {
+    sending = false;
+  }
+}
+
+async function sendStageInner(mode: ReadMode, maxUsd: number, scope: Scope): Promise<{ sent: number; estimatedUsd: number; batches: string[]; skippedOverBudget: number }> {
   const all = stageCandidates(mode, scope);
   const chosen: Candidate[] = [];
   let est = 0;

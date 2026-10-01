@@ -33,7 +33,7 @@ export interface InvoiceExtraction {
   suggested_domain: 'demo' | 'sales' | null;
   suggested_category: string | null;
   description: string | null;
-  read_by?: ReadMode | 'opus-pdf';    // absent on readings made before the staged reader
+  read_by?: ReadMode | 'opus-pdf' | 'xml';  // absent on readings made before the staged reader; 'xml' = e-invoice data
 }
 
 export type ReadMode = 'haiku-text' | 'sonnet-pdf';

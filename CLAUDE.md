@@ -94,6 +94,7 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - `PATCH /invoices/:id/vat` with optional `amount` changes net + VAT together (FX redone; used by the inline edit). No separate VAT audit: the full check covers it — invoices without a PDF get VAT-rule suggestions (`vatRuleSuggestion`), flagged rows can be marked "Correct as stored" (`POST /invoices/:id/accept-check` → `invoice_check_accepted`, holds until the figures change)
 - Check Duplicates (`GET /check-duplicates`) also uses the full check's readings: same file, or same seller (VAT no.) + same printed invoice number → duplicate; both read with different printed numbers from the same seller → never flagged. No AI calls of its own
 - Scope: Full check (triage, batches, report) and Check Duplicates take `domain` = demo | sales (omitted = all); `ScopeSwitch` in `InvoiceFullCheck.tsx`, shared on the Summary tab
+- Uploads save their reading in `invoice_extractions` (AI for PDFs; e-invoice XML data as `read_by: 'xml'` via `rememberUblReading`), so the full check confirms them without new AI calls. `sendStage` allows one send at a time (concurrent users)
 
 ## Deployment
 Railway, auto-deploys from `main` on push. Commit and push immediately after every change.

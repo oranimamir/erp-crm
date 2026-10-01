@@ -13,7 +13,7 @@ import {
   normalizeSupplierName, normalizeVat, levenshtein, supplierTokens, type SupplierIndex,
 } from '../lib/supplierMatch.js';
 import {
-  readSupplierInvoice, checkAmounts, cachedInvoiceExtraction, type InvoiceExtraction,
+  readSupplierInvoice, checkAmounts, cachedInvoiceExtraction, rememberExtraction, type InvoiceExtraction,
 } from '../lib/supplierInvoiceReader.js';
 import {
   runTriage, triageJob, stageCandidates, sendStage, pollBatches, startBatchPoller, invoiceSignature, scopeOf,
@@ -332,11 +332,40 @@ function parseUBLInvoice(xmlString: string) {
     supplierVat,
     vatRate: check.vatRate,
     parseSource: 'xml' as 'xml' | 'ai' | 'text',
+    vatLines,
+    totalIncl: totalIncl != null ? Math.abs(totalIncl) : null,
+    reverseCharge,
     parseWarnings: check.warnings,
     lineItems,
     embeddedPdf,
     pdfFilename,
   };
+}
+
+/** Store an e-invoice's own figures as its reading (shared with the full check). */
+function rememberUblReading(fileHash: string, inv: NonNullable<ReturnType<typeof parseUBLInvoice>>): void {
+  try {
+    rememberExtraction(fileHash, {
+      is_invoice: true,
+      is_credit_note: inv.amount < 0,
+      invoice_number: inv.invoiceId || null,
+      issue_date: /^\d{4}-\d{2}-\d{2}$/.test(inv.issueDate) ? inv.issueDate : null,
+      currency: inv.currency || null,
+      supplier_name: inv.supplierName || null,
+      supplier_vat_number: inv.supplierVat || null,
+      supplier_country: inv.supplierCountry || null,
+      net_amount: Math.abs(inv.amount),
+      vat_amount: Math.abs(inv.vatAmount),
+      total_amount: inv.totalIncl,
+      vat_lines: inv.vatLines,
+      reverse_charge: inv.reverseCharge,
+      matched_known_supplier: null,
+      suggested_domain: null,
+      suggested_category: null,
+      description: null,
+      read_by: 'xml',
+    });
+  } catch { /* reading cache only */ }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1089,6 +1118,8 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       const xmlBaseName = (xml.name.replace(/\.xml$/i, '').split('/').pop() || '').trim();
       const pairedPdf = pdfFiles.get(xmlBaseName.toLowerCase());
       const pairedPdfHash = pdfHashes.get(xmlBaseName.toLowerCase());
+      // The e-invoice data is the reading: saved so the full check never pays AI to re-read its PDF
+      rememberUblReading(pairedPdfHash || xml.hash, inv);
       parsed.push({
         ...inv,
         xmlFilename: xml.name,
@@ -2228,6 +2259,7 @@ router.post('/upload-single', upload.single('file'), async (req: Request, res: R
       const xmlString = file.buffer.toString('utf-8');
       parsed = parseUBLInvoice(xmlString);
       if (parsed) {
+        rememberUblReading(fileHash, parsed);
         parsed.xmlFilename = file.originalname;
         parsed.pdfFilename = null;
         parsed.embeddedPdf = null;
@@ -3307,7 +3339,7 @@ router.post('/invoices/:id/apply-check', async (req: Request, res: Response) => 
 });
 
 const VERIFIED_BY: Record<string, string> = {
-  text: 'Text check', 'haiku-text': 'AI (text)', 'sonnet-pdf': 'AI (PDF)', 'opus-pdf': 'AI (PDF)', rules: 'VAT rules (no PDF)',
+  text: 'Text check', 'haiku-text': 'AI (text)', 'sonnet-pdf': 'AI (PDF)', 'opus-pdf': 'AI (PDF)', xml: 'E-invoice data (XML)', rules: 'VAT rules (no PDF)',
 };
 
 router.get('/full-check', async (req: Request, res: Response) => {
