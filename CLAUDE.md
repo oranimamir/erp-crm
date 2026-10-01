@@ -98,6 +98,7 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - No AI reading on upload (no credit / no key / error) → basic regex reader, `ai_unavailable` warning on the invoice + `aiUnavailable {count, reason}` on the ZIP response; review shows a red banner. After a credit error AI is skipped for 5 min (`creditOutUntil`)
 - Monthly AI spending limit (Settings → AI invoice reading, `app_settings.ai_monthly_limit_usd`, default $10; `lib/aiBudget.ts`): spend = this month's `ai_usage` + open batch estimates. Uploads get `aiProblem: 'limit'`; runs send only what fits and note the rest
 - Uploads run the same order: step 1 free (`verifyBasicReading`: the basic reader's figures confirmed by the PDF text AND exactly one known supplier VAT no. printed; credit notes excluded) → Haiku on text → Sonnet on PDF. `learnSupplierVats` stores suppliers' VAT numbers from readings when a run finishes
+- Duplicates on upload (ZIP, single, import guard) — `findDuplicate` / `buildDuplicateIndex`: same file → skip; same invoice number (stored or printed, compacted) + same supplier (VAT no. / name) or amount or date → skip; same supplier + amount + date otherwise → review as `possible_duplicate` (pre-skipped, user can include). Two numbers read off the documents that differ → never a duplicate. Same rules inside one ZIP
 
 ## Deployment
 Railway, auto-deploys from `main` on push. Commit and push immediately after every change.

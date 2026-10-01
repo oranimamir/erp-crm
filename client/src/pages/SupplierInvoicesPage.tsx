@@ -82,6 +82,7 @@ const AI_PROBLEM_TEXT: Record<string, string> = {
 
 interface SingleUploadPreview {
   parseWarnings?: string[]; aiProblem?: string | null;
+  possibleDuplicate?: { invoiceId: string; supplier: string; date: string; amount: number } | null;
   invoiceId: string; date: string; supplier: string; amount: number; vatAmount: number;
   currency: string; domain: string; category: string; month: string; lineItems: string;
   pdfFilename: string | null; xmlFilename: string | null; embeddedPdf: string | null;
@@ -851,9 +852,11 @@ export default function SupplierInvoicesPage() {
         if (res.data.aiUnavailable) {
           addToast(`AI reading unavailable for ${res.data.aiUnavailable.count} invoice(s): ${AI_PROBLEM_TEXT[res.data.aiUnavailable.reason] || 'unknown error'}. They were read by the basic reader — check their amounts and VAT in the review list.`, 'error');
         }
+        const possibleDup = res.data.warnings.filter((w: any) => w.issues.includes('possible_duplicate')).length;
         const badTotals = res.data.warnings.filter((w: any) => w.issues.includes('totals_mismatch')).length;
         const vatCheck = res.data.warnings.filter((w: any) => w.issues.includes('foreign_vat') || w.issues.includes('vat_rate_unusual')).length;
         const parts: string[] = [];
+        if (possibleDup > 0) parts.push(`${possibleDup} possible duplicate(s) (skipped unless you include them)`);
         if (badTotals > 0) parts.push(`${badTotals} whose net + VAT don't add up to the total`);
         if (vatCheck > 0) parts.push(`${vatCheck} with VAT to check`);
         if (zeroAmt > 0) parts.push(`${zeroAmt} with amount €0`);
@@ -916,7 +919,7 @@ export default function SupplierInvoicesPage() {
         })));
         // Auto-skip own-company and duplicate invoices by default (user can un-skip)
         const autoSkipIds = (res.data.warnings || [])
-          .filter((w: any) => w.issues.includes('own_company'))
+          .filter((w: any) => w.issues.includes('own_company') || w.issues.includes('possible_duplicate'))
           .map((w: any) => w.invoiceId);
         if (autoSkipIds.length > 0) setSkipIds(autoSkipIds);
         setShowUnknownModal(true);
@@ -2513,6 +2516,18 @@ export default function SupplierInvoicesPage() {
                             {w.issues.includes('totals_mismatch') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Net + VAT ≠ invoice total — check the amounts</span>}
                             {w.issues.includes('foreign_vat') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Foreign supplier charges VAT — check it is not reverse charge</span>}
                             {w.issues.includes('vat_rate_unusual') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Unusual VAT rate — check the VAT</span>}
+                            {w.issues.includes('possible_duplicate') && (
+                              <>
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700"
+                                  title="Same supplier, amount and date as an invoice already stored; one of the two has no usable invoice number">
+                                  Possible duplicate of {w.duplicateOf?.invoiceId}{w.duplicateOf?.inThisZip ? ' in this ZIP' : ''} ({w.duplicateOf?.supplier}, {w.duplicateOf?.date ? formatDate(w.duplicateOf.date) : ''}, {Number(w.duplicateOf?.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })})
+                                </span>
+                                <button onClick={() => setSkipIds(prev => isSkipped ? prev.filter(id => id !== u.invoiceId) : [...prev, u.invoiceId])}
+                                  className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${isSkipped ? 'bg-red-50 text-red-600 border-red-200' : 'bg-green-50 text-green-600 border-green-200'}`}>
+                                  {isSkipped ? 'Will skip — click to include' : 'Will include — click to skip'}
+                                </button>
+                              </>
+                            )}
                             {w.issues.includes('ai_unavailable') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Read without AI — check net & VAT against the PDF</span>}
                             {w.issues.includes('not_an_invoice') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Does not look like an invoice (quote / statement?)</span>}
                           </div>
@@ -2904,6 +2919,13 @@ export default function SupplierInvoicesPage() {
             <div className="p-6 border-b">
               <h2 className="text-lg font-bold text-gray-900">Review Invoice Before Import</h2>
               <p className="text-sm text-gray-500 mt-1">Preview the invoice and edit fields as needed before importing.</p>
+              {singlePreview.possibleDuplicate && (
+                <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                  <strong>Possible duplicate</strong> of invoice {singlePreview.possibleDuplicate.invoiceId} from {singlePreview.possibleDuplicate.supplier}
+                  {' '}({formatDate(singlePreview.possibleDuplicate.date)}, {Number(singlePreview.possibleDuplicate.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}) — same supplier, amount and date.
+                  {' '}Import only if this is a different invoice.
+                </div>
+              )}
               {singlePreview.parseWarnings?.includes('ai_unavailable') && (
                 <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
                   <strong>AI reading unavailable</strong>: {AI_PROBLEM_TEXT[singlePreview.aiProblem || ''] || 'unknown error'}.

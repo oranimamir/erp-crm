@@ -1113,6 +1113,118 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
 // UPLOAD ZIP — shared endpoint, classifies into demo/sales domains
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// DUPLICATES ON UPLOAD — one rule set for ZIP, single upload and import
+//   same_file        identical bytes already stored                       → skip
+//   same_number      same invoice number (as stored or as printed on the
+//                    PDF, ignoring spacing / leading zeros) from the same
+//                    supplier (VAT no. or name), amount or invoice date   → skip
+//   same_amount_date same supplier + amount + date, a number missing on
+//                    one side                                             → review (pre-skipped)
+// Same supplier with two different invoice numbers is never a duplicate.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Invoice number usable for matching: compact, has a digit, not a bare word. */
+function dupNumber(v: unknown): string | null {
+  const c = compactId(typeof v === 'string' ? v : '');
+  return c.length >= 3 && /\d/.test(c) ? c : null;
+}
+
+interface DupRow {
+  id: number; invoice_id: string; supplier: string; amount: number; issue_date: string; domain: string;
+  pdf_filename: string | null; xml_filename: string | null;
+  nums: string[]; vats: string[]; names: string[];
+  /** Number read off the document itself (AI / e-invoice / text-confirmed), not e.g. a file name */
+  readNums: string[];
+}
+interface DupIndex { rows: DupRow[]; byHash: Map<string, DupRow>; byNum: Map<string, DupRow[]> }
+
+function buildDuplicateIndex(): DupIndex {
+  const raw = db.prepare(`
+    SELECT i.id, i.invoice_id, i.supplier, i.amount, i.issue_date, i.domain, i.pdf_filename, i.xml_filename, i.supplier_vat,
+      COALESCE(i.file_hash, t.file_hash) as file_hash
+    FROM demo_invoices i LEFT JOIN invoice_triage t ON t.invoice_id = i.id
+  `).all() as any[];
+  const aliases = db.prepare('SELECT supplier_pattern, display_name FROM demo_supplier_mappings').all() as any[];
+  const idx: DupIndex = { rows: [], byHash: new Map(), byNum: new Map() };
+  for (const r of raw) {
+    const x = cachedInvoiceExtraction(r.file_hash);
+    const names = [r.supplier, x?.supplier_name].filter(Boolean) as string[];
+    // a renamed supplier also answers to its original spelling
+    for (const a of aliases) if (a.display_name && names.some(n => sameSupplier(n, a.display_name))) names.push(a.supplier_pattern);
+    const row: DupRow = {
+      id: r.id, invoice_id: r.invoice_id, supplier: r.supplier, amount: r.amount, issue_date: r.issue_date, domain: r.domain,
+      pdf_filename: r.pdf_filename, xml_filename: r.xml_filename,
+      nums: [...new Set([dupNumber(r.invoice_id), dupNumber(x?.invoice_number)].filter(Boolean) as string[])],
+      readNums: [dupNumber(x?.invoice_number)].filter(Boolean) as string[],
+      vats: [...new Set([normalizeVat(r.supplier_vat), normalizeVat(x?.supplier_vat_number)].filter(Boolean) as string[])],
+      names,
+    };
+    idx.rows.push(row);
+    if (r.file_hash) idx.byHash.set(r.file_hash, row);
+    for (const n of row.nums) idx.byNum.set(n, [...(idx.byNum.get(n) || []), row]);
+  }
+  return idx;
+}
+
+interface DupCandidate {
+  fileHash?: string | null; invoiceId?: string | null; supplierName?: string | null; readName?: string | null;
+  supplierVat?: string | null; amount?: number; issueDate?: string | null;
+  /** The invoice number was read off the document (not taken from the file name) */
+  numberReliable?: boolean;
+}
+
+function sameSeller(row: DupRow, inv: DupCandidate): boolean {
+  const vat = normalizeVat(inv.supplierVat);
+  if (vat && row.vats.includes(vat)) return true;
+  if (vat && row.vats.length > 0) return false; // both have VAT numbers and they differ
+  const names = [inv.supplierName, inv.readName].filter(Boolean) as string[];
+  return names.some(n => row.names.some(m => sameSupplier(n, m)));
+}
+
+function findDuplicate(idx: DupIndex, inv: DupCandidate): { kind: 'same_file' | 'same_number' | 'same_amount_date'; row: DupRow } | null {
+  if (inv.fileHash) {
+    const hit = idx.byHash.get(inv.fileHash);
+    if (hit) return { kind: 'same_file', row: hit };
+  }
+  const amount = Math.abs(inv.amount || 0);
+  const num = dupNumber(inv.invoiceId);
+  if (num) {
+    for (const row of idx.byNum.get(num) || []) {
+      // Same number plus the same supplier, amount or invoice date — the last one also
+      // holds when a poor reading got the supplier and amount wrong
+      if (sameSeller(row, inv)
+        || (amount > 0 && Math.abs(Math.abs(row.amount) - amount) < 0.02)
+        || (!!inv.issueDate && row.issue_date === inv.issueDate)) return { kind: 'same_number', row };
+    }
+  }
+  if (amount > 0 && inv.issueDate) {
+    for (const row of idx.rows) {
+      if (row.issue_date !== inv.issueDate || Math.abs(Math.abs(row.amount) - amount) >= 0.02) continue;
+      if (!sameSeller(row, inv)) continue;
+      // Both numbers read off the documents and they differ → two separate invoices
+      if (num && inv.numberReliable && row.readNums.length > 0 && !row.nums.includes(num)) continue;
+      return { kind: 'same_amount_date', row };
+    }
+  }
+  return null;
+}
+
+/** Add an accepted invoice to the index, so later ones in the same upload match it too. */
+function addToDuplicateIndex(idx: DupIndex, inv: DupCandidate & { invoiceId?: string | null }): void {
+  const row: DupRow = {
+    id: -1, invoice_id: inv.invoiceId || '', supplier: inv.supplierName || '', amount: inv.amount || 0, issue_date: inv.issueDate || '',
+    domain: '', pdf_filename: null, xml_filename: null,
+    nums: [dupNumber(inv.invoiceId)].filter(Boolean) as string[],
+    readNums: inv.numberReliable ? [dupNumber(inv.invoiceId)].filter(Boolean) as string[] : [],
+    vats: [normalizeVat(inv.supplierVat)].filter(Boolean) as string[],
+    names: [inv.supplierName, inv.readName].filter(Boolean) as string[],
+  };
+  idx.rows.push(row);
+  if (inv.fileHash) idx.byHash.set(inv.fileHash, row);
+  for (const n of row.nums) idx.byNum.set(n, [...(idx.byNum.get(n) || []), row]);
+}
+
 router.post('/upload-zip', upload.single('file'), async (req: Request, res: Response) => {
   try {
     if (!req.file) { res.status(400).json({ error: 'No file uploaded' }); return; }
@@ -1236,46 +1348,30 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       return;
     }
 
-    // --- Deduplicate within the ZIP itself ---
-    // ONLY exact invoice ID matches are auto-deduped (XML+PDF pair for same invoice).
-    // Combo matches (same supplier+amount+date but different IDs) are kept but flagged —
-    // they could be legitimate separate invoices from the same supplier on the same day.
-    const seenIds = new Set<string>();
-    const seenCombos = new Map<string, string>(); // combo-key → first invoiceId
+    // --- Deduplicate within the ZIP itself (same rules as against the stored invoices) ---
+    // Sure duplicates (same file / same number from the same supplier — e.g. an XML and its
+    // PDF) are dropped; same supplier + amount + date with a number missing is flagged.
+    const zipIndex: DupIndex = { rows: [], byHash: new Map(), byNum: new Map() };
     const deduped: typeof parsed = [];
     let inZipDuplicateCount = 0;
-    const comboDuplicateWarnings: { invoiceId: string; supplier: string; matchedId: string }[] = [];
     for (const inv of parsed) {
-      // Exact invoice ID dedup — safe to auto-remove (e.g. XML and standalone PDF for same invoice)
-      if (inv.invoiceId && seenIds.has(inv.invoiceId)) {
-        console.log(`[upload-zip] Dedup skipping (exact ID): "${inv.supplierName}" ${inv.invoiceId}`);
+      const cand = { fileHash: inv.fileHash, invoiceId: inv.invoiceId, supplierName: inv.supplierName, supplierVat: inv.supplierVat, amount: inv.amount, issueDate: inv.issueDate,
+        numberReliable: !(inv.parseWarnings || []).includes('ai_unavailable') };
+      const dup = findDuplicate(zipIndex, cand);
+      if (dup && dup.kind !== 'same_amount_date') {
+        console.log(`[upload-zip] In-ZIP duplicate (${dup.kind}): "${inv.supplierName}" ${inv.invoiceId}`);
         inZipDuplicateCount++;
         continue;
       }
-      if (inv.invoiceId) seenIds.add(inv.invoiceId);
-
-      // Combo match — keep the invoice but flag it as potential duplicate
-      if (inv.amount > 0) {
-        const comboKey = `${inv.supplierName.toLowerCase()}|${inv.amount}|${inv.issueDate}`;
-        if (seenCombos.has(comboKey)) {
-          comboDuplicateWarnings.push({
-            invoiceId: inv.invoiceId,
-            supplier: inv.supplierName,
-            matchedId: seenCombos.get(comboKey)!,
-          });
-          inv.duplicateWarning = true;
-        } else {
-          seenCombos.set(comboKey, inv.invoiceId);
-        }
+      if (dup) {
+        inv.duplicateWarning = true;
+        inv.zipDuplicateOf = { invoiceId: dup.row.invoice_id, supplier: dup.row.supplier, date: dup.row.issue_date, amount: dup.row.amount, inThisZip: true };
       }
-
+      addToDuplicateIndex(zipIndex, cand);
       deduped.push(inv);
     }
     if (inZipDuplicateCount > 0) {
-      console.log(`[upload-zip] Removed ${inZipDuplicateCount} exact ID duplicate(s) within the ZIP`);
-    }
-    if (comboDuplicateWarnings.length > 0) {
-      console.log(`[upload-zip] ${comboDuplicateWarnings.length} potential combo duplicate(s) kept but flagged`);
+      console.log(`[upload-zip] Removed ${inZipDuplicateCount} duplicate(s) within the ZIP`);
     }
 
     // Infer month
@@ -1325,86 +1421,25 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     // Show ALL unknown invoices (not just unique-per-supplier) so user reviews each one
     const uniqueUnknowns = [...new Map(unknownSuppliers.map(u => [u.invoiceId, u])).values()];
 
-    // --- File-hash dedup against existing DB invoices ---
-    // Catches the case where the same PDF is uploaded under a different filename and the
-    // metadata-based heuristics below would miss it.
-    const incomingHashes = classified.map((i: any) => i.fileHash).filter(Boolean) as string[];
-    const existingHashRows = incomingHashes.length
-      ? (db.prepare(
-          `SELECT file_hash, invoice_id, supplier, issue_date, pdf_filename, xml_filename
-           FROM demo_invoices WHERE file_hash IN (${incomingHashes.map(() => '?').join(',')})`
-        ).all(...incomingHashes) as any[])
-      : [];
-    const existingByHash = new Map(existingHashRows.map(r => [r.file_hash, r]));
+    // --- Duplicates against the stored invoices ---
+    const dupIndex = buildDuplicateIndex();
     const fileHashDuplicates: { newFilename: string; invoiceId: string; existing: any }[] = [];
-    const dropByHash = new Set<string>(); // invoiceIds to drop because identical bytes already exist
-
-    // --- Duplicate detection against existing DB invoices ---
-    // An invoice is a duplicate if: same invoice_id, OR same supplier+amount+date
-    // Supplier matching must account for renamed suppliers (display_name ↔ original pattern)
-    const existingInvoices = db.prepare('SELECT invoice_id, supplier, amount, issue_date, domain FROM demo_invoices').all() as any[];
-    const existingIdSet = new Set(existingInvoices.map((e: any) => e.invoice_id));
-
-    // Build combo set with BOTH stored name AND any known original patterns from supplier mappings
-    const supplierMappings = db.prepare('SELECT supplier_pattern, display_name FROM demo_supplier_mappings').all() as any[];
-    const nameToAliases = new Map<string, string[]>(); // lowercase name → [aliases]
-    for (const m of supplierMappings) {
-      const names: string[] = [m.supplier_pattern.toLowerCase()];
-      if (m.display_name) names.push(m.display_name.toLowerCase());
-      for (const n of names) {
-        const existing = nameToAliases.get(n) || [];
-        for (const other of names) { if (!existing.includes(other)) existing.push(other); }
-        nameToAliases.set(n, existing);
-      }
-    }
-
-    const existingComboSet = new Set<string>();
-    for (const e of existingInvoices) {
-      if (e.amount === 0) continue; // skip zero-amount from combo dedup — too many false matches
-      const baseName = e.supplier.toLowerCase();
-      const combo = `${baseName}|${e.amount}|${e.issue_date}`;
-      existingComboSet.add(combo);
-      // Also add combos for known aliases of this supplier
-      const aliases = nameToAliases.get(baseName) || [];
-      for (const alias of aliases) {
-        existingComboSet.add(`${alias}|${e.amount}|${e.issue_date}`);
-      }
-    }
-
     const duplicates: any[] = [];
-    const duplicateInvoiceIds = new Set<string>();
+    const sureDuplicate = new Set<any>();               // skipped
+    const possibleDuplicate = new Map<any, any>();      // reviewed, pre-skipped
     for (const inv of classified) {
-      // File-hash match — exact bytes already in the system, regardless of filename or parsed metadata
-      const hashHit = inv.fileHash ? existingByHash.get(inv.fileHash) : null;
-      if (hashHit) {
-        fileHashDuplicates.push({
-          newFilename: inv.pdfFilename || inv.xmlFilename || '(unknown)',
-          invoiceId: inv.invoiceId,
-          existing: {
-            invoiceId: hashHit.invoice_id,
-            supplier: hashHit.supplier,
-            date: hashHit.issue_date,
-            filename: hashHit.pdf_filename || hashHit.xml_filename,
-          },
-        });
-        if (inv.invoiceId) dropByHash.add(inv.invoiceId);
-        continue;
-      }
-      const idMatch = inv.invoiceId && existingIdSet.has(inv.invoiceId);
-      // Skip combo match for zero-amount invoices to avoid false positives
-      const comboMatch = inv.amount > 0 && existingComboSet.has(`${inv.supplierName.toLowerCase()}|${inv.amount}|${inv.issueDate}`);
-      if (idMatch || comboMatch) {
-        duplicateInvoiceIds.add(inv.invoiceId);
-        const invNameLower = inv.supplierName.toLowerCase();
-        const invAliases = new Set([invNameLower, ...(nameToAliases.get(invNameLower) || [])]);
-        const existing = existingInvoices.find((e: any) =>
-          e.invoice_id === inv.invoiceId ||
-          (invAliases.has(e.supplier.toLowerCase()) && Math.abs(e.amount - inv.amount) < 0.01 && e.issue_date === inv.issueDate)
-        );
-        duplicates.push({
-          new: { invoiceId: inv.invoiceId, supplier: inv.supplierName, date: inv.issueDate, amount: inv.amount },
-          existing: existing ? { invoiceId: existing.invoice_id, supplier: existing.supplier, date: existing.issue_date, amount: existing.amount, domain: existing.domain } : null,
-        });
+      const dup = findDuplicate(dupIndex, { fileHash: inv.fileHash, invoiceId: inv.invoiceId, supplierName: inv.supplierName, readName: inv.readName, supplierVat: inv.supplierVat, amount: inv.amount, issueDate: inv.issueDate,
+        numberReliable: !(inv.parseWarnings || []).includes('ai_unavailable') });
+      if (!dup) continue;
+      const existing = { invoiceId: dup.row.invoice_id, supplier: dup.row.supplier, date: dup.row.issue_date, amount: dup.row.amount, domain: dup.row.domain, filename: dup.row.pdf_filename || dup.row.xml_filename };
+      if (dup.kind === 'same_file') {
+        fileHashDuplicates.push({ newFilename: inv.pdfFilename || inv.xmlFilename || '(unknown)', invoiceId: inv.invoiceId, existing });
+        sureDuplicate.add(inv);
+      } else if (dup.kind === 'same_number') {
+        duplicates.push({ new: { invoiceId: inv.invoiceId, supplier: inv.supplierName, date: inv.issueDate, amount: inv.amount }, existing, reason: 'same_number' });
+        sureDuplicate.add(inv);
+      } else {
+        possibleDuplicate.set(inv, existing);
       }
     }
 
@@ -1441,19 +1476,17 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     // Separate own-company invoices so we can report them to the user
     const ownCompanyInvoices = classified.filter(inv => isOwnCompany(inv.supplierName));
 
-    // Exclude duplicates — silently skip them (user doesn't want to review duplicates)
-    const newInvoices = classified.filter((inv: any) => {
-      if (duplicateInvoiceIds.has(inv.invoiceId)) return false;
-      if (inv.fileHash && existingByHash.has(inv.fileHash)) return false;
-      return true;
-    });
+    // Sure duplicates are skipped (reported in the toast); possible ones go to the review
+    const newInvoices = classified.filter((inv: any) => !sureDuplicate.has(inv));
 
     // Flag invoices that need user attention (amount=0, fallback date, unknown supplier, own-company, bad dates)
     const today = new Date().toISOString().substring(0, 10);
     const currentYear = new Date().getFullYear();
-    const warnings: { invoiceId: string; supplier: string; issues: string[] }[] = [];
+    const warnings: { invoiceId: string; supplier: string; issues: string[]; duplicateOf?: any }[] = [];
     for (const inv of newInvoices) {
       const issues: string[] = [];
+      const dupOf = possibleDuplicate.get(inv) || inv.zipDuplicateOf;
+      if (dupOf) issues.push('possible_duplicate');
       if (isOwnCompany(inv.supplierName)) issues.push('own_company');
       if (inv.amount === 0) issues.push('amount_zero');
       if (!inv.issueDate || inv.issueDate === today) issues.push('date_uncertain');
@@ -1470,7 +1503,7 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       }
       for (const w of inv.parseWarnings || []) issues.push(w);
       if (issues.length > 0) {
-        warnings.push({ invoiceId: inv.invoiceId, supplier: inv.supplierName, issues });
+        warnings.push({ invoiceId: inv.invoiceId, supplier: inv.supplierName, issues, ...(dupOf ? { duplicateOf: dupOf } : {}) });
       }
     }
 
@@ -1666,68 +1699,20 @@ router.post('/confirm-import', async (req: Request, res: Response) => {
       // Split invoices by domain and create separate batches
       const filtered = invoices.filter((inv: any) => !skipSet.has(inv.invoiceId));
 
-      // Server-side duplicate guard: remove any invoice already in the DB
-      // Must check with BOTH original parsed name AND corrected name (nameOverrides)
-      const existingIds = new Set(
-        (db.prepare('SELECT invoice_id FROM demo_invoices').all() as any[]).map((r: any) => r.invoice_id)
-      );
-      // Seeded from the DB, then grown as we accept rows. This dedups incoming
-      // invoices against the DB *and* against each other within this batch —
-      // two invoices in the same upload that share a file_hash would otherwise
-      // both pass the DB check and the 2nd INSERT would violate the partial
-      // unique index idx_demo_invoices_file_hash, aborting the whole transaction.
-      const seenHashes = new Set(
-        (db.prepare(`SELECT file_hash FROM demo_invoices WHERE file_hash IS NOT NULL`).all() as any[]).map((r: any) => r.file_hash)
-      );
-      const existingDbInvoices = db.prepare('SELECT supplier, amount, issue_date FROM demo_invoices').all() as any[];
-      const existingCombos = new Set<string>();
-      // Build alias map from supplier mappings for cross-name matching
-      const mappings = db.prepare('SELECT supplier_pattern, display_name FROM demo_supplier_mappings').all() as any[];
-      const aliasMap = new Map<string, string[]>();
-      for (const m of mappings) {
-        const names: string[] = [m.supplier_pattern.toLowerCase()];
-        if (m.display_name) names.push(m.display_name.toLowerCase());
-        for (const n of names) {
-          const ex = aliasMap.get(n) || [];
-          for (const o of names) { if (!ex.includes(o)) ex.push(o); }
-          aliasMap.set(n, ex);
-        }
-      }
-      for (const r of existingDbInvoices) {
-        if (r.amount === 0) continue; // skip zero-amount from combo dedup
-        const baseName = r.supplier.toLowerCase();
-        existingCombos.add(`${baseName}|${r.amount}|${r.issue_date}`);
-        for (const alias of (aliasMap.get(baseName) || [])) {
-          existingCombos.add(`${alias}|${r.amount}|${r.issue_date}`);
-        }
-      }
+      // Server-side duplicate guard (race with another upload, or a re-sent request):
+      // sure duplicates only — possible ones were reviewed and kept by the user
+      const guardIndex = buildDuplicateIndex();
       const nonDuplicate: any[] = [];
       const skippedDetails: { invoiceId: string; supplier: string; reason: string }[] = [];
-      const seenIds = new Set<string>();
       for (const inv of filtered) {
-        if (inv.fileHash && seenHashes.has(inv.fileHash)) {
-          skippedDetails.push({ invoiceId: inv.invoiceId, supplier: inv.supplier, reason: 'duplicate_file_hash' });
+        const cand = { fileHash: inv.fileHash, invoiceId: inv.invoiceId, supplierName: nameOverrides?.[inv.supplier] || inv.supplier, readName: inv.supplier, supplierVat: inv.supplierVat, amount: inv.amount, issueDate: inv.issueDate };
+        const dup = findDuplicate(guardIndex, cand);
+        if (dup && dup.kind !== 'same_amount_date') {
+          skippedDetails.push({ invoiceId: inv.invoiceId, supplier: inv.supplier, reason: dup.kind === 'same_file' ? 'duplicate_file_hash' : 'duplicate_id' });
           continue;
         }
-        if (inv.invoiceId && (existingIds.has(inv.invoiceId) || seenIds.has(inv.invoiceId))) {
-          skippedDetails.push({ invoiceId: inv.invoiceId, supplier: inv.supplier, reason: 'duplicate_id' });
-          continue;
-        }
-        // Accepted so far — reserve this row's hash/id so later rows in the same
-        // batch dedup against it (prevents in-batch UNIQUE violations on insert).
-        if (inv.fileHash) seenHashes.add(inv.fileHash);
-        if (inv.invoiceId) seenIds.add(inv.invoiceId);
-        if (inv.amount === 0) { nonDuplicate.push(inv); continue; }
-        const originalName = (inv.supplier || '').toLowerCase();
-        const correctedName = (nameOverrides?.[inv.supplier] || '').toLowerCase();
-        if (existingCombos.has(`${originalName}|${inv.amount}|${inv.issueDate}`)) {
-          skippedDetails.push({ invoiceId: inv.invoiceId, supplier: inv.supplier, reason: 'duplicate_combo' });
-          continue;
-        }
-        if (correctedName && existingCombos.has(`${correctedName}|${inv.amount}|${inv.issueDate}`)) {
-          skippedDetails.push({ invoiceId: inv.invoiceId, supplier: inv.supplier, reason: 'duplicate_combo' });
-          continue;
-        }
+        // Reserve it so a later row in this import can't be inserted twice
+        addToDuplicateIndex(guardIndex, cand);
         nonDuplicate.push(inv);
       }
 
@@ -2345,6 +2330,20 @@ router.post('/upload-single', upload.single('file'), async (req: Request, res: R
       return;
     }
 
+    // Same invoice already stored (another file, same number from the same supplier)?
+    const singleDup = findDuplicate(buildDuplicateIndex(), {
+      fileHash, invoiceId: parsed.invoiceId, supplierName: parsed.supplierName, supplierVat: parsed.supplierVat, amount: parsed.amount, issueDate: parsed.issueDate,
+      numberReliable: !(parsed.parseWarnings || []).includes('ai_unavailable'),
+    });
+    if (singleDup && singleDup.kind !== 'same_amount_date') {
+      const e = singleDup.row;
+      res.status(409).json({ error: `Already in the system: invoice ${e.invoice_id} from ${e.supplier} (${e.issue_date}, ${e.amount})` });
+      return;
+    }
+    if (singleDup) {
+      parsed.possibleDuplicate = { invoiceId: singleDup.row.invoice_id, supplier: singleDup.row.supplier, date: singleDup.row.issue_date, amount: singleDup.row.amount };
+    }
+
     // Auto-classify
     const classification = classifySupplier(parsed.supplierName || '', { vat: parsed.supplierVat, aiMatch: parsed.aiMatch, index: supplierIndex });
     parsed.readName = parsed.supplierName;
@@ -2396,6 +2395,7 @@ router.post('/upload-single', upload.single('file'), async (req: Request, res: R
         parseSource: parsed.parseSource || null,
         parseWarnings: parsed.parseWarnings || [],
         aiProblem: parsed.aiProblem || null,
+        possibleDuplicate: parsed.possibleDuplicate || null,
         matchedBy: classification?.matchedBy || null,
         readName: parsed.readName,
       },
@@ -2423,12 +2423,12 @@ router.post('/confirm-single', async (req: Request, res: Response) => {
         return;
       }
     }
-    if (invoice.invoiceId) {
-      const existing = db.prepare('SELECT id FROM demo_invoices WHERE invoice_id = ?').get(invoice.invoiceId) as any;
-      if (existing) {
-        res.status(409).json({ error: `Invoice ${invoice.invoiceId} already exists` });
-        return;
-      }
+    const dup = findDuplicate(buildDuplicateIndex(), {
+      invoiceId: invoice.invoiceId, supplierName: invoice.supplier, supplierVat: invoice.supplierVat, amount: invoice.amount, issueDate: invoice.date,
+    });
+    if (dup && dup.kind === 'same_number') {
+      res.status(409).json({ error: `Invoice ${dup.row.invoice_id} from ${dup.row.supplier} is already in the system` });
+      return;
     }
 
     const fx = await computeFxFields(
