@@ -13,7 +13,8 @@ import {
   normalizeSupplierName, normalizeVat, levenshtein, supplierTokens, type SupplierIndex,
 } from '../lib/supplierMatch.js';
 import {
-  readSupplierInvoice, checkAmounts, cachedInvoiceExtraction, rememberExtraction, type InvoiceExtraction,
+  readSupplierInvoice, checkAmounts, cachedInvoiceExtraction, rememberExtraction, isCreditError, invoiceReaderConfigured,
+  type InvoiceExtraction,
 } from '../lib/supplierInvoiceReader.js';
 import {
   runTriage, triageJob, stageCandidates, sendStage, pollBatches, startBatchPoller, invoiceSignature, scopeOf,
@@ -1015,20 +1016,38 @@ function fromExtraction(x: InvoiceExtraction, textResult: Awaited<ReturnType<typ
 }
 
 type ReadInvoice = Awaited<ReturnType<typeof parsePDFInvoice>> & {
+  /** Why the basic reader was used: 'credit' | 'not_configured' | 'error' | 'unreadable' */
+  aiProblem?: string;
   aiMatch?: string | null;
   suggestedDomain?: 'demo' | 'sales' | null;
   suggestedCategory?: string | null;
 };
 
+// After "credit used up", skip AI for a few minutes instead of failing on every file of the ZIP
+let creditOutUntil = 0;
+
 async function readPdfInvoice(buf: Buffer, fileName: string, fileHash: string, index: SupplierIndex, force = false): Promise<ReadInvoice> {
   const textResult = await parsePDFInvoice(buf, fileName);
   let x: InvoiceExtraction | null = null;
-  try {
-    x = await readSupplierInvoice({ fileHash, file: buf, categories: invoiceCategories(), force });
-  } catch (err: any) {
-    console.warn(`[invoice-reader] Claude read failed for ${fileName}, using text reader:`, err?.message || err);
+  let aiProblem: string | undefined;
+  // A saved reading needs no AI, credit or not
+  const saved = force ? null : cachedInvoiceExtraction(fileHash);
+  if (saved) x = saved;
+  else if (Date.now() < creditOutUntil) aiProblem = 'credit';
+  else {
+    try {
+      x = await readSupplierInvoice({ fileHash, file: buf, categories: invoiceCategories(), force });
+    } catch (err: any) {
+      aiProblem = isCreditError(err) ? 'credit' : 'error';
+      if (aiProblem === 'credit') creditOutUntil = Date.now() + 5 * 60_000;
+      console.warn(`[invoice-reader] Claude read failed for ${fileName}, using text reader:`, err?.message || err);
+    }
   }
-  if (!x) return textResult;
+  if (!x) {
+    // Basic reader only — make sure the user sees that
+    aiProblem = aiProblem || (invoiceReaderConfigured() ? 'unreadable' : 'not_configured');
+    return { ...textResult, parseWarnings: [...textResult.parseWarnings, 'ai_unavailable'], aiProblem };
+  }
   const inv = fromExtraction(x, textResult);
   console.log(`[invoice-reader] ${fileName}: id="${inv.invoiceId}" supplier="${inv.supplierName}" vat_no=${inv.supplierVat || '-'} country=${inv.supplierCountry || '??'} net=${inv.amount} vat=${inv.vatAmount} ${inv.currency} warnings=${inv.parseWarnings.join(',') || '-'}`);
   return {
@@ -1466,6 +1485,13 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       })),
       categoryConflicts,
       warnings,
+      aiUnavailable: (() => {
+        const hit = parsed.filter((p: any) => p.aiProblem);
+        if (hit.length === 0) return null;
+        const order = ['credit', 'not_configured', 'error', 'unreadable'];
+        const reason = order.find(r => hit.some((p: any) => p.aiProblem === r)) || 'error';
+        return { count: hit.length, reason };
+      })(),
       // Reconciliation data
       reconciliation: {
         totalFilesInZip: allFileNames.length,
@@ -2331,6 +2357,7 @@ router.post('/upload-single', upload.single('file'), async (req: Request, res: R
         vatRate: parsed.vatRate ?? null,
         parseSource: parsed.parseSource || null,
         parseWarnings: parsed.parseWarnings || [],
+        aiProblem: parsed.aiProblem || null,
         matchedBy: classification?.matchedBy || null,
         readName: parsed.readName,
       },

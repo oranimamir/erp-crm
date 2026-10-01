@@ -72,7 +72,15 @@ interface MonthlySummary {
   months: string[];
 }
 
+const AI_PROBLEM_TEXT: Record<string, string> = {
+  credit: 'the Anthropic API credit is used up — top it up',
+  not_configured: 'AI reading is not set up on the server (ANTHROPIC_API_KEY)',
+  error: 'the AI service did not respond',
+  unreadable: 'the AI could not read the file',
+};
+
 interface SingleUploadPreview {
+  parseWarnings?: string[]; aiProblem?: string | null;
   invoiceId: string; date: string; supplier: string; amount: number; vatAmount: number;
   currency: string; domain: string; category: string; month: string; lineItems: string;
   pdfFilename: string | null; xmlFilename: string | null; embeddedPdf: string | null;
@@ -839,6 +847,9 @@ export default function SupplierInvoicesPage() {
         const badDate = res.data.warnings.filter((w: any) => w.issues.includes('date_uncertain')).length;
         const badSupplier = res.data.warnings.filter((w: any) => w.issues.includes('supplier_uncertain')).length;
         const ownCompany = res.data.warnings.filter((w: any) => w.issues.includes('own_company')).length;
+        if (res.data.aiUnavailable) {
+          addToast(`AI reading unavailable for ${res.data.aiUnavailable.count} invoice(s): ${AI_PROBLEM_TEXT[res.data.aiUnavailable.reason] || 'unknown error'}. They were read by the basic reader — check their amounts and VAT in the review list.`, 'error');
+        }
         const badTotals = res.data.warnings.filter((w: any) => w.issues.includes('totals_mismatch')).length;
         const vatCheck = res.data.warnings.filter((w: any) => w.issues.includes('foreign_vat') || w.issues.includes('vat_rate_unusual')).length;
         const parts: string[] = [];
@@ -2437,6 +2448,12 @@ export default function SupplierInvoicesPage() {
                 Review each invoice, correct the supplier name if needed, and classify into <strong>Demo Expenses</strong> or <strong>Sales Activities</strong>.
                 {(pendingUpload.warnings?.length > 0) && <span className="text-amber-600 font-medium"> Some invoices need attention — check the warning badges below.</span>}
               </p>
+              {pendingUpload.aiUnavailable && (
+                <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                  <strong>AI reading unavailable</strong> for {pendingUpload.aiUnavailable.count} invoice(s): {AI_PROBLEM_TEXT[pendingUpload.aiUnavailable.reason] || 'unknown error'}.
+                  {' '}They were read by the basic reader, which often gets net and VAT wrong — check each one against the PDF (Preview), or cancel and upload again once AI reading works.
+                </div>
+              )}
               {reviewedIds.size > 0 && (
                 <div className="flex items-center gap-3 mt-2">
                   <span className="text-xs text-green-600 font-medium">{reviewedIds.size} reviewed</span>
@@ -2495,6 +2512,7 @@ export default function SupplierInvoicesPage() {
                             {w.issues.includes('totals_mismatch') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Net + VAT ≠ invoice total — check the amounts</span>}
                             {w.issues.includes('foreign_vat') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Foreign supplier charges VAT — check it is not reverse charge</span>}
                             {w.issues.includes('vat_rate_unusual') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Unusual VAT rate — check the VAT</span>}
+                            {w.issues.includes('ai_unavailable') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Read without AI — check net & VAT against the PDF</span>}
                             {w.issues.includes('not_an_invoice') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Does not look like an invoice (quote / statement?)</span>}
                           </div>
                         );
@@ -2885,6 +2903,12 @@ export default function SupplierInvoicesPage() {
             <div className="p-6 border-b">
               <h2 className="text-lg font-bold text-gray-900">Review Invoice Before Import</h2>
               <p className="text-sm text-gray-500 mt-1">Preview the invoice and edit fields as needed before importing.</p>
+              {singlePreview.parseWarnings?.includes('ai_unavailable') && (
+                <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                  <strong>AI reading unavailable</strong>: {AI_PROBLEM_TEXT[singlePreview.aiProblem || ''] || 'unknown error'}.
+                  {' '}This invoice was read by the basic reader — check net, VAT and supplier against the PDF before importing.
+                </div>
+              )}
             </div>
             <div className="flex-1 overflow-y-auto p-6">
               <div className="flex gap-6">
