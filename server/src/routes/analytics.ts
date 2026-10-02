@@ -674,7 +674,63 @@ router.get('/quantity', (req: Request, res: Response) => {
     .filter(r => r.tons > 0)
     .sort((a, b) => b.tons - a.tons);
 
-  res.json({ monthly, total_tons: totalTons, by_customer: byCustomer, by_region: byRegion });
+  // Per-product breakdown — read off the customer invoices (by invoice date),
+  // not the orders: the lines of a generated invoice, else the invoice's own
+  // tonnage shared over its operation's order lines. An invoice with a tonnage
+  // but no product lines anywhere lands under "Unspecified product".
+  const invoiceRows = db.prepare(`
+    SELECT i.id, i.quantity_mt, op.order_id,
+      (SELECT d.data FROM invoice_documents d WHERE d.invoice_id = i.id AND d.status = 'final' ORDER BY d.id DESC LIMIT 1) as doc_data
+    FROM invoices i
+    LEFT JOIN operations op ON op.id = i.operation_id
+    WHERE i.type = 'customer' AND i.status NOT IN ('cancelled', 'draft')
+      AND i.invoice_date IS NOT NULL AND i.invoice_date BETWEEN ? AND ?
+      ${customerId ? 'AND i.customer_id = ?' : ''}
+  `).all(dateStart, dateEnd, ...custParams) as any[];
+
+  const productMap = new Map<string, { product: string; tons: number; invoice_count: number }>();
+  let invoicesWithoutTonnage = 0;
+  for (const inv of invoiceRows) {
+    let lines: { name: string; mt: number }[] = [];
+    let fromDocument = false;
+    if (inv.doc_data) {
+      let docData: any = {};
+      try { docData = JSON.parse(inv.doc_data); } catch { /* corrupt row → no lines */ }
+      lines = (Array.isArray(docData.items) ? docData.items : [])
+        .map((it: any) => ({ name: String(it.commercial_name || ''), mt: toMt(Number(it.quantity) || 0, it.quantity_unit) }))
+        .filter((l: any) => l.mt != null && l.mt > 0);
+      fromDocument = lines.length > 0;
+    }
+    if (!lines.length && inv.order_id) {
+      lines = (db.prepare('SELECT description, quantity, unit FROM order_items WHERE order_id = ? ORDER BY id').all(inv.order_id) as any[])
+        .map(it => ({ name: String(it.description || ''), mt: toMt(Number(it.quantity) || 0, it.unit) }))
+        .filter((l): l is { name: string; mt: number } => l.mt != null && l.mt > 0);
+    }
+    const linesMt = lines.reduce((s, l) => s + l.mt, 0);
+    // The tonnage typed on an uploaded invoice wins over the order's quantities
+    const invoiceMt = !fromDocument && inv.quantity_mt != null ? Number(inv.quantity_mt) || 0 : linesMt;
+    if (!invoiceMt) { invoicesWithoutTonnage++; continue; }
+    if (!lines.length) lines = [{ name: '', mt: invoiceMt }];
+    const scale = linesMt ? invoiceMt / linesMt : 1;
+
+    const counted = new Set<string>();
+    for (const l of lines) {
+      const product = l.name.replace(/\s+/g, ' ').trim() || 'Unspecified product';
+      const key = product.toLowerCase();
+      const entry = productMap.get(key) ?? { product, tons: 0, invoice_count: 0 };
+      entry.tons += l.mt * scale;
+      if (!counted.has(key)) { entry.invoice_count += 1; counted.add(key); }
+      productMap.set(key, entry);
+    }
+  }
+  const byProduct = [...productMap.values()].sort((a, b) => b.tons - a.tons);
+
+  res.json({
+    monthly, total_tons: totalTons, by_customer: byCustomer, by_region: byRegion,
+    by_product: byProduct,
+    invoiced_tons: byProduct.reduce((s, p) => s + p.tons, 0),
+    invoices_without_tonnage: invoicesWithoutTonnage,
+  });
 });
 
 // GET /analytics/demo-expenses — analytics for demo_invoices (demo expenses + sales activities)

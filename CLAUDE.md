@@ -100,5 +100,8 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - Uploads run the same order: step 1 free (`verifyBasicReading`: the basic reader's figures confirmed by the PDF text AND exactly one known supplier VAT no. printed; credit notes excluded) → Haiku on text → Sonnet on PDF. `learnSupplierVats` stores suppliers' VAT numbers from readings when a run finishes
 - Duplicates on upload (ZIP, single, import guard) — `findDuplicate` / `buildDuplicateIndex`: same file → skip; same invoice number (stored or printed, compacted) + same supplier (VAT no. / name) or amount or date → skip; same supplier + amount + date otherwise → review as `possible_duplicate` (pre-skipped, user can include). Two numbers read off the documents that differ → never a duplicate. Same rules inside one ZIP
 
+## Analytics
+- Tonnage Sold (`GET /api/analytics/quantity`): month / customer / region come from customer order lines; `by_product` comes from customer invoices (by invoice date) — generated invoice lines, else the invoice's `quantity_mt` shared over the operation's order lines, else "Unspecified product"
+
 ## Deployment
 Railway, auto-deploys from `main` on push. Commit and push immediately after every change.

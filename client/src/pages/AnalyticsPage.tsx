@@ -3,7 +3,7 @@ import api from '../lib/api';
 import Card from '../components/ui/Card';
 import {
   BarChart3, TrendingUp, TrendingDown, DollarSign, Clock,
-  RefreshCw, FileSpreadsheet, Users, Truck, Scale, ShoppingCart, Receipt, Landmark, Info,
+  RefreshCw, FileSpreadsheet, Users, Truck, Scale, ShoppingCart, Receipt, Landmark, Info, Package,
 } from 'lucide-react';
 import { downloadExcel } from '../lib/exportExcel';
 import { useToast } from '../contexts/ToastContext';
@@ -37,6 +37,10 @@ interface QuantityData {
   total_tons: number;
   by_customer: { customer_id: number; customer_name: string; tons: number }[];
   by_region: { region: string; tons: number }[];
+  // Read off the customer invoices, unlike the order-based figures above
+  by_product: { product: string; tons: number; invoice_count: number }[];
+  invoiced_tons: number;
+  invoices_without_tonnage: number;
 }
 interface DemoExpensesData {
   monthly: { month: string; demo: number; sales: number; demo_vat: number; sales_vat: number }[];
@@ -950,7 +954,7 @@ export default function AnalyticsPage() {
         )}
 
         {view === 'tonnage' && quantityData && data && (
-          quantityData.total_tons === 0 ? (
+          quantityData.total_tons === 0 && !quantityData.by_product?.length ? (
             <Card className="p-10 text-center">
               <Scale size={36} className="text-gray-300 mx-auto mb-3" />
               <p className="text-gray-500 font-medium">No tonnage data for this period</p>
@@ -996,6 +1000,22 @@ export default function AnalyticsPage() {
                 format={fmtTons}
                 onExport={() => downloadExcel(`tonnage-by-customer-${period}`,
                   ['Customer', 'Tons'], quantityData.by_customer.map(c => [c.customer_name, c.tons]))}
+              />
+
+              <BreakdownPanel
+                title="Tonnage by Product"
+                subtitle={`From customer invoices — ${fmtTons(quantityData.invoiced_tons || 0)} invoiced, ${period}`
+                  + (quantityData.invoices_without_tonnage ? ` · ${quantityData.invoices_without_tonnage} invoice(s) without a tonnage left out` : '')}
+                icon={<Package size={16} className="text-gray-400" />}
+                dimensionHeader="Product"
+                rows={(quantityData.by_product || []).map(p => ({
+                  key: p.product, label: p.product, values: [p.tons], count: p.invoice_count,
+                }))}
+                series={[{ name: 'Tons', color: C_TONS }]}
+                format={fmtTons}
+                countLabel="Invoices"
+                onExport={() => downloadExcel(`tonnage-by-product-${period}`,
+                  ['Product', 'Invoices', 'Tons'], (quantityData.by_product || []).map(p => [p.product, p.invoice_count, p.tons]))}
               />
 
               <BreakdownPanel
