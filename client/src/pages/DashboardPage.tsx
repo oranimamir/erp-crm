@@ -47,6 +47,16 @@ export default function DashboardPage() {
   const [tonsBreakdownOpen, setTonsBreakdownOpen] = useState(false);
   const [priorYearOverdue, setPriorYearOverdue] = useState<{ invoices: any[]; total: number }>({ invoices: [], total: 0 });
   const [demoExpensesMonthly, setDemoExpensesMonthly] = useState<any[]>([]);
+  // Demo expenses chart: salaries and cars can be ticked off
+  const [demoInclude, setDemoInclude] = useState<{ salaries: boolean; cars: boolean }>(() => {
+    try { return { salaries: true, cars: true, ...JSON.parse(localStorage.getItem('dashboard.demoInclude') || '{}') }; }
+    catch { return { salaries: true, cars: true }; }
+  });
+  const toggleDemoInclude = (key: 'salaries' | 'cars') => setDemoInclude(prev => {
+    const next = { ...prev, [key]: !prev[key] };
+    try { localStorage.setItem('dashboard.demoInclude', JSON.stringify(next)); } catch { /* storage unavailable */ }
+    return next;
+  });
   const [loading, setLoading] = useState(true);
   const [activeInfo, setActiveInfo] = useState<string | null>(null);
   const [breakdown, setBreakdown] = useState<null | 'paid' | 'pending' | 'expected' | 'total'>(null);
@@ -402,8 +412,10 @@ export default function DashboardPage() {
             const year = new Date().getFullYear();
             const nowMonth = new Date().getMonth() + 1; // 1-12
             // Build a 12-month grid for the current year. Past+current months get
-            // actuals from monthlyPayments; all months can carry expected_expense
-            // (from working_capital_forecasts.planned). Expected income is the
+            // actuals from monthlyPayments — paid out is the sales-activity supplier
+            // invoices only. Working capital is a forecast, so it shows from this
+            // month onward (working_capital_forecasts.planned) and never in past
+            // months. Expected income is the
             // single forecastExpected value split equally across the 3 months of
             // the next quarter. If next quarter spills into next year (i.e. now is
             // Q4), expected income simply doesn't appear in this chart.
@@ -417,18 +429,17 @@ export default function DashboardPage() {
               : 0;
 
             const paymentsByMonth = new Map<string, { received: number; paid_out: number }>();
-            for (const m of monthlyPayments) paymentsByMonth.set(m.month, { received: m.received ?? 0, paid_out: m.paid_out ?? 0 });
-            const wcByMonth = new Map<string, { planned: number; actualized: number }>();
-            for (const m of wcForecast) wcByMonth.set(m.month, { planned: m.planned ?? 0, actualized: m.actualized ?? 0 });
+            for (const m of monthlyPayments) paymentsByMonth.set(m.month, { received: m.received ?? 0, paid_out: m.paid_out_sales ?? 0 });
+            const wcByMonth = new Map<string, { planned: number }>();
+            for (const m of wcForecast) wcByMonth.set(m.month, { planned: m.planned ?? 0 });
 
             const rows = Array.from({ length: 12 }, (_, i) => {
               const monthNum = i + 1;
               const monthKey = `${year}-${String(monthNum).padStart(2, '0')}`;
               const pay = paymentsByMonth.get(monthKey) ?? { received: 0, paid_out: 0 };
-              const wc  = wcByMonth.get(monthKey)       ?? { planned: 0, actualized: 0 };
+              const wc  = wcByMonth.get(monthKey)       ?? { planned: 0 };
               const expectedIncome  = nextQuarterMonths.includes(monthNum) ? expectedIncomePerMonth : 0;
-              // Actualized WC outflows are real cash that's already gone — fold into paid_out.
-              const paidOut = pay.paid_out + wc.actualized;
+              const paidOut = pay.paid_out;
               return {
                 month: monthKey,
                 monthNum,
@@ -489,7 +500,7 @@ export default function DashboardPage() {
                     <span>
                       €{wcStalePlanned.toLocaleString(undefined, { minimumFractionDigits: 2 })} of working-capital
                       entries are still marked planned for months that have already passed. Past months here are
-                      reported from supplier invoices only, so these are excluded from the forecast —{' '}
+                      reported from sales-activity invoices only, so these are excluded from the forecast —{' '}
                       <Link to="/working-capital" className="underline font-medium">review them</Link> and mark
                       them actualized or cancelled.
                     </span>
@@ -500,8 +511,8 @@ export default function DashboardPage() {
                 <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-gray-500">
                   <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-green-500 inline-block" /> Received from clients</span>
                   <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-emerald-300 inline-block" /> Expected income (next quarter, split equally)</span>
-                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-400 inline-block" /> Paid out (suppliers + actualized WC)</span>
-                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-rose-200 inline-block" /> Expected expense (planned WC, this month onward)</span>
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-400 inline-block" /> Paid out (sales-activity invoices)</span>
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-rose-200 inline-block" /> Expected expense (working capital, this month onward)</span>
                 </div>
                 {/* Bar chart with Y-axis */}
                 <div className="flex gap-2">
@@ -577,7 +588,7 @@ export default function DashboardPage() {
                                   <div
                                     className={`w-full bg-red-400 ${r.expected_expense > 0 ? '' : 'rounded-t'}`}
                                     style={{ height: `${paidOutH}px` }}
-                                    title={`Paid out: €${r.paid_out.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                                    title={`Paid out (sales-activity invoices): €${r.paid_out.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
                                   />
                                 )}
                               </div>
@@ -839,10 +850,18 @@ export default function DashboardPage() {
 
       {/* Demo Expenses Monthly Chart */}
       {demoExpensesMonthly.length > 0 && (() => {
-        const maxVal = Math.max(...demoExpensesMonthly.map((m: any) => m.total), 1);
-        const totalExpenses = demoExpensesMonthly.reduce((s: number, m: any) => s + m.total, 0);
-        const totalVat = demoExpensesMonthly.reduce((s: number, m: any) => s + (m.vat_total || 0), 0);
-        const totalInvoices = demoExpensesMonthly.reduce((s: number, m: any) => s + m.count, 0);
+        // Each month without the categories that are ticked off
+        const left = (['salaries', 'cars'] as const).filter(k => !demoInclude[k]);
+        const demoMonths = demoExpensesMonthly.map((m: any) => ({
+          month: m.month,
+          total: Math.max(0, m.total - left.reduce((s, k) => s + (m[`${k}_total`] || 0), 0)),
+          vat_total: Math.max(0, (m.vat_total || 0) - left.reduce((s, k) => s + (m[`${k}_vat`] || 0), 0)),
+          count: m.count - left.reduce((s, k) => s + (m[`${k}_count`] || 0), 0),
+        }));
+        const maxVal = Math.max(...demoMonths.map(m => m.total), 1);
+        const totalExpenses = demoMonths.reduce((s, m) => s + m.total, 0);
+        const totalVat = demoMonths.reduce((s, m) => s + m.vat_total, 0);
+        const totalInvoices = demoMonths.reduce((s, m) => s + m.count, 0);
         const chartH = 180;
         return (
           <Card>
@@ -851,7 +870,14 @@ export default function DashboardPage() {
                 <Receipt size={16} className="text-gray-400" />
                 <h2 className="font-semibold text-gray-900">Demo Expenses — Monthly Total ({year})</h2>
               </div>
-              <div className="flex items-center gap-4 text-xs text-gray-500">
+              <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 text-xs text-gray-500">
+                {(['salaries', 'cars'] as const).map(k => (
+                  <label key={k} className="flex items-center gap-1.5 cursor-pointer select-none text-gray-700">
+                    <input type="checkbox" checked={demoInclude[k]} onChange={() => toggleDemoInclude(k)}
+                      className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                    {k === 'salaries' ? 'Salaries' : 'Cars'}
+                  </label>
+                ))}
                 <span>Total: <strong className="text-gray-900">{fmt(totalExpenses)}</strong></span>
                 <span>VAT: <strong className="text-amber-600">{fmt(totalVat)}</strong></span>
                 <span>{totalInvoices} invoices</span>
@@ -873,7 +899,7 @@ export default function DashboardPage() {
                         style={{ bottom: `${(pct / 100) * chartH}px` }} />
                     ))}
                     <div className="flex items-end gap-1.5 h-full">
-                      {demoExpensesMonthly.map((m: any) => {
+                      {demoMonths.map((m: any) => {
                         const barH = m.total > 0 ? Math.max((m.total / maxVal) * (chartH - 20), 3) : 0;
                         return (
                           <div key={m.month} className="flex-1 h-full flex flex-col items-center justify-end group relative">
@@ -894,7 +920,7 @@ export default function DashboardPage() {
                     </div>
                   </div>
                   <div className="flex gap-1.5 mt-1">
-                    {demoExpensesMonthly.map((m: any) => (
+                    {demoMonths.map((m: any) => (
                       <div key={m.month} className="flex-1 text-center text-[10px] text-gray-400 truncate">
                         {new Date(m.month + '-01').toLocaleDateString(undefined, { month: 'short' })}
                       </div>

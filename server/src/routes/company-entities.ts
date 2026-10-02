@@ -12,19 +12,48 @@ const FIELDS = [
   'usd_account', 'usd_bic', 'eur_account', 'eur_bic', 'delivery_address',
 ] as const;
 
+const BANK_FIELDS = ['bank_name', 'bank_address', 'usd_account', 'usd_bic', 'eur_account', 'eur_bic'] as const;
+type Bank = Record<typeof BANK_FIELDS[number], string>;
+
 function clean(value: unknown): string {
   return value == null ? '' : String(value).trim();
+}
+
+function cleanBank(raw: any): Bank {
+  return Object.fromEntries(BANK_FIELDS.map(f => [f, clean(raw?.[f])])) as Bank;
+}
+
+/** The entity's banks; one saved before there could be several has just the bank in its columns. */
+function banksOf(row: any): Bank[] {
+  try {
+    const list = JSON.parse(row?.banks || 'null');
+    if (Array.isArray(list) && list.length) return list.map(cleanBank);
+  } catch { /* unreadable list → the columns */ }
+  return [cleanBank(row)];
+}
+
+function present(row: any): any {
+  if (!row) return row;
+  const banks = banksOf(row);
+  return { ...row, banks, default_bank: Math.min(Math.max(Number(row.default_bank) || 0, 0), banks.length - 1) };
 }
 
 function byCode(code: string): any {
   return db.prepare('SELECT * FROM company_entities WHERE code = ?').get(code);
 }
 
+// Everyone signed in reads the entities (documents are issued from them);
+// only an admin changes them
+function requireAdmin(req: Request, res: Response, next: Function) {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  next();
+}
+
 router.get('/', (_req: Request, res: Response) => {
-  res.json(listEntities());
+  res.json(listEntities().map(present));
 });
 
-router.post('/', (req: Request, res: Response) => {
+router.post('/', requireAdmin, (req: Request, res: Response) => {
   const code = clean(req.body?.code).toUpperCase();
   const name = clean(req.body?.company_name);
   if (!ENTITY_CODE_PATTERN.test(code)) {
@@ -38,19 +67,43 @@ router.post('/', (req: Request, res: Response) => {
   db.saveToDisk();
 
   notifyAdmin({ action: 'created', entity: 'TripleW Entity', label: `${name} (${code})`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
-  res.status(201).json(byCode(code));
+  res.status(201).json(present(byCode(code)));
 });
 
-router.put('/:code', (req: Request, res: Response) => {
+router.put('/:code', requireAdmin, (req: Request, res: Response) => {
   const code = String(req.params.code).toUpperCase();
   const existing = byCode(code);
   if (!existing) { res.status(404).json({ error: 'Entity not found' }); return; }
 
-  const next = Object.fromEntries(FIELDS.map(f => [f, req.body?.[f] !== undefined ? clean(req.body[f]) : existing[f]]));
+  const next: Record<string, string> = Object.fromEntries(FIELDS.map(f => [f, req.body?.[f] !== undefined ? clean(req.body[f]) : existing[f]]));
   if (!next.company_name) { res.status(400).json({ error: 'Company name is required' }); return; }
 
-  db.prepare(`UPDATE company_entities SET ${FIELDS.map(f => `${f} = ?`).join(', ')}, updated_at = datetime('now') WHERE code = ?`)
-    .run(...FIELDS.map(f => next[f]), code);
+  // Banks: the list as sent, or the stored one with this request's bank fields
+  // applied to its default. Empty entries are dropped; the default bank is
+  // copied into the bank columns, which is what documents print.
+  const current = present(existing);
+  const pick = (count: number): number | null => {
+    const wanted = req.body?.default_bank !== undefined ? Number(req.body.default_bank) : current.default_bank;
+    return Number.isInteger(wanted) && wanted >= 0 && wanted < count ? wanted : null;
+  };
+  let banks: Bank[];
+  let chosen: Bank | undefined;
+  if (Array.isArray(req.body?.banks)) {
+    const sent: Bank[] = req.body.banks.map(cleanBank);
+    chosen = sent[pick(sent.length) ?? 0];
+    banks = sent.filter(b => b === chosen || BANK_FIELDS.some(f => b[f]));
+  } else {
+    banks = current.banks;
+    const index = pick(banks.length) ?? current.default_bank;
+    // A newly chosen default keeps its own details; otherwise the fields sent edit it
+    if (index === current.default_bank) banks[index] = cleanBank(next);
+    chosen = banks[index];
+  }
+  if (!chosen) { chosen = cleanBank({}); banks = [chosen]; }
+  for (const f of BANK_FIELDS) next[f] = chosen[f];
+
+  db.prepare(`UPDATE company_entities SET ${FIELDS.map(f => `${f} = ?`).join(', ')}, banks = ?, default_bank = ?, updated_at = datetime('now') WHERE code = ?`)
+    .run(...FIELDS.map(f => next[f]), JSON.stringify(banks), banks.indexOf(chosen), code);
 
   if (req.body?.is_default === true) {
     db.prepare('UPDATE company_entities SET is_default = CASE WHEN code = ? THEN 1 ELSE 0 END').run(code);
@@ -58,10 +111,10 @@ router.put('/:code', (req: Request, res: Response) => {
   db.saveToDisk();
 
   notifyAdmin({ action: 'updated', entity: 'TripleW Entity', label: `${next.company_name} (${code})`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
-  res.json(byCode(code));
+  res.json(present(byCode(code)));
 });
 
-router.delete('/:code', (req: Request, res: Response) => {
+router.delete('/:code', requireAdmin, (req: Request, res: Response) => {
   const code = String(req.params.code).toUpperCase();
   const existing = byCode(code);
   if (!existing) { res.status(404).json({ error: 'Entity not found' }); return; }

@@ -55,8 +55,9 @@ router.put('/document-emails', (req: Request, res: Response) => {
   res.json(value);
 });
 
-// GET /api/settings/ai-limit — monthly AI spending limit for invoice reading, and this month's spend
-router.get('/ai-limit', (_req: Request, res: Response) => {
+// GET /api/settings/ai-limit — monthly AI spending limit for invoice reading, and this month's spend (admin only)
+router.get('/ai-limit', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
   const limit = getAiMonthlyLimit(), spent = aiSpentThisMonth();
   res.json({ monthly_usd: limit, spent_usd: Math.round(spent * 100) / 100, left_usd: Math.max(0, Math.round((limit - spent) * 100) / 100) });
 });

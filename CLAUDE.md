@@ -77,7 +77,8 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 ## TripleW Entities
 - Table `company_entities` (edited on the TripleW Details page, `/api/company-entities`); `server/src/lib/companyEntity.ts`
 - Entity picked from the operation number (`SO<code>…`), default entity otherwise
-- Each entity has a USD and a EUR account; `applyEntityBank()` prints the one matching the document currency (skipped when `bank_override` — customer-profile bank)
+- Each entity has one or more banks (`company_entities.banks` JSON + `default_bank`), each with a USD and a EUR account; the default bank is mirrored into the bank columns, and `applyEntityBank()` prints its account matching the document currency (skipped when `bank_override` — customer-profile bank)
+- Read by everyone, changed by admins only (server `requireAdmin`; the page is read-only for other users)
 
 ## Customers & Suppliers
 - Customer page: Summary | Details. Details = per-entity profiles (`customer_document_profiles`), the source for OC/invoice customer details; the default entity is mirrored onto the `customers` row
@@ -99,6 +100,10 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - Monthly AI spending limit (Settings → AI invoice reading, `app_settings.ai_monthly_limit_usd`, default $10; `lib/aiBudget.ts`): spend = this month's `ai_usage` + open batch estimates. Uploads get `aiProblem: 'limit'`; runs send only what fits and note the rest
 - Uploads run the same order: step 1 free (`verifyBasicReading`: the basic reader's figures confirmed by the PDF text AND exactly one known supplier VAT no. printed; credit notes excluded) → Haiku on text → Sonnet on PDF. `learnSupplierVats` stores suppliers' VAT numbers from readings when a run finishes
 - Duplicates on upload (ZIP, single, import guard) — `findDuplicate` / `buildDuplicateIndex`: same file → skip; same invoice number (stored or printed, compacted) + same supplier (VAT no. / name) or amount or date → skip; same supplier + amount + date otherwise → review as `possible_duplicate` (pre-skipped, user can include). Two numbers read off the documents that differ → never a duplicate. Same rules inside one ZIP
+
+## Dashboard
+- Monthly Cash Flow: paid out = sales-activity supplier invoices only (`paid_out_sales`); working capital shows only as planned amounts from the current month onward, never in past months
+- Demo Expenses chart: Salaries / Cars checkboxes (`/dashboard/demo-expenses-monthly` returns their share per month; choice kept in localStorage)
 
 ## Analytics
 - "Based on" Orders | Invoices (`basis` in `AnalyticsPage.tsx`) applies to the whole page: Tonnage (`GET /api/analytics/quantity?basis=`), Trading sale side (`/trading?basis=`), the revenue compared with expenses, and it moves with the Revenue Orders / Invoices sub-tabs (Summary always shows both)

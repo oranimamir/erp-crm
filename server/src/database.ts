@@ -1765,6 +1765,10 @@ export async function initializeDatabase() {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
+  // Several banks per entity (JSON list); the bank columns above always hold the
+  // default one, which is what documents print
+  try { db.exec(`ALTER TABLE company_entities ADD COLUMN banks TEXT`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE company_entities ADD COLUMN default_bank INTEGER NOT NULL DEFAULT 0`); } catch (_) { /* column may already exist */ }
   try {
     const count = (db.prepare('SELECT COUNT(*) as n FROM company_entities').get() as any).n;
     if (!count) {

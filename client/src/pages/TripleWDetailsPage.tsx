@@ -1,11 +1,24 @@
 import { useEffect, useState } from 'react';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
+import { useAuth } from '../contexts/AuthContext';
 import Button from '../components/ui/Button';
 import { Building2, Plus, Save, Star, Trash2, Loader2, Landmark, X } from 'lucide-react';
 
-// The TripleW legal entities that issue documents. Each has a USD and a EUR
-// account; a document prints the one matching its currency.
+// The TripleW legal entities that issue documents. An entity can hold several
+// banks, each with a USD and a EUR account; documents print the default bank's
+// account matching their currency. Only an admin edits this page.
+
+interface Bank {
+  bank_name: string;
+  bank_address: string;
+  usd_account: string;
+  usd_bic: string;
+  eur_account: string;
+  eur_bic: string;
+}
+
+const EMPTY_BANK: Bank = { bank_name: '', bank_address: '', usd_account: '', usd_bic: '', eur_account: '', eur_bic: '' };
 
 interface Entity {
   code: string;
@@ -26,6 +39,8 @@ interface Entity {
   eur_bic: string;
   delivery_address: string;
   is_default: number;
+  banks: Bank[];
+  default_bank: number;
 }
 
 const inputCls =
@@ -34,22 +49,28 @@ const inputCls =
 function normalise(raw: any): Entity {
   const out: any = { ...raw };
   for (const key of Object.keys(out)) if (out[key] == null) out[key] = '';
+  if (!Array.isArray(out.banks) || !out.banks.length) {
+    out.banks = [Object.fromEntries(Object.keys(EMPTY_BANK).map(k => [k, out[k] || '']))];
+  }
+  out.default_bank = Math.min(Math.max(Number(out.default_bank) || 0, 0), out.banks.length - 1);
   return out as Entity;
 }
 
-function Field({ label, value, onChange, placeholder, className = '' }: {
-  label: string; value: string; onChange: (v: string) => void; placeholder?: string; className?: string;
+function Field({ label, value, onChange, placeholder, className = '', disabled }: {
+  label: string; value: string; onChange: (v: string) => void; placeholder?: string; className?: string; disabled?: boolean;
 }) {
   return (
     <div className={`space-y-1 ${className}`}>
       <label className="block text-xs font-medium text-gray-500">{label}</label>
-      <input value={value} placeholder={placeholder} onChange={e => onChange(e.target.value)} className={inputCls} />
+      <input value={value} placeholder={placeholder} disabled={disabled} onChange={e => onChange(e.target.value)}
+        className={`${inputCls} ${disabled ? 'bg-gray-50 text-gray-600 cursor-not-allowed' : ''}`} />
     </div>
   );
 }
 
-function EntityCard({ entity, onSaved, onDeleted, onDefault }: {
+function EntityCard({ entity, canEdit, onSaved, onDeleted, onDefault }: {
   entity: Entity;
+  canEdit: boolean;
   onSaved: (e: Entity) => void;
   onDeleted: (code: string) => void;
   onDefault: (code: string) => void;
@@ -62,6 +83,15 @@ function EntityCard({ entity, onSaved, onDeleted, onDefault }: {
   useEffect(() => setForm(entity), [entity]);
 
   const set = (key: keyof Entity) => (value: string) => setForm(prev => ({ ...prev, [key]: value }));
+  const ro = !canEdit;
+  const setBank = (index: number, key: keyof Bank) => (value: string) =>
+    setForm(prev => ({ ...prev, banks: prev.banks.map((b, i) => (i === index ? { ...b, [key]: value } : b)) }));
+  const addBank = () => setForm(prev => ({ ...prev, banks: [...prev.banks, { ...EMPTY_BANK }] }));
+  const removeBank = (index: number) => setForm(prev => ({
+    ...prev,
+    banks: prev.banks.filter((_, i) => i !== index),
+    default_bank: prev.default_bank > index ? prev.default_bank - 1 : prev.default_bank,
+  }));
   const dirty = JSON.stringify(form) !== JSON.stringify(entity);
 
   async function save() {
@@ -95,12 +125,12 @@ function EntityCard({ entity, onSaved, onDeleted, onDefault }: {
         <h2 className="font-semibold text-gray-800">{entity.company_name}</h2>
         {entity.is_default ? (
           <span className="flex items-center gap-1 text-xs text-amber-600"><Star size={12} className="fill-amber-400" /> Default</span>
-        ) : (
+        ) : ro ? null : (
           <button onClick={() => onDefault(entity.code)} className="text-xs text-gray-400 hover:text-amber-600 flex items-center gap-1">
             <Star size={12} /> Set as default
           </button>
         )}
-        <div className="ml-auto flex items-center gap-2">
+        {canEdit && <div className="ml-auto flex items-center gap-2">
           {!entity.is_default && (confirmDelete ? (
             <>
               <span className="text-xs text-red-600">Delete {entity.code}?</span>
@@ -115,47 +145,65 @@ function EntityCard({ entity, onSaved, onDeleted, onDefault }: {
           <Button size="sm" onClick={save} disabled={saving || !dirty}>
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
           </Button>
-        </div>
+        </div>}
       </div>
 
       <div className="p-5 grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 flex items-center gap-1.5"><Building2 size={13} /> Company</h3>
-          <Field label="Company name" value={form.company_name} onChange={set('company_name')} />
-          <Field label="Address line 1" value={form.address1} onChange={set('address1')} />
-          <Field label="Address line 2" value={form.address2} onChange={set('address2')} />
-          <Field label="Address line 3" value={form.address3} onChange={set('address3')} />
+          <Field label="Company name" value={form.company_name} onChange={set('company_name')} disabled={ro} />
+          <Field label="Address line 1" value={form.address1} onChange={set('address1')} disabled={ro} />
+          <Field label="Address line 2" value={form.address2} onChange={set('address2')} disabled={ro} />
+          <Field label="Address line 3" value={form.address3} onChange={set('address3')} disabled={ro} />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="Contact person" value={form.contact_person} onChange={set('contact_person')} />
-            <Field label="Phone" value={form.tel} onChange={set('tel')} />
-            <Field label="Email" value={form.email} onChange={set('email')} />
-            <Field label="VAT" value={form.vat} onChange={set('vat')} />
-            <Field label="KVK / company no." value={form.kvk} onChange={set('kvk')} />
+            <Field label="Contact person" value={form.contact_person} onChange={set('contact_person')} disabled={ro} />
+            <Field label="Phone" value={form.tel} onChange={set('tel')} disabled={ro} />
+            <Field label="Email" value={form.email} onChange={set('email')} disabled={ro} />
+            <Field label="VAT" value={form.vat} onChange={set('vat')} disabled={ro} />
+            <Field label="KVK / company no." value={form.kvk} onChange={set('kvk')} disabled={ro} />
           </div>
-          <Field label="Delivery address (order confirmations)" value={form.delivery_address} onChange={set('delivery_address')} />
+          <Field label="Delivery address (order confirmations)" value={form.delivery_address} onChange={set('delivery_address')} disabled={ro} />
         </div>
 
         <div className="space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 flex items-center gap-1.5"><Landmark size={13} /> Bank</h3>
-          <Field label="Bank name" value={form.bank_name} onChange={set('bank_name')} />
-          <Field label="Bank address" value={form.bank_address} onChange={set('bank_address')} />
-
-          <div className="rounded-lg border border-gray-200 p-3 space-y-3">
-            <p className="text-xs font-semibold text-gray-600">USD account <span className="font-normal text-gray-400">— printed on USD documents</span></p>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <Field label="IBAN / account no." value={form.usd_account} onChange={set('usd_account')} className="sm:col-span-2" />
-              <Field label="BIC / SWIFT" value={form.usd_bic} onChange={set('usd_bic')} />
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-gray-200 p-3 space-y-3">
-            <p className="text-xs font-semibold text-gray-600">EUR account <span className="font-normal text-gray-400">— printed on EUR and other documents</span></p>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <Field label="IBAN / account no." value={form.eur_account} onChange={set('eur_account')} className="sm:col-span-2" />
-              <Field label="BIC / SWIFT" value={form.eur_bic} onChange={set('eur_bic')} />
-            </div>
-          </div>
-          <p className="text-xs text-gray-400">If the matching account is empty, the other one is printed.</p>
+          {form.banks.map((bank, i) => {
+            const isDefault = form.default_bank === i;
+            return (
+              <div key={i} className={`rounded-lg border p-3 space-y-3 ${isDefault ? 'border-primary-300 bg-primary-50/30' : 'border-gray-200'}`}>
+                <div className="flex items-center gap-2">
+                  <label className={`flex items-center gap-1.5 text-xs font-semibold ${isDefault ? 'text-primary-700' : 'text-gray-600'} ${ro ? '' : 'cursor-pointer'}`}>
+                    <input type="radio" name={`default-bank-${entity.code}`} checked={isDefault} disabled={ro}
+                      onChange={() => setForm(prev => ({ ...prev, default_bank: i }))} />
+                    {isDefault ? 'Default bank — printed on documents' : 'Use as default bank'}
+                  </label>
+                  {canEdit && !isDefault && (
+                    <button onClick={() => removeBank(i)} className="ml-auto p-1 rounded text-gray-300 hover:text-red-600 hover:bg-red-50" title="Remove this bank">
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
+                <Field label="Bank name" value={bank.bank_name} onChange={setBank(i, 'bank_name')} disabled={ro} />
+                <Field label="Bank address" value={bank.bank_address} onChange={setBank(i, 'bank_address')} disabled={ro} />
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <Field label="USD account — IBAN / account no." value={bank.usd_account} onChange={setBank(i, 'usd_account')} className="sm:col-span-2" disabled={ro} />
+                  <Field label="BIC / SWIFT" value={bank.usd_bic} onChange={setBank(i, 'usd_bic')} disabled={ro} />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <Field label="EUR account — IBAN / account no." value={bank.eur_account} onChange={setBank(i, 'eur_account')} className="sm:col-span-2" disabled={ro} />
+                  <Field label="BIC / SWIFT" value={bank.eur_bic} onChange={setBank(i, 'eur_bic')} disabled={ro} />
+                </div>
+              </div>
+            );
+          })}
+          {canEdit && (
+            <button onClick={addBank} className="flex items-center gap-1 text-xs font-medium text-primary-600 hover:text-primary-800">
+              <Plus size={13} /> Add another bank
+            </button>
+          )}
+          <p className="text-xs text-gray-400">
+            Documents print the default bank: its USD account on USD documents, its EUR account on all others. If the matching account is empty, the other one is printed.
+          </p>
         </div>
       </div>
     </div>
@@ -164,6 +212,8 @@ function EntityCard({ entity, onSaved, onDeleted, onDefault }: {
 
 export default function TripleWDetailsPage() {
   const { addToast } = useToast();
+  const { user } = useAuth();
+  const canEdit = user?.role === 'admin';
   const [entities, setEntities] = useState<Entity[]>([]);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -211,15 +261,19 @@ export default function TripleWDetailsPage() {
           </h1>
           <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
             The entities that issue order confirmations, invoices and purchase orders. Each document picks the
-            entity from its operation number (SOBE… → BE) and prints the bank account for its currency.
+            entity from its operation number (SOBE… → BE) and prints its default bank's account for the document currency.
           </p>
         </div>
-        <div className="sm:ml-auto">
-          <Button size="sm" onClick={() => setAdding(true)}><Plus size={14} /> Add entity</Button>
-        </div>
+        {canEdit ? (
+          <div className="sm:ml-auto">
+            <Button size="sm" onClick={() => setAdding(true)}><Plus size={14} /> Add entity</Button>
+          </div>
+        ) : (
+          <p className="sm:ml-auto text-xs text-gray-500 shrink-0">Read only — an admin can change these details.</p>
+        )}
       </div>
 
-      {adding && (
+      {adding && canEdit && (
         <div className="bg-white rounded-xl border border-primary-200 shadow-sm p-5 space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="font-semibold text-gray-800 text-sm">New entity</h2>
@@ -247,6 +301,7 @@ export default function TripleWDetailsPage() {
           <EntityCard
             key={entity.code}
             entity={entity}
+            canEdit={canEdit}
             onSaved={saved => setEntities(prev => prev.map(e => (e.code === saved.code ? saved : e)))}
             onDeleted={code => setEntities(prev => prev.filter(e => e.code !== code))}
             onDefault={makeDefault}

@@ -691,11 +691,20 @@ router.get('/tons-ytd', (_req: Request, res: Response) => {
   });
 });
 
+// Per month, plus the Salaries and Cars shares so the dashboard can leave them out
 router.get('/demo-expenses-monthly', (_req: Request, res: Response) => {
+  const categorySplit = (cat: 'salaries' | 'cars') => {
+    const is = `LOWER(TRIM(category)) = '${cat}'`;
+    return `SUM(CASE WHEN ${is} THEN COALESCE(eur_amount, amount) ELSE 0 END) as ${cat}_total,
+        SUM(CASE WHEN ${is} THEN COALESCE(vat_eur_amount, vat_amount, 0) ELSE 0 END) as ${cat}_vat,
+        SUM(CASE WHEN ${is} THEN 1 ELSE 0 END) as ${cat}_count`;
+  };
   try {
     const year = new Date().getFullYear().toString();
     const data = db.prepare(`
-      SELECT month, SUM(COALESCE(eur_amount, amount)) as total, SUM(COALESCE(vat_eur_amount, vat_amount)) as vat_total, COUNT(*) as count
+      SELECT month, SUM(COALESCE(eur_amount, amount)) as total, SUM(COALESCE(vat_eur_amount, vat_amount)) as vat_total, COUNT(*) as count,
+        ${categorySplit('salaries')},
+        ${categorySplit('cars')}
       FROM demo_invoices
       WHERE month LIKE ? || '%' AND domain = 'demo'
       GROUP BY month
