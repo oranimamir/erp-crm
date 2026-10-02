@@ -6,7 +6,7 @@ import { StatTile } from '../charts/Panels';
 import { formatDate } from '../../lib/dates';
 import { AlertTriangle, ArrowLeftRight, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 
-// Trading operations: the customer's order (what we sell) set against the
+// Trading operations: the customer's order or invoices (what we sell) set against the
 // supplier's order (what we buy), per operation and line by line.
 
 interface Line {
@@ -22,6 +22,7 @@ interface TradeOp {
   status: string;
   order_number: string | null;
   order_date: string | null;
+  sale_ref: string | null;
   customer_name: string | null;
   supplier_name: string | null;
   source: 'purchase_order' | 'supplier_invoice' | null;
@@ -59,8 +60,8 @@ function marginClass(v: number | null) {
   return v < 0 ? 'text-red-600' : 'text-green-700';
 }
 
-export default function TradingComparison({ year, monthFrom, monthTo, customerId }: {
-  year: string; monthFrom: string; monthTo: string; customerId: string;
+export default function TradingComparison({ year, monthFrom, monthTo, customerId, basis }: {
+  year: string; monthFrom: string; monthTo: string; customerId: string; basis: 'orders' | 'invoices';
 }) {
   const [data, setData] = useState<TradingData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -71,12 +72,12 @@ export default function TradingComparison({ year, monthFrom, monthTo, customerId
     setLoading(true);
     setError(null);
     api.get('/analytics/trading', {
-      params: { year, month_from: monthFrom, month_to: monthTo, customer_id: customerId || undefined },
+      params: { year, month_from: monthFrom, month_to: monthTo, customer_id: customerId || undefined, basis },
     })
       .then(r => setData(r.data))
       .catch(err => setError(err.response?.data?.error || 'Failed to load trading operations'))
       .finally(() => setLoading(false));
-  }, [year, monthFrom, monthTo, customerId]);
+  }, [year, monthFrom, monthTo, customerId, basis]);
 
   const toggle = (id: number) => setOpen(prev => {
     const next = new Set(prev);
@@ -90,7 +91,7 @@ export default function TradingComparison({ year, monthFrom, monthTo, customerId
     return (
       <Card className="p-10 text-center text-sm text-gray-500">
         <ArrowLeftRight size={28} className="mx-auto mb-2 text-gray-300" />
-        No trading operations in this period. Set an operation's category to <strong>Trading</strong> on its page to include it here.
+        No trading operations {basis === 'invoices' ? 'invoiced' : 'ordered'} in this period. Set an operation's category to <strong>Trading</strong> on its page to include it here.
       </Card>
     );
   }
@@ -101,7 +102,7 @@ export default function TradingComparison({ year, monthFrom, monthTo, customerId
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatTile label="Sold to customers" value={eurFmt(totals.sale_eur)} hint={`${totals.compared} of ${totals.operations} operations compared`} />
+        <StatTile label={basis === 'invoices' ? 'Invoiced to customers' : 'Sold to customers'} value={eurFmt(totals.sale_eur)} hint={`${totals.compared} of ${totals.operations} operations compared`} />
         <StatTile label="Bought from suppliers" value={eurFmt(totals.purchase_eur)} hint="Supplier POs, or supplier invoices when no PO" />
         <StatTile label="Gross margin" value={eurFmt(totals.margin_eur)} hint="Sale minus purchase, same operations" />
         <StatTile label="Margin %" value={`${marginPct.toFixed(1)}%`} hint="EUR at today's rates" />
@@ -127,7 +128,7 @@ export default function TradingComparison({ year, monthFrom, monthTo, customerId
                 <th className="text-left px-3 py-2.5 font-medium">Operation</th>
                 <th className="text-left px-3 py-2.5 font-medium">Customer</th>
                 <th className="text-left px-3 py-2.5 font-medium">Supplier</th>
-                <th className="text-right px-3 py-2.5 font-medium">Customer order</th>
+                <th className="text-right px-3 py-2.5 font-medium">{basis === 'invoices' ? 'Customer invoices' : 'Customer order'}</th>
                 <th className="text-right px-3 py-2.5 font-medium">Supplier order</th>
                 <th className="text-right px-3 py-2.5 font-medium">Margin (EUR)</th>
                 <th className="text-right px-3 py-2.5 font-medium">Margin %</th>
@@ -145,7 +146,7 @@ export default function TradingComparison({ year, monthFrom, monthTo, customerId
                         <Link to={`/operations/${op.operation_id}`} onClick={e => e.stopPropagation()} className="font-semibold text-primary-700 hover:underline">
                           {op.operation_number}
                         </Link>
-                        <div className="text-[11px] text-gray-400">{formatDate(op.order_date) || ''}{op.order_number ? ` · ${op.order_number}` : ''}</div>
+                        <div className="text-[11px] text-gray-400">{formatDate(op.order_date) || ''}{op.sale_ref ? ` · ${op.sale_ref}` : ''}</div>
                       </td>
                       <td className="px-3 py-2.5 text-gray-700">{op.customer_name || '—'}</td>
                       <td className="px-3 py-2.5 text-gray-700">
@@ -213,7 +214,7 @@ export default function TradingComparison({ year, monthFrom, monthTo, customerId
                               </tbody>
                             </table>
                           ) : (
-                            <p className="text-xs text-gray-400 py-2">No order lines on this operation.</p>
+                            <p className="text-xs text-gray-400 py-2">{basis === 'invoices' ? 'No invoice lines on this operation (uploaded invoices carry a total only).' : 'No order lines on this operation.'}</p>
                           )}
                           {op.source === 'supplier_invoice' && (
                             <p className="text-[11px] text-gray-400 mt-1">No supplier purchase order was generated, so the cost is the supplier invoices recorded on the operation (no per-line prices).</p>

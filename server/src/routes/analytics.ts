@@ -30,8 +30,8 @@ function toMt(qty: number, unit?: string | null): number | null {
 interface TradeLine { name: string; quantity: number; unit: string; unit_price: number; currency: string }
 
 // GET /analytics/trading
-//   ?year=2026&month_from=1&month_to=12&customer_id=
-// Trading operations: what the customer ordered (sale) against what was bought
+//   ?year=2026&month_from=1&month_to=12&customer_id=&basis=orders|invoices
+// Trading operations: what the customer ordered or was invoiced (sale) against what was bought
 // from the supplier — the supplier purchase order, or the supplier invoices
 // recorded on the operation when no PO was generated. EUR at today's rates.
 router.get('/trading', async (req: Request, res: Response) => {
@@ -49,29 +49,87 @@ router.get('/trading', async (req: Request, res: Response) => {
   let customerClause = '';
   if (customerId && !isNaN(customerId)) { customerClause = 'AND op.customer_id = ?'; params.push(customerId); }
 
-  const ops = db.prepare(`
-    SELECT op.id, op.operation_number, op.status, o.id as order_id,
-      c.name as customer_name, o.order_number, COALESCE(o.order_date, date(op.created_at)) as order_date
-    FROM operations op
-    LEFT JOIN customers c ON op.customer_id = c.id
-    LEFT JOIN orders o ON op.order_id = o.id
-    WHERE op.category = 'trading'
-      AND COALESCE(o.order_date, date(op.created_at)) BETWEEN ? AND ?
-      ${customerClause}
-    ORDER BY COALESCE(o.order_date, op.created_at) DESC
-  `).all(...params) as any[];
+  // The sale side: the customer's order (by order date), or the customer
+  // invoices recorded on the operation (by invoice date)
+  const basis = req.query.basis === 'invoices' ? 'invoices' : 'orders';
+  const INVOICE_IN_PERIOD = `i.operation_id = op.id AND i.type = 'customer' AND i.status NOT IN ('cancelled', 'draft')
+    AND i.invoice_date IS NOT NULL AND i.invoice_date BETWEEN ? AND ?`;
+
+  const ops = (basis === 'invoices'
+    ? db.prepare(`
+        SELECT op.id, op.operation_number, op.status, o.id as order_id,
+          c.name as customer_name, o.order_number,
+          (SELECT MIN(i.invoice_date) FROM invoices i WHERE ${INVOICE_IN_PERIOD}) as order_date
+        FROM operations op
+        LEFT JOIN customers c ON op.customer_id = c.id
+        LEFT JOIN orders o ON op.order_id = o.id
+        WHERE op.category = 'trading'
+          AND EXISTS (SELECT 1 FROM invoices i WHERE ${INVOICE_IN_PERIOD})
+          ${customerClause}
+        ORDER BY order_date DESC
+      `).all(dateStart, dateEnd, ...params)
+    : db.prepare(`
+        SELECT op.id, op.operation_number, op.status, o.id as order_id,
+          c.name as customer_name, o.order_number, COALESCE(o.order_date, date(op.created_at)) as order_date
+        FROM operations op
+        LEFT JOIN customers c ON op.customer_id = c.id
+        LEFT JOIN orders o ON op.order_id = o.id
+        WHERE op.category = 'trading'
+          AND COALESCE(o.order_date, date(op.created_at)) BETWEEN ? AND ?
+          ${customerClause}
+        ORDER BY COALESCE(o.order_date, op.created_at) DESC
+      `).all(...params)) as any[];
 
   const rows = ops.map(op => {
-    const sale: TradeLine[] = (op.order_id
-      ? db.prepare('SELECT description, quantity, unit, unit_price, currency FROM order_items WHERE order_id = ? ORDER BY id').all(op.order_id) as any[]
-      : []
-    ).map(i => ({
-      name: i.description || '',
-      quantity: Number(i.quantity) || 0,
-      unit: i.unit || '',
-      unit_price: Number(i.unit_price) || 0,
-      currency: String(i.currency || 'USD').toUpperCase(),
-    }));
+    let sale: TradeLine[] = [];
+    // Invoice basis: the amounts as invoiced (a generated invoice also gives the lines)
+    let saleInvoices: Array<{ invoice_number: string; amount: number; currency: string; mt: number | null }> | null = null;
+    if (basis === 'invoices') {
+      const invs = db.prepare(`
+        SELECT i.id, i.invoice_number, i.amount, i.currency, i.quantity_mt,
+          (SELECT d.data FROM invoice_documents d WHERE d.invoice_id = i.id AND d.status = 'final' ORDER BY d.id DESC LIMIT 1) as doc_data
+        FROM invoices i, (SELECT ? as id) op
+        WHERE ${INVOICE_IN_PERIOD}
+        ORDER BY i.invoice_date, i.id
+      `).all(op.id, dateStart, dateEnd) as any[];
+      saleInvoices = invs.map(inv => {
+        let docLines: TradeLine[] = [];
+        if (inv.doc_data) {
+          let docData: any = {};
+          try { docData = JSON.parse(inv.doc_data); } catch { /* corrupt row → no lines */ }
+          docLines = (Array.isArray(docData.items) ? docData.items : []).map((i: any) => ({
+            name: i.commercial_name || '',
+            quantity: Number(i.quantity) || 0,
+            unit: i.quantity_unit || '',
+            unit_price: Number(i.unit_price) || 0,
+            currency: String(i.currency || inv.currency || 'EUR').toUpperCase(),
+          }));
+        }
+        sale.push(...docLines);
+        let mt: number | null = inv.quantity_mt != null ? Number(inv.quantity_mt) : null;
+        if (mt == null && docLines.length) {
+          const parts = docLines.map(l => toMt(l.quantity, l.unit));
+          mt = parts.some(p => p == null) ? null : parts.reduce((s: number, p) => s + (p as number), 0);
+        }
+        return {
+          invoice_number: inv.invoice_number,
+          amount: Number(inv.amount) || 0,
+          currency: String(inv.currency || 'USD').toUpperCase(),
+          mt,
+        };
+      });
+    } else {
+      sale = (op.order_id
+        ? db.prepare('SELECT description, quantity, unit, unit_price, currency FROM order_items WHERE order_id = ? ORDER BY id').all(op.order_id) as any[]
+        : []
+      ).map(i => ({
+        name: i.description || '',
+        quantity: Number(i.quantity) || 0,
+        unit: i.unit || '',
+        unit_price: Number(i.unit_price) || 0,
+        currency: String(i.currency || 'USD').toUpperCase(),
+      }));
+    }
 
     // The supplier side: the generated purchase order first, else supplier invoices
     let source: 'purchase_order' | 'supplier_invoice' | null = null;
@@ -108,13 +166,14 @@ router.get('/trading', async (req: Request, res: Response) => {
         invoiceLines = invs.map(i => ({ amount: Number(i.amount) || 0, currency: String(i.currency || 'USD').toUpperCase(), eur_amount: i.eur_amount }));
       }
     }
-    return { op, sale, source, supplierName, purchase, freight, invoiceLines };
+    return { op, sale, saleInvoices, source, supplierName, purchase, freight, invoiceLines };
   });
 
   // Live EUR rates for every currency involved
   const currencies = new Set<string>();
   for (const r of rows) {
     r.sale.forEach(i => currencies.add(i.currency));
+    r.saleInvoices?.forEach(i => currencies.add(i.currency));
     r.purchase.forEach(i => currencies.add(i.currency));
     r.invoiceLines.forEach(i => currencies.add(i.currency));
   }
@@ -136,8 +195,10 @@ router.get('/trading', async (req: Request, res: Response) => {
     return total;
   };
 
-  const operations = rows.map(({ op, sale, source, supplierName, purchase, freight, invoiceLines }) => {
-    const saleEur = sale.reduce((s, i) => s + eur(i.quantity * i.unit_price, i.currency), 0);
+  const operations = rows.map(({ op, sale, saleInvoices, source, supplierName, purchase, freight, invoiceLines }) => {
+    const saleEur = saleInvoices
+      ? saleInvoices.reduce((s, i) => s + eur(i.amount, i.currency), 0)
+      : sale.reduce((s, i) => s + eur(i.quantity * i.unit_price, i.currency), 0);
 
     let purchaseCurrency: string | null = null;
     let purchaseTotal: number | null = null;
@@ -178,7 +239,9 @@ router.get('/trading', async (req: Request, res: Response) => {
       });
     });
 
-    const saleMt = mtOf(sale);
+    const saleMt = saleInvoices
+      ? (saleInvoices.some(i => i.mt == null) ? null : saleInvoices.reduce((s, i) => s + (i.mt as number), 0))
+      : mtOf(sale);
     const purchaseMt = source === 'purchase_order' ? mtOf(purchase) : null;
     const marginEur = purchaseEur != null && !unpriced ? saleEur - purchaseEur : null;
 
@@ -188,11 +251,15 @@ router.get('/trading', async (req: Request, res: Response) => {
       status: op.status,
       order_number: op.order_number,
       order_date: op.order_date,
+      // What the sale side was read from: the order, or the invoices in the period
+      sale_ref: saleInvoices ? saleInvoices.map(i => i.invoice_number).join(", ") : op.order_number,
       customer_name: op.customer_name,
       supplier_name: supplierName,
       source,
-      sale_currency: sale[0]?.currency || 'EUR',
-      sale_total: sale.reduce((s, i) => s + i.quantity * i.unit_price, 0),
+      sale_currency: saleInvoices?.[0]?.currency || sale[0]?.currency || 'EUR',
+      sale_total: saleInvoices
+        ? saleInvoices.reduce((s, i) => s + i.amount, 0)
+        : sale.reduce((s, i) => s + i.quantity * i.unit_price, 0),
       sale_eur: saleEur,
       purchase_currency: purchaseCurrency,
       purchase_total: purchaseTotal,
@@ -210,6 +277,7 @@ router.get('/trading', async (req: Request, res: Response) => {
   // Totals only over operations where both sides are known, so the margin is honest
   const compared = operations.filter(o => o.margin_eur != null);
   res.json({
+    basis,
     totals: {
       operations: operations.length,
       compared: compared.length,
@@ -592,7 +660,8 @@ const MT_EXPR = `
     ELSE NULL
   END`;
 
-// GET /analytics/quantity — monthly metric tons (MT) sold from customer orders
+// GET /analytics/quantity — metric tons (MT) sold per month, customer, region and product
+//   ?basis=orders (default) | invoices
 router.get('/quantity', (req: Request, res: Response) => {
   const yearNum = parseInt((req.query.year as string) || new Date().getFullYear().toString());
   if (isNaN(yearNum) || yearNum < 2000 || yearNum > 2100) {
@@ -612,124 +681,130 @@ router.get('/quantity', (req: Request, res: Response) => {
   if (req.query.customer_id && (isNaN(customerId!) || customerId! <= 0)) {
     res.status(400).json({ error: 'Invalid customer_id' }); return;
   }
-  const custWhere = customerId ? `AND o.customer_id = ?` : '';
   const custParams = customerId ? [customerId] : [];
+  // What the figures are read from: customer order lines (by order date), or
+  // customer invoices (by invoice date)
+  const basis = req.query.basis === 'invoices' ? 'invoices' : 'orders';
 
-  const tonsRows = db.prepare(`
-    SELECT strftime('%Y-%m', COALESCE(o.order_date, date(o.created_at))) as month,
-           SUM(${MT_EXPR}) as tons
-    FROM order_items oi
-    JOIN orders o ON oi.order_id = o.id
-    WHERE o.type = 'customer'
-      AND COALESCE(o.order_date, date(o.created_at)) BETWEEN ? AND ?
-      ${custWhere}
-    GROUP BY month
-  `).all(dateStart, dateEnd, ...custParams) as any[];
+  interface QtyLine {
+    doc: number; month: string; customer_id: number | null; customer_name: string | null;
+    region: string; product: string; mt: number;
+  }
+  const lines: QtyLine[] = [];
+  let withoutTonnage = 0;
 
+  if (basis === 'orders') {
+    const rows = db.prepare(`
+      SELECT o.id, strftime('%Y-%m', COALESCE(o.order_date, date(o.created_at))) as month,
+        o.customer_id, c.name as customer_name,
+        (SELECT op.country FROM operations op WHERE op.order_id = o.id AND op.country IS NOT NULL ORDER BY op.id DESC LIMIT 1) as op_country,
+        o.destination as destination, oi.description, oi.quantity, oi.unit
+      FROM order_items oi
+      JOIN orders o ON oi.order_id = o.id
+      LEFT JOIN customers c ON o.customer_id = c.id
+      WHERE o.type = 'customer'
+        AND COALESCE(o.order_date, date(o.created_at)) BETWEEN ? AND ?
+        ${customerId ? 'AND o.customer_id = ?' : ''}
+      ORDER BY oi.id
+    `).all(dateStart, dateEnd, ...custParams) as any[];
+    for (const r of rows) {
+      const mt = toMt(Number(r.quantity) || 0, r.unit);
+      if (!mt) continue;
+      lines.push({
+        doc: r.id, month: r.month, customer_id: r.customer_id, customer_name: r.customer_name,
+        region: resolveCountry(r.op_country || r.destination) || 'Unknown',
+        product: String(r.description || ''), mt,
+      });
+    }
+  } else {
+    // Per invoice: the lines of a generated invoice, else the invoice's own
+    // tonnage shared over its operation's order lines. An invoice with a
+    // tonnage but no product lines anywhere lands under "Unspecified product".
+    const invoiceRows = db.prepare(`
+      SELECT i.id, i.quantity_mt, strftime('%Y-%m', i.invoice_date) as month,
+        i.customer_id, c.name as customer_name,
+        op.order_id, op.country as op_country, o.destination as destination,
+        (SELECT d.data FROM invoice_documents d WHERE d.invoice_id = i.id AND d.status = 'final' ORDER BY d.id DESC LIMIT 1) as doc_data
+      FROM invoices i
+      LEFT JOIN customers c ON i.customer_id = c.id
+      LEFT JOIN operations op ON op.id = i.operation_id
+      LEFT JOIN orders o ON o.id = op.order_id
+      WHERE i.type = 'customer' AND i.status NOT IN ('cancelled', 'draft')
+        AND i.invoice_date IS NOT NULL AND i.invoice_date BETWEEN ? AND ?
+        ${customerId ? 'AND i.customer_id = ?' : ''}
+    `).all(dateStart, dateEnd, ...custParams) as any[];
+
+    for (const inv of invoiceRows) {
+      let invLines: { name: string; mt: number }[] = [];
+      let fromDocument = false;
+      if (inv.doc_data) {
+        let docData: any = {};
+        try { docData = JSON.parse(inv.doc_data); } catch { /* corrupt row → no lines */ }
+        invLines = (Array.isArray(docData.items) ? docData.items : [])
+          .map((it: any) => ({ name: String(it.commercial_name || ''), mt: toMt(Number(it.quantity) || 0, it.quantity_unit) }))
+          .filter((l: any) => l.mt != null && l.mt > 0);
+        fromDocument = invLines.length > 0;
+      }
+      if (!invLines.length && inv.order_id) {
+        invLines = (db.prepare('SELECT description, quantity, unit FROM order_items WHERE order_id = ? ORDER BY id').all(inv.order_id) as any[])
+          .map(it => ({ name: String(it.description || ''), mt: toMt(Number(it.quantity) || 0, it.unit) }))
+          .filter((l): l is { name: string; mt: number } => l.mt != null && l.mt > 0);
+      }
+      const linesMt = invLines.reduce((s, l) => s + l.mt, 0);
+      // The tonnage typed on an uploaded invoice wins over the order's quantities
+      const invoiceMt = !fromDocument && inv.quantity_mt != null ? Number(inv.quantity_mt) || 0 : linesMt;
+      if (!invoiceMt) { withoutTonnage++; continue; }
+      if (!invLines.length) invLines = [{ name: '', mt: invoiceMt }];
+      const scale = linesMt ? invoiceMt / linesMt : 1;
+      const region = resolveCountry(inv.op_country || inv.destination) || 'Unknown';
+      for (const l of invLines) {
+        lines.push({
+          doc: inv.id, month: inv.month, customer_id: inv.customer_id, customer_name: inv.customer_name,
+          region, product: l.name, mt: l.mt * scale,
+        });
+      }
+    }
+  }
+
+  // ── Aggregate the lines: per month, customer, region and product ───────────
   const months: Record<string, { month: string; tons: number }> = {};
   for (let m = monthStart; m <= monthEnd; m++) {
     const key = `${year}-${String(m).padStart(2, '0')}`;
     months[key] = { month: key, tons: 0 };
   }
-  for (const r of tonsRows) {
-    if (months[r.month]) months[r.month].tons = Number(r.tons) || 0;
+  const customerMap = new Map<number, { customer_id: number; customer_name: string; tons: number }>();
+  const regionMap = new Map<string, number>();
+  const productMap = new Map<string, { product: string; tons: number; docs: Set<number> }>();
+  for (const l of lines) {
+    if (months[l.month]) months[l.month].tons += l.mt;
+
+    const cid = l.customer_id ?? 0;
+    const cust = customerMap.get(cid) ?? { customer_id: cid, customer_name: l.customer_name || 'Unknown', tons: 0 };
+    cust.tons += l.mt;
+    customerMap.set(cid, cust);
+
+    regionMap.set(l.region, (regionMap.get(l.region) ?? 0) + l.mt);
+
+    const product = l.product.replace(/\s+/g, ' ').trim() || 'Unspecified product';
+    const key = product.toLowerCase();
+    const prod = productMap.get(key) ?? { product, tons: 0, docs: new Set<number>() };
+    prod.tons += l.mt;
+    prod.docs.add(l.doc);
+    productMap.set(key, prod);
   }
 
   const monthly = Object.values(months);
-  const totalTons = monthly.reduce((s, m) => s + m.tons, 0);
-
-  // Per-customer breakdown
-  const byCustomer = db.prepare(`
-    SELECT o.customer_id, c.name as customer_name, SUM(${MT_EXPR}) as tons
-    FROM order_items oi
-    JOIN orders o ON oi.order_id = o.id
-    JOIN customers c ON o.customer_id = c.id
-    WHERE o.type = 'customer'
-      AND COALESCE(o.order_date, date(o.created_at)) BETWEEN ? AND ?
-      ${custWhere}
-    GROUP BY o.customer_id
-    ORDER BY tons DESC
-    LIMIT 30
-  `).all(dateStart, dateEnd, ...custParams) as any[];
-
-  // Per-region breakdown (region from operation country / order destination)
-  const regionSrc = db.prepare(`
-    SELECT SUM(${MT_EXPR}) as tons,
-      (SELECT op.country FROM operations op WHERE op.order_id = o.id AND op.country IS NOT NULL ORDER BY op.id DESC LIMIT 1) as op_country,
-      o.destination as destination
-    FROM order_items oi
-    JOIN orders o ON oi.order_id = o.id
-    WHERE o.type = 'customer'
-      AND COALESCE(o.order_date, date(o.created_at)) BETWEEN ? AND ?
-      ${custWhere}
-    GROUP BY o.id
-  `).all(dateStart, dateEnd, ...custParams) as any[];
-  const tonsRegionMap = new Map<string, number>();
-  for (const r of regionSrc) {
-    const region = resolveCountry(r.op_country || r.destination) || 'Unknown';
-    tonsRegionMap.set(region, (tonsRegionMap.get(region) ?? 0) + (Number(r.tons) || 0));
-  }
-  const byRegion = [...tonsRegionMap.entries()]
-    .map(([region, tons]) => ({ region, tons }))
-    .filter(r => r.tons > 0)
-    .sort((a, b) => b.tons - a.tons);
-
-  // Per-product breakdown — read off the customer invoices (by invoice date),
-  // not the orders: the lines of a generated invoice, else the invoice's own
-  // tonnage shared over its operation's order lines. An invoice with a tonnage
-  // but no product lines anywhere lands under "Unspecified product".
-  const invoiceRows = db.prepare(`
-    SELECT i.id, i.quantity_mt, op.order_id,
-      (SELECT d.data FROM invoice_documents d WHERE d.invoice_id = i.id AND d.status = 'final' ORDER BY d.id DESC LIMIT 1) as doc_data
-    FROM invoices i
-    LEFT JOIN operations op ON op.id = i.operation_id
-    WHERE i.type = 'customer' AND i.status NOT IN ('cancelled', 'draft')
-      AND i.invoice_date IS NOT NULL AND i.invoice_date BETWEEN ? AND ?
-      ${customerId ? 'AND i.customer_id = ?' : ''}
-  `).all(dateStart, dateEnd, ...custParams) as any[];
-
-  const productMap = new Map<string, { product: string; tons: number; invoice_count: number }>();
-  let invoicesWithoutTonnage = 0;
-  for (const inv of invoiceRows) {
-    let lines: { name: string; mt: number }[] = [];
-    let fromDocument = false;
-    if (inv.doc_data) {
-      let docData: any = {};
-      try { docData = JSON.parse(inv.doc_data); } catch { /* corrupt row → no lines */ }
-      lines = (Array.isArray(docData.items) ? docData.items : [])
-        .map((it: any) => ({ name: String(it.commercial_name || ''), mt: toMt(Number(it.quantity) || 0, it.quantity_unit) }))
-        .filter((l: any) => l.mt != null && l.mt > 0);
-      fromDocument = lines.length > 0;
-    }
-    if (!lines.length && inv.order_id) {
-      lines = (db.prepare('SELECT description, quantity, unit FROM order_items WHERE order_id = ? ORDER BY id').all(inv.order_id) as any[])
-        .map(it => ({ name: String(it.description || ''), mt: toMt(Number(it.quantity) || 0, it.unit) }))
-        .filter((l): l is { name: string; mt: number } => l.mt != null && l.mt > 0);
-    }
-    const linesMt = lines.reduce((s, l) => s + l.mt, 0);
-    // The tonnage typed on an uploaded invoice wins over the order's quantities
-    const invoiceMt = !fromDocument && inv.quantity_mt != null ? Number(inv.quantity_mt) || 0 : linesMt;
-    if (!invoiceMt) { invoicesWithoutTonnage++; continue; }
-    if (!lines.length) lines = [{ name: '', mt: invoiceMt }];
-    const scale = linesMt ? invoiceMt / linesMt : 1;
-
-    const counted = new Set<string>();
-    for (const l of lines) {
-      const product = l.name.replace(/\s+/g, ' ').trim() || 'Unspecified product';
-      const key = product.toLowerCase();
-      const entry = productMap.get(key) ?? { product, tons: 0, invoice_count: 0 };
-      entry.tons += l.mt * scale;
-      if (!counted.has(key)) { entry.invoice_count += 1; counted.add(key); }
-      productMap.set(key, entry);
-    }
-  }
-  const byProduct = [...productMap.values()].sort((a, b) => b.tons - a.tons);
-
   res.json({
-    monthly, total_tons: totalTons, by_customer: byCustomer, by_region: byRegion,
-    by_product: byProduct,
-    invoiced_tons: byProduct.reduce((s, p) => s + p.tons, 0),
-    invoices_without_tonnage: invoicesWithoutTonnage,
+    basis,
+    monthly,
+    total_tons: monthly.reduce((s, m) => s + m.tons, 0),
+    by_customer: [...customerMap.values()].sort((a, b) => b.tons - a.tons).slice(0, 30),
+    by_region: [...regionMap.entries()].map(([region, tons]) => ({ region, tons })).sort((a, b) => b.tons - a.tons),
+    by_product: [...productMap.values()]
+      .map(p => ({ product: p.product, tons: p.tons, count: p.docs.size }))
+      .sort((a, b) => b.tons - a.tons),
+    // Invoices left out because no tonnage could be read (invoice basis only)
+    without_tonnage: withoutTonnage,
   });
 });
 

@@ -101,7 +101,9 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - Duplicates on upload (ZIP, single, import guard) — `findDuplicate` / `buildDuplicateIndex`: same file → skip; same invoice number (stored or printed, compacted) + same supplier (VAT no. / name) or amount or date → skip; same supplier + amount + date otherwise → review as `possible_duplicate` (pre-skipped, user can include). Two numbers read off the documents that differ → never a duplicate. Same rules inside one ZIP
 
 ## Analytics
-- Tonnage Sold (`GET /api/analytics/quantity`): month / customer / region come from customer order lines; `by_product` comes from customer invoices (by invoice date) — generated invoice lines, else the invoice's `quantity_mt` shared over the operation's order lines, else "Unspecified product"
+- "Based on" Orders | Invoices (`basis` in `AnalyticsPage.tsx`) applies to the whole page: Tonnage (`GET /api/analytics/quantity?basis=`), Trading sale side (`/trading?basis=`), the revenue compared with expenses, and it moves with the Revenue Orders / Invoices sub-tabs (Summary always shows both)
+- Tonnage on invoices (by invoice date): generated invoice lines, else the invoice's `quantity_mt` shared over the operation's order lines, else "Unspecified product"; on orders: customer order lines by order date. Both give month / customer / region / product
+- Trading on invoices: operations with a customer invoice in the period; sale = invoice amounts (lines only from generated invoices)
 
 ## Deployment
 Railway, auto-deploys from `main` on push. Commit and push immediately after every change.

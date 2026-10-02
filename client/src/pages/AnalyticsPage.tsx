@@ -37,11 +37,14 @@ interface QuantityData {
   total_tons: number;
   by_customer: { customer_id: number; customer_name: string; tons: number }[];
   by_region: { region: string; tons: number }[];
-  // Read off the customer invoices, unlike the order-based figures above
-  by_product: { product: string; tons: number; invoice_count: number }[];
-  invoiced_tons: number;
-  invoices_without_tonnage: number;
+  by_product: { product: string; tons: number; count: number }[];
+  /** Invoices left out because no tonnage could be read (invoice basis only). */
+  without_tonnage: number;
 }
+
+// What the figures are read from — customer orders (by order date) or customer
+// invoices (by invoice date). One choice for the whole page.
+type Basis = 'orders' | 'invoices';
 interface DemoExpensesData {
   monthly: { month: string; demo: number; sales: number; demo_vat: number; sales_vat: number }[];
   by_category: { category: string; domain: string; total: number; vat_total: number; count: number }[];
@@ -178,9 +181,20 @@ export default function AnalyticsPage() {
   const [monthTo, setMonthTo] = useState('12');
   const [customerId, setCustomerId] = useState('');
   const [groupBy, setGroupBy] = useState<GroupBy>('month');
+  const [basis, setBasis] = useState<Basis>('orders');
 
   // ── Revenue sub-tabs ──────────────────────────────────────────────────────
   const [revenueTab, setRevenueTab] = useState<'summary' | 'orders' | 'invoices'>('summary');
+  // The Orders / Invoices sub-tabs are the same choice as the basis, so the two
+  // move together; Summary shows both measures side by side either way.
+  const chooseBasis = (b: Basis) => {
+    setBasis(b);
+    if (revenueTab !== 'summary') setRevenueTab(b);
+  };
+  const chooseRevenueTab = (t: 'summary' | 'orders' | 'invoices') => {
+    setRevenueTab(t);
+    if (t !== 'summary') setBasis(t);
+  };
   const [revenueRows, setRevenueRows] = useState<{ customer_invoices: any[]; orders: any[] } | null>(null);
   const [breakdown, setBreakdown] = useState<RevenueBreakdown | null>(null);
 
@@ -217,7 +231,7 @@ export default function AnalyticsPage() {
         params: { year, month_from: monthFrom, month_to: monthTo, customer_id: customerId || undefined },
       }),
       api.get('/analytics/quantity', {
-        params: { year, month_from: monthFrom, month_to: monthTo, customer_id: customerId || undefined },
+        params: { year, month_from: monthFrom, month_to: monthTo, customer_id: customerId || undefined, basis },
       }),
       api.get('/analytics/demo-expenses', {
         params: {
@@ -234,7 +248,7 @@ export default function AnalyticsPage() {
       })
       .catch(() => { setData(null); setQuantityData(null); setDemoData(null); })
       .finally(() => setLoading(false));
-  }, [year, monthFrom, monthTo, customerId, effectiveDomain, demoCategory]);
+  }, [year, monthFrom, monthTo, customerId, effectiveDomain, demoCategory, basis]);
 
   // Row-level revenue data for the Orders / Invoices sub-tabs
   useEffect(() => {
@@ -248,14 +262,14 @@ export default function AnalyticsPage() {
 
   // Orders and invoices arrive as two independent summaries and stay that way:
   // an order becomes an invoice, so adding them would count the same sale twice.
+  // Loaded for every view: the chosen basis picks one of the two as "revenue".
   useEffect(() => {
-    if (view !== 'revenue') return;
     api.get('/analytics/revenue-breakdown', {
       params: { year, month_from: monthFrom, month_to: monthTo, customer_id: customerId || undefined },
     })
       .then(res => setBreakdown(res.data))
       .catch(() => setBreakdown(null));
-  }, [view, year, monthFrom, monthTo, customerId]);
+  }, [year, monthFrom, monthTo, customerId]);
 
   // ── Misc handlers ─────────────────────────────────────────────────────────
   const handleMonthFromChange = (val: string) => {
@@ -273,6 +287,8 @@ export default function AnalyticsPage() {
     setMonthFrom('1');
     setMonthTo('12');
     setCustomerId('');
+    setBasis('orders');
+    setRevenueTab('summary');
     setShowDemo(true);
     setShowSales(true);
     setCompareRevenue(false);
@@ -281,10 +297,16 @@ export default function AnalyticsPage() {
   };
 
   const isFiltered = year !== currentYear || monthFrom !== '1' || monthTo !== '12'
-    || customerId !== '' || !showDemo || !showSales || compareRevenue
+    || customerId !== '' || basis !== 'orders' || !showDemo || !showSales || compareRevenue
     || demoCategory !== '' || demoSupplier !== '';
 
   const period = periodLabel(year, monthFrom, monthTo);
+  // Revenue on the chosen basis: orders placed, or invoices issued
+  const basisRevenue = breakdown?.[basis];
+  const basisRevenueTotal = basisRevenue?.total ?? 0;
+  const basisRevenueLabel = basis === 'orders' ? 'Orders placed' : 'Invoices issued';
+  const basisColor = basis === 'orders' ? C_ORDERS : C_INVOICES;
+  const basisNote = basis === 'orders' ? 'Customer orders, by order date' : 'Customer invoices, by invoice date';
   const groupHeader = groupBy === 'month' ? 'Month' : groupBy === 'quarter' ? 'Quarter' : 'Year';
 
   const filteredBySupplier = demoData?.by_supplier.filter(s =>
@@ -367,8 +389,8 @@ export default function AnalyticsPage() {
   const expenseRollup = demoData
     ? rollupByPeriod(
         demoData.monthly.map(m => {
-          const rev = data?.monthly.find(r => r.month === m.month);
-          return { ...m, received: rev?.received || 0 };
+          const rev = basisRevenue?.monthly.find(r => r.month === m.month);
+          return { ...m, received: rev?.total || 0 };
         }),
         groupBy,
         ['demo', 'sales', 'demo_vat', 'sales_vat', 'received'],
@@ -377,7 +399,7 @@ export default function AnalyticsPage() {
   const expenseSeries = [
     ...(showDemo ? [{ name: 'Demo expenses', color: C_ORDERS, values: expenseRollup.map(r => r.demo) }] : []),
     ...(showSales ? [{ name: 'Sales activities', color: C_EXPENSE, values: expenseRollup.map(r => r.sales) }] : []),
-    ...(compareRevenue ? [{ name: 'Revenue received', color: C_INVOICES, values: expenseRollup.map(r => r.received) }] : []),
+    ...(compareRevenue ? [{ name: basisRevenueLabel, color: C_INVOICES, values: expenseRollup.map(r => r.received) }] : []),
   ];
 
   const categoryRows: VizRow[] = (() => {
@@ -478,6 +500,21 @@ export default function AnalyticsPage() {
                     groupBy === g ? 'bg-primary-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
                   } ${i > 0 ? 'border-l border-gray-300' : ''}`}>
                   {g}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Based on</label>
+            <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm font-medium" title={basisNote}>
+              {(['orders', 'invoices'] as Basis[]).map((b, i) => (
+                <button key={b}
+                  onClick={() => chooseBasis(b)}
+                  className={`px-3 py-2 capitalize transition-colors ${
+                    basis === b ? 'bg-primary-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+                  } ${i > 0 ? 'border-l border-gray-300' : ''}`}>
+                  {b}
                 </button>
               ))}
             </div>
@@ -585,7 +622,7 @@ export default function AnalyticsPage() {
             <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm font-medium w-fit">
               {(['summary', 'orders', 'invoices'] as const).map((t, i) => (
                 <button key={t}
-                  onClick={() => setRevenueTab(t)}
+                  onClick={() => chooseRevenueTab(t)}
                   className={`px-4 py-2 capitalize transition-colors ${
                     revenueTab === t ? 'bg-green-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
                   } ${i > 0 ? 'border-l border-gray-300' : ''}`}>
@@ -832,10 +869,10 @@ export default function AnalyticsPage() {
                 <StatTile label="Sales activities" color={C_EXPENSE} icon={<Truck size={18} />}
                   value={fmt(salesTotal.total)} hint={`${salesTotal.count} invoices`} />
               )}
-              {compareRevenue && data && (
-                <StatTile label="Revenue received" color={C_INVOICES} icon={<TrendingUp size={18} />}
-                  value={fmt(data.totals.received)}
-                  hint={`Net ${data.totals.received - demoData.totals.total_amount >= 0 ? '+' : ''}${fmt(data.totals.received - demoData.totals.total_amount)}`} />
+              {compareRevenue && (
+                <StatTile label={basisRevenueLabel} color={C_INVOICES} icon={<TrendingUp size={18} />}
+                  value={fmt(basisRevenueTotal)}
+                  hint={`Net ${basisRevenueTotal - demoData.totals.total_amount >= 0 ? '+' : ''}${fmt(basisRevenueTotal - demoData.totals.total_amount)}`} />
               )}
             </div>
 
@@ -867,7 +904,7 @@ export default function AnalyticsPage() {
                       {showSales && <th className="text-right px-3 py-2 font-medium">Sales</th>}
                       <th className="text-right px-3 py-2 font-medium">Total exp.</th>
                       <th className="text-right px-3 py-2 font-medium">VAT</th>
-                      {compareRevenue && <th className="text-right px-3 py-2 font-medium">Revenue</th>}
+                      {compareRevenue && <th className="text-right px-3 py-2 font-medium">{basisRevenueLabel}</th>}
                       {compareRevenue && <th className="text-right px-5 py-2 font-medium">Net</th>}
                     </tr>
                   </thead>
@@ -900,9 +937,9 @@ export default function AnalyticsPage() {
                       {showSales && <td className="px-3 py-2 text-right tabular-nums">{fmt(salesTotal?.total || 0)}</td>}
                       <td className="px-3 py-2 text-right tabular-nums">{fmt(demoData.totals.total_amount)}</td>
                       <td className="px-3 py-2 text-right tabular-nums text-gray-500">{fmt(demoData.totals.total_vat)}</td>
-                      {compareRevenue && data && <td className="px-3 py-2 text-right tabular-nums">{fmt(data.totals.received)}</td>}
-                      {compareRevenue && data && (() => {
-                        const net = data.totals.received - demoData.totals.total_amount;
+                      {compareRevenue && <td className="px-3 py-2 text-right tabular-nums">{fmt(basisRevenueTotal)}</td>}
+                      {compareRevenue && (() => {
+                        const net = basisRevenueTotal - demoData.totals.total_amount;
                         return (
                           <td className={`px-5 py-2 text-right tabular-nums ${net >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                             {net >= 0 ? '+' : ''}{fmt(net)}
@@ -950,34 +987,40 @@ export default function AnalyticsPage() {
         {/* TONNAGE                                                            */}
         {/* ═══════════════════════════════════════════════════════════════════ */}
         {view === 'trading' && (
-          <TradingComparison year={year} monthFrom={monthFrom} monthTo={monthTo} customerId={customerId} />
+          <TradingComparison year={year} monthFrom={monthFrom} monthTo={monthTo} customerId={customerId} basis={basis} />
         )}
 
-        {view === 'tonnage' && quantityData && data && (
-          quantityData.total_tons === 0 && !quantityData.by_product?.length ? (
+        {view === 'tonnage' && quantityData && (
+          quantityData.total_tons === 0 ? (
             <Card className="p-10 text-center">
               <Scale size={36} className="text-gray-300 mx-auto mb-3" />
               <p className="text-gray-500 font-medium">No tonnage data for this period</p>
               <p className="text-xs text-gray-400 mt-1">
-                Tonnage is read from customer order line items (unit: tons / t / mt).
+                {basis === 'orders'
+                  ? 'Tonnage is read from customer order line items (unit: tons / t / mt).'
+                  : 'Tonnage is read from customer invoices: the lines of a generated invoice, or the tonnage entered on an uploaded one.'}
               </p>
             </Card>
           ) : (
             <>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <StatTile label="Total tons sold" color={C_TONS} icon={<Scale size={18} />}
-                  value={fmtTons(quantityData.total_tons)} hint={period} />
-                <StatTile label="Cash received" color={C_CASH} icon={<TrendingUp size={18} />}
-                  value={fmt(data.totals.received)} hint={period} />
-                <StatTile label="EUR per ton" color={C_INVOICES} icon={<DollarSign size={18} />}
-                  value={data.totals.received > 0 && quantityData.total_tons > 0
-                    ? fmt(data.totals.received / quantityData.total_tons)
-                    : '—'} />
+                <StatTile label={basis === 'orders' ? 'Total tons ordered' : 'Total tons invoiced'} color={C_TONS} icon={<Scale size={18} />}
+                  value={fmtTons(quantityData.total_tons)}
+                  hint={quantityData.without_tonnage
+                    ? `${period} · ${quantityData.without_tonnage} invoice(s) without a tonnage left out`
+                    : period} />
+                <StatTile label={basisRevenueLabel} color={basisColor} icon={<TrendingUp size={18} />}
+                  value={fmt(basisRevenueTotal)} hint={period} />
+                <StatTile label="EUR per ton" color={C_CASH} icon={<DollarSign size={18} />}
+                  value={basisRevenueTotal > 0 && quantityData.total_tons > 0
+                    ? fmt(basisRevenueTotal / quantityData.total_tons)
+                    : '—'}
+                  hint={`${basisRevenueLabel} ÷ tons`} />
               </div>
 
               <PeriodPanel
                 title="Tons Sold per Period"
-                subtitle={`${groupHeader} breakdown — ${period}`}
+                subtitle={`${basisNote} — ${period}`}
                 icon={<Scale size={16} className="text-gray-400" />}
                 periodHeader={groupHeader}
                 categories={tonsRollup.map(r => r.period)}
@@ -1004,18 +1047,17 @@ export default function AnalyticsPage() {
 
               <BreakdownPanel
                 title="Tonnage by Product"
-                subtitle={`From customer invoices — ${fmtTons(quantityData.invoiced_tons || 0)} invoiced, ${period}`
-                  + (quantityData.invoices_without_tonnage ? ` · ${quantityData.invoices_without_tonnage} invoice(s) without a tonnage left out` : '')}
+                subtitle={period}
                 icon={<Package size={16} className="text-gray-400" />}
                 dimensionHeader="Product"
                 rows={(quantityData.by_product || []).map(p => ({
-                  key: p.product, label: p.product, values: [p.tons], count: p.invoice_count,
+                  key: p.product, label: p.product, values: [p.tons], count: p.count,
                 }))}
                 series={[{ name: 'Tons', color: C_TONS }]}
                 format={fmtTons}
-                countLabel="Invoices"
+                countLabel={basis === 'orders' ? 'Orders' : 'Invoices'}
                 onExport={() => downloadExcel(`tonnage-by-product-${period}`,
-                  ['Product', 'Invoices', 'Tons'], (quantityData.by_product || []).map(p => [p.product, p.invoice_count, p.tons]))}
+                  ['Product', basis === 'orders' ? 'Orders' : 'Invoices', 'Tons'], (quantityData.by_product || []).map(p => [p.product, p.count, p.tons]))}
               />
 
               <BreakdownPanel
