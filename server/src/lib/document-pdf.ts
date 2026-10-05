@@ -102,10 +102,12 @@ export interface DocLine {
   description?: string | null;
   /** Printed under the commercial name. */
   lot?: string | null;
-  /** Optional second, third and fourth lots of the same product, printed under the first. */
+  /** Older lines: second to fourth lots, printed under the first. */
   lot2?: string | null;
   lot3?: string | null;
   lot4?: string | null;
+  /** Every lot of the line, as many as were added; wins over lot … lot4. */
+  lots?: string[] | null;
   /** Free note under the line — "80 drums on 20 pallets", "2 pallets lot 01-2601-001". */
   note?: string | null;
 }
@@ -326,7 +328,7 @@ function cellValues(item: DocLine, index: number, layout: InvoiceLayout): Record
   const inRow = layout.hs_code === 'line';
   const nameParts = [item.commercial_name || ''];
   if (inRow && item.hs_code && !has('hs_code')) nameParts.push(`HS code: ${item.hs_code}`);
-  const lots = [item.lot, item.lot2, item.lot3, item.lot4].map(l => String(l || '').trim()).filter(Boolean);
+  const lots = lotsOf(item);
   if (layout.show_lot && lots.length && !has('lot')) nameParts.push(`Lot : ${lots.join('\n        ')}`);
   if (inRow && layout.show_line_note && item.note && !has('packing_note')) nameParts.push(item.note);
 
@@ -342,6 +344,36 @@ function cellValues(item: DocLine, index: number, layout: InvoiceLayout): Record
     unit_price: price ? `${fmt(price)} ${currency}${unit ? `/${unit}` : ''}` : '',
     amount: qty && price ? `${fmt(qty * price)} ${currency}` : '',
   };
+}
+
+/** A line's lot numbers: `lots` when saved as a list, else lot … lot4. */
+export function lotsOf(line: { lot?: string | null; lot2?: string | null; lot3?: string | null; lot4?: string | null; lots?: unknown }): string[] {
+  const list = Array.isArray(line?.lots) ? line.lots : [line?.lot, line?.lot2, line?.lot3, line?.lot4];
+  return list.map(l => String(l ?? '').trim()).filter(Boolean);
+}
+
+/** Text columns that wrap well, so a code column too narrow for its value can borrow from them. */
+const WIDTH_DONORS = new Set(['commercial_name', 'product', 'reference', 'packaging', 'packing_note', 'description']);
+
+/**
+ * Widens `key` so its longest line ("01.2602-003") prints whole at `size`,
+ * taking the room from the text columns in proportion to their width (at most
+ * a third of it). The table's total width stays the same.
+ */
+function widenToFit<C extends { key: string; width: number }>(
+  doc: any, cols: C[], rows: Array<Record<string, string>>, key: string, size: number, pad: number,
+): C[] {
+  const col = cols.find(c => c.key === key);
+  if (!col) return cols;
+  doc.font('Helvetica').fontSize(size);
+  const widest = Math.max(0, ...rows.flatMap(r => String(r[key] ?? '').split('\n').map(l => doc.widthOfString(l.trim()))));
+  const extra = widest + pad * 2 + 1 - col.width;
+  if (extra <= 0) return cols;
+  const pool = cols.filter(c => WIDTH_DONORS.has(c.key)).reduce((sum, c) => sum + c.width, 0);
+  if (!pool) return cols;
+  const take = Math.min(extra, pool / 3);
+  return cols.map(c => c.key === key ? { ...c, width: c.width + take }
+    : WIDTH_DONORS.has(c.key) ? { ...c, width: c.width - take * (c.width / pool) } : c);
 }
 
 /** Columns whose value is one figure or code and reads badly broken across lines. */
@@ -611,12 +643,13 @@ function drawTable(doc: any, kind: DocumentKind, layout: InvoiceLayout, data: Do
   const items = Array.isArray(data.items) ? data.items : [];
   const rows = items.map((item, index) => cellValues(item, index, layout));
   // A column nobody filled in is left off the page
-  const cols = fittedColumns({
+  const fitted = fittedColumns({
     ...layout,
     columns: layout.columns.filter(c => ALWAYS_SHOWN.has(c.key) || rows.some(r => String(r[c.key] ?? '').trim())),
   });
   const PAD = 5;
-  const size = tableSizes(kind, cols);
+  const size = tableSizes(kind, fitted);
+  const cols = widenToFit(doc, fitted, rows, 'lot', size.cell, PAD);
   const cellSize = uniformCellSize(doc, cols, rows, size.cell, PAD);
 
   // A heading may wrap between words, never inside one — a word too wide for
@@ -778,8 +811,9 @@ function drawPackingTable(doc: any, pl: PackingListLayout, data: DocumentData, t
   // A column nobody filled in (no CBM typed, no lot…) is left off the page
   const shown = pl.columns.filter(c => ALWAYS_SHOWN.has(c.key) || allTexts.some(t => String(t[c.key] ?? '').trim()));
   const total = shown.reduce((sum, c) => sum + c.width, 0);
-  const cols = shown.map(c => ({ ...c, width: c.width * (W / total), numeric: NUMERIC_PL.has(c.key) }));
   const PAD = 4;
+  const cols = widenToFit(doc, shown.map(c => ({ ...c, width: c.width * (W / total), numeric: NUMERIC_PL.has(c.key) })),
+    allTexts, 'lot', 8.5, PAD);
   const HEAD = 7.5;
 
   const texts = allTexts;

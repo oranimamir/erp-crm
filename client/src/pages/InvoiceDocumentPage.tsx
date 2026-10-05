@@ -3,6 +3,7 @@ import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom'
 import api from '../lib/api';
 import { acceptPlaceholderOnTab } from '../lib/placeholderTab';
 import CompareButtons from '../components/CompareButtons';
+import LotFields, { lotFieldsFor, lotsOf } from '../components/LotFields';
 import { useCompanyEntities } from '../lib/useCompanyEntities';
 import { useToast } from '../contexts/ToastContext';
 import Button from '../components/ui/Button';
@@ -28,11 +29,8 @@ interface InvLine {
   currency: string;
   hs_code: string;
   description: string;
-  lot: string;
-  /** Optional second, third and fourth lots of the same product, printed under the first. */
-  lot2: string;
-  lot3: string;
-  lot4: string;
+  /** The line's lot numbers — one or more, printed under each other. */
+  lots: string[];
   note: string;
 }
 
@@ -102,7 +100,7 @@ const FORM_KEYS = [
 const emptyLine = (n: number): InvLine => ({
   line: n, reference: '', commercial_name: '', packaging: '',
   quantity: '', quantity_unit: 'KG', unit_price: '', currency: 'EUR',
-  hs_code: '', description: '', lot: '', lot2: '', lot3: '', lot4: '', note: '',
+  hs_code: '', description: '', lots: [''], note: '',
 });
 
 const blankData = (): InvData => ({
@@ -136,10 +134,7 @@ function toFormData(raw: any): InvData {
     currency: item?.currency || 'EUR',
     hs_code: item?.hs_code ?? '',
     description: item?.description ?? '',
-    lot: item?.lot ?? '',
-    lot2: item?.lot2 ?? '',
-    lot3: item?.lot3 ?? '',
-    lot4: item?.lot4 ?? '',
+    lots: lotsOf(item),
     note: item?.note ?? '',
   }));
   return merged as InvData;
@@ -157,6 +152,7 @@ function toPayload(form: InvData, includeOrigin: boolean, layout: InvoiceLayout)
     country_of_origin: includeOrigin ? form.country_of_origin : '',
     items: form.items.map((item, index) => ({
       ...item,
+      ...lotFieldsFor(item.lots),
       line: index + 1,
       quantity: item.quantity === '' ? 0 : Number(item.quantity),
       unit_price: item.unit_price === '' ? 0 : Number(item.unit_price),
@@ -820,14 +816,8 @@ export default function InvoiceDocumentPage() {
                     <Field label="Commercial name" value={item.commercial_name} onChange={v => setItem(index, { commercial_name: v })} />
                     <Field label="Packaging" value={item.packaging} onChange={v => setItem(index, { packaging: v })} placeholder="25 KG bags" />
                     <Field label="HS code" value={item.hs_code} onChange={v => setItem(index, { hs_code: v })} placeholder="2918.11" />
-                    <Field label="Lot" value={item.lot} onChange={v => setItem(index, { lot: v })} placeholder="01.2602-003" />
-                    <Field label="Second lot (optional)" value={item.lot2} onChange={v => setItem(index, { lot2: v })} />
-                    {(item.lot2 || item.lot3 || item.lot4) && (
-                      <Field label="Third lot (optional)" value={item.lot3} onChange={v => setItem(index, { lot3: v })} />
-                    )}
-                    {(item.lot3 || item.lot4) && (
-                      <Field label="Fourth lot (optional)" value={item.lot4} onChange={v => setItem(index, { lot4: v })} />
-                    )}
+                    <LotFields lots={item.lots} onChange={lots => setItem(index, { lots })} placeholder="01.2602-003"
+                      className="sm:col-span-2" />
                     <Field label="Packing note" value={item.note} onChange={v => setItem(index, { note: v })}
                       placeholder="80 drums on 20 pallets" />
                   </div>

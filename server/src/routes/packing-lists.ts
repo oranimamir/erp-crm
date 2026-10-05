@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 import { Resend } from 'resend';
 import db from '../database.js';
 import { notifyAdmin } from '../lib/notify.js';
-import { buildDocumentPdf, type DocumentData, type PackingRow } from '../lib/document-pdf.js';
+import { buildDocumentPdf, lotsOf, type DocumentData, type PackingRow } from '../lib/document-pdf.js';
 import { computePacking, listPackaging, matchPackaging, netKg, packagingById, type PackagingRow } from '../lib/packing.js';
 import { normalizePlLayout, resolvePlLayout } from '../lib/packingListLayout.js';
 import { resolveProfile } from '../lib/documentPrefill.js';
@@ -34,6 +34,8 @@ export interface PackingLineInput {
   lot2?: string | null;
   lot3?: string | null;
   lot4?: string | null;
+  /** Every lot, as many as added; wins over lot … lot4. */
+  lots?: string[] | null;
   hs_code?: string | null;
   description?: string | null;
   packaging_id?: number | null;
@@ -120,10 +122,7 @@ function linesFromInvoice(items: any[], rows: PackagingRow[], keep: PackingLineI
       packaging: item.packaging || '',
       quantity: Number(item.quantity) || 0,
       quantity_unit: item.quantity_unit || 'KG',
-      lot: item.lot || '',
-      lot2: item.lot2 || '',
-      lot3: item.lot3 || '',
-      lot4: item.lot4 || '',
+      lots: lotsOf(item),
       hs_code: item.hs_code || '',
       description: item.description || '',
     };
@@ -155,7 +154,7 @@ function packingRows(lines: PackingLineInput[]): PackingRow[] {
     return {
       reference: line.reference || '',
       product: line.commercial_name || '',
-      lot: [line.lot, line.lot2, line.lot3, line.lot4].map(l => String(l || '').trim()).filter(Boolean).join('\n'),
+      lot: lotsOf(line).join('\n'),
       hs_code: line.hs_code || '',
       description: line.description || '',
       packaging_type: pkg ? pkg.type : (line.packaging || ''),

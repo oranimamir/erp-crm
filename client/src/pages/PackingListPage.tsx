@@ -7,6 +7,7 @@ import { formatDate } from '../lib/dates';
 import { useToast } from '../contexts/ToastContext';
 import Button from '../components/ui/Button';
 import CompareButtons from '../components/CompareButtons';
+import LotFields, { lotFieldsFor, lotsOf } from '../components/LotFields';
 import PackingListLayoutEditor from '../components/PackingListLayoutEditor';
 import { plWithDefaults, type PackingListLayout } from '../lib/packingListLayout';
 import {
@@ -26,10 +27,8 @@ interface PlLine {
   packaging: string;
   quantity: number;
   quantity_unit: string;
-  lot: string;
-  lot2: string;
-  lot3: string;
-  lot4: string;
+  /** Lot numbers, copied from the invoice and editable here. */
+  lots: string[];
   hs_code: string;
   description: string;
   packaging_id: number | null;
@@ -96,10 +95,7 @@ function toLine(raw: any): PlLine {
     packaging: raw?.packaging ?? '',
     quantity: Number(raw?.quantity) || 0,
     quantity_unit: raw?.quantity_unit || 'KG',
-    lot: raw?.lot ?? '',
-    lot2: raw?.lot2 ?? '',
-    lot3: raw?.lot3 ?? '',
-    lot4: raw?.lot4 ?? '',
+    lots: lotsOf(raw),
     hs_code: raw?.hs_code ?? '',
     description: raw?.description ?? '',
     packaging_id: raw?.packaging_id ?? null,
@@ -125,6 +121,7 @@ function toPayload(form: PlData, layout: PackingListLayout) {
     layout,
     lines: form.lines.map(l => ({
       ...l,
+      ...lotFieldsFor(l.lots),
       units_override: l.units_override === '' ? null : Number(l.units_override),
       pallets_override: l.pallets_override === '' ? null : Number(l.pallets_override),
       pallet_weight_override: l.pallet_weight_override === '' ? null : Number(l.pallet_weight_override),
@@ -703,20 +700,11 @@ export default function PackingListPage() {
                       <span className="text-sm font-semibold text-gray-800">{line.commercial_name || `Line ${index + 1}`}</span>
                       <span className="text-xs text-gray-500">
                         {line.reference}{line.reference && ' · '}{kg(line.quantity)} {line.quantity_unit}
-                        {[line.lot, line.lot2, line.lot3, line.lot4].some(Boolean) && ` · Lot ${[line.lot, line.lot2, line.lot3, line.lot4].filter(Boolean).join(' / ')}`}
+                        {line.lots.some(l => l.trim()) && ` · Lot ${line.lots.filter(l => l.trim()).join(' / ')}`}
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      <Field label="Lot" value={line.lot} onChange={v => setLine(index, { lot: v })} />
-                      <Field label="Second lot (optional)" value={line.lot2} onChange={v => setLine(index, { lot2: v })} />
-                      {(line.lot2 || line.lot3 || line.lot4) && (
-                        <Field label="Third lot (optional)" value={line.lot3} onChange={v => setLine(index, { lot3: v })} />
-                      )}
-                      {(line.lot3 || line.lot4) && (
-                        <Field label="Fourth lot (optional)" value={line.lot4} onChange={v => setLine(index, { lot4: v })} />
-                      )}
-                    </div>
+                    <LotFields lots={line.lots} onChange={lots => setLine(index, { lots })} />
 
                     <div className="space-y-1">
                       <label className="block text-xs font-medium text-gray-500">Packaging</label>
