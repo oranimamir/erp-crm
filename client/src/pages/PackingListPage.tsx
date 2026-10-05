@@ -28,6 +28,8 @@ interface PlLine {
   quantity_unit: string;
   lot: string;
   lot2: string;
+  lot3: string;
+  lot4: string;
   hs_code: string;
   description: string;
   packaging_id: number | null;
@@ -96,6 +98,8 @@ function toLine(raw: any): PlLine {
     quantity_unit: raw?.quantity_unit || 'KG',
     lot: raw?.lot ?? '',
     lot2: raw?.lot2 ?? '',
+    lot3: raw?.lot3 ?? '',
+    lot4: raw?.lot4 ?? '',
     hs_code: raw?.hs_code ?? '',
     description: raw?.description ?? '',
     packaging_id: raw?.packaging_id ?? null,
@@ -699,7 +703,7 @@ export default function PackingListPage() {
                       <span className="text-sm font-semibold text-gray-800">{line.commercial_name || `Line ${index + 1}`}</span>
                       <span className="text-xs text-gray-500">
                         {line.reference}{line.reference && ' · '}{kg(line.quantity)} {line.quantity_unit}
-                        {(line.lot || line.lot2) && ` · Lot ${[line.lot, line.lot2].filter(Boolean).join(' / ')}`}
+                        {[line.lot, line.lot2, line.lot3, line.lot4].some(Boolean) && ` · Lot ${[line.lot, line.lot2, line.lot3, line.lot4].filter(Boolean).join(' / ')}`}
                       </span>
                     </div>
 

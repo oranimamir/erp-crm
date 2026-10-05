@@ -32,6 +32,8 @@ export interface PackingLineInput {
   quantity_unit?: string | null;
   lot?: string | null;
   lot2?: string | null;
+  lot3?: string | null;
+  lot4?: string | null;
   hs_code?: string | null;
   description?: string | null;
   packaging_id?: number | null;
@@ -120,6 +122,8 @@ function linesFromInvoice(items: any[], rows: PackagingRow[], keep: PackingLineI
       quantity_unit: item.quantity_unit || 'KG',
       lot: item.lot || '',
       lot2: item.lot2 || '',
+      lot3: item.lot3 || '',
+      lot4: item.lot4 || '',
       hs_code: item.hs_code || '',
       description: item.description || '',
     };
@@ -151,7 +155,7 @@ function packingRows(lines: PackingLineInput[]): PackingRow[] {
     return {
       reference: line.reference || '',
       product: line.commercial_name || '',
-      lot: [line.lot, line.lot2].map(l => String(l || '').trim()).filter(Boolean).join('\n'),
+      lot: [line.lot, line.lot2, line.lot3, line.lot4].map(l => String(l || '').trim()).filter(Boolean).join('\n'),
       hs_code: line.hs_code || '',
       description: line.description || '',
       packaging_type: pkg ? pkg.type : (line.packaging || ''),

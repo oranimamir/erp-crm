@@ -102,8 +102,10 @@ export interface DocLine {
   description?: string | null;
   /** Printed under the commercial name. */
   lot?: string | null;
-  /** An optional second lot of the same product, printed directly under the first. */
+  /** Optional second, third and fourth lots of the same product, printed under the first. */
   lot2?: string | null;
+  lot3?: string | null;
+  lot4?: string | null;
   /** Free note under the line — "80 drums on 20 pallets", "2 pallets lot 01-2601-001". */
   note?: string | null;
 }
@@ -324,7 +326,7 @@ function cellValues(item: DocLine, index: number, layout: InvoiceLayout): Record
   const inRow = layout.hs_code === 'line';
   const nameParts = [item.commercial_name || ''];
   if (inRow && item.hs_code && !has('hs_code')) nameParts.push(`HS code: ${item.hs_code}`);
-  const lots = [item.lot, item.lot2].map(l => String(l || '').trim()).filter(Boolean);
+  const lots = [item.lot, item.lot2, item.lot3, item.lot4].map(l => String(l || '').trim()).filter(Boolean);
   if (layout.show_lot && lots.length && !has('lot')) nameParts.push(`Lot : ${lots.join('\n        ')}`);
   if (inRow && layout.show_line_note && item.note && !has('packing_note')) nameParts.push(item.note);
 
