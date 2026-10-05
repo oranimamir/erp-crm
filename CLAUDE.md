@@ -63,6 +63,9 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - Line table uses one font size for every cell; lots are a list per line (`lots`, any number, "Add lot" in `components/LotFields.tsx`; `lot` mirrors the first; older lines' `lot`–`lot4` read via `lotsOf`), stacked; the Lot column widens to fit the longest lot on one line (`widenToFit`, borrowing from the text columns); client block prints contact person, phone and email
 - Document forms (invoice/OC/PO): Tab on an empty field accepts its grey placeholder (`client/src/lib/placeholderTab.ts`)
 
+## Customer Invoices page
+- Sub-tabs Invoices | Invoices list (`components/InvoiceRegister.tsx`, `GET /api/invoices/register?entity=`): every customer invoice in invoice-number order (numeric-aware) with date, client, country (operation's, else resolved from the order destination), order # (else PO), operation #, blending/trading; All / BE / NL by `entityFromOperationNumber(operation number, else invoice number)`; operation via `invoices.operation_id`, else `our_ref`
+
 ## Packing Lists
 - `/api/packing-lists`, page `/packing-lists/:id`; built from a generated invoice (`invoice_document_id`), numbered `<operation#>PL`, filed under the operation documents ("Packing list")
 - Packaging per line from Inventory → Packaging (`packaging` table) via `server/src/lib/packing.ts`: code token in the reference (BU25, DU25…) + longest product-name match; ties offered in a dropdown

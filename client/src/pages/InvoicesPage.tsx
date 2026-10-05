@@ -12,6 +12,7 @@ import EmptyState from '../components/ui/EmptyState';
 import { Plus, FileText, Eye, Trash2, FileDown, ChevronUp, ChevronDown, FileSpreadsheet, Landmark, Download, X, Loader2, Filter, CalendarDays, BarChart3 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
+import InvoiceRegister from '../components/InvoiceRegister';
 
 const statusBadgeClasses: Record<string, string> = {
   draft:           'bg-gray-100 text-gray-700 border-gray-200',
@@ -94,6 +95,14 @@ export default function InvoicesPage() {
   const { addToast } = useToast();
   const navigate = useNavigate();
   const saved = loadFilters();
+  // Sub-tab: the working list, or the register in invoice-number order
+  const [view, setView] = useState<'invoices' | 'list'>(() => {
+    try { return localStorage.getItem('invoicesView') === 'list' ? 'list' : 'invoices'; } catch { return 'invoices'; }
+  });
+  const switchView = (v: 'invoices' | 'list') => {
+    setView(v);
+    try { localStorage.setItem('invoicesView', v); } catch { /* private mode */ }
+  };
   const [invoices, setInvoices] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -346,6 +355,18 @@ export default function InvoicesPage() {
         </div>
       </div>
 
+      <div className="flex gap-1 border-b border-gray-200">
+        {([['invoices', 'Invoices'], ['list', 'Invoices list']] as const).map(([key, label]) => (
+          <button key={key} onClick={() => switchView(key)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              view === key ? 'border-primary-600 text-primary-700' : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {view === 'list' ? <InvoiceRegister /> : (<>
       {/* Monthly Summary: Invoices vs Wire Transfers */}
       {monthlySummary && (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
@@ -738,6 +759,7 @@ export default function InvoicesPage() {
         )}
         <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
       </Card>
+      </>)}
 
       <ConfirmDialog
         open={deleteId !== null}

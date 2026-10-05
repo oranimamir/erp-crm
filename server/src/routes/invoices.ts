@@ -6,6 +6,8 @@ import { getEurRate } from '../lib/fx.js';
 import { refreshEstimatedPaymentDate } from '../lib/paymentTerms.js';
 import { resolveUpload, streamZip, safeName } from '../lib/zipFiles.js';
 import { deleteInvoiceDocument } from './invoice-documents.js';
+import { entityFromOperationNumber, isEntityCode } from '../lib/companyEntity.js';
+import { resolveCountry } from '../lib/portCountry.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -96,6 +98,37 @@ router.get('/', (req: Request, res: Response) => {
   `).all(...params, limit, offset);
 
   res.json({ data: invoices, total, page, limit, totalPages: Math.ceil(total / limit) });
+});
+
+/**
+ * Register of customer invoices, by invoice number, to check the numbering:
+ * client, country, order, operation and its category. `entity` (BE / NL) is
+ * read off the operation number, else the invoice number, as documents do.
+ */
+router.get('/register', (req: Request, res: Response) => {
+  const entity = String(req.query.entity || '');
+  const rows = db.prepare(`
+    SELECT i.id, i.invoice_number, i.invoice_date, i.status, i.po_number,
+      c.name AS customer_name,
+      op.id AS operation_id, op.operation_number, op.category, op.country AS operation_country,
+      o.id AS order_id, o.order_number, o.destination AS order_destination
+    FROM invoices i
+    LEFT JOIN customers c ON c.id = i.customer_id
+    LEFT JOIN operations op ON op.id = COALESCE(i.operation_id,
+      (SELECT id FROM operations WHERE operation_number = i.our_ref LIMIT 1))
+    LEFT JOIN orders o ON o.id = op.order_id
+    WHERE i.type = 'customer'
+  `).all() as any[];
+
+  const data = rows
+    .map(r => ({
+      ...r,
+      entity: entityFromOperationNumber(r.operation_number || r.invoice_number),
+      country: r.operation_country || resolveCountry(r.order_destination) || null,
+    }))
+    .filter(r => !isEntityCode(entity) || r.entity === entity)
+    .sort((a, b) => String(a.invoice_number).localeCompare(String(b.invoice_number), undefined, { numeric: true }));
+  res.json({ data });
 });
 
 // Monthly summary: invoices generated & wire transfers made (in EUR)
