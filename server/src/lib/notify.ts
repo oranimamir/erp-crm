@@ -12,6 +12,36 @@ export interface NotifyPayload {
   detail?: string;      // Optional extra info (e.g. new status)
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Settings → Operation change emails: when on, every change made to an
+ * operation (Operations tab — create, edit, status, dates, country, documents,
+ * delete) is also emailed to these recipients. The person who made the change
+ * is left out, as with the per-user "Notify" emails.
+ */
+export interface OperationNotifySettings { enabled: boolean; recipients: string[] }
+
+export function normalizeOperationNotify(raw: any): OperationNotifySettings {
+  const parts = Array.isArray(raw?.recipients) ? raw.recipients : String(raw?.recipients ?? '').split(/[,;\s]+/);
+  const recipients = [...new Set<string>(parts.map((r: any) => String(r).trim()).filter((r: string) => EMAIL_RE.test(r)))];
+  return { enabled: !!raw?.enabled, recipients };
+}
+
+export function getOperationNotifySettings(): OperationNotifySettings {
+  try {
+    const row = db.prepare(`SELECT value FROM app_settings WHERE key = 'operation_notifications'`).get() as any;
+    return normalizeOperationNotify(row ? JSON.parse(row.value) : null);
+  } catch {
+    return normalizeOperationNotify(null);
+  }
+}
+
+export function setOperationNotifySettings(value: OperationNotifySettings): void {
+  db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('operation_notifications', ?, datetime('now'))")
+    .run(JSON.stringify(value));
+}
+
 /** Record fields (customer names, invoice numbers…) are user-entered and go into HTML email */
 function esc(value: unknown): string {
   return String(value ?? '')
@@ -77,8 +107,23 @@ async function _send(payload: NotifyPayload): Promise<void> {
   const admins = db.prepare(
     `SELECT email FROM users WHERE notify_on_changes = 1 AND email IS NOT NULL AND email != '' AND id != ?`
   ).all(payload.performedById ?? -1) as Array<{ email: string }>;
+  const to = admins.map(a => a.email);
 
-  if (admins.length === 0) return;
+  // Operation changes also go to Settings → Operation change emails
+  if (payload.entity.startsWith('Operation')) {
+    const ops = getOperationNotifySettings();
+    if (ops.enabled) {
+      const own = payload.performedById != null
+        ? ((db.prepare('SELECT email FROM users WHERE id = ?').get(payload.performedById) as any)?.email || '').toLowerCase()
+        : '';
+      for (const r of ops.recipients) {
+        const lower = r.toLowerCase();
+        if (lower !== own && !to.some(t => t.toLowerCase() === lower)) to.push(r);
+      }
+    }
+  }
+
+  if (to.length === 0) return;
 
   const from = process.env.RESEND_FROM_EMAIL || 'CirculERP <onboarding@resend.dev>';
   const appUrl = process.env.APP_URL || '';
@@ -107,7 +152,7 @@ async function _send(payload: NotifyPayload): Promise<void> {
   <div style="background:#4f46e5;padding:16px 24px;display:flex;align-items:center;gap:10px;">
     <div style="background:white;color:#4f46e5;font-weight:700;font-size:13px;padding:4px 10px;border-radius:6px;">C</div>
     <span style="color:white;font-weight:700;font-size:17px;">CirculERP</span>
-    <span style="margin-left:auto;color:#c7d2fe;font-size:12px;">Admin Notification</span>
+    <span style="margin-left:auto;color:#c7d2fe;font-size:12px;">Change Notification</span>
   </div>
   <div style="padding:24px;">
     <p style="margin:0 0 20px;font-size:16px;color:#111827;">
@@ -144,7 +189,7 @@ async function _send(payload: NotifyPayload): Promise<void> {
   const resend = new Resend(apiKey);
   await resend.emails.send({
     from,
-    to: admins.map(a => a.email),
+    to,
     subject: `[CirculERP] ${payload.entity} ${payload.action}: ${payload.label}`,
     html,
   });

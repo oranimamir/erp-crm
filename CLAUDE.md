@@ -42,6 +42,7 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 ## Operations
 - `operations.category`: 'blending' | 'trading' (required for new operations)
 - List filter All / BE / NL — entity read off the operation number (`entityFromOperationNumber`)
+- Change emails: Settings → Operation change emails (`app_settings.operation_notifications`, `/api/settings/operation-notifications`, admin) — `notifyAdmin` with an `Operation…` entity also emails these recipients (not the person who acted), with what changed in `detail` (`describeChanges` in `routes/operations.ts`)
 - Supplier Purchase Order via `/api/purchase-orders` (any order, not only trading ops) — Order Confirmation template, entity from operation number, filed as `<op#>PO.pdf`, prices entered by hand
 
 ## Document Generators (OC, supplier PO, invoice, PL)

@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
 import { getAiMonthlyLimit, setAiMonthlyLimit, aiSpentThisMonth } from '../lib/aiBudget.js';
+import { getOperationNotifySettings, setOperationNotifySettings, normalizeOperationNotify } from '../lib/notify.js';
 
 /**
  * App-wide settings edited on the Settings page. For now: the default
@@ -70,6 +71,24 @@ router.put('/ai-limit', (req: Request, res: Response) => {
   setAiMonthlyLimit(n);
   const spent = aiSpentThisMonth();
   res.json({ monthly_usd: n, spent_usd: Math.round(spent * 100) / 100, left_usd: Math.max(0, Math.round((n - spent) * 100) / 100) });
+});
+
+// GET /api/settings/operation-notifications — who is emailed when an operation changes (admin only)
+router.get('/operation-notifications', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  res.json({ ...getOperationNotifySettings(), email_configured: !!process.env.RESEND_API_KEY });
+});
+
+// PUT /api/settings/operation-notifications — admin only
+router.put('/operation-notifications', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const body = req.body || {};
+  const invalid = list(body.recipients).filter(e => !EMAIL_RE.test(e));
+  if (invalid.length) { res.status(400).json({ error: `Invalid email address: ${invalid.join(', ')}` }); return; }
+  const value = normalizeOperationNotify(body);
+  if (value.enabled && !value.recipients.length) { res.status(400).json({ error: 'Add at least one recipient' }); return; }
+  setOperationNotifySettings(value);
+  res.json({ ...value, email_configured: !!process.env.RESEND_API_KEY });
 });
 
 export default router;

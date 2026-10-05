@@ -17,6 +17,20 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
 const router = Router();
 
+/** "ETA 12/10/2026 → 15/10/2026; Notes changed" — for the operation change emails */
+function describeChanges(before: any, after: any, fields: Record<string, string>): string {
+  const show = (v: any) => {
+    if (v === null || v === undefined || v === '') return '—';
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v));
+    return m ? `${m[3]}/${m[2]}/${m[1]}` : String(v);
+  };
+  return Object.entries(fields)
+    .filter(([key]) => String(before[key] ?? '') !== String(after[key] ?? ''))
+    .map(([key, name]) => ['notes', 'order_id', 'customer_id', 'supplier_id'].includes(key) ? `${name} changed` : `${name} ${show(before[key])} → ${show(after[key])}`)
+    .join('; ');
+}
+
+
 // ── Categories ────────────────────────────────────────────────────────────────
 
 router.get('/categories', (_req: Request, res: Response) => {
@@ -601,6 +615,8 @@ router.patch('/:id/country', (req: Request, res: Response) => {
   const { country } = req.body;
   const next = country === undefined ? existing.country : (country?.trim() || null);
   db.prepare(`UPDATE operations SET country=?, updated_at=datetime('now') WHERE id=?`).run(next, req.params.id);
+  const detail = describeChanges(existing, { country: next }, { country: 'Country' });
+  if (detail) notifyAdmin({ action: 'updated', entity: 'Operation', label: existing.operation_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId, detail });
   res.json({ id: existing.id, country: next });
 });
 
@@ -644,6 +660,8 @@ router.patch('/:id/dates', (req: Request, res: Response) => {
   const updated = db.prepare(
     'SELECT etd, eta, estimated_payment_date, estimated_payment_date_source, bl_date FROM operations WHERE id = ?'
   ).get(req.params.id) as any;
+  const detail = describeChanges(existing, updated, { etd: 'ETD', eta: 'ETA', bl_date: 'BL date', estimated_payment_date: 'Est. payment date' });
+  if (detail) notifyAdmin({ action: 'updated', entity: 'Operation', label: existing.operation_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId, detail });
   res.json({ id: existing.id, ...updated });
 });
 
@@ -671,8 +689,12 @@ router.put('/:id', (req: Request, res: Response) => {
       category !== undefined ? (category || null) : existing.category,
       req.params.id
     );
-    const op = db.prepare('SELECT * FROM operations WHERE id = ?').get(req.params.id);
-    notifyAdmin({ action: 'updated', entity: 'Operation', label: operation_number || existing.operation_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
+    const op = db.prepare('SELECT * FROM operations WHERE id = ?').get(req.params.id) as any;
+    const detail = describeChanges(existing, op, {
+      operation_number: 'Number', status: 'Status', category: 'Category', notes: 'Notes',
+      order_id: 'Order', customer_id: 'Customer', supplier_id: 'Supplier',
+    });
+    notifyAdmin({ action: 'updated', entity: 'Operation', label: op.operation_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId, detail: detail || undefined });
     res.json(op);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -727,7 +749,7 @@ router.delete('/:id', (req: Request, res: Response) => {
 // ── Upload document ───────────────────────────────────────────────────────────
 
 router.post('/:id/documents', uploadOperationDoc.single('file'), (req: Request, res: Response) => {
-  const operation = db.prepare('SELECT id FROM operations WHERE id = ?').get(req.params.id);
+  const operation = db.prepare('SELECT id, operation_number FROM operations WHERE id = ?').get(req.params.id) as any;
   if (!operation) { res.status(404).json({ error: 'Operation not found' }); return; }
 
   if (!req.file) {
@@ -755,7 +777,7 @@ router.post('/:id/documents', uploadOperationDoc.single('file'), (req: Request, 
     WHERE od.id = ?
   `).get(result.lastInsertRowid);
 
-  notifyAdmin({ action: 'created', entity: 'Operation Document', label: req.file.originalname, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
+  notifyAdmin({ action: 'created', entity: 'Operation Document', label: `${operation.operation_number} — ${req.file.originalname}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.status(201).json(doc);
 });
 
@@ -787,7 +809,7 @@ router.delete('/:id/documents/:docId', (req: Request, res: Response) => {
   if (fs.existsSync(fp)) fs.unlinkSync(fp);
 
   db.prepare('DELETE FROM operation_documents WHERE id = ?').run(doc.id);
-  notifyAdmin({ action: 'deleted', entity: 'Operation Document', label: doc.file_name || `Document #${doc.id}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
+  notifyAdmin({ action: 'deleted', entity: 'Operation Document', label: `${(db.prepare('SELECT operation_number FROM operations WHERE id = ?').get(doc.operation_id) as any)?.operation_number ?? ''} — ${doc.file_name || `Document #${doc.id}`}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.json({ message: 'Document deleted' });
 });
 
