@@ -35,6 +35,8 @@ interface PlLine {
   pallets_override: string;
   /** Empty pallet weight in kg; blank = 20 kg. */
   pallet_weight_override: string;
+  /** The line's whole packaging weight (gross − net) in kg; blank = computed. */
+  packaging_weight_override: string;
   volume_cbm: string;
 }
 
@@ -100,6 +102,7 @@ function toLine(raw: any): PlLine {
     units_override: raw?.units_override == null ? '' : String(raw.units_override),
     pallets_override: raw?.pallets_override == null ? '' : String(raw.pallets_override),
     pallet_weight_override: raw?.pallet_weight_override == null ? '' : String(raw.pallet_weight_override),
+    packaging_weight_override: raw?.packaging_weight_override == null ? '' : String(raw.packaging_weight_override),
     volume_cbm: raw?.volume_cbm == null ? '' : String(raw.volume_cbm),
   };
 }
@@ -121,6 +124,7 @@ function toPayload(form: PlData, layout: PackingListLayout) {
       units_override: l.units_override === '' ? null : Number(l.units_override),
       pallets_override: l.pallets_override === '' ? null : Number(l.pallets_override),
       pallet_weight_override: l.pallet_weight_override === '' ? null : Number(l.pallet_weight_override),
+      packaging_weight_override: l.packaging_weight_override === '' ? null : Number(l.packaging_weight_override),
     })),
   };
 }
@@ -174,8 +178,8 @@ function Section({ icon, title, children, action }: {
 }
 
 /** A count that is computed unless typed; the reset hands it back to the calculation. */
-function CountField({ label, value, computed, onChange }: {
-  label: string; value: string; computed: number; onChange: (v: string) => void;
+function CountField({ label, value, computed, onChange, decimals }: {
+  label: string; value: string; computed: number; onChange: (v: string) => void; decimals?: boolean;
 }) {
   return (
     <div className="space-y-1">
@@ -186,7 +190,7 @@ function CountField({ label, value, computed, onChange }: {
             className="text-gray-400 hover:text-primary-600"><RotateCcw size={11} /></button>
         )}
       </label>
-      <input type="number" min={0} value={value} placeholder={String(computed)}
+      <input type="number" min={0} step={decimals ? 'any' : undefined} value={value} placeholder={String(computed)}
         onChange={e => onChange(e.target.value)}
         className={`${inputCls} ${value === '' ? '' : 'border-amber-300 bg-amber-50'}`} />
     </div>
@@ -495,6 +499,7 @@ export default function PackingListPage() {
   const figures = form.lines.map(l =>
     computePacking(netKg(l.quantity, l.quantity_unit), byId.get(l.packaging_id ?? -1), {
       units: l.units_override, pallets: l.pallets_override, pallet_weight: l.pallet_weight_override,
+      packaging_weight: l.packaging_weight_override,
     }));
   const totals = figures.reduce((acc, f) => ({
     units: acc.units + f.units, pallets: acc.pallets + f.pallets,
@@ -704,7 +709,7 @@ export default function PackingListPage() {
                         value={line.packaging_id ?? ''}
                         onChange={e => setLine(index, {
                           packaging_id: e.target.value ? Number(e.target.value) : null,
-                          units_override: '', pallets_override: '',
+                          units_override: '', pallets_override: '', packaging_weight_override: '',
                         })}
                         className={`${inputCls} ${pkg ? '' : 'border-amber-300'}`}
                       >
@@ -735,6 +740,13 @@ export default function PackingListPage() {
                       <CountField label="Pallet weight (kg)" value={line.pallet_weight_override} computed={20}
                         onChange={v => setLine(index, { pallet_weight_override: v })} />
                       <Field label="Volume CBM" value={line.volume_cbm} onChange={v => setLine(index, { volume_cbm: v })} />
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-end">
+                      <CountField label="Packaging weight (kg)" value={line.packaging_weight_override} decimals
+                        computed={Math.round(f.computed_packaging_kg * 100) / 100}
+                        onChange={v => setLine(index, { packaging_weight_override: v })} />
+                      <Figure label="Gross weight" value={`${kg(f.net_kg)} + ${kg(f.packaging_kg)} = ${kg(f.gross_kg)} kg`} strong />
                     </div>
 
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs rounded-lg bg-gray-50 px-3 py-2">

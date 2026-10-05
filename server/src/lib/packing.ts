@@ -44,6 +44,10 @@ export interface PackingFigures {
   pallet_weight_kg: number;
   empty_kg: number;
   pallet_kg: number;
+  /** Empty units + pallets, as computed. */
+  computed_packaging_kg: number;
+  /** Gross − net: the computed packaging weight unless typed by hand. */
+  packaging_kg: number;
   gross_kg: number;
 }
 
@@ -123,13 +127,14 @@ const round = (n: number) => Math.round(n * 100) / 100;
  *   Gross weight (unit)  = content + packaging
  *   Pallet net weight    = units per pallet × unit net
  *   Pallet gross weight  = units per pallet × unit gross + pallet (20 kg unless set)
- * The line's gross = product + empty units + pallets. Units, pallets and the
- * pallet weight typed by hand replace the computed / default ones.
+ * The line's gross = product + packaging weight (empty units + pallets, unless
+ * typed). Units, pallets, the pallet weight and the line's packaging weight
+ * typed by hand replace the computed / default ones.
  */
 export function computePacking(
   net: number,
   pkg: PackagingRow | null,
-  overrides: { units?: number | null; pallets?: number | null; pallet_weight?: number | null } = {}
+  overrides: { units?: number | null; pallets?: number | null; pallet_weight?: number | null; packaging_weight?: number | null } = {}
 ): PackingFigures {
   const mass = Number(pkg?.product_mass) || 0;
   const perPallet = Number(pkg?.units_per_pallet) || 0;
@@ -143,6 +148,9 @@ export function computePacking(
   const unitGross = mass + packagingKg;
   const empty = units * packagingKg;
   const palletKg = pallets * palletWeight;
+  const computedPackaging = empty + palletKg;
+  const packaging = overrides.packaging_weight != null && overrides.packaging_weight >= 0
+    ? overrides.packaging_weight : computedPackaging;
   return {
     net_kg: round(net),
     units,
@@ -155,6 +163,8 @@ export function computePacking(
     pallet_weight_kg: round(palletWeight),
     empty_kg: round(empty),
     pallet_kg: round(palletKg),
-    gross_kg: round(net + empty + palletKg),
+    computed_packaging_kg: round(computedPackaging),
+    packaging_kg: round(packaging),
+    gross_kg: round(net + packaging),
   };
 }

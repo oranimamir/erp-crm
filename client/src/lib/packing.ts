@@ -30,6 +30,10 @@ export interface PackingFigures {
   pallet_weight_kg: number;
   empty_kg: number;
   pallet_kg: number;
+  /** Empty units + pallets, as computed. */
+  computed_packaging_kg: number;
+  /** Gross − net: the computed packaging weight unless typed. */
+  packaging_kg: number;
   gross_kg: number;
 }
 
@@ -59,12 +63,13 @@ const weight = (v: unknown): number | null => {
 /**
  * Unit net = content; unit gross = content + packaging; pallet net = units per
  * pallet × unit net; pallet gross = units per pallet × unit gross + pallet
- * (20 kg unless typed). Counts and the pallet weight typed by hand win.
+ * (20 kg unless typed); line gross = net + packaging weight (empty units +
+ * pallets unless typed). Counts and weights typed by hand win.
  */
 export function computePacking(
   net: number,
   pkg: PackagingOption | null | undefined,
-  overrides: { units?: unknown; pallets?: unknown; pallet_weight?: unknown } = {},
+  overrides: { units?: unknown; pallets?: unknown; pallet_weight?: unknown; packaging_weight?: unknown } = {},
 ): PackingFigures {
   const mass = Number(pkg?.product_mass) || 0;
   const perPallet = Number(pkg?.units_per_pallet) || 0;
@@ -77,13 +82,16 @@ export function computePacking(
   const unitGross = mass + packagingKg;
   const empty = units * packagingKg;
   const palletKg = pallets * palletWeight;
+  const computedPackaging = empty + palletKg;
+  const packaging = weight(overrides.packaging_weight) ?? computedPackaging;
   return {
     net_kg: net, units, computed_units: computedUnits, units_per_pallet: perPallet || null,
     pallets, computed_pallets: computedPallets,
     unit_net_kg: mass, unit_gross_kg: unitGross,
     pallet_net_kg: perPallet * mass, pallet_gross_kg: perPallet ? perPallet * unitGross + palletWeight : 0,
     pallet_weight_kg: palletWeight,
-    empty_kg: empty, pallet_kg: palletKg, gross_kg: net + empty + palletKg,
+    empty_kg: empty, pallet_kg: palletKg,
+    computed_packaging_kg: computedPackaging, packaging_kg: packaging, gross_kg: net + packaging,
   };
 }
 

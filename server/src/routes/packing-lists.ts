@@ -39,6 +39,8 @@ export interface PackingLineInput {
   pallets_override?: number | null;
   /** What one empty pallet weighs on this line; blank = 20 kg. */
   pallet_weight_override?: number | null;
+  /** The line's whole packaging weight (gross − net); blank = computed. */
+  packaging_weight_override?: number | null;
   /** Volume CBM as typed. */
   volume_cbm?: string | null;
 }
@@ -127,6 +129,8 @@ function linesFromInvoice(items: any[], rows: PackagingRow[], keep: PackingLineI
       : matchPackaging(source, rows).best?.id ?? null;
     return {
       ...source, packaging_id: packagingId, units_override: null, pallets_override: null,
+      // Follows the quantity, so it is computed again
+      packaging_weight_override: null,
       // What was typed for the pallet and volume is not on the invoice, so it stays
       pallet_weight_override: previous?.pallet_weight_override ?? null,
       volume_cbm: previous?.volume_cbm ?? '',
@@ -142,6 +146,7 @@ function packingRows(lines: PackingLineInput[]): PackingRow[] {
       units: optionalCount(line.units_override),
       pallets: optionalCount(line.pallets_override),
       pallet_weight: optionalWeight(line.pallet_weight_override),
+      packaging_weight: optionalWeight(line.packaging_weight_override),
     });
     return {
       reference: line.reference || '',
