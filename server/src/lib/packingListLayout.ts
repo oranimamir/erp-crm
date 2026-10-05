@@ -65,7 +65,7 @@ export const PL_COLUMN_LABELS: Record<PlColumnKey, string> = {
 };
 
 const PRESET_WIDTHS: Record<PlColumnKey, number> = {
-  line: 28, reference: 62, product: 96, lot: 56, packaging: 52,
+  line: 28, reference: 62, product: 96, lot: 72, packaging: 52,
   unit_net: 50, unit_gross: 50, units_per_pallet: 44, pallet_net: 56, pallet_gross: 56,
   volume_cbm: 40, pallets: 38, units: 38, net_total: 56, gross_total: 56,
 };
@@ -74,7 +74,7 @@ const col = (key: PlColumnKey, label = PL_COLUMN_LABELS[key]): PlColumn => ({ ke
 
 /** The columns every issued PL has, in their order. */
 export const DEFAULT_PL_COLUMNS: PlColumn[] = [
-  col('line'), col('reference'), col('product'),
+  col('line'), col('reference'), col('product'), col('lot'),
   col('unit_net'), col('unit_gross'), col('units_per_pallet'),
   col('pallet_net'), col('pallet_gross'), col('volume_cbm'), col('pallets'),
 ];
@@ -334,7 +334,20 @@ function rows<F extends string>(value: unknown, allowed: F[], fallback: Array<La
     .map((r: any) => ({ label: String(r.label ?? ''), field: r.field as F }));
 }
 
+/** Every PL carries the invoice's lot number(s) in a column right after the commercial name. */
+function withLotColumn(cols: PlColumn[]): PlColumn[] {
+  if (cols.some(c => c.key === 'lot')) return cols;
+  const at = cols.findIndex(c => c.key === 'product');
+  const out = [...cols];
+  out.splice(at >= 0 ? at + 1 : out.length, 0, col('lot'));
+  return out;
+}
+
 function columns(value: unknown, fallback: PlColumn[]): PlColumn[] {
+  return withLotColumn(columnsAsSaved(value, fallback));
+}
+
+function columnsAsSaved(value: unknown, fallback: PlColumn[]): PlColumn[] {
   if (!Array.isArray(value)) return fallback;
   const seen = new Set<string>();
   const kept: PlColumn[] = [];

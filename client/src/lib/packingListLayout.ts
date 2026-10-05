@@ -67,6 +67,7 @@ const DEFAULT_COLUMNS: PlColumn[] = [
   { key: 'line', label: 'Line', width: 28 },
   { key: 'reference', label: 'Reference', width: 62 },
   { key: 'product', label: 'Commercial name', width: 96 },
+  { key: 'lot', label: 'Lot', width: 72 },
   { key: 'unit_net', label: 'Net weight', width: 50 },
   { key: 'unit_gross', label: 'Gross weight', width: 50 },
   { key: 'units_per_pallet', label: 'Units per pallet', width: 44 },
@@ -101,6 +102,15 @@ export const DEFAULT_PL_LAYOUT: PackingListLayout = {
   show_terms: true,
 };
 
+/** Every PL carries the invoice's lot number(s) in a column right after the commercial name. */
+function withLotColumn(cols: PlColumn[]): PlColumn[] {
+  if (cols.some(c => c.key === 'lot')) return cols;
+  const at = cols.findIndex(c => c.key === 'product');
+  const out = [...cols];
+  out.splice(at >= 0 ? at + 1 : out.length, 0, { key: 'lot', label: 'Lot', width: 72 });
+  return out;
+}
+
 /** Fills in anything a saved layout is missing, so the editor never sees undefined. */
 export function plWithDefaults(raw: Partial<PackingListLayout> | null | undefined): PackingListLayout {
   const l = raw || {};
@@ -109,7 +119,7 @@ export function plWithDefaults(raw: Partial<PackingListLayout> | null | undefine
     ...l,
     labels: { ...DEFAULT_PL_LAYOUT.labels, ...(l.labels || {}) },
     meta: l.meta || DEFAULT_PL_LAYOUT.meta,
-    columns: l.columns?.length ? l.columns : DEFAULT_PL_LAYOUT.columns,
+    columns: withLotColumn(l.columns?.length ? l.columns : DEFAULT_PL_LAYOUT.columns),
     details: l.details || DEFAULT_PL_LAYOUT.details,
   };
 }
