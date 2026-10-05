@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Loader2, FileSpreadsheet } from 'lucide-react';
+import { Loader2, FileSpreadsheet, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
 import api from '../lib/api';
 import Card from './ui/Card';
 import Button from './ui/Button';
@@ -11,6 +11,7 @@ interface RegisterRow {
   id: number;
   invoice_number: string;
   invoice_date: string | null;
+  created_at: string;
   status: string;
   customer_name: string | null;
   country: string | null;
@@ -24,6 +25,15 @@ interface RegisterRow {
 }
 
 type Entity = '' | 'BE' | 'NL';
+type SortKey = 'invoice_number' | 'created_at' | 'invoice_date' | 'customer_name' | 'country' | 'order' | 'operation_number' | 'category';
+
+const COLUMNS: Array<[SortKey, string]> = [
+  ['invoice_number', 'Invoice #'], ['created_at', 'Created'], ['invoice_date', 'Invoice date'], ['customer_name', 'Client'],
+  ['country', 'Country'], ['order', 'Order #'], ['operation_number', 'Operation #'], ['category', 'Blending / Trading'],
+];
+
+const sortValue = (r: RegisterRow, key: SortKey): string =>
+  key === 'order' ? (r.order_number || r.po_number || '') : String(r[key] ?? '');
 
 const categoryLabel = (c: string | null) => (c === 'blending' ? 'Blending' : c === 'trading' ? 'Trading' : '');
 
@@ -37,6 +47,21 @@ export default function InvoiceRegister() {
   });
   const [rows, setRows] = useState<RegisterRow[]>([]);
   const [loading, setLoading] = useState(true);
+  // Newest created first until a heading is clicked
+  const [sortBy, setSortBy] = useState<SortKey>('created_at');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const sortOn = (key: SortKey) => {
+    if (key === sortBy) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortBy(key); setSortDir(key === 'created_at' || key === 'invoice_date' ? 'desc' : 'asc'); }
+  };
+  const sorted = [...rows].sort((a, b) => {
+    const x = sortValue(a, sortBy), y = sortValue(b, sortBy);
+    // Blanks always last, whichever way
+    if (!x !== !y) return x ? -1 : 1;
+    const c = x.localeCompare(y, undefined, { numeric: true, sensitivity: 'base' })
+      || String(a.invoice_number).localeCompare(String(b.invoice_number), undefined, { numeric: true });
+    return sortDir === 'asc' ? c : -c;
+  });
 
   useEffect(() => {
     try { localStorage.setItem('invoiceRegisterEntity', entity); } catch { /* private mode */ }
@@ -49,9 +74,9 @@ export default function InvoiceRegister() {
 
   const handleExport = () => {
     downloadExcel(`invoice-list${entity ? `-${entity}` : ''}`,
-      ['Invoice #', 'Date', 'Client', 'Country', 'Order #', 'Operation #', 'Category'],
-      rows.map(r => [
-        r.invoice_number, formatDate(r.invoice_date || '') || '', r.customer_name || '', r.country || '',
+      ['Invoice #', 'Created', 'Invoice date', 'Client', 'Country', 'Order #', 'Operation #', 'Category'],
+      sorted.map(r => [
+        r.invoice_number, formatDate(r.created_at) || '', formatDate(r.invoice_date || '') || '', r.customer_name || '', r.country || '',
         r.order_number || r.po_number || '', r.operation_number || '', categoryLabel(r.category),
       ]));
   };
@@ -92,21 +117,25 @@ export default function InvoiceRegister() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-200 bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  <th className="px-4 py-3">Invoice #</th>
-                  <th className="px-4 py-3">Date</th>
-                  <th className="px-4 py-3">Client</th>
-                  <th className="px-4 py-3">Country</th>
-                  <th className="px-4 py-3">Order #</th>
-                  <th className="px-4 py-3">Operation #</th>
-                  <th className="px-4 py-3">Blending / Trading</th>
+                  {COLUMNS.map(([key, label]) => (
+                    <th key={key} className="px-4 py-3">
+                      <button type="button" onClick={() => sortOn(key)}
+                        className={`inline-flex items-center gap-1 uppercase tracking-wide hover:text-gray-800 ${sortBy === key ? 'text-gray-900' : ''}`}>
+                        {label}
+                        {sortBy !== key ? <ChevronsUpDown size={12} className="text-gray-300" />
+                          : sortDir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                      </button>
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {rows.map(r => (
+                {sorted.map(r => (
                   <tr key={r.id} className={`hover:bg-gray-50 ${r.status === 'cancelled' ? 'text-gray-400 line-through' : ''}`}>
                     <td className="px-4 py-2.5 font-medium">
                       <Link to={`/invoices/${r.id}`} className="text-primary-600 hover:underline">{r.invoice_number}</Link>
                     </td>
+                    <td className="px-4 py-2.5 text-gray-600">{formatDate(r.created_at) || dash}</td>
                     <td className="px-4 py-2.5 text-gray-600">{formatDate(r.invoice_date || '') || dash}</td>
                     <td className="px-4 py-2.5 text-gray-900">{r.customer_name || dash}</td>
                     <td className="px-4 py-2.5 text-gray-600">{r.country || dash}</td>

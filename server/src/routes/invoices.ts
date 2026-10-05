@@ -108,7 +108,7 @@ router.get('/', (req: Request, res: Response) => {
 router.get('/register', (req: Request, res: Response) => {
   const entity = String(req.query.entity || '');
   const rows = db.prepare(`
-    SELECT i.id, i.invoice_number, i.invoice_date, i.status, i.po_number,
+    SELECT i.id, i.invoice_number, i.invoice_date, i.created_at, i.status, i.po_number,
       c.name AS customer_name,
       op.id AS operation_id, op.operation_number, op.category, op.country AS operation_country,
       o.id AS order_id, o.order_number, o.destination AS order_destination

@@ -65,7 +65,7 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - Document forms (invoice/OC/PO): Tab on an empty field accepts its grey placeholder (`client/src/lib/placeholderTab.ts`)
 
 ## Customer Invoices page
-- Sub-tabs Invoices | Invoices list (`components/InvoiceRegister.tsx`, `GET /api/invoices/register?entity=`): every customer invoice in invoice-number order (numeric-aware) with date, client, country (operation's, else resolved from the order destination), order # (else PO), operation #, blending/trading; All / BE / NL by `entityFromOperationNumber(operation number, else invoice number)`; operation via `invoices.operation_id`, else `our_ref`
+- Sub-tabs Invoices | Invoices list (`components/InvoiceRegister.tsx`, `GET /api/invoices/register?entity=`): every customer invoice, every column sortable (client-side; default created date, newest first; blanks last) with created date, invoice date, client, country (operation's, else resolved from the order destination), order # (else PO), operation #, blending/trading; All / BE / NL by `entityFromOperationNumber(operation number, else invoice number)`; operation via `invoices.operation_id`, else `our_ref`
 
 ## Packing Lists
 - `/api/packing-lists`, page `/packing-lists/:id`; built from a generated invoice (`invoice_document_id`), numbered `<operation#>PL`, filed under the operation documents ("Packing list")
