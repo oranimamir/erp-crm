@@ -43,6 +43,7 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - `operations.category`: 'blending' | 'trading' (required for new operations)
 - List filter All / BE / NL — entity read off the operation number (`entityFromOperationNumber`)
 - Change emails: Settings → Operation change emails (`app_settings.operation_notifications`, `/api/settings/operation-notifications`, admin) — `notifyAdmin` with an `Operation…` entity also emails these recipients (not the person who acted), with what changed in `detail` (`describeChanges` in `routes/operations.ts`)
+- Who is notified about whom: Settings (admin, `NotificationRulesSettings.tsx`, `/api/settings/notification-rules`, `app_settings.notification_mutes` = `[{recipient: 'user:<id>' | 'email:<addr>', actor: userId}]`); a muted pair is skipped in `notifyAdmin` emails and in the bell (`activity_log.performed_by_id`, `mutedActorsForUser`); default = everyone hears about everyone
 - Supplier Purchase Order via `/api/purchase-orders` (any order, not only trading ops) — Order Confirmation template, entity from operation number, filed as `<op#>PO.pdf`, prices entered by hand
 
 ## Document Generators (OC, supplier PO, invoice, PL)

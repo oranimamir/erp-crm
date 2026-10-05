@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
 import { authenticateToken } from '../middleware/auth.js';
+import { mutedActorsForUser } from '../lib/notify.js';
 
 const router = Router();
 
@@ -17,15 +18,20 @@ router.get('/', authenticateToken, (req: Request, res: Response) => {
 
   const lastRead = user.notifications_last_read_at as string | null;
 
+  // Changes by people this user is set not to hear about are left out
+  const muted = mutedActorsForUser(req.user!.userId).filter(Number.isInteger);
+  const notMuted = muted.length ? `(performed_by_id IS NULL OR performed_by_id NOT IN (${muted.join(',')}))` : '1';
+
   const items = db.prepare(`
     SELECT id, entity, action, label, performed_by, created_at
     FROM activity_log
+    WHERE ${notMuted}
     ORDER BY created_at DESC
     LIMIT 50
   `).all() as any[];
 
   const unread_count = lastRead
-    ? (db.prepare(`SELECT COUNT(*) as c FROM activity_log WHERE created_at > ?`).get(lastRead) as any).c
+    ? (db.prepare(`SELECT COUNT(*) as c FROM activity_log WHERE created_at > ? AND ${notMuted}`).get(lastRead) as any).c
     : items.length;
 
   res.json({ items, unread_count, last_read_at: lastRead });

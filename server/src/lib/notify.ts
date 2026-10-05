@@ -42,6 +42,48 @@ export function setOperationNotifySettings(value: OperationNotifySettings): void
     .run(JSON.stringify(value));
 }
 
+/**
+ * Settings → Who is notified about whom (admin): pairs of recipient + user
+ * whose changes that recipient does NOT hear about — e.g. Denis is not told
+ * what Caro does. Everything not listed is sent. A recipient is an app user
+ * (`user:<id>`) or an email typed under Operation change emails (`email:<addr>`).
+ */
+export interface NotificationMute { recipient: string; actor: number }
+
+export function normalizeMutes(raw: any): NotificationMute[] {
+  const seen = new Set<string>();
+  const out: NotificationMute[] = [];
+  for (const m of Array.isArray(raw) ? raw : []) {
+    const recipient = String(m?.recipient ?? '').trim().toLowerCase();
+    const actor = Number(m?.actor);
+    if (!/^(user:\d+|email:\S+@\S+)$/.test(recipient) || !Number.isInteger(actor) || actor <= 0) continue;
+    const key = `${recipient}|${actor}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ recipient, actor });
+  }
+  return out;
+}
+
+export function getNotificationMutes(): NotificationMute[] {
+  try {
+    const row = db.prepare(`SELECT value FROM app_settings WHERE key = 'notification_mutes'`).get() as any;
+    return normalizeMutes(row ? JSON.parse(row.value) : []);
+  } catch {
+    return [];
+  }
+}
+
+export function setNotificationMutes(value: NotificationMute[]): void {
+  db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('notification_mutes', ?, datetime('now'))")
+    .run(JSON.stringify(value));
+}
+
+/** The users whose changes this app user has been set not to hear about. */
+export function mutedActorsForUser(userId: number): number[] {
+  return getNotificationMutes().filter(m => m.recipient === `user:${userId}`).map(m => m.actor);
+}
+
 /** Record fields (customer names, invoice numbers…) are user-entered and go into HTML email */
 function esc(value: unknown): string {
   return String(value ?? '')
@@ -90,8 +132,8 @@ export function notifyAdmin(payload: NotifyPayload): void {
   // Always log to activity_log (in-app notifications)
   try {
     db.prepare(
-      `INSERT INTO activity_log (entity, action, label, performed_by) VALUES (?, ?, ?, ?)`
-    ).run(payload.entity, payload.action, payload.label, payload.performedBy);
+      `INSERT INTO activity_log (entity, action, label, performed_by, performed_by_id) VALUES (?, ?, ?, ?, ?)`
+    ).run(payload.entity, payload.action, payload.label, payload.performedBy, payload.performedById ?? null);
   } catch (err: any) {
     console.error('[notify] Failed to log activity:', err?.message || err);
   }
@@ -105,9 +147,20 @@ async function _send(payload: NotifyPayload): Promise<void> {
   if (!apiKey) return;
 
   const admins = db.prepare(
-    `SELECT email FROM users WHERE notify_on_changes = 1 AND email IS NOT NULL AND email != '' AND id != ?`
-  ).all(payload.performedById ?? -1) as Array<{ email: string }>;
-  const to = admins.map(a => a.email);
+    `SELECT id, email FROM users WHERE notify_on_changes = 1 AND email IS NOT NULL AND email != '' AND id != ?`
+  ).all(payload.performedById ?? -1) as Array<{ id: number; email: string }>;
+  // Recipients set not to hear about this person's changes are left out
+  const mutes = payload.performedById != null
+    ? getNotificationMutes().filter(m => m.actor === payload.performedById)
+    : [];
+  const mutedUsers = new Set(mutes.map(m => m.recipient));
+  const isMuted = (email: string) => {
+    const lower = email.toLowerCase();
+    if (mutedUsers.has(`email:${lower}`)) return true;
+    const user = db.prepare('SELECT id FROM users WHERE LOWER(email) = ?').get(lower) as any;
+    return !!user && mutedUsers.has(`user:${user.id}`);
+  };
+  const to = admins.filter(a => !mutedUsers.has(`user:${a.id}`)).map(a => a.email);
 
   // Operation changes also go to Settings → Operation change emails
   if (payload.entity.startsWith('Operation')) {
@@ -118,7 +171,7 @@ async function _send(payload: NotifyPayload): Promise<void> {
         : '';
       for (const r of ops.recipients) {
         const lower = r.toLowerCase();
-        if (lower !== own && !to.some(t => t.toLowerCase() === lower)) to.push(r);
+        if (lower !== own && !to.some(t => t.toLowerCase() === lower) && !isMuted(r)) to.push(r);
       }
     }
   }

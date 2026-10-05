@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
 import { getAiMonthlyLimit, setAiMonthlyLimit, aiSpentThisMonth } from '../lib/aiBudget.js';
-import { getOperationNotifySettings, setOperationNotifySettings, normalizeOperationNotify } from '../lib/notify.js';
+import { getOperationNotifySettings, setOperationNotifySettings, normalizeOperationNotify, getNotificationMutes, setNotificationMutes, normalizeMutes } from '../lib/notify.js';
 
 /**
  * App-wide settings edited on the Settings page. For now: the default
@@ -89,6 +89,24 @@ router.put('/operation-notifications', (req: Request, res: Response) => {
   if (value.enabled && !value.recipients.length) { res.status(400).json({ error: 'Add at least one recipient' }); return; }
   setOperationNotifySettings(value);
   res.json({ ...value, email_configured: !!process.env.RESEND_API_KEY });
+});
+
+// GET /api/settings/notification-rules — who is not told about whose changes (admin only)
+router.get('/notification-rules', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const users = db.prepare(
+    `SELECT id, username, display_name, email, notify_on_changes FROM users ORDER BY COALESCE(display_name, username)`
+  ).all();
+  const ops = getOperationNotifySettings();
+  res.json({ mutes: getNotificationMutes(), users, operation_recipients: ops.enabled ? ops.recipients : [] });
+});
+
+// PUT /api/settings/notification-rules — admin only; body { mutes: [{ recipient, actor }] }
+router.put('/notification-rules', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const mutes = normalizeMutes(req.body?.mutes);
+  setNotificationMutes(mutes);
+  res.json({ mutes });
 });
 
 export default router;

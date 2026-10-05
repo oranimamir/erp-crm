@@ -1055,6 +1055,8 @@ export async function initializeDatabase() {
   `);
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_activity_log_created_at ON activity_log(created_at)`); } catch (_) {}
   try { db.exec(`ALTER TABLE users ADD COLUMN notifications_last_read_at TEXT`); } catch (_) {}
+  // Who made the change, so a user can be set not to see someone's changes
+  try { db.exec(`ALTER TABLE activity_log ADD COLUMN performed_by_id INTEGER`); } catch (_) {}
 
   // Drop the legacy invoice_payments installment table — partial payment flow removed
   try { db.exec(`DROP TABLE IF EXISTS invoice_payments`); } catch (_) {}
