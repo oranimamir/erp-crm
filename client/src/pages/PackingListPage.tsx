@@ -707,6 +707,17 @@ export default function PackingListPage() {
                       </span>
                     </div>
 
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <Field label="Lot" value={line.lot} onChange={v => setLine(index, { lot: v })} />
+                      <Field label="Second lot (optional)" value={line.lot2} onChange={v => setLine(index, { lot2: v })} />
+                      {(line.lot2 || line.lot3 || line.lot4) && (
+                        <Field label="Third lot (optional)" value={line.lot3} onChange={v => setLine(index, { lot3: v })} />
+                      )}
+                      {(line.lot3 || line.lot4) && (
+                        <Field label="Fourth lot (optional)" value={line.lot4} onChange={v => setLine(index, { lot4: v })} />
+                      )}
+                    </div>
+
                     <div className="space-y-1">
                       <label className="block text-xs font-medium text-gray-500">Packaging</label>
                       <select
