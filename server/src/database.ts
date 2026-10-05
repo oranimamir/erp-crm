@@ -1978,6 +1978,29 @@ export async function initializeDatabase() {
     `).run();
   } catch { /* ignore */ }
 
+  // Non-commercial operations: samples to customers, shipping with raw-material
+  // suppliers / blenders — numbered NCO<entity><year><nnn>, kept apart from
+  // `operations` so they never count as sales
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS non_commercial_operations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nco_number TEXT UNIQUE NOT NULL,
+      entity TEXT NOT NULL,
+      year INTEGER NOT NULL,
+      seq INTEGER NOT NULL,
+      type TEXT NOT NULL CHECK (type IN ('samples', 'shipping')),
+      customer_id INTEGER,
+      supplier_id INTEGER,
+      nco_date TEXT,
+      notes TEXT,
+      created_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL,
+      FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE SET NULL
+    )
+  `);
+
   // Referential integrity is only as good as the last migration — surface any
   // violation in the logs rather than letting it rot silently as it did before.
   try {

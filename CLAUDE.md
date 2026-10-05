@@ -46,6 +46,11 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - Who is notified about whom: Settings (admin, `NotificationRulesSettings.tsx`, `/api/settings/notification-rules`, `app_settings.notification_mutes` = `[{recipient: 'user:<id>' | 'email:<addr>', actor: userId}]`); a muted pair is skipped in `notifyAdmin` emails and in the bell (`activity_log.performed_by_id`, `mutedActorsForUser`); default = everyone hears about everyone
 - Supplier Purchase Order via `/api/purchase-orders` (any order, not only trading ops) — Order Confirmation template, entity from operation number, filed as `<op#>PO.pdf`, prices entered by hand
 
+## Non-Commercial Operations
+- Own page `/non-commercial-operations` (sidebar "Non-Commercial Ops"), table `non_commercial_operations`, `/api/non-commercial-operations` — separate from `operations`, so never in revenue / dashboard / analytics / working capital
+- Number given by the server on create, never typed: `NCO` + entity (BE/NL) + year of the NCO date + 3-digit running number per entity and year (`NCOBE2026001`); `GET /next-number` previews it; fixed after creation
+- `type` 'samples' → a customer; 'shipping' → a supplier in category raw_materials or blenders (server rejects others)
+
 ## Document Generators (OC, supplier PO, invoice, PL)
 - Generated from an order: `DocumentGenerators` (operation page + order page) shows each as none / (draft) / ✓
 - OC, PO, invoice: `status` 'draft' | 'final' — "Save draft" keeps the form only (no PDF, not filed); "Confirm & generate" files the PDF under the operation; never back to draft

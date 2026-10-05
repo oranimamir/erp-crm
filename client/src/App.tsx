@@ -31,6 +31,7 @@ import AdminUsersPage from './pages/AdminUsersPage';
 import AcceptInvitePage from './pages/AcceptInvitePage';
 import NotFoundPage from './pages/NotFoundPage';
 import OperationsPage from './pages/OperationsPage';
+import NonCommercialOperationsPage from './pages/NonCommercialOperationsPage';
 import OperationDetailPage from './pages/OperationDetailPage';
 import OperationFormPage from './pages/OperationFormPage';
 import AnalyticsPage from './pages/AnalyticsPage';
@@ -80,6 +81,7 @@ export default function App() {
               <Route path="/production" element={<ProductionPage />} />
               <Route path="/products" element={<Navigate to="/inventory" replace />} />
               <Route path="/operations" element={<OperationsPage />} />
+              <Route path="/non-commercial-operations" element={<NonCommercialOperationsPage />} />
               <Route path="/operations/new" element={<OperationFormPage />} />
               <Route path="/operations/:id" element={<OperationDetailPage />} />
               <Route path="/analytics" element={<AnalyticsPage />} />
