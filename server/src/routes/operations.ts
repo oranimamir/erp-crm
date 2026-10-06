@@ -5,7 +5,8 @@ import { getEurRate } from '../lib/fx.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { resolveCountry } from '../lib/portCountry.js';
 import { scoreCandidate } from '../lib/wireMatch.js';
-import { entityFromOperationNumber, isEntityCode } from '../lib/companyEntity.js';
+import { entityFromOperationNumber, entityProfile, isEntityCode } from '../lib/companyEntity.js';
+import { sendDocumentsEmail, withSizes } from '../lib/documentMail.js';
 import { uploadOperationDoc } from '../middleware/upload.js';
 import { deleteInvoiceDocument } from './invoice-documents.js';
 import { findBillOfLading } from './packing-lists.js';
@@ -496,7 +497,7 @@ router.get('/:id', (req: Request, res: Response) => {
     ORDER BY wt.created_at DESC
   `).all(Number(req.params.id));
 
-  res.json({ ...operation, documents, invoices, order_items: orderItems, wire_transfers });
+  res.json({ ...operation, documents: withSizes(documents as any[]), invoices, order_items: orderItems, wire_transfers });
 });
 
 // ── Create operation ──────────────────────────────────────────────────────────
@@ -779,6 +780,34 @@ router.post('/:id/documents', uploadOperationDoc.single('file'), (req: Request, 
 
   notifyAdmin({ action: 'created', entity: 'Operation Document', label: `${operation.operation_number} — ${req.file.originalname}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.status(201).json(doc);
+});
+
+// ── Send documents by email ───────────────────────────────────────────────
+
+/**
+ * POST /api/operations/:id/documents/email — { to, cc, subject, message,
+ * documents: [docId, …] in attachment order, numbered }
+ */
+router.post('/:id/documents/email', async (req: Request, res: Response) => {
+  const op = db.prepare(`
+    SELECT op.id, op.operation_number, c.name AS customer_name
+    FROM operations op LEFT JOIN customers c ON c.id = op.customer_id WHERE op.id = ?
+  `).get(req.params.id) as any;
+  if (!op) { res.status(404).json({ error: 'Operation not found' }); return; }
+  const docs = db.prepare('SELECT id, file_path, file_name FROM operation_documents WHERE operation_id = ?').all(op.id) as any[];
+  const result = await sendDocumentsEmail(req.body || {}, docs, {
+    subject: `${op.operation_number} — documents${op.customer_name ? ` — ${op.customer_name}` : ''}`,
+    reference: op.operation_number,
+    company: entityProfile(entityFromOperationNumber(op.operation_number)).company_name || 'TripleW',
+  });
+  if (result.status === 200) {
+    notifyAdmin({
+      action: 'updated', entity: 'Operation', label: `Operation ${op.operation_number}`,
+      detail: `${result.body.count} document(s) emailed to ${result.body.to.join(', ')}`,
+      performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
+    });
+  }
+  res.status(result.status).json(result.body);
 });
 
 // ── The operation's Bill of Lading, for the generators' "Compare with BL" ──

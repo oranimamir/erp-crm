@@ -6,13 +6,15 @@ import {
   ArrowLeft, Briefcase, ShoppingCart, FileText, Upload, Trash2,
   Download, Eye, X, Plus, Receipt, ExternalLink, CheckCircle,
   AlertCircle, Loader2, Edit2, Link2, Search, Truck, Landmark,
-  FileCheck2, Receipt as ReceiptIcon, Package, Library,
+  FileCheck2, Receipt as ReceiptIcon, Package, Library, Send,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
 import DocumentGenerators from '../components/DocumentGenerators';
 import RequiredDocuments from '../components/RequiredDocuments';
 import AddFromLibraryModal from '../components/AddFromLibraryModal';
+import SendDocumentsModal from '../components/SendDocumentsModal';
+import { missingRequired } from '../lib/operationDocs';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -26,6 +28,7 @@ interface OperationDoc {
   category_name: string | null;
   notes: string | null;
   created_at: string;
+  file_size?: number | null;
 }
 
 interface Invoice {
@@ -174,6 +177,7 @@ export default function OperationDetailPage() {
   const [addingCat, setAddingCat] = useState(false);
   const [showAddCat, setShowAddCat] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
+  const [showSend, setShowSend] = useState(false);
 
   // Wire transfer upload (inline in invoices section)
   const [wireUploadInvoiceId, setWireUploadInvoiceId] = useState<number | null>(null);
@@ -1048,6 +1052,15 @@ export default function OperationDetailPage() {
           <div className="flex items-center gap-2">
             <button
               type="button"
+              onClick={() => setShowSend(true)}
+              disabled={operation.documents.length === 0}
+              title="Email the documents as attachments"
+              className="flex items-center gap-1 text-xs text-white bg-primary-600 hover:bg-primary-700 rounded-lg px-2 py-1 disabled:opacity-50"
+            >
+              <Send size={12} /> Send documents
+            </button>
+            <button
+              type="button"
               onClick={() => setShowLibrary(true)}
               title="Add MSDS / product specification sheets from Inventory → Documents"
               className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 border border-primary-200 bg-primary-50 rounded-lg px-2 py-1"
@@ -1063,6 +1076,16 @@ export default function OperationDetailPage() {
             </button>
           </div>
         </div>
+
+        <SendDocumentsModal
+          open={showSend}
+          onClose={() => setShowSend(false)}
+          endpoint={`/operations/${operation.id}/documents/email`}
+          reference={operation.operation_number}
+          partyName={operation.customer_name || ''}
+          documents={operation.documents}
+          missingRequired={missingRequired(operation.documents)}
+        />
 
         <AddFromLibraryModal
           open={showLibrary}

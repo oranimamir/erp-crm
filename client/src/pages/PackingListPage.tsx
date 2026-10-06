@@ -70,6 +70,7 @@ interface PackingList {
   pl_number: string;
   invoice_document_id: number | null;
   order_id: number | null;
+  nco_id?: number | null;
   operation_id: number | null;
   /** The draft PDF (watermarked DRAFT) — kept after finalizing. */
   file_name: string | null;
@@ -240,6 +241,7 @@ export default function PackingListPage() {
   const [sending, setSending] = useState(false);
   const [billOfLading, setBillOfLading] = useState<BillOfLading | null>(null);
   const [orderId, setOrderId] = useState<number | null>(null);
+  const [ncoId, setNcoId] = useState<number | null>(null);
   // Which document is shown beside the packing list
 
   // How this customer's packing lists are laid out — see PackingListLayoutEditor
@@ -263,6 +265,7 @@ export default function PackingListPage() {
     setInvoiceDocId(record.invoice_document_id);
     setOperationId(record.operation_id);
     setOrderId(record.order_id ?? null);
+    setNcoId(record.nco_id ?? null);
     setLayout(plWithDefaults(record.data.layout));
     setLayoutSource('this packing list as it was saved');
   }, []);
@@ -303,6 +306,7 @@ export default function PackingListPage() {
           setLayoutSource(data.layout_source || 'the standard packing list template');
           setOperationId(data.invoice?.operation_id ?? null);
           setOrderId(data.invoice?.order_id ?? null);
+          setNcoId(data.invoice?.nco_id ?? null);
         }
       } catch (err: any) {
         if (!cancelled) {
@@ -508,13 +512,13 @@ export default function PackingListPage() {
   }), { units: 0, pallets: 0, net: 0, gross: 0 });
   const unmatched = form.lines.filter(l => !l.packaging_id || !byId.has(l.packaging_id)).length;
 
-  const backTo = operationId ? `/operations/${operationId}` : '/operations';
+  const backTo = ncoId ? `/non-commercial-operations/${ncoId}` : operationId ? `/operations/${operationId}` : '/operations';
 
   return (
     <div className="space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
         <Link to={backTo} className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
-          <ArrowLeft size={16} /> Back to operation
+          <ArrowLeft size={16} /> Back to {ncoId ? 'samples' : 'operation'}
         </Link>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="secondary" size="sm" onClick={refreshFromInvoice} disabled={refreshing || !invoiceDocId}

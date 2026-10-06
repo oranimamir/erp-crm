@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Plus, Pencil, Trash2, Loader2, PackageOpen } from 'lucide-react';
 import api from '../lib/api';
 import { formatDate } from '../lib/dates';
@@ -65,6 +66,7 @@ const emptyForm = (entity: Entity = 'BE'): FormState =>
 
 export default function NonCommercialOperationsPage() {
   const { addToast } = useToast();
+  const navigate = useNavigate();
   const [entity, setEntity] = useState<'' | Entity>('');
   const [type, setType] = useState<'' | NcoType>('');
   const [rows, setRows] = useState<Nco[]>([]);
@@ -143,6 +145,9 @@ export default function NonCommercialOperationsPage() {
       } else {
         const { data } = await api.post('/non-commercial-operations', { ...payload, entity: form.entity });
         addToast(`${data.nco_number} created`, 'success');
+        setShowForm(false);
+        navigate(`/non-commercial-operations/${data.id}`);
+        return;
       }
       setShowForm(false);
       load();
@@ -201,7 +206,7 @@ export default function NonCommercialOperationsPage() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {rows.map(r => (
-                  <tr key={r.id} className="hover:bg-gray-50">
+                  <tr key={r.id} onClick={() => navigate(`/non-commercial-operations/${r.id}`)} className="hover:bg-gray-50 cursor-pointer">
                     <td className="px-4 py-2.5 font-medium text-gray-900 whitespace-nowrap">{r.nco_number}</td>
                     <td className="px-4 py-2.5 text-gray-600 whitespace-nowrap">{formatDate(r.nco_date) || dash}</td>
                     <td className="px-4 py-2.5">
@@ -222,7 +227,7 @@ export default function NonCommercialOperationsPage() {
                       )}
                     </td>
                     <td className="px-4 py-2.5 text-gray-600 max-w-xs truncate" title={r.notes || ''}>{r.notes || dash}</td>
-                    <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                    <td className="px-4 py-2.5 text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       <button onClick={() => openEdit(r)} className="p-1.5 rounded text-gray-400 hover:text-primary-600" title="Edit">
                         <Pencil size={14} />
                       </button>

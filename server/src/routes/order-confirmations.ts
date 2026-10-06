@@ -15,6 +15,9 @@ import {
   formatLongDate,
   type OrderConfirmationData,
 } from '../lib/document-pdf.js';
+import {
+  ncoSource, ncoDocLines, ncoProfile, ncoPartyFields, NCO_CURRENCY, fileUnderNco, dropNcoDocumentRow,
+} from '../lib/ncoDocs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
@@ -61,8 +64,8 @@ function parseRecord(row: any) {
  */
 async function renderAndFile(
   data: OrderConfirmationData,
-  opts: { operationId: number | null; existing?: any; userId?: number }
-): Promise<{ filePath: string; fileName: string; documentId: number | null }> {
+  opts: { operationId: number | null; ncoId?: number | null; existing?: any; userId?: number }
+): Promise<Filed> {
   const pdf = await buildOrderConfirmationPdf(data);
 
   fs.mkdirSync(docsDir, { recursive: true });
@@ -100,16 +103,24 @@ async function renderAndFile(
     documentId = null;
   }
 
-  return { filePath: storedName, fileName: displayName, documentId };
+  // An NCO's confirmation is filed under the NCO instead
+  const ncoDocumentId = opts.ncoId
+    ? fileUnderNco(opts.ncoId, opts.existing?.nco_document_id, 'Order Confirmation', storedName, displayName, `Order Confirmation ${data.oc_number || ''}`.trim())
+    : null;
+
+  return { filePath: storedName, fileName: displayName, documentId, ncoDocumentId };
 }
 
+type Filed = { filePath: string; fileName: string; documentId: number | null; ncoDocumentId: number | null };
+
 /** Undo a renderAndFile when the row it belongs to could not be written. */
-function discardFiled(filed: { filePath: string; documentId: number | null }, keepDocumentId: number | null) {
+function discardFiled(filed: Filed, keepDocumentId: number | null, keepNcoDocumentId: number | null = null) {
   const orphan = path.join(docsDir, filed.filePath);
   if (fs.existsSync(orphan)) { try { fs.unlinkSync(orphan); } catch { /* best effort */ } }
   if (filed.documentId && filed.documentId !== keepDocumentId) {
     try { db.prepare('DELETE FROM operation_documents WHERE id = ?').run(filed.documentId); } catch { /* best effort */ }
   }
+  if (filed.ncoDocumentId && filed.ncoDocumentId !== keepNcoDocumentId) dropNcoDocumentRow(filed.ncoDocumentId);
 }
 
 /** True when `ocNumber` is already taken by a different confirmation. */
@@ -121,6 +132,7 @@ function ocNumberTaken(ocNumber: string, exceptId?: number): boolean {
 // ── Prefill a draft from the uploaded order ───────────────────────────────
 
 router.get('/prepare', (req: Request, res: Response) => {
+  if (req.query.nco_id) { prepareFromNco(req, res); return; }
   const orderId = parseInt(String(req.query.order_id || ''), 10);
   if (!Number.isInteger(orderId)) { res.status(400).json({ error: 'order_id is required' }); return; }
 
@@ -222,7 +234,63 @@ router.get('/prepare', (req: Request, res: Response) => {
   });
 });
 
+/** A samples NCO has no order: its own lines and customer make the draft. */
+function prepareFromNco(req: Request, res: Response) {
+  const nco = ncoSource(Number(req.query.nco_id));
+  if (!nco) { res.status(404).json({ error: 'Non-commercial operation not found' }); return; }
+  if (nco.type !== 'samples') { res.status(400).json({ error: 'Documents are generated for sample NCOs only' }); return; }
+
+  const existing = db.prepare('SELECT * FROM order_confirmations WHERE nco_id = ? ORDER BY id DESC LIMIT 1').get(nco.id) as any;
+  if (existing) { res.json({ existing: parseRecord(existing) }); return; }
+
+  const requested = String(req.query.entity || '').toUpperCase();
+  const entity: EntityCode = isEntityCode(requested) ? requested : nco.entity;
+  const issuer = entityProfile(entity, NCO_CURRENCY(nco.lines));
+  const requestedProfile = parseInt(String(req.query.profile_id || ''), 10);
+  const { match, profiles } = ncoProfile(nco, Number.isInteger(requestedProfile) ? requestedProfile : null);
+  const profile = match.profile;
+  const ocDefaults = profile?.data.order_confirmation || {};
+  const party = ncoPartyFields(nco, profile);
+
+  const draft: OrderConfirmationData = {
+    ...issuer,
+    entity_code: entity,
+    oc_number: nco.nco_number,
+    oc_date: new Date().toISOString().slice(0, 10),
+    sq_number: '',
+    our_ref: nco.nco_number,
+    po_number: '',
+    client_code: party.client_code,
+    client_name: party.client_name,
+    billing_address: party.billing_address,
+    client_phone: party.client_phone,
+    tax_id: party.tax_id,
+    contact_email: party.contact_email,
+    items: ncoDocLines(nco.lines),
+    delivery: ocDefaults.delivery || '',
+    delivery_address: ocDefaults.delivery_address || issuer.delivery_address || '',
+    delivery_contact: issuer.delivery_contact || '',
+    delivery_date_text: '',
+    freight: 0,
+    vat: 0,
+    terms: ocDefaults.terms || '',
+  };
+
+  res.json({
+    existing: null, draft, entity, profiles,
+    profile_id: profile?.id ?? null, profile_name: profile?.name ?? null,
+    matched_by: match.matchedBy, match_confident: match.confident,
+    order: null, operation: null,
+    nco: { id: nco.id, nco_number: nco.nco_number, customer_name: nco.customer_name },
+  });
+}
+
 // ── List / read ───────────────────────────────────────────────────────────
+
+router.get('/by-nco/:ncoId', (req: Request, res: Response) => {
+  const rows = db.prepare('SELECT * FROM order_confirmations WHERE nco_id = ? ORDER BY id DESC').all(Number(req.params.ncoId)) as any[];
+  res.json(rows.map(parseRecord));
+});
 
 router.get('/by-order/:orderId', (req: Request, res: Response) => {
   const rows = db.prepare(
@@ -254,21 +322,25 @@ router.post('/preview', async (req: Request, res: Response) => {
 // ── Create ────────────────────────────────────────────────────────────────
 
 router.post('/', async (req: Request, res: Response) => {
-  const { order_id, operation_id, profile_id, data } = req.body as {
-    order_id?: number; operation_id?: number | null; profile_id?: number | null; data?: OrderConfirmationData;
+  const { order_id, operation_id, profile_id, data, nco_id } = req.body as {
+    order_id?: number; operation_id?: number | null; profile_id?: number | null; data?: OrderConfirmationData; nco_id?: number | null;
   };
   // A draft is only the saved form: no PDF, nothing filed under the operation
   const isDraft = req.body?.status === 'draft';
 
-  if (!order_id) { res.status(400).json({ error: 'order_id is required' }); return; }
+  // A samples NCO stands in for the order
+  const nco = nco_id ? db.prepare('SELECT id, nco_number, type FROM non_commercial_operations WHERE id = ?').get(nco_id) as any : null;
+  if (nco_id && !nco) { res.status(404).json({ error: 'Non-commercial operation not found' }); return; }
+  if (nco && nco.type !== 'samples') { res.status(400).json({ error: 'Documents are generated for sample NCOs only' }); return; }
+  if (!order_id && !nco) { res.status(400).json({ error: 'order_id is required' }); return; }
   if (!data || typeof data !== 'object') { res.status(400).json({ error: 'data is required' }); return; }
 
-  const order = db.prepare('SELECT id, order_number FROM orders WHERE id = ?').get(order_id) as any;
-  if (!order) { res.status(404).json({ error: 'Order not found' }); return; }
+  const order = order_id ? db.prepare('SELECT id, order_number FROM orders WHERE id = ?').get(order_id) as any : null;
+  if (order_id && !order) { res.status(404).json({ error: 'Order not found' }); return; }
 
   // Fall back to the operation already linked to the order
-  let operationId: number | null = operation_id ?? null;
-  if (operationId == null) {
+  let operationId: number | null = nco ? null : (operation_id ?? null);
+  if (operationId == null && order) {
     const linked = db.prepare('SELECT id FROM operations WHERE order_id = ? ORDER BY id DESC LIMIT 1').get(order_id) as any;
     operationId = linked?.id ?? null;
   }
@@ -277,7 +349,8 @@ router.post('/', async (req: Request, res: Response) => {
     ...data,
     oc_number: (data.oc_number || '').trim()
       || operationNumberFor(operationId)
-      || (order as any).order_number
+      || nco?.nco_number
+      || order?.order_number
       || '',
   });
   if (!payload.oc_number) { res.status(400).json({ error: 'A confirmation number is required' }); return; }
@@ -288,17 +361,17 @@ router.post('/', async (req: Request, res: Response) => {
     return;
   }
 
-  let filed: { filePath: string; fileName: string; documentId: number | null } | null = null;
+  let filed: Filed | null = null;
   try {
-    if (!isDraft) filed = await renderAndFile(payload, { operationId, userId: req.user?.userId });
+    if (!isDraft) filed = await renderAndFile(payload, { operationId, ncoId: nco?.id ?? null, userId: req.user?.userId });
 
     const result = db.prepare(`
-      INSERT INTO order_confirmations (oc_number, order_id, operation_id, profile_id, data, file_path, file_name, document_id, created_by, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO order_confirmations (oc_number, order_id, operation_id, profile_id, data, file_path, file_name, document_id, created_by, status, nco_id, nco_document_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      payload.oc_number, order_id, operationId, profile_id ?? null,
+      payload.oc_number, order?.id ?? null, operationId, profile_id ?? null,
       JSON.stringify(payload), filed?.filePath ?? null, filed?.fileName ?? null, filed?.documentId ?? null,
-      req.user?.userId ?? null, isDraft ? 'draft' : 'final'
+      req.user?.userId ?? null, isDraft ? 'draft' : 'final', nco?.id ?? null, filed?.ncoDocumentId ?? null
     );
 
     const row = db.prepare('SELECT * FROM order_confirmations WHERE id = ?').get(result.lastInsertRowid);
@@ -342,25 +415,26 @@ router.put('/:id', async (req: Request, res: Response) => {
     ...data,
     oc_number: (data.oc_number || '').trim() || existing.oc_number,
   });
-  const operationId = operation_id !== undefined ? operation_id : existing.operation_id;
+  const operationId = existing.nco_id ? null : (operation_id !== undefined ? operation_id : existing.operation_id);
 
   if (ocNumberTaken(payload.oc_number!, existing.id)) {
     res.status(409).json({ error: `Order confirmation ${payload.oc_number} already exists` });
     return;
   }
 
-  let filed: { filePath: string; fileName: string; documentId: number | null } | null = null;
+  let filed: Filed | null = null;
   try {
-    if (!isDraft) filed = await renderAndFile(payload, { operationId, existing, userId: req.user?.userId });
+    if (!isDraft) filed = await renderAndFile(payload, { operationId, ncoId: existing.nco_id ?? null, existing, userId: req.user?.userId });
 
     db.prepare(`
       UPDATE order_confirmations
       SET oc_number = ?, operation_id = ?, profile_id = ?, data = ?, file_path = ?, file_name = ?, document_id = ?,
-        status = ?, draft_data = NULL, updated_at = datetime('now')
+        nco_document_id = ?, status = ?, draft_data = NULL, updated_at = datetime('now')
       WHERE id = ?
     `).run(
       payload.oc_number, operationId, profile_id ?? existing.profile_id ?? null, JSON.stringify(payload),
-      filed?.filePath ?? null, filed?.fileName ?? null, filed?.documentId ?? null, isDraft ? 'draft' : 'final', existing.id
+      filed?.filePath ?? null, filed?.fileName ?? null, filed?.documentId ?? null, filed?.ncoDocumentId ?? null,
+      isDraft ? 'draft' : 'final', existing.id
     );
 
     const row = db.prepare('SELECT * FROM order_confirmations WHERE id = ?').get(existing.id);
@@ -372,7 +446,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     res.json(parseRecord(row));
   } catch (err: any) {
     // The superseded file is already gone, so only discard what this call wrote
-    if (filed) discardFiled(filed, existing.document_id);
+    if (filed) discardFiled(filed, existing.document_id, existing.nco_document_id);
     if (err?.message?.includes('UNIQUE')) {
       res.status(409).json({ error: `Order confirmation ${payload.oc_number} already exists` });
       return;
@@ -475,12 +549,7 @@ router.delete('/:id', (req: Request, res: Response) => {
   const row = db.prepare('SELECT * FROM order_confirmations WHERE id = ?').get(Number(req.params.id)) as any;
   if (!row) { res.status(404).json({ error: 'Order confirmation not found' }); return; }
 
-  if (row.file_path) {
-    const filePath = path.join(docsDir, row.file_path);
-    if (fs.existsSync(filePath)) { try { fs.unlinkSync(filePath); } catch { /* best effort */ } }
-  }
-  if (row.document_id) db.prepare('DELETE FROM operation_documents WHERE id = ?').run(row.document_id);
-  db.prepare('DELETE FROM order_confirmations WHERE id = ?').run(row.id);
+  deleteOrderConfirmationRow(row);
 
   notifyAdmin({
     action: 'deleted', entity: 'Order Confirmation', label: row.oc_number,
@@ -496,3 +565,14 @@ function escapeHtml(value: string): string {
 }
 
 export default router;
+
+/** Removes a confirmation's PDF, its filed document row (operation or NCO) and the row itself. */
+export function deleteOrderConfirmationRow(row: any): void {
+  if (row.file_path) {
+    const filePath = path.join(docsDir, row.file_path);
+    if (fs.existsSync(filePath)) { try { fs.unlinkSync(filePath); } catch { /* best effort */ } }
+  }
+  if (row.document_id) db.prepare('DELETE FROM operation_documents WHERE id = ?').run(row.document_id);
+  dropNcoDocumentRow(row.nco_document_id);
+  db.prepare('DELETE FROM order_confirmations WHERE id = ?').run(row.id);
+}

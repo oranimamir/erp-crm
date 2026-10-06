@@ -10,6 +10,7 @@ import { buildDocumentPdf, lotsOf, type DocumentData, type PackingRow } from '..
 import { computePacking, listPackaging, matchPackaging, netKg, packagingById, type PackagingRow } from '../lib/packing.js';
 import { normalizePlLayout, resolvePlLayout } from '../lib/packingListLayout.js';
 import { resolveProfile } from '../lib/documentPrefill.js';
+import { fileUnderNco, dropNcoDocumentRow } from '../lib/ncoDocs.js';
 
 /**
  * Packing lists: the goods of a generated invoice with their packaging, unit
@@ -181,6 +182,13 @@ function withRows(data: PackingListData): PackingListData {
 
 /** The customer (and their profile) a packing list is for, read off its invoice. */
 function customerFor(invoice: any): { customerId: number | null; customerName: string; profile: ReturnType<typeof resolveProfile> } {
+  // A samples NCO's invoice: the NCO's customer
+  if (invoice?.nco_id) {
+    const nco = db.prepare(`SELECT n.customer_id, c.name AS customer_name FROM non_commercial_operations n LEFT JOIN customers c ON c.id = n.customer_id WHERE n.id = ?`)
+      .get(invoice.nco_id) as any;
+    const customerId = nco?.customer_id ?? null;
+    return { customerId, customerName: nco?.customer_name || '', profile: resolveProfile(customerId, invoice?.profile_id ?? null) };
+  }
   const order = invoice?.order_id
     ? db.prepare(`SELECT o.customer_id, c.name AS customer_name FROM orders o LEFT JOIN customers c ON c.id = o.customer_id WHERE o.id = ?`)
       .get(invoice.order_id) as any
@@ -196,8 +204,8 @@ function candidatesFor(lines: PackingLineInput[], rows: PackagingRow[]): number[
 
 async function renderAndFile(
   data: PackingListData,
-  opts: { operationId: number | null; existing?: any; status: PlStatus }
-): Promise<{ filePath: string; fileName: string; documentId: number | null }> {
+  opts: { operationId: number | null; ncoId?: number | null; existing?: any; status: PlStatus }
+): Promise<Filed> {
   // A draft carries a DRAFT watermark; the final one is clean. Each has its own
   // file and its own operation document, so finalizing never replaces the draft.
   const isFinal = opts.status === 'final';
@@ -205,6 +213,7 @@ async function renderAndFile(
   const slot = {
     file_path: isFinal ? opts.existing?.final_file_path : opts.existing?.file_path,
     document_id: isFinal ? opts.existing?.final_document_id : opts.existing?.document_id,
+    nco_document_id: isFinal ? opts.existing?.final_nco_document_id : opts.existing?.nco_document_id,
   };
 
   fs.mkdirSync(docsDir, { recursive: true });
@@ -239,15 +248,23 @@ async function renderAndFile(
     documentId = null;
   }
 
-  return { filePath: storedName, fileName: displayName, documentId };
+  // A samples NCO's packing list is filed under the NCO instead
+  const ncoDocumentId = opts.ncoId
+    ? fileUnderNco(opts.ncoId, slot.nco_document_id, 'Packing list', storedName, displayName, note)
+    : null;
+
+  return { filePath: storedName, fileName: displayName, documentId, ncoDocumentId };
 }
 
-function discardFiled(filed: { filePath: string; documentId: number | null }, keepDocumentId: number | null) {
+type Filed = { filePath: string; fileName: string; documentId: number | null; ncoDocumentId: number | null };
+
+function discardFiled(filed: Filed, keepDocumentId: number | null, keepNcoDocumentId: number | null = null) {
   const orphan = path.join(docsDir, filed.filePath);
   if (fs.existsSync(orphan)) { try { fs.unlinkSync(orphan); } catch { /* best effort */ } }
   if (filed.documentId && filed.documentId !== keepDocumentId) {
     try { db.prepare('DELETE FROM operation_documents WHERE id = ?').run(filed.documentId); } catch { /* best effort */ }
   }
+  if (filed.ncoDocumentId && filed.ncoDocumentId !== keepNcoDocumentId) dropNcoDocumentRow(filed.ncoDocumentId);
 }
 
 function numberTaken(plNumber: string, exceptId?: number): boolean {
@@ -258,10 +275,11 @@ function numberTaken(plNumber: string, exceptId?: number): boolean {
 /** Removes a packing list and its filed PDF — used when its invoice is deleted. */
 export function deletePackingListsForInvoice(invoiceDocumentId: number) {
   const rows = db.prepare('SELECT * FROM packing_lists WHERE invoice_document_id = ?').all(invoiceDocumentId) as any[];
-  for (const row of rows) removeRow(row);
+  for (const row of rows) deletePackingListRow(row);
 }
 
-function removeRow(row: any) {
+/** Removes a packing list, its PDFs and the documents they are filed as. */
+export function deletePackingListRow(row: any) {
   for (const stored of [row.file_path, row.final_file_path]) {
     if (!stored) continue;
     const filePath = path.join(docsDir, stored);
@@ -270,6 +288,8 @@ function removeRow(row: any) {
   for (const docId of [row.document_id, row.final_document_id]) {
     if (docId) db.prepare('DELETE FROM operation_documents WHERE id = ?').run(docId);
   }
+  dropNcoDocumentRow(row.nco_document_id);
+  dropNcoDocumentRow(row.final_nco_document_id);
   db.prepare('DELETE FROM packing_lists WHERE id = ?').run(row.id);
 }
 
@@ -344,7 +364,7 @@ router.get('/prepare', (req: Request, res: Response) => {
     profile_id: profile?.id ?? null,
     profile_name: profile?.name ?? null,
     candidates: candidatesFor(lines, rows),
-    invoice: { id: invoice.id, invoice_number: invoice.invoice_number, order_id: invoice.order_id, operation_id: invoice.operation_id },
+    invoice: { id: invoice.id, invoice_number: invoice.invoice_number, order_id: invoice.order_id, operation_id: invoice.operation_id, nco_id: invoice.nco_id ?? null },
   });
 });
 
@@ -362,6 +382,12 @@ router.post('/refresh-lines', (req: Request, res: Response) => {
 router.get('/by-invoice/:invoiceDocId', (req: Request, res: Response) => {
   const rows = db.prepare('SELECT * FROM packing_lists WHERE invoice_document_id = ? ORDER BY id DESC')
     .all(Number(req.params.invoiceDocId)) as any[];
+  res.json(rows.map(parseRecord));
+});
+
+router.get('/by-nco/:ncoId', (req: Request, res: Response) => {
+  const rows = db.prepare('SELECT * FROM packing_lists WHERE nco_id = ? ORDER BY id DESC')
+    .all(Number(req.params.ncoId)) as any[];
   res.json(rows.map(parseRecord));
 });
 
@@ -434,16 +460,18 @@ router.post('/', async (req: Request, res: Response) => {
     return;
   }
 
-  let filed: { filePath: string; fileName: string; documentId: number | null } | null = null;
+  let filed: Filed | null = null;
   try {
     const operationId = resolveOperationId(invoice);
-    filed = await renderAndFile(payload, { operationId, status: 'draft' });
+    const ncoId: number | null = invoice.nco_id ?? null;
+    filed = await renderAndFile(payload, { operationId, ncoId, status: 'draft' });
     const result = db.prepare(`
-      INSERT INTO packing_lists (pl_number, invoice_document_id, order_id, operation_id, data, file_path, file_name, document_id, created_by, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')
+      INSERT INTO packing_lists (pl_number, invoice_document_id, order_id, operation_id, data, file_path, file_name, document_id, created_by, status, nco_id, nco_document_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
     `).run(
       payload.doc_number, invoice.id, invoice.order_id ?? null, operationId,
-      JSON.stringify(payload), filed.filePath, filed.fileName, filed.documentId, req.user?.userId ?? null
+      JSON.stringify(payload), filed.filePath, filed.fileName, filed.documentId, req.user?.userId ?? null,
+      ncoId, filed.ncoDocumentId
     );
     const row = db.prepare('SELECT * FROM packing_lists WHERE id = ?').get(result.lastInsertRowid);
     notifyAdmin({
@@ -477,16 +505,17 @@ router.put('/:id', async (req: Request, res: Response) => {
     return;
   }
 
-  let filed: { filePath: string; fileName: string; documentId: number | null } | null = null;
+  let filed: Filed | null = null;
   try {
     // Saving an edit makes it a draft again — a changed PL is never labelled final by accident
     const operationId = existing.operation_id ?? resolveOperationId(invoiceDoc(existing.invoice_document_id));
-    filed = await renderAndFile(payload, { operationId, existing, status: 'draft' });
+    filed = await renderAndFile(payload, { operationId, ncoId: existing.nco_id ?? null, existing, status: 'draft' });
     db.prepare(`
       UPDATE packing_lists SET pl_number = ?, operation_id = ?, data = ?, file_path = ?, file_name = ?, document_id = ?,
-        status = 'draft', finalized_at = NULL, updated_at = datetime('now')
+        nco_document_id = ?, status = 'draft', finalized_at = NULL, updated_at = datetime('now')
       WHERE id = ?
-    `).run(payload.doc_number, operationId, JSON.stringify(payload), filed.filePath, filed.fileName, filed.documentId, existing.id);
+    `).run(payload.doc_number, operationId, JSON.stringify(payload), filed.filePath, filed.fileName, filed.documentId,
+      filed.ncoDocumentId, existing.id);
     const row = db.prepare('SELECT * FROM packing_lists WHERE id = ?').get(existing.id);
     notifyAdmin({
       action: 'updated', entity: 'Packing List', label: payload.doc_number!,
@@ -494,7 +523,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     });
     res.json(parseRecord(row));
   } catch (err: any) {
-    if (filed) discardFiled(filed, existing.document_id);
+    if (filed) discardFiled(filed, existing.document_id, existing.nco_document_id);
     console.error('[packing-lists] update failed:', err?.message || err);
     res.status(500).json({ error: 'Failed to regenerate the packing list' });
   }
@@ -517,22 +546,22 @@ async function setStatus(req: Request, res: Response, status: PlStatus) {
 
   const record = parseRecord(existing);
   const operationId = existing.operation_id ?? resolveOperationId(invoiceDoc(existing.invoice_document_id));
-  let filed: { filePath: string; fileName: string; documentId: number | null } | null = null;
+  let filed: Filed | null = null;
   try {
     if (status === 'final') {
       // The final PL is the saved draft, without the watermark, filed beside it
-      filed = await renderAndFile(withRows(record.data), { operationId, existing, status });
+      filed = await renderAndFile(withRows(record.data), { operationId, ncoId: existing.nco_id ?? null, existing, status });
       db.prepare(`
         UPDATE packing_lists SET status = 'final', finalized_at = datetime('now'), operation_id = ?,
-          final_file_path = ?, final_file_name = ?, final_document_id = ?, updated_at = datetime('now')
+          final_file_path = ?, final_file_name = ?, final_document_id = ?, final_nco_document_id = ?, updated_at = datetime('now')
         WHERE id = ?
-      `).run(operationId, filed.filePath, filed.fileName, filed.documentId, existing.id);
+      `).run(operationId, filed.filePath, filed.fileName, filed.documentId, filed.ncoDocumentId, existing.id);
     } else {
       // Reopening keeps the finalized PDF; a draft is (re)made only if there is none
       if (!existing.file_path) {
-        filed = await renderAndFile(withRows(record.data), { operationId, existing, status });
-        db.prepare('UPDATE packing_lists SET file_path = ?, file_name = ?, document_id = ? WHERE id = ?')
-          .run(filed.filePath, filed.fileName, filed.documentId, existing.id);
+        filed = await renderAndFile(withRows(record.data), { operationId, ncoId: existing.nco_id ?? null, existing, status });
+        db.prepare('UPDATE packing_lists SET file_path = ?, file_name = ?, document_id = ?, nco_document_id = ? WHERE id = ?')
+          .run(filed.filePath, filed.fileName, filed.documentId, filed.ncoDocumentId, existing.id);
       }
       db.prepare(`
         UPDATE packing_lists SET status = 'draft', finalized_at = NULL, operation_id = ?, updated_at = datetime('now')
@@ -547,7 +576,8 @@ async function setStatus(req: Request, res: Response, status: PlStatus) {
     });
     res.json({ record: parseRecord(row), bl_found: !!findBillOfLading(operationId) });
   } catch (err: any) {
-    if (filed) discardFiled(filed, status === 'final' ? existing.final_document_id : existing.document_id);
+    if (filed) discardFiled(filed, status === 'final' ? existing.final_document_id : existing.document_id,
+      status === 'final' ? existing.final_nco_document_id : existing.nco_document_id);
     console.error('[packing-lists] status change failed:', err?.message || err);
     res.status(500).json({ error: 'Failed to update the packing list' });
   }
@@ -650,7 +680,7 @@ function escapeHtml(value: string): string {
 router.delete('/:id', (req: Request, res: Response) => {
   const row = db.prepare('SELECT * FROM packing_lists WHERE id = ?').get(Number(req.params.id)) as any;
   if (!row) { res.status(404).json({ error: 'Packing list not found' }); return; }
-  removeRow(row);
+  deletePackingListRow(row);
   notifyAdmin({
     action: 'deleted', entity: 'Packing List', label: row.pl_number,
     performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
@@ -661,7 +691,7 @@ router.delete('/:id', (req: Request, res: Response) => {
 /** PLs saved before they were always filed under their operation's documents. */
 export async function backfillPackingListFiling(): Promise<void> {
   let rows: any[] = [];
-  try { rows = db.prepare('SELECT * FROM packing_lists WHERE operation_id IS NULL OR document_id IS NULL').all() as any[]; }
+  try { rows = db.prepare('SELECT * FROM packing_lists WHERE (operation_id IS NULL OR document_id IS NULL) AND nco_id IS NULL').all() as any[]; }
   catch { return; }
   for (const row of rows) {
     try {

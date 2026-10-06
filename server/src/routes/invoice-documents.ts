@@ -22,6 +22,10 @@ import { normalizeLayout } from '../lib/invoiceLayout.js';
 import { getEurRate } from '../lib/fx.js';
 import { refreshEstimatedPaymentDate } from '../lib/paymentTerms.js';
 import { deletePackingListsForInvoice } from './packing-lists.js';
+import {
+  ncoSource, ncoDocLines, ncoProfile, ncoPartyFields, NCO_CURRENCY, NO_COMMERCIAL_VALUE,
+  fileUnderNco, dropNcoDocumentRow,
+} from '../lib/ncoDocs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
@@ -108,8 +112,8 @@ function parseRecord(row: any) {
  */
 async function renderAndFile(
   data: DocumentData,
-  opts: { operationId: number | null; existing?: any }
-): Promise<{ filePath: string; fileName: string; documentId: number | null }> {
+  opts: { operationId: number | null; ncoId?: number | null; existing?: any }
+): Promise<Filed> {
   const pdf = await buildDocumentPdf('invoice', data);
 
   fs.mkdirSync(docsDir, { recursive: true });
@@ -146,16 +150,24 @@ async function renderAndFile(
     documentId = null;
   }
 
-  return { filePath: storedName, fileName: displayName, documentId };
+  // An NCO's invoice is filed under the NCO instead
+  const ncoDocumentId = opts.ncoId
+    ? fileUnderNco(opts.ncoId, opts.existing?.nco_document_id, 'Commercial Invoice', storedName, displayName, `Commercial Invoice ${data.doc_number || ''}`.trim())
+    : null;
+
+  return { filePath: storedName, fileName: displayName, documentId, ncoDocumentId };
 }
 
+type Filed = { filePath: string; fileName: string; documentId: number | null; ncoDocumentId: number | null };
+
 /** Undo a renderAndFile when the row it belongs to could not be written. */
-function discardFiled(filed: { filePath: string; documentId: number | null }, keepDocumentId: number | null) {
+function discardFiled(filed: Filed, keepDocumentId: number | null, keepNcoDocumentId: number | null = null) {
   const orphan = path.join(docsDir, filed.filePath);
   if (fs.existsSync(orphan)) { try { fs.unlinkSync(orphan); } catch { /* best effort */ } }
   if (filed.documentId && filed.documentId !== keepDocumentId) {
     try { db.prepare('DELETE FROM operation_documents WHERE id = ?').run(filed.documentId); } catch { /* best effort */ }
   }
+  if (filed.ncoDocumentId && filed.ncoDocumentId !== keepNcoDocumentId) dropNcoDocumentRow(filed.ncoDocumentId);
 }
 
 function numberTaken(invoiceNumber: string, exceptId?: number, linkedInvoiceId?: number | null): boolean {
@@ -194,7 +206,8 @@ function linesTonnage(items: DocumentData['items']): number | null {
  */
 async function syncRecordedInvoice(docId: number): Promise<void> {
   const docRow = db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(docId) as any;
-  if (!docRow) return;
+  // An NCO (samples) invoice has no commercial value — never a recorded invoice, never revenue
+  if (!docRow || docRow.nco_id) return;
   const data = parseRecord(docRow).data as DocumentData;
   const order = docRow.order_id
     ? db.prepare('SELECT id, type, customer_id, supplier_id FROM orders WHERE id = ?').get(docRow.order_id) as any
@@ -277,6 +290,7 @@ export function deleteInvoiceDocument(row: any, opts: { keepRecorded?: boolean }
     if (fs.existsSync(filePath)) { try { fs.unlinkSync(filePath); } catch { /* best effort */ } }
   }
   if (row.document_id) db.prepare('DELETE FROM operation_documents WHERE id = ?').run(row.document_id);
+  dropNcoDocumentRow(row.nco_document_id);
   // The packing list packs this invoice's goods, so it goes with it
   deletePackingListsForInvoice(row.id);
   db.prepare('DELETE FROM invoice_documents WHERE id = ?').run(row.id);
@@ -314,7 +328,7 @@ export async function backfillRecordedInvoices(): Promise<void> {
   } catch { /* table unavailable */ }
 
   let rows: Array<{ id: number }> = [];
-  try { rows = db.prepare(`SELECT id FROM invoice_documents WHERE invoice_id IS NULL AND status = 'final'`).all() as any[]; }
+  try { rows = db.prepare(`SELECT id FROM invoice_documents WHERE invoice_id IS NULL AND status = 'final' AND nco_id IS NULL`).all() as any[]; }
   catch { return; }
   for (const row of rows) {
     try { await syncRecordedInvoice(row.id); }
@@ -332,6 +346,7 @@ const OC_CARRIED_FIELDS = [
 ] as const;
 
 router.get('/prepare', (req: Request, res: Response) => {
+  if (req.query.nco_id) { prepareFromNco(req, res); return; }
   const orderId = parseInt(String(req.query.order_id || ''), 10);
   if (!Number.isInteger(orderId)) { res.status(400).json({ error: 'order_id is required' }); return; }
 
@@ -489,6 +504,76 @@ router.get('/prepare', (req: Request, res: Response) => {
   });
 });
 
+/**
+ * A samples NCO: drafted from its order confirmation when there is one, else
+ * from the NCO lines. Numbered as the NCO, printed "No commercial value".
+ */
+function prepareFromNco(req: Request, res: Response) {
+  const nco = ncoSource(Number(req.query.nco_id));
+  if (!nco) { res.status(404).json({ error: 'Non-commercial operation not found' }); return; }
+  if (nco.type !== 'samples') { res.status(400).json({ error: 'Documents are generated for sample NCOs only' }); return; }
+
+  const existing = db.prepare('SELECT * FROM invoice_documents WHERE nco_id = ? ORDER BY id DESC LIMIT 1').get(nco.id) as any;
+  if (existing) { res.json({ existing: parseRecord(existing) }); return; }
+
+  const ocRow = db.prepare('SELECT * FROM order_confirmations WHERE nco_id = ? ORDER BY id DESC LIMIT 1').get(nco.id) as any;
+  let ocData: any = null;
+  if (ocRow) { try { ocData = JSON.parse(ocRow.data); } catch { /* corrupt OC → NCO only */ } }
+  const ocItems: any[] = Array.isArray(ocData?.items) && ocData.items.length ? ocData.items : [];
+
+  const requested = String(req.query.entity || '').toUpperCase();
+  const entity: EntityCode = isEntityCode(requested) ? requested : isEntityCode(ocData?.entity_code) ? ocData.entity_code : nco.entity;
+  const currency = String(ocItems.find((i: any) => i?.currency)?.currency || NCO_CURRENCY(nco.lines)).toUpperCase();
+  const issuer = entityProfile(entity, currency);
+
+  const requestedProfile = parseInt(String(req.query.profile_id || ocRow?.profile_id || ''), 10);
+  const { match, profiles } = ncoProfile(nco, Number.isInteger(requestedProfile) ? requestedProfile : null);
+  const profile = match.profile;
+  const invDefaults = profile?.data.invoice || {};
+  const { layout, source: layoutSource } = resolveInvoiceLayout(nco.customer_id, profile, nco.customer_name);
+  const today = new Date().toISOString().slice(0, 10);
+
+  const draft: DocumentData = {
+    ...issuer,
+    entity_code: entity,
+    doc_number: nco.nco_number,
+    doc_date: today,
+    sq_number: '',
+    our_ref: nco.nco_number,
+    po_number: '',
+    operation_number: nco.nco_number,
+    ...ncoPartyFields(nco, profile),
+    items: ncoDocLines(nco.lines),
+    delivery: invDefaults.delivery || '',
+    delivery_address: invDefaults.delivery_address || '',
+    delivery_date_text: '',
+    product_reference: nco.lines[0]?.product || '',
+    freight: 0,
+    vat: 0,
+    insurance: 0,
+    terms: '',
+    notes: NO_COMMERCIAL_VALUE,
+    layout,
+  };
+  if (ocData) {
+    for (const key of OC_CARRIED_FIELDS) {
+      const value = ocData[key];
+      if (value != null && String(value).trim() !== '') (draft as any)[key] = value;
+    }
+    if (ocItems.length) draft.items = ocItems;
+  }
+
+  res.json({
+    existing: null, draft,
+    oc: ocRow ? { id: ocRow.id, oc_number: ocRow.oc_number } : null,
+    entity, layout, layout_source: layoutSource, profiles,
+    profile_id: profile?.id ?? null, profile_name: profile?.name ?? null,
+    matched_by: match.matchedBy, match_confident: match.confident,
+    order: null, operation: null,
+    nco: { id: nco.id, nco_number: nco.nco_number, customer_id: nco.customer_id, customer_name: nco.customer_name },
+  });
+}
+
 // ── Save a layout as the customer's own ───────────────────────────────────
 
 /**
@@ -514,6 +599,11 @@ router.put('/layout/:profileId', (req: Request, res: Response) => {
 });
 
 // ── List / read ───────────────────────────────────────────────────────────
+
+router.get('/by-nco/:ncoId', (req: Request, res: Response) => {
+  const rows = db.prepare('SELECT * FROM invoice_documents WHERE nco_id = ? ORDER BY id DESC').all(Number(req.params.ncoId)) as any[];
+  res.json(rows.map(parseRecord));
+});
 
 router.get('/by-order/:orderId', (req: Request, res: Response) => {
   const rows = db.prepare(
@@ -545,16 +635,22 @@ router.post('/preview', async (req: Request, res: Response) => {
 // ── Create ────────────────────────────────────────────────────────────────
 
 router.post('/', async (req: Request, res: Response) => {
-  const { order_id, operation_id, profile_id, data } = req.body as {
-    order_id?: number; operation_id?: number | null; profile_id?: number | null; data?: DocumentData;
+  const { order_id, operation_id, profile_id, data, nco_id } = req.body as {
+    order_id?: number; operation_id?: number | null; profile_id?: number | null; data?: DocumentData; nco_id?: number | null;
   };
   const isDraft = req.body?.status === 'draft';
 
-  if (!order_id) { res.status(400).json({ error: 'order_id is required' }); return; }
+  // A samples NCO stands in for the order; its invoice is numbered as the NCO
+  const nco = nco_id ? db.prepare('SELECT id, nco_number, type, entity FROM non_commercial_operations WHERE id = ?').get(nco_id) as any : null;
+  if (nco_id && !nco) { res.status(404).json({ error: 'Non-commercial operation not found' }); return; }
+  if (nco && nco.type !== 'samples') { res.status(400).json({ error: 'Documents are generated for sample NCOs only' }); return; }
+  if (!order_id && !nco) { res.status(400).json({ error: 'order_id is required' }); return; }
   if (!data || typeof data !== 'object') { res.status(400).json({ error: 'data is required' }); return; }
 
-  const order = db.prepare('SELECT id, order_number FROM orders WHERE id = ?').get(order_id) as any;
-  if (!order) { res.status(404).json({ error: 'Order not found' }); return; }
+  const order = order_id ? db.prepare('SELECT id, order_number FROM orders WHERE id = ?').get(order_id) as any : null;
+  if (order_id && !order) { res.status(404).json({ error: 'Order not found' }); return; }
+
+  if (nco) { await createForNco(req, res, nco, data, profile_id ?? null, isDraft); return; }
 
   let operationId: number | null = operation_id ?? null;
   if (operationId == null) {
@@ -575,7 +671,7 @@ router.post('/', async (req: Request, res: Response) => {
   const renumberedFrom = numberTaken(payload.doc_number!) ? payload.doc_number! : null;
   if (renumberedFrom) payload.doc_number = nextInvoiceNumber(entity, payload.doc_date);
 
-  let filed: { filePath: string; fileName: string; documentId: number | null } | null = null;
+  let filed: Filed | null = null;
   try {
     // A draft is only the saved form: no PDF, not filed, not in revenue
     if (!isDraft) filed = await renderAndFile(payload, { operationId });
@@ -611,6 +707,46 @@ router.post('/', async (req: Request, res: Response) => {
   }
 });
 
+/** Create for a samples NCO: own number (the NCO's), filed under the NCO, never a recorded invoice. */
+async function createForNco(req: Request, res: Response, nco: any, data: DocumentData, profileId: number | null, isDraft: boolean) {
+  const payload: DocumentData = applyEntityBank({
+    ...data,
+    doc_number: (data.doc_number || '').trim() || nco.nco_number,
+    operation_number: data.operation_number || nco.nco_number,
+  });
+  if (numberTaken(payload.doc_number!)) {
+    res.status(409).json({ error: `Invoice ${payload.doc_number} already exists` });
+    return;
+  }
+
+  let filed: Filed | null = null;
+  try {
+    if (!isDraft) filed = await renderAndFile(payload, { operationId: null, ncoId: nco.id });
+    const result = db.prepare(`
+      INSERT INTO invoice_documents (invoice_number, order_id, operation_id, profile_id, data, file_path, file_name, document_id, created_by, status, nco_id, nco_document_id)
+      VALUES (?, NULL, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
+    `).run(
+      payload.doc_number, profileId, JSON.stringify(payload), filed?.filePath ?? null, filed?.fileName ?? null,
+      req.user?.userId ?? null, isDraft ? 'draft' : 'final', nco.id, filed?.ncoDocumentId ?? null
+    );
+    const row = db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(result.lastInsertRowid);
+    notifyAdmin({
+      action: 'created', entity: isDraft ? 'Sample invoice draft' : 'Sample invoice', label: payload.doc_number!,
+      detail: `${nco.nco_number} — no commercial value`,
+      performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
+    });
+    res.status(201).json({ ...parseRecord(row), renumbered_from: null });
+  } catch (err: any) {
+    if (filed) discardFiled(filed, null);
+    if (err?.message?.includes('UNIQUE')) {
+      res.status(409).json({ error: `Invoice ${payload.doc_number} already exists` });
+      return;
+    }
+    console.error('[invoice-documents] NCO create failed:', err?.message || err);
+    res.status(500).json({ error: 'Failed to generate the invoice' });
+  }
+}
+
 // ── Update ────────────────────────────────────────────────────────────────
 
 router.put('/:id', async (req: Request, res: Response) => {
@@ -635,11 +771,12 @@ router.put('/:id', async (req: Request, res: Response) => {
     ...data,
     doc_number: (data.doc_number || '').trim() || existing.invoice_number,
   });
-  const operationId = operation_id !== undefined ? operation_id : existing.operation_id;
+  const operationId = existing.nco_id ? null : (operation_id !== undefined ? operation_id : existing.operation_id);
 
   let renumberedFrom: string | null = null;
   if (numberTaken(payload.doc_number!, existing.id, existing.invoice_id)) {
-    if (!wasDraft) {
+    // An NCO invoice is outside the series — it is never renumbered into it
+    if (!wasDraft || existing.nco_id) {
       res.status(409).json({ error: `Invoice ${payload.doc_number} already exists` });
       return;
     }
@@ -651,18 +788,18 @@ router.put('/:id', async (req: Request, res: Response) => {
     payload.doc_number = nextInvoiceNumber(entity, payload.doc_date);
   }
 
-  let filed: { filePath: string; fileName: string; documentId: number | null } | null = null;
+  let filed: Filed | null = null;
   try {
-    if (!isDraft) filed = await renderAndFile(payload, { operationId, existing });
+    if (!isDraft) filed = await renderAndFile(payload, { operationId, ncoId: existing.nco_id ?? null, existing });
 
     db.prepare(`
       UPDATE invoice_documents
       SET invoice_number = ?, operation_id = ?, profile_id = ?, data = ?, file_path = ?, file_name = ?, document_id = ?,
-        status = ?, draft_data = NULL, updated_at = datetime('now')
+        nco_document_id = ?, status = ?, draft_data = NULL, updated_at = datetime('now')
       WHERE id = ?
     `).run(
       payload.doc_number, operationId, profile_id ?? existing.profile_id ?? null, JSON.stringify(payload),
-      filed?.filePath ?? null, filed?.fileName ?? null, filed?.documentId ?? null,
+      filed?.filePath ?? null, filed?.fileName ?? null, filed?.documentId ?? null, filed?.ncoDocumentId ?? null,
       isDraft ? 'draft' : 'final', existing.id
     );
 
@@ -679,7 +816,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     });
     res.json({ ...parseRecord(row), renumbered_from: renumberedFrom });
   } catch (err: any) {
-    if (filed) discardFiled(filed, existing.document_id);
+    if (filed) discardFiled(filed, existing.document_id, existing.nco_document_id);
     console.error('[invoice-documents] update failed:', err?.message || err);
     res.status(500).json({ error: 'Failed to regenerate the invoice' });
   }

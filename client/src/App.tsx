@@ -28,6 +28,7 @@ import InventoryPage from './pages/InventoryPage';
 import ProductionPage from './pages/ProductionPage';
 import InvoiceGeneratorPage from './pages/InvoiceGeneratorPage';
 import AdminUsersPage from './pages/AdminUsersPage';
+import NcoDetailPage from './pages/NcoDetailPage';
 import AcceptInvitePage from './pages/AcceptInvitePage';
 import NotFoundPage from './pages/NotFoundPage';
 import OperationsPage from './pages/OperationsPage';
@@ -82,6 +83,7 @@ export default function App() {
               <Route path="/products" element={<Navigate to="/inventory" replace />} />
               <Route path="/operations" element={<OperationsPage />} />
               <Route path="/non-commercial-operations" element={<NonCommercialOperationsPage />} />
+              <Route path="/non-commercial-operations/:id" element={<NcoDetailPage />} />
               <Route path="/operations/new" element={<OperationFormPage />} />
               <Route path="/operations/:id" element={<OperationDetailPage />} />
               <Route path="/analytics" element={<AnalyticsPage />} />

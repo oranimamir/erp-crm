@@ -2004,6 +2004,29 @@ export async function initializeDatabase() {
     )
   `);
 
+  // NCO samples: lines (the generators' source — an NCO has no order) and documents
+  try { db.exec(`ALTER TABLE non_commercial_operations ADD COLUMN items TEXT`); } catch (_) { /* column may already exist */ }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS nco_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nco_id INTEGER NOT NULL,
+      category_id INTEGER,
+      file_path TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (nco_id) REFERENCES non_commercial_operations(id) ON DELETE CASCADE,
+      FOREIGN KEY (category_id) REFERENCES document_categories(id) ON DELETE SET NULL
+    )
+  `);
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_nco_docs_nco ON nco_documents(nco_id)`); } catch (_) {}
+  // Generated OC / invoice / PL for an NCO, filed under it (nco_document_id)
+  for (const table of ['order_confirmations', 'invoice_documents', 'packing_lists']) {
+    try { db.exec(`ALTER TABLE ${table} ADD COLUMN nco_id INTEGER`); } catch (_) { /* column may already exist */ }
+    try { db.exec(`ALTER TABLE ${table} ADD COLUMN nco_document_id INTEGER`); } catch (_) { /* column may already exist */ }
+  }
+  try { db.exec(`ALTER TABLE packing_lists ADD COLUMN final_nco_document_id INTEGER`); } catch (_) { /* column may already exist */ }
+
   // Inventory → Documents: MSDS / product specification sheets per product,
   // copied into an operation's documents when needed
   db.exec(`

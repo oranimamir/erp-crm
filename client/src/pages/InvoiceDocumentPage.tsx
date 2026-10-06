@@ -74,7 +74,8 @@ interface InvData {
 interface InvoiceRecord {
   id: number;
   invoice_number: string;
-  order_id: number;
+  order_id: number | null;
+  nco_id?: number | null;
   operation_id: number | null;
   file_name: string | null;
   sent_to: string | null;
@@ -220,6 +221,8 @@ export default function InvoiceDocumentPage() {
   const { addToast } = useToast();
 
   const orderIdParam = params.get('order_id');
+  // A samples NCO stands in for the order
+  const ncoIdParam = params.get('nco_id');
   const operationIdParam = params.get('operation_id');
 
   const [loading, setLoading] = useState(true);
@@ -227,6 +230,9 @@ export default function InvoiceDocumentPage() {
   const [record, setRecord] = useState<InvoiceRecord | null>(null);
   const [packingListId, setPackingListId] = useState<number | null>(null);
   const [orderId, setOrderId] = useState<number | null>(orderIdParam ? Number(orderIdParam) : null);
+  const [ncoId, setNcoId] = useState<number | null>(ncoIdParam ? Number(ncoIdParam) : null);
+  /** What the draft is prepared from: the NCO, else the order. */
+  const sourceParams = () => (ncoIdParam || ncoId) ? { nco_id: ncoIdParam || ncoId } : { order_id: orderIdParam || orderId };
   const [operationId, setOperationId] = useState<number | null>(operationIdParam ? Number(operationIdParam) : null);
 
   const [entity, setEntity] = useState<string>('BE');
@@ -289,6 +295,7 @@ export default function InvoiceDocumentPage() {
     const shown = rec.draft || rec.data;
     setForm(toFormData(shown));
     setOrderId(rec.order_id);
+    setNcoId(rec.nco_id ?? null);
     setOperationId(rec.operation_id);
     setIncludeOrigin(!!(shown.manufacturer || shown.country_of_origin));
     setLayout(withDefaults(shown.layout));
@@ -298,14 +305,14 @@ export default function InvoiceDocumentPage() {
   /** Re-fetch the draft when the entity or billing profile changes. */
   const loadDraft = useCallback(async (opts: { entity?: string; profile_id?: number } = {}) => {
     const { data } = await api.get('/invoice-documents/prepare', {
-      params: { order_id: orderIdParam || orderId, ...opts },
+      params: { ...sourceParams(), ...opts },
     });
     if (data.existing) { adopt(data.existing); return; }
     setForm(toFormData(data.draft));
     setFromOc(!!data.oc);
     setLayout(withDefaults(data.layout));
     setLayoutSource(data.layout_source || 'the standard company template');
-    setCustomerId(data.order?.customer_id ?? null);
+    setCustomerId(data.order?.customer_id ?? data.nco?.customer_id ?? null);
     setEntity(data.entity);
     setProfiles(data.profiles || []);
     setProfileId(data.profile_id ?? null);
@@ -314,7 +321,7 @@ export default function InvoiceDocumentPage() {
     setMatchConfident(!!data.match_confident);
     setIncludeOrigin(!!data.layout?.origin && !!(data.draft?.manufacturer || data.draft?.country_of_origin));
     if (data.operation) setOperationId(data.operation.id);
-  }, [orderIdParam, orderId, adopt]);
+  }, [orderIdParam, orderId, ncoIdParam, ncoId, adopt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -326,7 +333,7 @@ export default function InvoiceDocumentPage() {
           if (!cancelled) adopt(data);
           return;
         }
-        if (!orderIdParam) {
+        if (!orderIdParam && !ncoIdParam) {
           addToast('No order selected', 'error');
           navigate('/operations');
           return;
@@ -344,7 +351,7 @@ export default function InvoiceDocumentPage() {
 
     load();
     return () => { cancelled = true; };
-  }, [id, orderIdParam]);
+  }, [id, orderIdParam, ncoIdParam]);
 
   // The order's confirmation, for "Compare with OC"
   useEffect(() => {
@@ -393,7 +400,7 @@ export default function InvoiceDocumentPage() {
     setChooseEntity(false);
     try {
       const { data } = await api.get('/invoice-documents/prepare', {
-        params: { order_id: orderIdParam || orderId, entity, profile_id: nextId },
+        params: { ...sourceParams(), entity, profile_id: nextId },
       });
       if (data.draft) {
         setForm(toFormData(data.draft));
@@ -422,10 +429,10 @@ export default function InvoiceDocumentPage() {
   }
 
   async function handleSave(status: 'draft' | 'final') {
-    if (!orderId) { addToast('No order linked', 'error'); return; }
+    if (!orderId && !ncoId) { addToast('No order linked', 'error'); return; }
     setSaving(true);
     try {
-      const body = { order_id: orderId, operation_id: operationId, profile_id: profileId, status, data: toPayload(form, includeOrigin, layout) };
+      const body = { order_id: orderId, nco_id: ncoId, operation_id: operationId, profile_id: profileId, status, data: toPayload(form, includeOrigin, layout) };
       const { data } = record
         ? await api.put(`/invoice-documents/${record.id}`, body)
         : await api.post('/invoice-documents', body);
@@ -531,13 +538,14 @@ export default function InvoiceDocumentPage() {
   const isDraft = !record || record.status === 'draft';
   const generated = !!record && !isDraft;
 
-  const backTo = operationId ? `/operations/${operationId}` : orderId ? `/orders/${orderId}` : '/operations';
+  const backTo = ncoId ? `/non-commercial-operations/${ncoId}`
+    : operationId ? `/operations/${operationId}` : orderId ? `/orders/${orderId}` : '/operations';
 
   return (
     <div className="space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
         <Link to={backTo} className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
-          <ArrowLeft size={16} /> Back to {operationId ? 'operation' : 'order'}
+          <ArrowLeft size={16} /> Back to {ncoId ? 'samples' : operationId ? 'operation' : 'order'}
         </Link>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="secondary" size="sm" onClick={handlePreview} disabled={previewing}>
