@@ -757,6 +757,9 @@ export async function initializeDatabase() {
   const defaultCategories = [
     'Quality Statement', 'COA', 'Insurance', 'MSDS', 'PDS',
     'Packing list', 'Halal certificate', 'Kosher certificate',
+    // Shipping documents every operation needs (client lib/operationDocs.ts)
+    'Quality certificate', 'Origin certificate', 'Insurance certificate', 'Sanitary certificate',
+    'Phytosanitary certificate', 'EUR1', 'Label', 'Product Specification Sheet', 'Invoice',
   ];
   for (const name of defaultCategories) {
     try {

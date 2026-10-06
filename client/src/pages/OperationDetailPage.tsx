@@ -11,6 +11,7 @@ import {
 import { formatDate } from '../lib/dates';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
 import DocumentGenerators from '../components/DocumentGenerators';
+import RequiredDocuments from '../components/RequiredDocuments';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -391,6 +392,20 @@ export default function OperationDetailPage() {
     setUploadingAll(false);
     await fetchOperation();
     setPendingUploads(prev => prev.filter(p => p.status !== 'done'));
+  }
+
+  /** One file straight into a category — the shipping-documents checklist. */
+  async function uploadToCategory(file: File, categoryId: number) {
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('category_id', String(categoryId));
+      await api.post(`/operations/${id}/documents`, fd);
+      await fetchOperation();
+      addToast('Document uploaded', 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Upload failed', 'error');
+    }
   }
 
   // ── Add category ────────────────────────────────────────────────────────────
@@ -1012,6 +1027,14 @@ export default function OperationDetailPage() {
           </table>
         </div>
       )}
+
+      {/* ── Shipping documents checklist ───────────────────────────────────── */}
+      <RequiredDocuments
+        documents={operation.documents}
+        categories={categories}
+        onUpload={uploadToCategory}
+        onPreview={(doc, label) => openPreview({ fileName: doc.file_name, filePath: doc.file_path, subfolder: 'operation-docs', label })}
+      />
 
       {/* ── Documents ──────────────────────────────────────────────────────── */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
