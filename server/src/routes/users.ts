@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import db from '../database.js';
+import { removeMutesForUser } from '../lib/notify.js';
 
 const router = Router();
 
@@ -135,6 +136,7 @@ router.delete('/:id', requireAdmin, (req: Request, res: Response) => {
     res.status(404).json({ error: 'User not found' });
     return;
   }
+  removeMutesForUser(userId);
   res.json({ message: 'User deleted' });
 });
 

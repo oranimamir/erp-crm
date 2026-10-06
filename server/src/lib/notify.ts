@@ -79,6 +79,25 @@ export function setNotificationMutes(value: NotificationMute[]): void {
     .run(JSON.stringify(value));
 }
 
+/**
+ * Replaces one recipient's mutes, leaving everyone else's as stored — two
+ * admins editing different people never overwrite each other.
+ */
+export function setMutesForRecipient(recipient: string, actors: number[]): NotificationMute[] {
+  const key = recipient.trim().toLowerCase();
+  const others = getNotificationMutes().filter(m => m.recipient !== key);
+  const next = normalizeMutes([...others, ...actors.map(actor => ({ recipient: key, actor }))]);
+  setNotificationMutes(next);
+  return next;
+}
+
+/** Drops every rule that names this user, as recipient or as the person acting. */
+export function removeMutesForUser(userId: number): void {
+  const all = getNotificationMutes();
+  const kept = all.filter(m => m.actor !== userId && m.recipient !== `user:${userId}`);
+  if (kept.length !== all.length) setNotificationMutes(kept);
+}
+
 /** The users whose changes this app user has been set not to hear about. */
 export function mutedActorsForUser(userId: number): number[] {
   return getNotificationMutes().filter(m => m.recipient === `user:${userId}`).map(m => m.actor);

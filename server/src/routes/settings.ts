@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
 import { getAiMonthlyLimit, setAiMonthlyLimit, aiSpentThisMonth } from '../lib/aiBudget.js';
-import { getOperationNotifySettings, setOperationNotifySettings, normalizeOperationNotify, getNotificationMutes, setNotificationMutes, normalizeMutes } from '../lib/notify.js';
+import { getOperationNotifySettings, setOperationNotifySettings, normalizeOperationNotify, getNotificationMutes, normalizeMutes, setMutesForRecipient } from '../lib/notify.js';
 
 /**
  * App-wide settings edited on the Settings page. For now: the default
@@ -95,18 +95,21 @@ router.put('/operation-notifications', (req: Request, res: Response) => {
 router.get('/notification-rules', (req: Request, res: Response) => {
   if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
   const users = db.prepare(
-    `SELECT id, username, display_name, email, notify_on_changes FROM users ORDER BY COALESCE(display_name, username)`
+    `SELECT id, username, display_name, email, role, notify_on_changes FROM users ORDER BY COALESCE(display_name, username)`
   ).all();
   const ops = getOperationNotifySettings();
   res.json({ mutes: getNotificationMutes(), users, operation_recipients: ops.enabled ? ops.recipients : [] });
 });
 
-// PUT /api/settings/notification-rules — admin only; body { mutes: [{ recipient, actor }] }
-router.put('/notification-rules', (req: Request, res: Response) => {
+// PUT /api/settings/notification-rules/:recipient — admin only; body { muted_actors: number[] }.
+// Replaces only this recipient's rules (user:<id> or email:<addr>).
+router.put('/notification-rules/:recipient', (req: Request, res: Response) => {
   if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
-  const mutes = normalizeMutes(req.body?.mutes);
-  setNotificationMutes(mutes);
-  res.json({ mutes });
+  const recipient = String(req.params.recipient || '').trim().toLowerCase();
+  if (!/^(user:\d+|email:\S+@\S+)$/.test(recipient)) { res.status(400).json({ error: 'Invalid recipient' }); return; }
+  const raw = Array.isArray(req.body?.muted_actors) ? req.body.muted_actors : [];
+  const actors = normalizeMutes(raw.map((actor: unknown) => ({ recipient, actor }))).map(m => m.actor);
+  res.json({ mutes: setMutesForRecipient(recipient, actors) });
 });
 
 export default router;

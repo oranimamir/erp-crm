@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -15,6 +15,13 @@ import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
 import { Plus, Users, Pencil, Trash2, UserPlus, Mail, Clock, XCircle, Copy, Bell, BellOff, CheckCircle, Link } from 'lucide-react';
 import { formatDate } from '../lib/dates';
+import NotificationRules, { scopeOf, scopeLabel, type NotificationRulesData, type Mute } from '../components/NotificationRules';
+
+type TabId = 'users' | 'notifications';
+const TABS: { id: TabId; label: string }[] = [
+  { id: 'users', label: 'Users' },
+  { id: 'notifications', label: 'Notifications' },
+];
 
 const roleOptions = [
   { value: 'user', label: 'User' },
@@ -43,6 +50,14 @@ export default function AdminUsersPage() {
   const [invitations, setInvitations] = useState<any[]>([]);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [rules, setRules] = useState<NotificationRulesData | null>(null);
+
+  // The tab (and the person picked on Notifications) live in the URL
+  const [params, setParams] = useSearchParams();
+  const activeTab: TabId = params.get('tab') === 'notifications' ? 'notifications' : 'users';
+  const selectedRecipient = params.get('recipient');
+  const goTab = (tab: TabId, recipient?: string) =>
+    setParams(tab === 'users' ? {} : { tab, ...(recipient ? { recipient } : {}) });
 
   // Admin guard
   useEffect(() => {
@@ -65,7 +80,14 @@ export default function AdminUsersPage() {
       .catch(() => {});
   };
 
+  const fetchRules = () => {
+    api.get('/settings/notification-rules')
+      .then(res => setRules(res.data))
+      .catch(() => addToast('Failed to load the notification rules', 'error'));
+  };
+
   useEffect(() => { fetchUsers(); fetchInvitations(); }, [page, search, roleFilter]);
+  useEffect(() => { if (currentUser?.role === 'admin') fetchRules(); }, [currentUser?.role]);
 
   const openCreate = () => {
     setEditing(null);
@@ -98,6 +120,7 @@ export default function AdminUsersPage() {
       }
       setShowModal(false);
       fetchUsers();
+      fetchRules();
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Failed to save', 'error');
     } finally {
@@ -111,6 +134,7 @@ export default function AdminUsersPage() {
       await api.delete(`/users/${deleteId}`);
       addToast('User deleted', 'success');
       fetchUsers();
+      fetchRules();
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Failed to delete', 'error');
     }
@@ -136,6 +160,7 @@ export default function AdminUsersPage() {
     try {
       const res = await api.patch(`/users/${userId}/notify`, {});
       setUsers(prev => prev.map(u => u.id === userId ? { ...u, notify_on_changes: res.data.notify_on_changes } : u));
+      setRules(prev => prev && { ...prev, users: prev.users.map(u => u.id === userId ? { ...u, notify_on_changes: res.data.notify_on_changes } : u) });
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Failed to update notification setting', 'error');
     }
@@ -173,6 +198,39 @@ export default function AdminUsersPage() {
         </div>
       </div>
 
+      <div className="border-b border-gray-200">
+        <nav className="flex gap-0 -mb-px overflow-x-auto">
+          {TABS.map(t => (
+            <button
+              key={t.id}
+              onClick={() => goTab(t.id)}
+              className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                activeTab === t.id
+                  ? 'border-primary-600 text-primary-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </nav>
+      </div>
+
+      {activeTab === 'notifications' && (
+        rules ? (
+          <NotificationRules
+            data={rules}
+            onChange={(mutes: Mute[]) => setRules(prev => prev && { ...prev, mutes })}
+            onToggleNotify={handleToggleNotify}
+            selected={selectedRecipient}
+            onSelect={key => setParams({ tab: 'notifications', recipient: key }, { replace: true })}
+          />
+        ) : (
+          <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" /></div>
+        )
+      )}
+
+      {activeTab === 'users' && (<>
       <Card>
         <div className="p-4 border-b border-gray-100">
           <div className="flex items-center gap-4">
@@ -205,7 +263,7 @@ export default function AdminUsersPage() {
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Display Name</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Email</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Role</th>
-                  <th className="text-center px-4 py-3 font-medium text-gray-600" title="Receive email notifications on changes">Notify</th>
+                  <th className="text-center px-4 py-3 font-medium text-gray-600" title="Receives change notifications (email + bell), and about whom">Notify</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Created At</th>
                   <th className="text-right px-4 py-3 font-medium text-gray-600">Actions</th>
                 </tr>
@@ -227,6 +285,7 @@ export default function AdminUsersPage() {
                       <Badge variant={u.role === 'admin' ? 'purple' : 'blue'}>{u.role}</Badge>
                     </td>
                     <td className="px-4 py-3 text-center">
+                      <div className="flex flex-col items-center gap-1">
                       <button
                         onClick={() => handleToggleNotify(u.id)}
                         title={u.notify_on_changes ? 'Notifications ON — click to disable' : 'Notifications OFF — click to enable'}
@@ -239,6 +298,16 @@ export default function AdminUsersPage() {
                         {u.notify_on_changes ? <Bell size={12} /> : <BellOff size={12} />}
                         {u.notify_on_changes ? 'On' : 'Off'}
                       </button>
+                      {!!u.notify_on_changes && rules && (
+                        <button
+                          onClick={() => goTab('notifications', `user:${u.id}`)}
+                          className="text-xs text-primary-600 hover:underline whitespace-nowrap"
+                          title="Choose whose changes this user is notified about"
+                        >
+                          {scopeLabel(scopeOf(rules, `user:${u.id}`, u.id))}
+                        </button>
+                      )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-gray-600">{formatDate(u.created_at)}</td>
                     <td className="px-4 py-3">
@@ -257,6 +326,8 @@ export default function AdminUsersPage() {
         )}
         <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
       </Card>
+
+      </>)}
 
       <Modal open={showModal} onClose={() => setShowModal(false)} title={editing ? 'Edit User' : 'New User'} size="lg">
         <div className="space-y-4">
@@ -282,7 +353,7 @@ export default function AdminUsersPage() {
       <ConfirmDialog open={deleteId !== null} onClose={() => setDeleteId(null)} onConfirm={handleDelete} title="Delete User" message="Are you sure you want to delete this user? This action cannot be undone." confirmLabel="Delete" />
 
       {/* Pending Invitations Section */}
-      {invitations.filter(i => !i.accepted_at).length > 0 && (
+      {activeTab === 'users' && invitations.filter(i => !i.accepted_at).length > 0 && (
         <Card>
           <div className="p-4 border-b border-gray-100">
             <div className="flex items-center gap-2">

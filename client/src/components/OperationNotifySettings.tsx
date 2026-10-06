@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Bell, AlertTriangle } from 'lucide-react';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
@@ -67,6 +68,8 @@ export default function OperationNotifySettings() {
           <p className="text-sm text-gray-600">
             Send an email whenever an operation is changed in the Operations tab — created, edited, status, dates, country,
             documents added or removed, or deleted. The person who made the change is not emailed.
+            {' '}To choose whose changes each recipient hears about, see{' '}
+            <Link to="/admin/users?tab=notifications" className="text-primary-600 hover:underline">User Management → Notifications</Link>.
           </p>
           <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer shrink-0">
             <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)}

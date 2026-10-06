@@ -9,7 +9,6 @@ import BackupEmailSettings from '../components/BackupEmailSettings';
 import DocumentEmailSettings from '../components/DocumentEmailSettings';
 import AiSpendingSettings from '../components/AiSpendingSettings';
 import OperationNotifySettings from '../components/OperationNotifySettings';
-import NotificationRulesSettings from '../components/NotificationRulesSettings';
 
 interface SavedBackup { filename: string; size: number; created_at: string; }
 interface BackupSchedule { frequency: 'daily' | 'weekly' | 'monthly'; day: number; hour: number; minute: number; }
@@ -322,7 +321,6 @@ export default function SettingsPage() {
       {/* Default recipients for emailed invoices and packing lists — admin only */}
       {user?.role === 'admin' && <DocumentEmailSettings />}
       {user?.role === 'admin' && <OperationNotifySettings />}
-      {user?.role === 'admin' && <NotificationRulesSettings />}
       {user?.role === 'admin' && <AiSpendingSettings />}
 
       {/* Backup — admin only */}
