@@ -1,3 +1,4 @@
+import { useSearchParams } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
@@ -14,6 +15,7 @@ import Badge from '../components/ui/Badge';
 import { Plus, Warehouse, Pencil, Trash2, PackagePlus, FileSpreadsheet, Package, Box, Upload, Mail, RefreshCw, ChevronRight, ChevronDown, Tag, Download, Loader2, CheckCircle2, ArchiveRestore } from 'lucide-react';
 import { downloadExcel } from '../lib/exportExcel';
 import { formatDate } from '../lib/dates';
+import ProductDocumentsTab from '../components/ProductDocumentsTab';
 
 // ─── Inventory Tab ────────────────────────────────────────────────────────────
 
@@ -1503,17 +1505,22 @@ function BatchesTab() {
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
-type InventoryTabId = 'warehouse' | 'products' | 'packaging' | 'batches';
+type InventoryTabId = 'warehouse' | 'products' | 'packaging' | 'batches' | 'documents';
 
 const tabs: { id: InventoryTabId; label: string }[] = [
   { id: 'warehouse', label: 'Warehouse Stock' },
   { id: 'products', label: 'Products' },
   { id: 'packaging', label: 'Packaging' },
   { id: 'batches', label: 'Batches' },
+  { id: 'documents', label: 'Documents' },
 ];
 
 export default function InventoryPage() {
-  const [activeTab, setActiveTab] = useState<InventoryTabId>('warehouse');
+  // ?tab=documents opens a tab directly (e.g. from an operation's Add from library)
+  const [params, setParams] = useSearchParams();
+  const tabParam = params.get('tab') as InventoryTabId | null;
+  const activeTab: InventoryTabId = tabs.some(t => t.id === tabParam) ? tabParam! : 'warehouse';
+  const setActiveTab = (id: InventoryTabId) => setParams(id === 'warehouse' ? {} : { tab: id }, { replace: true });
 
   return (
     <div className="space-y-4">
@@ -1538,6 +1545,7 @@ export default function InventoryPage() {
       {activeTab === 'products' && <ProductsTab />}
       {activeTab === 'packaging' && <PackagingTab />}
       {activeTab === 'batches' && <BatchesTab />}
+      {activeTab === 'documents' && <ProductDocumentsTab />}
     </div>
   );
 }

@@ -6,12 +6,13 @@ import {
   ArrowLeft, Briefcase, ShoppingCart, FileText, Upload, Trash2,
   Download, Eye, X, Plus, Receipt, ExternalLink, CheckCircle,
   AlertCircle, Loader2, Edit2, Link2, Search, Truck, Landmark,
-  FileCheck2, Receipt as ReceiptIcon, Package,
+  FileCheck2, Receipt as ReceiptIcon, Package, Library,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
 import DocumentGenerators from '../components/DocumentGenerators';
 import RequiredDocuments from '../components/RequiredDocuments';
+import AddFromLibraryModal from '../components/AddFromLibraryModal';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -172,6 +173,7 @@ export default function OperationDetailPage() {
   const [newCatName, setNewCatName] = useState('');
   const [addingCat, setAddingCat] = useState(false);
   const [showAddCat, setShowAddCat] = useState(false);
+  const [showLibrary, setShowLibrary] = useState(false);
 
   // Wire transfer upload (inline in invoices section)
   const [wireUploadInvoiceId, setWireUploadInvoiceId] = useState<number | null>(null);
@@ -1043,14 +1045,32 @@ export default function OperationDetailPage() {
             <FileText size={16} className="text-gray-500" />
             Documents ({operation.documents.length})
           </h2>
-          <button
-            type="button"
-            onClick={() => setShowAddCat(v => !v)}
-            className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2 py-1"
-          >
-            <Plus size={12} /> Add category
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowLibrary(true)}
+              title="Add MSDS / product specification sheets from Inventory → Documents"
+              className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 border border-primary-200 bg-primary-50 rounded-lg px-2 py-1"
+            >
+              <Library size={12} /> Add from library
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowAddCat(v => !v)}
+              className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2 py-1"
+            >
+              <Plus size={12} /> Add category
+            </button>
+          </div>
         </div>
+
+        <AddFromLibraryModal
+          open={showLibrary}
+          onClose={() => setShowLibrary(false)}
+          operationId={operation.id}
+          existingNames={operation.documents.map(d => d.file_name)}
+          onAdded={fetchOperation}
+        />
 
         {showAddCat && (
           <form onSubmit={handleAddCategory} className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex gap-2 items-center">

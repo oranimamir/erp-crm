@@ -63,3 +63,9 @@ export const uploadOrder = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter,
 });
+
+export const uploadProductDoc = multer({
+  storage: createStorage('product-docs'),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter,
+});

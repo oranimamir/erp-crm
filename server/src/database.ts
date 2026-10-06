@@ -2004,6 +2004,25 @@ export async function initializeDatabase() {
     )
   `);
 
+  // Inventory → Documents: MSDS / product specification sheets per product,
+  // copied into an operation's documents when needed
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS product_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id INTEGER NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('msds', 'pds')),
+      file_path TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      notes TEXT,
+      uploaded_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+      FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL
+    )
+  `);
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_product_docs_product ON product_documents(product_id)`); } catch (_) {}
+
   // Referential integrity is only as good as the last migration — surface any
   // violation in the logs rather than letting it rot silently as it did before.
   try {

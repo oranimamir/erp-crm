@@ -1,6 +1,7 @@
 import { Router, Request } from 'express';
 import db from '../database.js';
 import { notifyAdmin } from '../lib/notify.js';
+import { removeProductDocumentFiles } from '../lib/productDocs.js';
 
 const router = Router();
 
@@ -77,6 +78,7 @@ router.delete('/:id', (req, res) => {
   const { id } = req.params;
   const existing = db.prepare('SELECT name, sku FROM products WHERE id = ?').get(id) as any;
   if (!existing) return res.status(404).json({ error: 'Product not found' });
+  removeProductDocumentFiles(Number(id));
   db.prepare('DELETE FROM products WHERE id = ?').run(id);
   notifyAdmin({ action: 'deleted', entity: 'Product', label: `${existing.name} (${existing.sku})`, performedBy: (req as Request).user?.display_name || 'Unknown', performedById: (req as Request).user?.userId });
   res.json({ success: true });
