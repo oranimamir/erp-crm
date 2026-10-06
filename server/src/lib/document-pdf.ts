@@ -241,9 +241,20 @@ function num(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** Amounts and totals: up to 2 decimals. */
 function fmt(value: number): string {
   const rounded = Math.round(value * 100) / 100;
   return rounded.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+
+/** Quantities and weights: up to 3 decimals, never rounded to fewer. */
+function fmtQty(value: number): string {
+  return value.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
+}
+
+/** Unit prices: always at least 3 decimals, never rounded away (4.2 → 4.200, 4.1255 → 4.1255). */
+function fmtPrice(value: number): string {
+  return value.toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 6 });
 }
 
 export function lineAmount(item: DocLine): number {
@@ -340,8 +351,8 @@ function cellValues(item: DocLine, index: number, layout: InvoiceLayout): Record
     packing_note: item.note || '',
     hs_code: item.hs_code || '',
     lot: lots.join('\n'),
-    quantity: qty ? `${fmt(qty)}${unit ? ` ${unit}` : ''}` : '',
-    unit_price: price ? `${fmt(price)} ${currency}${unit ? `/${unit}` : ''}` : '',
+    quantity: qty ? `${fmtQty(qty)}${unit ? ` ${unit}` : ''}` : '',
+    unit_price: price ? `${fmtPrice(price)} ${currency}${unit ? `/${unit}` : ''}` : '',
     amount: qty && price ? `${fmt(qty * price)} ${currency}` : '',
   };
 }
@@ -715,7 +726,7 @@ function drawQuantityTotalRow(doc: any, cols: LayoutColumn[], items: DocLine[], 
   const currency = docCurrency(items);
 
   const totals: Record<string, string> = {
-    quantity: qty ? `${fmt(qty)}${unit ? ` ${unit}` : ''}` : '',
+    quantity: qty ? `${fmtQty(qty)}${unit ? ` ${unit}` : ''}` : '',
     amount: amount ? `${fmt(amount)} ${currency}` : '',
   };
 
@@ -765,9 +776,9 @@ function plural(name: string, n: number): string {
 function weight(kg: unknown, pl: PackingListLayout, perUnit = false): string {
   const n = num(kg);
   if (!n) return '';
-  if (pl.weight_unit !== 'lb') return `${fmt(n)} kg`;
+  if (pl.weight_unit !== 'lb') return `${fmtQty(n)} kg`;
   if (perUnit) return `${fmt(Math.round(n * LB_PER_KG))} lb`;
-  return `${fmt(n)} kg\n${fmt(n * LB_PER_KG)} lb`;
+  return `${fmtQty(n)} kg\n${fmtQty(n * LB_PER_KG)} lb`;
 }
 
 function packingCell(row: PackingRow, index: number, key: PlColumnKey, pl: PackingListLayout): string {
@@ -880,7 +891,7 @@ function drawPackingSummary(doc: any, pl: PackingListLayout, data: DocumentData,
   }
   const packages = [...byType].map(([name, n]) => `${fmt(n)} ${plural(name, n)}`).join(' + ');
 
-  const both = (kg: number) => pl.weight_unit === 'lb' ? `${fmt(kg)} kg / ${fmt(kg * LB_PER_KG)} lb` : `${fmt(kg)} kg`;
+  const both = (kg: number) => pl.weight_unit === 'lb' ? `${fmtQty(kg)} kg / ${fmtQty(kg * LB_PER_KG)} lb` : `${fmtQty(kg)} kg`;
   const lines: Array<[string, string]> = [['Total Net Weight:', both(net)]];
   if (packages) {
     lines.push(['Number of packages =', pallets

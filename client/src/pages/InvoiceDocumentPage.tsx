@@ -175,7 +175,7 @@ function Field({ label, value, onChange, placeholder, type = 'text', className =
   return (
     <div className={`space-y-1 ${className}`}>
       <label className="block text-xs font-medium text-gray-500">{label}</label>
-      <input type={type} value={value} placeholder={placeholder}
+      <input type={type} step={type === 'number' ? 'any' : undefined} value={value} placeholder={placeholder}
         onChange={e => onChange(e.target.value)}
         onKeyDown={e => acceptPlaceholderOnTab(e, value, placeholder, onChange)} className={inputCls} />
     </div>

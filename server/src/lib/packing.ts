@@ -119,7 +119,7 @@ export function netKg(quantity: unknown, unit: unknown): number {
   return q;
 }
 
-const round = (n: number) => Math.round(n * 100) / 100;
+const round = (n: number) => Math.round(n * 1000) / 1000;
 
 /**
  * Units, pallets and weights for one line.

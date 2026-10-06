@@ -142,7 +142,7 @@ function Field({ label, value, onChange, placeholder, type = 'text', className =
   return (
     <div className={`space-y-1 ${className}`}>
       <label className="block text-xs font-medium text-gray-500">{label}</label>
-      <input type={type} value={value} placeholder={placeholder}
+      <input type={type} step={type === 'number' ? 'any' : undefined} value={value} placeholder={placeholder}
         onChange={e => onChange(e.target.value)}
         onKeyDown={e => acceptPlaceholderOnTab(e, value, placeholder, onChange)} className={inputCls} />
     </div>
@@ -747,7 +747,7 @@ export default function PackingListPage() {
 
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-end">
                       <CountField label="Packaging weight (kg)" value={line.packaging_weight_override} decimals
-                        computed={Math.round(f.computed_packaging_kg * 100) / 100}
+                        computed={Math.round(f.computed_packaging_kg * 1000) / 1000}
                         onChange={v => setLine(index, { packaging_weight_override: v })} />
                       <Figure label="Gross weight" value={`${kg(f.net_kg)} + ${kg(f.packaging_kg)} = ${kg(f.gross_kg)} kg`} strong />
                     </div>

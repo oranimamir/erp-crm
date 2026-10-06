@@ -162,7 +162,7 @@ async function generateWithTemplate(_req: Request, res: Response, data: InvoiceD
     txt(page1, item.reference       || '', sx(73),  rowY, { size: 8 });
     txt(page1, item.commercial_name || '', sx(145), rowY, { size: 8 });
     txt(page1, item.packaging       || '', sx(293), rowY, { size: 8 });
-    txt(page1, qty   ? qty.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '', sx(360), rowY, { size: 8 });
+    txt(page1, qty   ? qty.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 3 }) : '', sx(360), rowY, { size: 8 });
     txt(page1, price ? price.toFixed(4) : '',                                                                              sx(416), rowY, { size: 8 });
     txt(page1, total ? total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '',         sx(478), rowY, { size: 8 });
   });
@@ -336,7 +336,7 @@ function drawPage1Scratch(doc: any, data: InvoiceData) {
       item.reference       || '',
       item.commercial_name || '',
       item.packaging       || '',
-      qty   ? qty.toLocaleString('en-US', { minimumFractionDigits: 2 }) : '',
+      qty   ? qty.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 3 }) : '',
       price ? price.toFixed(4) : '',
       total ? total.toLocaleString('en-US', { minimumFractionDigits: 2 }) : '',
     ];

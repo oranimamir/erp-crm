@@ -234,7 +234,7 @@ export default function InvoiceGeneratorPage() {
           reference:       it.sku || it.description || '',
           commercial_name: it.description || '',
           packaging:       it.packaging   || '',
-          quantity_lb:     it.quantity ? toLbs(parseFloat(it.quantity), it.unit || 'lbs').toFixed(2) : '',
+          quantity_lb:     it.quantity ? toLbs(parseFloat(it.quantity), it.unit || 'lbs').toFixed(3) : '',
           price_per_lb:    it.unit_price ? pricePerLb(parseFloat(it.unit_price), it.unit || 'lbs').toFixed(4) : '',
         })));
       }

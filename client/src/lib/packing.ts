@@ -95,7 +95,7 @@ export function computePacking(
   };
 }
 
-export const kg = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+export const kg = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 3 });
 
 export function packagingLabel(p: PackagingOption): string {
   return [p.type, p.code, p.product, p.units_per_pallet ? `${p.units_per_pallet}/pallet` : '']
