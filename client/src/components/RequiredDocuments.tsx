@@ -77,12 +77,12 @@ export default function RequiredDocuments({ operationId, documents, categories, 
           return (
             <div key={name}
               className={`rounded-lg border px-3 py-2.5 flex flex-col gap-1.5 ${has ? 'border-green-200 bg-green-50/50' : 'border-gray-200 bg-gray-50/50'}`}>
-              <div className="flex items-center justify-between gap-2">
-                <span className="flex items-center gap-1.5 text-sm font-medium text-gray-800 min-w-0">
+              <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+                <span className="flex items-center gap-1.5 text-sm font-semibold text-gray-800">
                   {has
                     ? <CheckCircle2 size={15} className="text-green-600 flex-shrink-0" />
                     : <Circle size={15} className="text-gray-300 flex-shrink-0" />}
-                  <span className="truncate">{name}</span>
+                  <span>{name}</span>
                 </span>
                 {category && (
                   <span className="flex items-center gap-2 flex-shrink-0">
