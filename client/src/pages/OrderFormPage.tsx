@@ -519,7 +519,7 @@ export default function OrderFormPage() {
                     >
                       <option value="">— Select product —</option>
                       {products.map((p: any) => (
-                        <option key={p.id} value={String(p.id)}>{p.name} ({p.sku})</option>
+                        <option key={p.id} value={String(p.id)}>{p.name}{p.sku ? ` (${p.sku})` : ''}</option>
                       ))}
                     </select>
                     {!item.productId && item.description && (

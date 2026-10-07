@@ -5,9 +5,11 @@ import { fileURLToPath } from 'url';
 import db from '../database.js';
 
 /**
- * Inventory → Documents: MSDS and product specification sheets, one library
- * per product. An operation takes a COPY of a library file, so replacing it in
- * the library later never changes what an operation already holds or sent.
+ * Inventory → Documents: MSDS, product specification sheets and declarations.
+ * A document is linked to any number of products (`product_document_products`);
+ * one with no product is general (applies to every product). An operation
+ * takes a COPY of a library file, so replacing it in the library later never
+ * changes what an operation already holds or sent.
  */
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -15,17 +17,68 @@ export const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..'
 export const productDocsDir = path.join(uploadsBase, 'product-docs');
 const operationDocsDir = path.join(uploadsBase, 'operation-docs');
 
-export type ProductDocKind = 'msds' | 'pds';
-export const PRODUCT_DOC_KINDS: ProductDocKind[] = ['msds', 'pds'];
+export type ProductDocKind = 'msds' | 'pds' | 'declaration';
+export const PRODUCT_DOC_KINDS: ProductDocKind[] = ['msds', 'pds', 'declaration'];
+export const KIND_LABEL: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Product Specification Sheet', declaration: 'Declaration' };
 /** The operation document category each kind is filed under. */
-export const KIND_CATEGORY: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Product Specification Sheet' };
+export const KIND_CATEGORY: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Product Specification Sheet', declaration: 'Declaration' };
 
-export const SELECT_PRODUCT_DOCS = `
-  SELECT d.*, p.name AS product_name, p.sku AS product_sku, u.display_name AS uploaded_by_name
+export interface LinkedProduct { id: number; name: string; sku: string | null }
+
+const SELECT_DOCS = `
+  SELECT d.*, u.display_name AS uploaded_by_name
   FROM product_documents d
-  JOIN products p ON p.id = d.product_id
   LEFT JOIN users u ON u.id = d.uploaded_by
 `;
+
+/** Library documents, each with its linked `products` (empty = general). */
+export function listProductDocs(where = '', params: any[] = [], order = 'ORDER BY d.kind, d.doc_code, d.title COLLATE NOCASE, d.created_at DESC'): any[] {
+  const docs = db.prepare(`${SELECT_DOCS} ${where} ${order}`).all(...params) as any[];
+  if (!docs.length) return docs;
+  const links = db.prepare(`
+    SELECT l.document_id, p.id, p.name, p.sku
+    FROM product_document_products l JOIN products p ON p.id = l.product_id
+    ORDER BY p.name COLLATE NOCASE
+  `).all() as any[];
+  const byDoc = new Map<number, LinkedProduct[]>();
+  for (const l of links) {
+    if (!byDoc.has(l.document_id)) byDoc.set(l.document_id, []);
+    byDoc.get(l.document_id)!.push({ id: l.id, name: l.name, sku: l.sku });
+  }
+  return docs.map(d => ({ ...d, products: byDoc.get(d.id) || [] }));
+}
+
+export function getProductDoc(id: number): any | null {
+  return listProductDocs('WHERE d.id = ?', [id])[0] || null;
+}
+
+/** A short label for notifications / copied documents: the title, else the file name. */
+export function docLabel(doc: { title?: string | null; file_name: string }): string {
+  return doc.title || doc.file_name;
+}
+
+/** Replaces a document's product links. */
+export function setDocumentProducts(documentId: number, productIds: number[]): void {
+  db.prepare('DELETE FROM product_document_products WHERE document_id = ?').run(documentId);
+  addDocumentProducts(documentId, productIds);
+}
+
+/** Adds product links (never removes any). */
+export function addDocumentProducts(documentId: number, productIds: number[]): void {
+  const ins = db.prepare('INSERT OR IGNORE INTO product_document_products (document_id, product_id) SELECT ?, id FROM products WHERE id = ?');
+  for (const pid of new Set(productIds)) ins.run(documentId, pid);
+}
+
+/** Parses a `product_ids` field (JSON array string, array, or comma list) into ids. */
+export function parseProductIds(value: unknown): number[] | undefined {
+  if (value === undefined) return undefined;
+  let raw: unknown = value;
+  if (typeof value === 'string') {
+    try { raw = JSON.parse(value); } catch { raw = value.split(','); }
+  }
+  const list = Array.isArray(raw) ? raw : [raw];
+  return list.map(Number).filter(n => Number.isInteger(n) && n > 0);
+}
 
 const SAFE_NAME = /^[a-zA-Z0-9._-]+$/;
 
@@ -35,17 +88,28 @@ export function unlinkProductFile(filePath: string | null | undefined): void {
   if (fs.existsSync(abs)) { try { fs.unlinkSync(abs); } catch { /* best effort */ } }
 }
 
-/** Removes the stored files of a product's documents (the rows cascade with the product). */
+/**
+ * Before a product is deleted: removes the documents that belong to it alone
+ * (row + file). Documents shared with other products just lose the link
+ * (cascade); general documents are untouched.
+ */
 export function removeProductDocumentFiles(productId: number): void {
-  const rows = db.prepare('SELECT file_path FROM product_documents WHERE product_id = ?').all(productId) as any[];
-  for (const r of rows) unlinkProductFile(r.file_path);
+  const rows = db.prepare(`
+    SELECT d.id, d.file_path FROM product_documents d
+    JOIN product_document_products l ON l.document_id = d.id AND l.product_id = ?
+    WHERE (SELECT COUNT(*) FROM product_document_products x WHERE x.document_id = d.id) = 1
+  `).all(productId) as any[];
+  for (const r of rows) {
+    db.prepare('DELETE FROM product_documents WHERE id = ?').run(r.id);
+    unlinkProductFile(r.file_path);
+  }
 }
 
-const norm = (s: unknown) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+export const norm = (s: unknown) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 /**
- * The catalogue product an order line is about: the longest product name (or
- * SKU) found as whole words in the line's description / client product name.
+ * The catalogue product an order / invoice line is about: the longest product
+ * name (or SKU) found as whole words in the line's description / product name.
  */
 export function matchProduct(
   line: { description?: string | null; client_product_name?: string | null },

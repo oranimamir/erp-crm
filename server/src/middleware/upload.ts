@@ -64,8 +64,15 @@ export const uploadOrder = multer({
   fileFilter,
 });
 
+// The document library also holds Word files (declarations)
+const libraryExtensions = [...allowedExtensions, '.doc', '.docx'];
+const libraryFileFilter = (_req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+  if (libraryExtensions.includes(path.extname(file.originalname).toLowerCase())) cb(null, true);
+  else cb(new Error('Only PDF, Word, JPEG, PNG and WebP files are allowed'));
+};
+
 export const uploadProductDoc = multer({
   storage: createStorage('product-docs'),
   limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter,
+  fileFilter: libraryFileFilter,
 });

@@ -594,7 +594,7 @@ export async function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS products (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
-      sku TEXT UNIQUE NOT NULL,
+      sku TEXT UNIQUE,
       category TEXT NOT NULL DEFAULT 'raw_material',
       unit TEXT NOT NULL DEFAULT 'tons',
       notes TEXT,
@@ -759,7 +759,7 @@ export async function initializeDatabase() {
     'Packing list', 'Halal certificate', 'Kosher certificate',
     // Shipping documents every operation needs (client lib/operationDocs.ts)
     'Quality certificate', 'Origin certificate', 'Insurance certificate', 'Sanitary certificate',
-    'Phytosanitary certificate', 'EUR1', 'Label', 'Product Specification Sheet', 'Invoice',
+    'Phytosanitary certificate', 'EUR1', 'Label', 'Product Specification Sheet', 'Invoice', 'Declaration',
   ];
   for (const name of defaultCategories) {
     try {
@@ -2027,24 +2027,95 @@ export async function initializeDatabase() {
   }
   try { db.exec(`ALTER TABLE packing_lists ADD COLUMN final_nco_document_id INTEGER`); } catch (_) { /* column may already exist */ }
 
-  // Inventory → Documents: MSDS / product specification sheets per product,
+  // Inventory → Documents: MSDS / product specification sheets / declarations,
+  // each linked to any number of products (none = general, applies to all);
   // copied into an operation's documents when needed
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS product_documents (
+  const productDocumentsSql = (table: string) => `
+    CREATE TABLE ${table} (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      product_id INTEGER NOT NULL,
-      kind TEXT NOT NULL CHECK (kind IN ('msds', 'pds')),
+      kind TEXT NOT NULL CHECK (kind IN ('msds', 'pds', 'declaration')),
+      title TEXT,
+      doc_code TEXT,
       file_path TEXT NOT NULL,
       file_name TEXT NOT NULL,
       notes TEXT,
+      sha256 TEXT,
       uploaded_by INTEGER,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
       FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL
-    )
-  `);
-  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_product_docs_product ON product_documents(product_id)`); } catch (_) {}
+    )`;
+  const productDocLinksSql = `
+    CREATE TABLE IF NOT EXISTS product_document_products (
+      document_id INTEGER NOT NULL,
+      product_id INTEGER NOT NULL,
+      PRIMARY KEY (document_id, product_id),
+      FOREIGN KEY (document_id) REFERENCES product_documents(id) ON DELETE CASCADE,
+      FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+    )`;
+  const oldDocsSql = (db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='product_documents'").get() as any)?.sql as string | undefined;
+  if (!oldDocsSql) {
+    db.exec(productDocumentsSql('product_documents'));
+  } else if (oldDocsSql.includes('product_id')) {
+    // One product per document → many-to-many; kind gains 'declaration'.
+    // Build the new table under a temp name, then drop + rename (renaming the
+    // OLD table would rewrite other tables' FK clauses to point at it).
+    try {
+      db.exec(`PRAGMA foreign_keys = OFF`, true);
+      db.exec(`
+        BEGIN;
+        ${productDocumentsSql('product_documents_new')};
+        INSERT INTO product_documents_new (id, kind, file_path, file_name, notes, uploaded_by, created_at, updated_at)
+          SELECT id, kind, file_path, file_name, notes, uploaded_by, created_at, updated_at FROM product_documents;
+        ${productDocLinksSql};
+        INSERT OR IGNORE INTO product_document_products (document_id, product_id) SELECT id, product_id FROM product_documents;
+        DROP TABLE product_documents;
+        ALTER TABLE product_documents_new RENAME TO product_documents;
+        COMMIT;
+      `, true);
+      db.exec(`PRAGMA foreign_keys = ON`, true);
+      db.saveToDisk();
+      console.log('[db] product_documents migrated to many-to-many product links');
+    } catch (err: any) {
+      console.error(`[db] Failed to migrate product_documents: ${err?.message || err}`);
+      try { db.exec(`ROLLBACK`, true); } catch { /* not in a transaction */ }
+      try { db.exec(`PRAGMA foreign_keys = ON`, true); } catch { /* ignore */ }
+    }
+  }
+  db.exec(productDocLinksSql);
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_product_doc_links_product ON product_document_products(product_id)`); } catch (_) {}
+
+  // products.sku optional: products added from the document library get their
+  // SKU later. Rebuilt from its own stored SQL so later-added columns survive.
+  try {
+    const productsSql = (db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='products'").get() as any)?.sql as string | undefined;
+    const skuRequired = /sku\s+TEXT\s+UNIQUE\s+NOT\s+NULL/i;
+    if (productsSql && skuRequired.test(productsSql)) {
+      const cols = (db.prepare(`PRAGMA table_info(products)`).all() as any[]).map(c => c.name).join(', ');
+      const createNew = productsSql
+        .replace(skuRequired, 'sku TEXT UNIQUE')
+        .replace(/CREATE TABLE\s+(IF NOT EXISTS\s+)?["`]?products["`]?/i, 'CREATE TABLE products_new');
+      db.exec(`PRAGMA foreign_keys = OFF`, true);
+      try {
+        db.exec(`
+          BEGIN;
+          ${createNew};
+          INSERT INTO products_new (${cols}) SELECT ${cols} FROM products;
+          DROP TABLE products;
+          ALTER TABLE products_new RENAME TO products;
+          COMMIT;
+        `, true);
+        db.saveToDisk();
+        console.log('[db] products.sku made optional');
+      } catch (err: any) {
+        console.error(`[db] Failed to make products.sku optional: ${err?.message || err}`);
+        try { db.exec(`ROLLBACK`, true); } catch { /* not in a transaction */ }
+      }
+      db.exec(`PRAGMA foreign_keys = ON`, true);
+    }
+  } catch (_) {
+    try { db.exec(`PRAGMA foreign_keys = ON`, true); } catch (_) {}
+  }
 
   // Referential integrity is only as good as the last migration — surface any
   // violation in the logs rather than letting it rot silently as it did before.

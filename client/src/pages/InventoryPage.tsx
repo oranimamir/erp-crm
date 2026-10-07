@@ -234,7 +234,7 @@ function InventoryTab() {
             >
               <option value="">— Select a product —</option>
               {products.map((p: any) => (
-                <option key={p.id} value={String(p.id)}>{p.name} ({p.sku})</option>
+                <option key={p.id} value={String(p.id)}>{p.name}{p.sku ? ` (${p.sku})` : ' (no SKU)'}</option>
               ))}
             </select>
             {products.length === 0 && (
@@ -358,8 +358,8 @@ function ProductsTab() {
   };
 
   const handleSave = async () => {
-    if (!form.name.trim() || !form.sku.trim()) {
-      addToast('Name and SKU are required', 'error');
+    if (!form.name.trim()) {
+      addToast('Name is required', 'error');
       return;
     }
     setSaving(true);
@@ -443,7 +443,12 @@ function ProductsTab() {
                 {items.map(item => (
                   <tr key={item.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3 font-medium text-gray-900">{item.name}</td>
-                    <td className="px-4 py-3 text-gray-600 font-mono text-xs">{item.sku}</td>
+                    <td className="px-4 py-3 text-gray-600 font-mono text-xs">
+                      {item.sku || (
+                        <button type="button" onClick={() => openEdit(item)} title="Fill in the SKU"
+                          className="font-sans px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 hover:bg-amber-200">SKU missing</button>
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       <Badge variant={categoryColors[item.category] || 'gray'}>
                         {item.category}
@@ -469,7 +474,7 @@ function ProductsTab() {
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <Input label="Name *" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
-            <Input label="SKU *" value={form.sku} onChange={e => setForm({ ...form, sku: e.target.value })} />
+            <Input label="SKU" value={form.sku} onChange={e => setForm({ ...form, sku: e.target.value })} placeholder="Fill in when known" />
           </div>
           <Select label="Category" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} options={categoryOptions} />
           <div className="space-y-1">
