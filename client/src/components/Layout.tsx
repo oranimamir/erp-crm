@@ -109,9 +109,14 @@ export default function Layout() {
 
       {/* Sidebar */}
       <aside className={`fixed lg:static inset-y-0 left-0 z-50 w-64 bg-[#1b2536] text-white transform transition-transform lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <Link to="/dashboard" className="flex items-center gap-3 px-6 py-5 border-b border-white/10 hover:opacity-80 transition-opacity">
-          <div className="w-8 h-8 bg-primary-600 rounded-md flex items-center justify-center font-bold text-sm shadow-sm">C</div>
-          <span className="text-lg font-bold">CirculERP</span>
+        <Link to="/dashboard" className="flex items-center gap-3 px-5 py-[18px] border-b border-white/10 hover:opacity-90 transition-opacity">
+          <img src="/logo.png" alt="" className="w-9 h-9 flex-shrink-0 drop-shadow-[0_0_6px_rgba(62,224,95,0.25)]" />
+          <span className="flex flex-col">
+            <span className="text-lg font-black leading-none tracking-tight">
+              Circul<span className="text-[#3ee05f]">ERP</span>
+            </span>
+            <span className="mt-1 text-[10px] font-bold uppercase leading-none tracking-[0.18em] text-white/40">by TripleW</span>
+          </span>
         </Link>
         <nav className="px-3 py-4 flex flex-col h-[calc(100%-73px)]">
           <div className="flex-1 space-y-1">

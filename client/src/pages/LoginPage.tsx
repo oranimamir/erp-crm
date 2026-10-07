@@ -59,10 +59,11 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-12 h-12 bg-primary-600 rounded-xl mb-4">
-            <span className="text-white font-bold text-lg">E</span>
-          </div>
-          <h1 className="text-2xl font-bold text-gray-900">ERP/CRM System</h1>
+          <img src="/logo.png" alt="TripleW" className="mx-auto mb-4 w-16 h-16" />
+          <h1 className="text-3xl font-black tracking-tight text-gray-900">
+            Circul<span className="text-[#16a34a]">ERP</span>
+          </h1>
+          <p className="mt-1 text-[11px] font-bold uppercase tracking-[0.2em] text-gray-400">by TripleW</p>
           <p className="text-sm text-gray-500 mt-1">
             {step === 'otp' ? 'Enter the code sent to your email' : 'Sign in to your account'}
           </p>
