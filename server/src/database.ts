@@ -2117,6 +2117,31 @@ export async function initializeDatabase() {
     try { db.exec(`PRAGMA foreign_keys = ON`, true); } catch (_) {}
   }
 
+  // Declarations generated per operation (any number), drafted from a library
+  // declaration, an earlier one or an uploaded file; final = PDF filed under
+  // the operation as category Declaration
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS declarations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      operation_id INTEGER NOT NULL,
+      title TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'final')),
+      data TEXT NOT NULL,
+      draft_data TEXT,
+      source TEXT,
+      file_path TEXT,
+      file_name TEXT,
+      document_id INTEGER,
+      created_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (operation_id) REFERENCES operations(id)          ON DELETE CASCADE,
+      FOREIGN KEY (document_id)  REFERENCES operation_documents(id) ON DELETE SET NULL,
+      FOREIGN KEY (created_by)   REFERENCES users(id)               ON DELETE SET NULL
+    )
+  `);
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_declarations_operation ON declarations(operation_id)`); } catch (_) {}
+
   // Referential integrity is only as good as the last migration — surface any
   // violation in the logs rather than letting it rot silently as it did before.
   try {

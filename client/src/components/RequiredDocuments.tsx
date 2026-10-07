@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
-import { CheckCircle2, Circle, Eye, Upload, Loader2, ClipboardCheck, ListChecks, Type } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { CheckCircle2, Circle, Eye, Upload, Loader2, ClipboardCheck, ListChecks, Type, FilePlus2, PenLine } from 'lucide-react';
 import { REQUIRED_OPERATION_DOCS, docsInCategory } from '../lib/operationDocs';
 import ChooseDocumentModal from './ChooseDocumentModal';
 
@@ -14,7 +15,9 @@ import ChooseDocumentModal from './ChooseDocumentModal';
 interface Doc { id: number; file_name: string; file_path: string; category_name: string | null }
 interface Category { id: number; name: string }
 
-export default function RequiredDocuments({ operationId, documents, categories, onUpload, onPreview, onFiled, onOpenFile, onEditText }: {
+export interface OperationDeclaration { id: number; title: string; status: 'draft' | 'final'; document_id: number | null; has_draft?: number | boolean }
+
+export default function RequiredDocuments({ operationId, documents, categories, onUpload, onPreview, onFiled, onOpenFile, onEditText, declarations = [] }: {
   operationId: number;
   documents: Doc[];
   categories: Category[];
@@ -24,6 +27,8 @@ export default function RequiredDocuments({ operationId, documents, categories, 
   onOpenFile: (file: { fileName: string; filePath: string; subfolder: string; label?: string }) => void;
   /** Edit the text of a filed Word document (declarations). */
   onEditText?: (docId: number) => void;
+  /** Declarations generated for this operation (the Declaration tile opens the generator). */
+  declarations?: OperationDeclaration[];
   /** Uploads one file into the category; resolves when done (the page refreshes its documents). */
   onUpload: (file: File, categoryId: number) => Promise<void>;
   onPreview: (doc: Doc, category: string) => void;
@@ -32,6 +37,8 @@ export default function RequiredDocuments({ operationId, documents, categories, 
   const [target, setTarget] = useState<Category | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [choosing, setChoosing] = useState<Category | null>(null);
+  const navigate = useNavigate();
+  const isDeclaration = (name: string) => name.toLowerCase() === 'declaration';
 
   const done = REQUIRED_OPERATION_DOCS.filter(c => docsInCategory(documents, c).length > 0).length;
   const categoryOf = (name: string) => categories.find(c => c.name.toLowerCase() === name.toLowerCase()) || null;
@@ -86,7 +93,13 @@ export default function RequiredDocuments({ operationId, documents, categories, 
                     : <Circle size={15} className="text-gray-300 flex-shrink-0" />}
                   <span>{name}</span>
                 </span>
-                {category && (
+                {isDeclaration(name) ? (
+                  <button type="button" onClick={() => navigate(`/declarations/new?operation_id=${operationId}`)}
+                    title="Generate a declaration — start from one in the system or upload one"
+                    className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 flex-shrink-0">
+                    <FilePlus2 size={12} /> {declarations.length || has ? 'Add declaration' : 'Generate'}
+                  </button>
+                ) : category && (
                   <span className="flex items-center gap-2 flex-shrink-0">
                     <button type="button" onClick={() => setChoosing(category)} disabled={busy !== null}
                       title={`Choose a ${name} already in the system`}
@@ -101,9 +114,32 @@ export default function RequiredDocuments({ operationId, documents, categories, 
                   </span>
                 )}
               </div>
-              {has ? (
+              {isDeclaration(name) && declarations.length > 0 && (
                 <ul className="space-y-1">
-                  {filed.map(d => (
+                  {declarations.map(dec => {
+                    const doc = dec.document_id ? filed.find(f => f.id === dec.document_id) : undefined;
+                    return (
+                      <li key={`dec${dec.id}`} className="flex items-start gap-1">
+                        <button type="button" onClick={() => navigate(`/declarations/${dec.id}`)} title="Open in the declaration generator"
+                          className="mt-0.5 flex-shrink-0 text-gray-400 hover:text-primary-600"><PenLine size={11} /></button>
+                        <button type="button" onClick={() => (doc ? onPreview(doc, name) : navigate(`/declarations/${dec.id}`))}
+                          className="flex items-start gap-1 text-left text-xs text-gray-600 hover:text-primary-600 max-w-full"
+                          title={doc ? `Preview ${doc.file_name}` : 'Draft — open it to finish and generate'}>
+                          {doc && <Eye size={11} className="flex-shrink-0 mt-0.5" />}
+                          <span className="break-words min-w-0 [overflow-wrap:anywhere]">
+                            {doc ? doc.file_name : dec.title}
+                            {dec.status === 'draft' && <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-700">draft</span>}
+                            {dec.status === 'final' && dec.has_draft ? <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-700">edits pending</span> : null}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {isDeclaration(name) && !has && declarations.length > 0 ? null : has ? (
+                <ul className="space-y-1">
+                  {filed.filter(d => !(isDeclaration(name) && declarations.some(dec => dec.document_id === d.id))).map(d => (
                     <li key={d.id} className="flex items-start gap-1">
                       {onEditText && /\.docx$/i.test(d.file_name) && (
                         <button type="button" onClick={() => onEditText(d.id)} title="Edit the text"

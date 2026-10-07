@@ -2,7 +2,8 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import db from '../database.js';
-import { uploadsBase, listProductDocs, ProductDocKind } from './productDocs.js';
+import { uploadsBase, listProductDocs, ProductDocKind, addDocumentProducts } from './productDocs.js';
+import { parseLibraryFileName } from './productLibrary.js';
 import { invoiceLines, suggestFor } from '../routes/product-documents.js';
 
 /**
@@ -188,4 +189,41 @@ export function fileFromSources(operationId: number, categoryId: number, items: 
     added++;
   }
   return { added, missing };
+}
+
+/** The catalogue products on the operation's invoice (else order). */
+export function operationProductIds(operationId: number): number[] {
+  const op = db.prepare('SELECT id, order_id FROM operations WHERE id = ?').get(operationId) as any;
+  if (!op) return [];
+  const lines = invoiceLines(op.id) ?? (op.order_id
+    ? db.prepare('SELECT description, client_product_name FROM order_items WHERE order_id = ? ORDER BY id').all(op.order_id) as any[]
+    : []);
+  return [...new Set(suggestFor(lines, []).map(l => l.product?.id).filter((id): id is number => !!id))];
+}
+
+/**
+ * A declaration uploaded on an operation also goes into the library
+ * (Inventory → Documents → Declarations), linked to the operation's products,
+ * so later operations can use it. The same file (by content) is kept once.
+ * Returns the library document id.
+ */
+export function saveDeclarationToLibrary(buffer: Buffer, fileName: string, operationId: number, userId: number | null): number | null {
+  const ext = path.extname(fileName).toLowerCase();
+  if (!['.pdf', '.doc', '.docx', '.jpg', '.jpeg', '.png', '.webp'].includes(ext)) return null;
+  const sha = crypto.createHash('sha256').update(buffer).digest('hex');
+  const same = db.prepare(`SELECT id FROM product_documents WHERE sha256 = ?`).get(sha) as any;
+  if (same) return same.id;
+  const dir = path.join(uploadsBase, 'product-docs');
+  fs.mkdirSync(dir, { recursive: true });
+  const stored = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`;
+  fs.writeFileSync(path.join(dir, stored), buffer);
+  const { code, title } = parseLibraryFileName(fileName);
+  const op = db.prepare('SELECT operation_number FROM operations WHERE id = ?').get(operationId) as any;
+  const r = db.prepare(`
+    INSERT INTO product_documents (kind, title, doc_code, file_path, file_name, notes, sha256, uploaded_by)
+    VALUES ('declaration', ?, ?, ?, ?, ?, ?, ?)
+  `).run(title, code, stored, fileName, op ? `Uploaded on ${op.operation_number}` : null, sha, userId);
+  const id = Number(r.lastInsertRowid);
+  addDocumentProducts(id, operationProductIds(operationId));
+  return id;
 }

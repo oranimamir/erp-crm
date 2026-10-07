@@ -10,7 +10,8 @@ import { sendDocumentsEmail, withSizes } from '../lib/documentMail.js';
 import { uploadOperationDoc } from '../middleware/upload.js';
 import { deleteInvoiceDocument } from './invoice-documents.js';
 import { findBillOfLading } from './packing-lists.js';
-import { documentSources, fileFromSources } from '../lib/documentSources.js';
+import { documentSources, fileFromSources, saveDeclarationToLibrary } from '../lib/documentSources.js';
+import { deleteDeclaration } from './declarations.js';
 import { categoryIdByName } from '../lib/productDocs.js';
 import { readDocxParagraphs, writeDocxParagraphs } from '../lib/docxText.js';
 import crypto from 'crypto';
@@ -782,6 +783,15 @@ router.post('/:id/documents', uploadOperationDoc.single('file'), (req: Request, 
     WHERE od.id = ?
   `).get(result.lastInsertRowid);
 
+  // A declaration uploaded here also goes into the library for later operations
+  if (/^declarations?$/i.test(String((doc as any)?.category_name || '').trim())) {
+    try {
+      saveDeclarationToLibrary(fs.readFileSync(req.file.path), req.file.originalname, operation.id, req.user?.userId ?? null);
+    } catch (err: any) {
+      console.error('[operations] could not save the declaration to the library:', err?.message || err);
+    }
+  }
+
   notifyAdmin({ action: 'created', entity: 'Operation Document', label: `${operation.operation_number} — ${req.file.originalname}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.status(201).json(doc);
 });
@@ -874,6 +884,7 @@ function isGeneratedDocument(docId: number): boolean {
     UNION SELECT 1 FROM purchase_orders WHERE document_id = ?1
     UNION SELECT 1 FROM invoice_documents WHERE document_id = ?1
     UNION SELECT 1 FROM packing_lists WHERE document_id = ?1 OR final_document_id = ?1
+    UNION SELECT 1 FROM declarations WHERE document_id = ?1
   `).get(docId);
 }
 
@@ -964,6 +975,15 @@ router.delete('/:id/documents/:docId', (req: Request, res: Response) => {
   ).get(Number(req.params.docId), Number(req.params.id)) as any;
 
   if (!doc) { res.status(404).json({ error: 'Document not found' }); return; }
+
+  // A generated declaration's PDF is the declaration — deleting it deletes the declaration
+  const declaration = db.prepare('SELECT * FROM declarations WHERE document_id = ?').get(doc.id) as any;
+  if (declaration) {
+    deleteDeclaration(declaration);
+    notifyAdmin({ action: 'deleted', entity: 'Declaration', label: declaration.title, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
+    res.json({ message: 'Declaration deleted' });
+    return;
+  }
 
   // A generated invoice's PDF is the invoice — deleting it deletes the invoice
   const generated = db.prepare('SELECT * FROM invoice_documents WHERE document_id = ?').get(doc.id) as any;

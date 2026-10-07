@@ -11,7 +11,7 @@ import {
 import { formatDate } from '../lib/dates';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
 import DocumentGenerators from '../components/DocumentGenerators';
-import RequiredDocuments from '../components/RequiredDocuments';
+import RequiredDocuments, { type OperationDeclaration } from '../components/RequiredDocuments';
 import AddFromLibraryModal from '../components/AddFromLibraryModal';
 import OperationDocumentEditModal from '../components/OperationDocumentEditModal';
 import DocumentCompareModal from '../components/DocumentCompareModal';
@@ -183,6 +183,7 @@ export default function OperationDetailPage() {
   const [editDoc, setEditDoc] = useState<OperationDoc | null>(null);
   const [compareDocId, setCompareDocId] = useState<number | null>(null);
   const [textDocId, setTextDocId] = useState<number | null>(null);
+  const [declarations, setDeclarations] = useState<OperationDeclaration[]>([]);
   const [showSend, setShowSend] = useState(false);
 
   // Wire transfer upload (inline in invoices section)
@@ -223,6 +224,7 @@ export default function OperationDetailPage() {
     try {
       const { data } = await api.get(`/operations/${id}`);
       setOperation(data);
+      api.get(`/declarations/by-operation/${id}`).then(r => setDeclarations(r.data || [])).catch(() => setDeclarations([]));
     } catch {
       addToast('Operation not found', 'error');
       navigate('/operations');
@@ -1051,6 +1053,7 @@ export default function OperationDetailPage() {
         onFiled={fetchOperation}
         onOpenFile={openPreview}
         onEditText={docId => setTextDocId(docId)}
+        declarations={declarations}
         documents={operation.documents}
         categories={categories}
         onUpload={uploadToCategory}
