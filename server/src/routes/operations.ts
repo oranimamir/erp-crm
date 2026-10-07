@@ -782,6 +782,63 @@ router.post('/:id/documents', uploadOperationDoc.single('file'), (req: Request, 
   res.status(201).json(doc);
 });
 
+// ── Edit document ─────────────────────────────────────────────────────────────
+
+/** A PDF a generator filed (OC, PO, invoice, PL) — its file is replaced only by regenerating. */
+function isGeneratedDocument(docId: number): boolean {
+  return !!db.prepare(`
+    SELECT 1 FROM order_confirmations WHERE document_id = ?1
+    UNION SELECT 1 FROM purchase_orders WHERE document_id = ?1
+    UNION SELECT 1 FROM invoice_documents WHERE document_id = ?1
+    UNION SELECT 1 FROM packing_lists WHERE document_id = ?1 OR final_document_id = ?1
+  `).get(docId);
+}
+
+/**
+ * PUT /api/operations/:id/documents/:docId — multipart: file_name, category_id,
+ * notes, optional file (a new version). Fields left out keep their value; the
+ * name keeps the file's extension.
+ */
+router.put('/:id/documents/:docId', uploadOperationDoc.single('file'), (req: Request, res: Response) => {
+  const doc = db.prepare('SELECT * FROM operation_documents WHERE id = ? AND operation_id = ?')
+    .get(Number(req.params.docId), Number(req.params.id)) as any;
+  const dropUpload = () => { if (req.file) { try { fs.unlinkSync(req.file.path); } catch { /* ignore */ } } };
+  if (!doc) { dropUpload(); res.status(404).json({ error: 'Document not found' }); return; }
+  if (req.file && isGeneratedDocument(doc.id)) {
+    dropUpload();
+    res.status(400).json({ error: 'This PDF was generated — change it in its generator and regenerate' });
+    return;
+  }
+
+  const ext = path.extname(req.file?.originalname || doc.file_name);
+  let fileName = req.file ? req.file.originalname : doc.file_name;
+  if (req.body?.file_name !== undefined) {
+    const typed = String(req.body.file_name).replace(/[\\/:*?"<>|]+/g, '-').trim();
+    if (!typed) { dropUpload(); res.status(400).json({ error: 'The name cannot be empty' }); return; }
+    fileName = path.extname(typed).toLowerCase() === ext.toLowerCase() ? typed : `${typed}${ext}`;
+  }
+  const categoryId = req.body?.category_id === undefined ? doc.category_id : (Number(req.body.category_id) || null);
+  const notes = req.body?.notes === undefined ? doc.notes : (String(req.body.notes).trim() || null);
+
+  db.prepare('UPDATE operation_documents SET file_path = ?, file_name = ?, category_id = ?, notes = ? WHERE id = ?')
+    .run(req.file?.filename ?? doc.file_path, fileName, categoryId, notes, doc.id);
+  if (req.file) {
+    const old = path.join(uploadsBase, 'operation-docs', doc.file_path);
+    if (/^[a-zA-Z0-9._-]+$/.test(doc.file_path) && fs.existsSync(old)) { try { fs.unlinkSync(old); } catch { /* ignore */ } }
+  }
+
+  const op = db.prepare('SELECT operation_number FROM operations WHERE id = ?').get(doc.operation_id) as any;
+  notifyAdmin({
+    action: 'updated', entity: 'Operation Document', label: `${op?.operation_number ?? ''} — ${fileName}`,
+    detail: req.file ? 'new version uploaded' : undefined,
+    performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
+  });
+  res.json(db.prepare(`
+    SELECT od.*, dc.name as category_name FROM operation_documents od
+    LEFT JOIN document_categories dc ON od.category_id = dc.id WHERE od.id = ?
+  `).get(doc.id));
+});
+
 // ── Send documents by email ───────────────────────────────────────────────
 
 /**

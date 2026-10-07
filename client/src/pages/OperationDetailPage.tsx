@@ -6,13 +6,15 @@ import {
   ArrowLeft, Briefcase, ShoppingCart, FileText, Upload, Trash2,
   Download, Eye, X, Plus, Receipt, ExternalLink, CheckCircle,
   AlertCircle, Loader2, Edit2, Link2, Search, Truck, Landmark,
-  FileCheck2, Receipt as ReceiptIcon, Package, Library, Send,
+  FileCheck2, Receipt as ReceiptIcon, Package, Library, Send, Columns2,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
 import DocumentGenerators from '../components/DocumentGenerators';
 import RequiredDocuments from '../components/RequiredDocuments';
 import AddFromLibraryModal from '../components/AddFromLibraryModal';
+import OperationDocumentEditModal from '../components/OperationDocumentEditModal';
+import DocumentCompareModal from '../components/DocumentCompareModal';
 import SendDocumentsModal from '../components/SendDocumentsModal';
 import { missingRequired } from '../lib/operationDocs';
 
@@ -177,6 +179,8 @@ export default function OperationDetailPage() {
   const [addingCat, setAddingCat] = useState(false);
   const [showAddCat, setShowAddCat] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
+  const [editDoc, setEditDoc] = useState<OperationDoc | null>(null);
+  const [compareDocId, setCompareDocId] = useState<number | null>(null);
   const [showSend, setShowSend] = useState(false);
 
   // Wire transfer upload (inline in invoices section)
@@ -1220,6 +1224,15 @@ export default function OperationDetailPage() {
                     className="p-1.5 rounded-lg hover:bg-gray-200 text-gray-500 hover:text-gray-700" title="Download">
                     <Download size={15} />
                   </button>
+                  <button onClick={() => setEditDoc(doc)}
+                    className="p-1.5 rounded-lg hover:bg-gray-200 text-gray-500 hover:text-primary-600" title="Edit name, category, notes or file">
+                    <Edit2 size={15} />
+                  </button>
+                  <button onClick={() => setCompareDocId(doc.id)} disabled={operation.documents.length < 2}
+                    className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-gray-600 border border-gray-200 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                    title={operation.documents.length < 2 ? 'Add another document to compare with' : 'Compare with another document of this operation'}>
+                    <Columns2 size={13} /> Compare with
+                  </button>
                   <button onClick={() => handleDeleteDoc(doc.id)}
                     className="p-1.5 rounded-lg hover:bg-red-100 text-gray-400 hover:text-red-600" title="Delete">
                     <Trash2 size={15} />
@@ -1230,6 +1243,12 @@ export default function OperationDetailPage() {
           </ul>
         ) : null}
       </div>
+
+      <OperationDocumentEditModal doc={editDoc} operationId={operation.id} categories={categories}
+        onClose={() => setEditDoc(null)} onSaved={fetchOperation} />
+      {compareDocId !== null && (
+        <DocumentCompareModal docs={operation.documents} initialLeft={compareDocId} onClose={() => setCompareDocId(null)} />
+      )}
 
       {/* ── Preview Modal ──────────────────────────────────────────────────── */}
       {previewItem && (
