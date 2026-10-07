@@ -21,7 +21,7 @@ const inputCls = 'block w-full rounded-lg border border-gray-300 px-3 py-2 text-
 const numberedName = (name: string, i: number, total: number) =>
   `${String(i + 1).padStart(Math.max(2, String(total).length), '0')} - ${name}`;
 
-export default function SendDocumentsModal({ open, onClose, endpoint, reference, partyName, documents, missingRequired = [] }: {
+export default function SendDocumentsModal({ open, onClose, endpoint, reference, partyName, documents, missingRequired = [], defaultNumbered = false }: {
   open: boolean;
   onClose: () => void;
   /** POST endpoint, e.g. /operations/12/documents/email */
@@ -32,6 +32,8 @@ export default function SendDocumentsModal({ open, onClose, endpoint, reference,
   documents: SendableDoc[];
   /** Required document types not uploaded yet — shown as a notice, never blocking. */
   missingRequired?: string[];
+  /** Start with "Number the attachments" ticked (the list is already in sending order). */
+  defaultNumbered?: boolean;
 }) {
   const { addToast } = useToast();
   const [to, setTo] = useState('');
@@ -48,6 +50,7 @@ export default function SendDocumentsModal({ open, onClose, endpoint, reference,
     setSubject(`${reference} — documents${partyName ? ` — ${partyName}` : ''}`);
     setMessage('');
     setOrder(documents.map(d => d.id));
+    setNumbered(defaultNumbered);
     // Everything except superseded draft PDFs
     setPicked(new Set(documents.filter(d => !/-DRAFT\.pdf$/i.test(d.file_name)).map(d => d.id)));
     api.get('/settings/document-emails').then(({ data }) => {

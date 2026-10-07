@@ -37,7 +37,7 @@ router.get('/', (req: Request, res: Response) => {
 });
 
 /** Lines of the operation's generated invoice (final over draft, newest), else null. */
-function invoiceLines(operationId: number): Array<{ description: string; client_product_name: string }> | null {
+export function invoiceLines(operationId: number): Array<{ description: string; client_product_name: string }> | null {
   const rows = db.prepare(`
     SELECT data FROM invoice_documents WHERE operation_id = ?
     ORDER BY CASE WHEN status = 'final' THEN 0 ELSE 1 END, updated_at DESC, id DESC

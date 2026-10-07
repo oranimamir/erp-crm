@@ -1,20 +1,27 @@
 import { useRef, useState } from 'react';
-import { CheckCircle2, Circle, Eye, Upload, Loader2, ClipboardCheck } from 'lucide-react';
+import { CheckCircle2, Circle, Eye, Upload, Loader2, ClipboardCheck, ListChecks } from 'lucide-react';
 import { REQUIRED_OPERATION_DOCS, docsInCategory } from '../lib/operationDocs';
+import ChooseDocumentModal from './ChooseDocumentModal';
 
 /**
  * The shipping documents an operation needs (Quality, Origin, Insurance,
- * Sanitary, Phytosanitary certificates, EUR1, Label): one tile each, ticked
- * once a document of that category is filed. Upload on a tile files straight
- * into that category.
+ * Sanitary, Phytosanitary certificates, EUR1, Label, MSDS, Product
+ * Specification Sheet, Declaration): one tile each, ticked once a document of
+ * that category is filed. Choose picks documents already in the app (best fit
+ * ticked); Upload files one from the computer straight into the category.
  */
 
 interface Doc { id: number; file_name: string; file_path: string; category_name: string | null }
 interface Category { id: number; name: string }
 
-export default function RequiredDocuments({ documents, categories, onUpload, onPreview }: {
+export default function RequiredDocuments({ operationId, documents, categories, onUpload, onPreview, onFiled, onOpenFile }: {
+  operationId: number;
   documents: Doc[];
   categories: Category[];
+  /** After documents were chosen from the system. */
+  onFiled: () => void;
+  /** Preview any stored file (library, batch, other operations). */
+  onOpenFile: (file: { fileName: string; filePath: string; subfolder: string; label?: string }) => void;
   /** Uploads one file into the category; resolves when done (the page refreshes its documents). */
   onUpload: (file: File, categoryId: number) => Promise<void>;
   onPreview: (doc: Doc, category: string) => void;
@@ -22,6 +29,7 @@ export default function RequiredDocuments({ documents, categories, onUpload, onP
   const inputRef = useRef<HTMLInputElement>(null);
   const [target, setTarget] = useState<Category | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [choosing, setChoosing] = useState<Category | null>(null);
 
   const done = REQUIRED_OPERATION_DOCS.filter(c => docsInCategory(documents, c).length > 0).length;
   const categoryOf = (name: string) => categories.find(c => c.name.toLowerCase() === name.toLowerCase()) || null;
@@ -58,8 +66,10 @@ export default function RequiredDocuments({ documents, categories, onUpload, onP
       </div>
 
       <input ref={inputRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={onFile} />
+      <ChooseDocumentModal category={choosing} operationId={operationId} onClose={() => setChoosing(null)}
+        onFiled={onFiled} onUpload={onUpload} onPreview={onOpenFile} />
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 p-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 p-4">
         {REQUIRED_OPERATION_DOCS.map(name => {
           const filed = docsInCategory(documents, name);
           const category = categoryOf(name);
@@ -75,12 +85,18 @@ export default function RequiredDocuments({ documents, categories, onUpload, onP
                   <span className="truncate">{name}</span>
                 </span>
                 {category && (
-                  <button type="button" onClick={() => pick(category)} disabled={busy !== null}
-                    title={has ? `Add another ${name}` : `Upload the ${name}`}
-                    className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 disabled:opacity-50 flex-shrink-0">
-                    {busy === name ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
-                    {has ? 'Add' : 'Upload'}
-                  </button>
+                  <span className="flex items-center gap-2 flex-shrink-0">
+                    <button type="button" onClick={() => setChoosing(category)} disabled={busy !== null}
+                      title={`Choose a ${name} already in the system`}
+                      className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 disabled:opacity-50">
+                      <ListChecks size={12} /> Choose
+                    </button>
+                    <button type="button" onClick={() => pick(category)} disabled={busy !== null}
+                      title={`Upload a ${name} from your computer`}
+                      className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 disabled:opacity-50">
+                      {busy === name ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />} Upload
+                    </button>
+                  </span>
                 )}
               </div>
               {has ? (

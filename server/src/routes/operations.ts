@@ -10,6 +10,8 @@ import { sendDocumentsEmail, withSizes } from '../lib/documentMail.js';
 import { uploadOperationDoc } from '../middleware/upload.js';
 import { deleteInvoiceDocument } from './invoice-documents.js';
 import { findBillOfLading } from './packing-lists.js';
+import { documentSources, fileFromSources } from '../lib/documentSources.js';
+import { categoryIdByName } from '../lib/productDocs.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -780,6 +782,37 @@ router.post('/:id/documents', uploadOperationDoc.single('file'), (req: Request, 
 
   notifyAdmin({ action: 'created', entity: 'Operation Document', label: `${operation.operation_number} — ${req.file.originalname}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.status(201).json(doc);
+});
+
+// ── Shipping document tiles: choose from the system ────────────────────────
+
+/** GET /api/operations/:id/document-sources?category= — documents in the app that could fill the category. */
+router.get('/:id/document-sources', (req: Request, res: Response) => {
+  const category = String(req.query.category || '').trim();
+  if (!category) { res.status(400).json({ error: 'category is required' }); return; }
+  const op = db.prepare('SELECT id FROM operations WHERE id = ?').get(Number(req.params.id));
+  if (!op) { res.status(404).json({ error: 'Operation not found' }); return; }
+  res.json({ data: documentSources(Number(req.params.id), category) });
+});
+
+/** POST /api/operations/:id/documents/from-system — { category, items: [{ source, id }] } */
+router.post('/:id/documents/from-system', (req: Request, res: Response) => {
+  const op = db.prepare('SELECT id, operation_number FROM operations WHERE id = ?').get(Number(req.params.id)) as any;
+  if (!op) { res.status(404).json({ error: 'Operation not found' }); return; }
+  const category = String(req.body?.category || '').trim();
+  const items = Array.isArray(req.body?.items) ? req.body.items : [];
+  if (!category || !items.length) { res.status(400).json({ error: 'Choose at least one document' }); return; }
+  const categoryId = categoryIdByName(category);
+  if (!categoryId) { res.status(400).json({ error: 'Unknown category' }); return; }
+  const result = fileFromSources(op.id, categoryId, items);
+  if (result.added) {
+    notifyAdmin({
+      action: 'updated', entity: 'Operation', label: `Operation ${op.operation_number}`,
+      detail: `${result.added} document(s) filed as ${category}`,
+      performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
+    });
+  }
+  res.json(result);
 });
 
 // ── Edit document ─────────────────────────────────────────────────────────────

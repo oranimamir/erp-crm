@@ -16,7 +16,7 @@ import AddFromLibraryModal from '../components/AddFromLibraryModal';
 import OperationDocumentEditModal from '../components/OperationDocumentEditModal';
 import DocumentCompareModal from '../components/DocumentCompareModal';
 import SendDocumentsModal from '../components/SendDocumentsModal';
-import { missingRequired } from '../lib/operationDocs';
+import { missingRequired, sortForSending, docNumber } from '../lib/operationDocs';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -624,6 +624,11 @@ export default function OperationDetailPage() {
 
   const pendingCount = pendingUploads.filter(p => p.status === 'pending' || p.status === 'error').length;
 
+  // Documents in sending order, numbered as they go out (superseded drafts unnumbered)
+  const sortedDocs = sortForSending(operation.documents);
+  const numbered = sortedDocs.filter(d => !/-DRAFT\.pdf$/i.test(d.file_name));
+  const docNumbers = new Map(numbered.map((d, i) => [d.id, docNumber(i, numbered.length)]));
+
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
       {/* ── Header ─────────────────────────────────────────────────────────── */}
@@ -1040,6 +1045,9 @@ export default function OperationDetailPage() {
 
       {/* ── Shipping documents checklist ───────────────────────────────────── */}
       <RequiredDocuments
+        operationId={operation.id}
+        onFiled={fetchOperation}
+        onOpenFile={openPreview}
         documents={operation.documents}
         categories={categories}
         onUpload={uploadToCategory}
@@ -1087,7 +1095,8 @@ export default function OperationDetailPage() {
           endpoint={`/operations/${operation.id}/documents/email`}
           reference={operation.operation_number}
           partyName={operation.customer_name || ''}
-          documents={operation.documents}
+          documents={sortedDocs}
+          defaultNumbered
           missingRequired={missingRequired(operation.documents)}
         />
 
@@ -1202,8 +1211,15 @@ export default function OperationDetailPage() {
           </div>
         ) : operation.documents.length > 0 ? (
           <ul className="divide-y divide-gray-100">
-            {operation.documents.map(doc => (
+            {sortedDocs.map(doc => (
               <li key={doc.id} className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50">
+                {docNumbers.has(doc.id) ? (
+                  <span className="w-7 flex-shrink-0 text-center text-xs font-semibold text-primary-700 bg-primary-50 rounded py-0.5" title="Order in the Send documents email">
+                    {docNumbers.get(doc.id)}
+                  </span>
+                ) : (
+                  <span className="w-7 flex-shrink-0 text-center text-[10px] text-gray-400" title="Draft — not sent by default">draft</span>
+                )}
                 <FileText size={18} className="text-gray-400 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-gray-800 truncate">{doc.file_name}</p>
