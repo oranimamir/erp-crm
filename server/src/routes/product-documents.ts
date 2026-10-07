@@ -5,11 +5,14 @@ import db from '../database.js';
 import { uploadProductDoc } from '../middleware/upload.js';
 import { notifyAdmin } from '../lib/notify.js';
 import {
-  PRODUCT_DOC_KINDS, KIND_LABEL, KIND_CATEGORY, ProductDocKind,
+  PRODUCT_DOC_KINDS, KIND_LABEL, KIND_CATEGORY, ProductDocKind, productDocsDir,
   listProductDocs, getProductDoc, docLabel, setDocumentProducts, parseProductIds,
   unlinkProductFile, matchProduct, copyToOperationDocs, categoryIdByName,
 } from '../lib/productDocs.js';
 import { importLibraryZip, parseLibraryFileName } from '../lib/productLibrary.js';
+import { readDocxParagraphs, writeDocxParagraphs } from '../lib/docxText.js';
+import fs from 'fs';
+import crypto from 'crypto';
 
 /**
  * Inventory → Documents: the MSDS / product specification sheet / declaration
@@ -158,6 +161,45 @@ router.put('/:id', uploadProductDoc.single('file'), (req: Request, res: Response
   if (req.file) unlinkProductFile(existing.file_path);
   notifyAdmin({ action: 'updated', entity: 'Product Document', label: `${KIND_LABEL[existing.kind as ProductDocKind]} — ${docLabel({ title, file_name: existing.file_name })}`, ...who(req) });
   res.json(getProductDoc(existing.id));
+});
+
+/** A library Word document (declarations) whose text can be edited. */
+function wordDoc(id: number): { doc: any; abs: string } | null {
+  const doc = getProductDoc(id);
+  if (!doc || !/\.docx$/i.test(doc.file_name) || !/^[a-zA-Z0-9._-]+$/.test(doc.file_path)) return null;
+  const abs = path.join(productDocsDir, doc.file_path);
+  return fs.existsSync(abs) ? { doc, abs } : null;
+}
+
+// GET /api/product-documents/:id/text — the paragraphs of a .docx
+router.get('/:id/text', async (req: Request, res: Response) => {
+  const found = wordDoc(Number(req.params.id));
+  if (!found) { res.status(404).json({ error: 'Only Word (.docx) documents can be edited here' }); return; }
+  try {
+    res.json({ file_name: found.doc.file_name, paragraphs: await readDocxParagraphs(fs.readFileSync(found.abs)) });
+  } catch {
+    res.status(400).json({ error: 'The Word file could not be read' });
+  }
+});
+
+// PUT /api/product-documents/:id/text — { edits: { [key]: text } }; copies already on operations stay as they were
+router.put('/:id/text', async (req: Request, res: Response) => {
+  const found = wordDoc(Number(req.params.id));
+  if (!found) { res.status(404).json({ error: 'Only Word (.docx) documents can be edited here' }); return; }
+  const edits = req.body?.edits && typeof req.body.edits === 'object' ? req.body.edits : {};
+  try {
+    const { buffer, changed } = await writeDocxParagraphs(fs.readFileSync(found.abs), edits);
+    if (!changed) { res.json({ changed: 0 }); return; }
+    const stored = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}.docx`;
+    fs.writeFileSync(path.join(productDocsDir, stored), buffer);
+    db.prepare(`UPDATE product_documents SET file_path = ?, sha256 = NULL, uploaded_by = ?, updated_at = datetime('now') WHERE id = ?`)
+      .run(stored, req.user?.userId ?? null, found.doc.id);
+    unlinkProductFile(found.doc.file_path);
+    notifyAdmin({ action: 'updated', entity: 'Product Document', label: `${KIND_LABEL[found.doc.kind as ProductDocKind]} — ${docLabel(found.doc)}`, detail: 'text edited', ...who(req) });
+    res.json({ changed });
+  } catch {
+    res.status(400).json({ error: 'The Word file could not be saved' });
+  }
 });
 
 router.delete('/:id', (req: Request, res: Response) => {

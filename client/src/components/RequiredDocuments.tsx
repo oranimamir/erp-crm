@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { CheckCircle2, Circle, Eye, Upload, Loader2, ClipboardCheck, ListChecks } from 'lucide-react';
+import { CheckCircle2, Circle, Eye, Upload, Loader2, ClipboardCheck, ListChecks, Type } from 'lucide-react';
 import { REQUIRED_OPERATION_DOCS, docsInCategory } from '../lib/operationDocs';
 import ChooseDocumentModal from './ChooseDocumentModal';
 
@@ -14,7 +14,7 @@ import ChooseDocumentModal from './ChooseDocumentModal';
 interface Doc { id: number; file_name: string; file_path: string; category_name: string | null }
 interface Category { id: number; name: string }
 
-export default function RequiredDocuments({ operationId, documents, categories, onUpload, onPreview, onFiled, onOpenFile }: {
+export default function RequiredDocuments({ operationId, documents, categories, onUpload, onPreview, onFiled, onOpenFile, onEditText }: {
   operationId: number;
   documents: Doc[];
   categories: Category[];
@@ -22,6 +22,8 @@ export default function RequiredDocuments({ operationId, documents, categories, 
   onFiled: () => void;
   /** Preview any stored file (library, batch, other operations). */
   onOpenFile: (file: { fileName: string; filePath: string; subfolder: string; label?: string }) => void;
+  /** Edit the text of a filed Word document (declarations). */
+  onEditText?: (docId: number) => void;
   /** Uploads one file into the category; resolves when done (the page refreshes its documents). */
   onUpload: (file: File, categoryId: number) => Promise<void>;
   onPreview: (doc: Doc, category: string) => void;
@@ -102,7 +104,11 @@ export default function RequiredDocuments({ operationId, documents, categories, 
               {has ? (
                 <ul className="space-y-1">
                   {filed.map(d => (
-                    <li key={d.id}>
+                    <li key={d.id} className="flex items-start gap-1">
+                      {onEditText && /\.docx$/i.test(d.file_name) && (
+                        <button type="button" onClick={() => onEditText(d.id)} title="Edit the text"
+                          className="mt-0.5 flex-shrink-0 text-gray-400 hover:text-primary-600"><Type size={11} /></button>
+                      )}
                       <button type="button" onClick={() => onPreview(d, name)}
                         className="flex items-start gap-1 text-left text-xs text-gray-600 hover:text-primary-600 max-w-full" title={`Preview ${d.file_name}`}>
                         <Eye size={11} className="flex-shrink-0 mt-0.5" /> <span className="break-words min-w-0 [overflow-wrap:anywhere]">{d.file_name}</span>

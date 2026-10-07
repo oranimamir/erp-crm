@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Upload, Eye, Download, RefreshCw, Trash2, Search, Loader2, FileText, Pencil, FileArchive, CheckCircle2 } from 'lucide-react';
+import { Upload, Eye, Download, RefreshCw, Trash2, Search, Loader2, FileText, Pencil, FileArchive, CheckCircle2, Type } from 'lucide-react';
 import api from '../lib/api';
 import { formatDate } from '../lib/dates';
 import { useToast } from '../contexts/ToastContext';
@@ -8,6 +8,7 @@ import { useFilePreview } from '../lib/useFilePreview';
 import Button from './ui/Button';
 import Modal from './ui/Modal';
 import ConfirmDialog from './ui/ConfirmDialog';
+import DocxTextEditModal from './DocxTextEditModal';
 
 /**
  * Inventory → Documents: the MSDS / product specification sheet / declaration
@@ -52,6 +53,7 @@ export default function ProductDocumentsTab() {
   const [saving, setSaving] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [deleteDoc, setDeleteDoc] = useState<ProductDoc | null>(null);
+  const [textDoc, setTextDoc] = useState<ProductDoc | null>(null);
   const replaceRef = useRef<HTMLInputElement>(null);
   const [replacing, setReplacing] = useState<ProductDoc | null>(null);
   const [importing, setImporting] = useState<{ kind: ProductDocKind; file: File | null; busy: boolean; result: ImportResult | null } | null>(null);
@@ -271,6 +273,9 @@ export default function ProductDocumentsTab() {
                           <button onClick={() => preview.open(fileOf(d))} title="Preview" className="p-1.5 rounded text-gray-400 hover:text-gray-700 hover:bg-gray-100"><Eye size={15} /></button>
                         )}
                         <button onClick={() => preview.download(fileOf(d))} title="Download" className="p-1.5 rounded text-gray-400 hover:text-gray-700 hover:bg-gray-100"><Download size={15} /></button>
+                        {/\.docx$/i.test(d.file_name) && (
+                          <button onClick={() => setTextDoc(d)} title="Edit the text of this Word document" className="p-1.5 rounded text-gray-400 hover:text-primary-600 hover:bg-gray-100"><Type size={15} /></button>
+                        )}
                         <button onClick={() => openEdit(d)} title="Edit title and products" className="p-1.5 rounded text-gray-400 hover:text-primary-600 hover:bg-gray-100"><Pencil size={15} /></button>
                         <button onClick={() => { setReplacing(d); replaceRef.current?.click(); }} title="Replace with a newer version"
                           className="p-1.5 rounded text-gray-400 hover:text-primary-600 hover:bg-gray-100"><RefreshCw size={15} /></button>
@@ -411,6 +416,11 @@ export default function ProductDocumentsTab() {
         title="Delete document"
         message={deleteDoc ? `Delete ${docTitle(deleteDoc)} from the library? Copies already added to operations stay.` : ''}
         confirmLabel="Delete" />
+
+      <DocxTextEditModal endpoint={textDoc ? `/product-documents/${textDoc.id}/text` : null}
+        title={textDoc ? `Edit ${docTitle(textDoc)}` : undefined}
+        note="Copies already added to operations keep their text."
+        onClose={() => setTextDoc(null)} onSaved={load} />
 
       {preview.modal}
     </div>

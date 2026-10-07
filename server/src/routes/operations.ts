@@ -12,6 +12,8 @@ import { deleteInvoiceDocument } from './invoice-documents.js';
 import { findBillOfLading } from './packing-lists.js';
 import { documentSources, fileFromSources } from '../lib/documentSources.js';
 import { categoryIdByName } from '../lib/productDocs.js';
+import { readDocxParagraphs, writeDocxParagraphs } from '../lib/docxText.js';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -813,6 +815,54 @@ router.post('/:id/documents/from-system', (req: Request, res: Response) => {
     });
   }
   res.json(result);
+});
+
+// ── Edit the text of a Word document (declarations) ────────────────────────
+
+function wordDocOf(req: Request): any | null {
+  const doc = db.prepare('SELECT * FROM operation_documents WHERE id = ? AND operation_id = ?')
+    .get(Number(req.params.docId), Number(req.params.id)) as any;
+  return doc && /\.docx$/i.test(doc.file_name) && /^[a-zA-Z0-9._-]+$/.test(doc.file_path) ? doc : null;
+}
+
+// GET /api/operations/:id/documents/:docId/text — the paragraphs of a .docx
+router.get('/:id/documents/:docId/text', async (req: Request, res: Response) => {
+  const doc = wordDocOf(req);
+  if (!doc) { res.status(404).json({ error: 'Only Word (.docx) documents can be edited here' }); return; }
+  const abs = path.join(uploadsBase, 'operation-docs', doc.file_path);
+  if (!fs.existsSync(abs)) { res.status(404).json({ error: 'File not found' }); return; }
+  try {
+    res.json({ file_name: doc.file_name, paragraphs: await readDocxParagraphs(fs.readFileSync(abs)) });
+  } catch {
+    res.status(400).json({ error: 'The Word file could not be read' });
+  }
+});
+
+// PUT /api/operations/:id/documents/:docId/text — { edits: { [key]: text } }
+router.put('/:id/documents/:docId/text', async (req: Request, res: Response) => {
+  const doc = wordDocOf(req);
+  if (!doc) { res.status(404).json({ error: 'Only Word (.docx) documents can be edited here' }); return; }
+  const edits = req.body?.edits && typeof req.body.edits === 'object' ? req.body.edits : {};
+  const dir = path.join(uploadsBase, 'operation-docs');
+  const abs = path.join(dir, doc.file_path);
+  if (!fs.existsSync(abs)) { res.status(404).json({ error: 'File not found' }); return; }
+  try {
+    const { buffer, changed } = await writeDocxParagraphs(fs.readFileSync(abs), edits);
+    if (!changed) { res.json({ changed: 0 }); return; }
+    const stored = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}.docx`;
+    fs.writeFileSync(path.join(dir, stored), buffer);
+    db.prepare('UPDATE operation_documents SET file_path = ? WHERE id = ?').run(stored, doc.id);
+    try { fs.unlinkSync(abs); } catch { /* ignore */ }
+    const op = db.prepare('SELECT operation_number FROM operations WHERE id = ?').get(doc.operation_id) as any;
+    notifyAdmin({
+      action: 'updated', entity: 'Operation Document', label: `${op?.operation_number ?? ''} — ${doc.file_name}`,
+      detail: `text edited (${changed} paragraph${changed === 1 ? '' : 's'})`,
+      performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
+    });
+    res.json({ changed });
+  } catch {
+    res.status(400).json({ error: 'The Word file could not be saved' });
+  }
 });
 
 // ── Edit document ─────────────────────────────────────────────────────────────

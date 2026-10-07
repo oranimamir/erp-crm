@@ -6,7 +6,7 @@ import {
   ArrowLeft, Briefcase, ShoppingCart, FileText, Upload, Trash2,
   Download, Eye, X, Plus, Receipt, ExternalLink, CheckCircle,
   AlertCircle, Loader2, Edit2, Link2, Search, Truck, Landmark,
-  FileCheck2, Receipt as ReceiptIcon, Package, Library, Send, Columns2,
+  FileCheck2, Receipt as ReceiptIcon, Package, Library, Send, Columns2, Type,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
@@ -15,6 +15,7 @@ import RequiredDocuments from '../components/RequiredDocuments';
 import AddFromLibraryModal from '../components/AddFromLibraryModal';
 import OperationDocumentEditModal from '../components/OperationDocumentEditModal';
 import DocumentCompareModal from '../components/DocumentCompareModal';
+import DocxTextEditModal from '../components/DocxTextEditModal';
 import SendDocumentsModal from '../components/SendDocumentsModal';
 import { missingRequired, sortForSending, docNumber } from '../lib/operationDocs';
 
@@ -181,6 +182,7 @@ export default function OperationDetailPage() {
   const [showLibrary, setShowLibrary] = useState(false);
   const [editDoc, setEditDoc] = useState<OperationDoc | null>(null);
   const [compareDocId, setCompareDocId] = useState<number | null>(null);
+  const [textDocId, setTextDocId] = useState<number | null>(null);
   const [showSend, setShowSend] = useState(false);
 
   // Wire transfer upload (inline in invoices section)
@@ -1048,6 +1050,7 @@ export default function OperationDetailPage() {
         operationId={operation.id}
         onFiled={fetchOperation}
         onOpenFile={openPreview}
+        onEditText={docId => setTextDocId(docId)}
         documents={operation.documents}
         categories={categories}
         onUpload={uploadToCategory}
@@ -1240,6 +1243,12 @@ export default function OperationDetailPage() {
                     className="p-1.5 rounded-lg hover:bg-gray-200 text-gray-500 hover:text-gray-700" title="Download">
                     <Download size={15} />
                   </button>
+                  {/\.docx$/i.test(doc.file_name) && (
+                    <button onClick={() => setTextDocId(doc.id)}
+                      className="p-1.5 rounded-lg hover:bg-gray-200 text-gray-500 hover:text-primary-600" title="Edit the text of this Word document">
+                      <Type size={15} />
+                    </button>
+                  )}
                   <button onClick={() => setEditDoc(doc)}
                     className="p-1.5 rounded-lg hover:bg-gray-200 text-gray-500 hover:text-primary-600" title="Edit name, category, notes or file">
                     <Edit2 size={15} />
@@ -1260,6 +1269,9 @@ export default function OperationDetailPage() {
         ) : null}
       </div>
 
+      <DocxTextEditModal endpoint={textDocId !== null ? `/operations/${operation.id}/documents/${textDocId}/text` : null}
+        title="Edit document text" note="Only this operation's copy changes — the library stays as it is."
+        onClose={() => setTextDocId(null)} onSaved={fetchOperation} />
       <OperationDocumentEditModal doc={editDoc} operationId={operation.id} categories={categories}
         onClose={() => setEditDoc(null)} onSaved={fetchOperation} />
       {compareDocId !== null && (

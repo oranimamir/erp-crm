@@ -8,6 +8,7 @@ export const REQUIRED_OPERATION_DOCS = [
   'Origin certificate',
   'Insurance certificate',
   'Sanitary certificate',
+  'Health certificate',
   'Phytosanitary certificate',
   'EUR1',
   'Label',

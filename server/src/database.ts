@@ -759,7 +759,7 @@ export async function initializeDatabase() {
     'Packing list', 'Halal certificate', 'Kosher certificate',
     // Shipping documents every operation needs (client lib/operationDocs.ts)
     'Quality certificate', 'Origin certificate', 'Insurance certificate', 'Sanitary certificate',
-    'Phytosanitary certificate', 'EUR1', 'Label', 'Product Specification Sheet', 'Invoice', 'Declaration',
+    'Phytosanitary certificate', 'EUR1', 'Label', 'Product Specification Sheet', 'Invoice', 'Declaration', 'Health certificate',
   ];
   for (const name of defaultCategories) {
     try {
