@@ -69,7 +69,7 @@ export default function RequiredDocuments({ operationId, documents, categories, 
       <ChooseDocumentModal category={choosing} operationId={operationId} onClose={() => setChoosing(null)}
         onFiled={onFiled} onUpload={onUpload} onPreview={onOpenFile} />
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 p-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 p-4">
         {REQUIRED_OPERATION_DOCS.map(name => {
           const filed = docsInCategory(documents, name);
           const category = categoryOf(name);
@@ -100,12 +100,12 @@ export default function RequiredDocuments({ operationId, documents, categories, 
                 )}
               </div>
               {has ? (
-                <ul className="space-y-0.5">
+                <ul className="space-y-1">
                   {filed.map(d => (
                     <li key={d.id}>
                       <button type="button" onClick={() => onPreview(d, name)}
-                        className="flex items-center gap-1 text-xs text-gray-600 hover:text-primary-600 max-w-full" title={`Preview ${d.file_name}`}>
-                        <Eye size={11} className="flex-shrink-0" /> <span className="truncate">{d.file_name}</span>
+                        className="flex items-start gap-1 text-left text-xs text-gray-600 hover:text-primary-600 max-w-full" title={`Preview ${d.file_name}`}>
+                        <Eye size={11} className="flex-shrink-0 mt-0.5" /> <span className="break-words min-w-0 [overflow-wrap:anywhere]">{d.file_name}</span>
                       </button>
                     </li>
                   ))}
