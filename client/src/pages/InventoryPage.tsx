@@ -13,6 +13,7 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
 import { Plus, Warehouse, Pencil, Trash2, PackagePlus, FileSpreadsheet, Package, Box, Upload, Mail, RefreshCw, ChevronRight, ChevronDown, Tag, Download, Loader2, CheckCircle2, ArchiveRestore } from 'lucide-react';
+import SkuImportModal from '../components/SkuImportModal';
 import { downloadExcel } from '../lib/exportExcel';
 import { formatDate } from '../lib/dates';
 import ProductDocumentsTab from '../components/ProductDocumentsTab';
@@ -326,6 +327,7 @@ function ProductsTab() {
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [form, setForm] = useState({ ...emptyProductForm });
   const [saving, setSaving] = useState(false);
+  const [importingSkus, setImportingSkus] = useState(false);
 
   const fetchItems = () => {
     setLoading(true);
@@ -394,9 +396,13 @@ function ProductsTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        <Button variant="secondary" onClick={() => setImportingSkus(true)} title="Fill in the SKUs from an Excel list (commercial name + reference)">
+          <FileSpreadsheet size={16} /> Import SKUs
+        </Button>
         <Button onClick={openCreate}><Plus size={16} /> Add Product</Button>
       </div>
+      <SkuImportModal open={importingSkus} onClose={() => setImportingSkus(false)} onSaved={fetchItems} />
 
       <Card>
         <div className="p-4 border-b border-gray-100">
