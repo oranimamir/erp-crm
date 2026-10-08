@@ -8,7 +8,7 @@ import {
   BACKUP_PARTS, BACKUP_TIMEZONE, getBackupEmailSettings, getLastBackupEmail,
   normalizeBackupEmailSettings, saveBackupEmailSettings, sendBackupEmail,
 } from '../lib/backupEmail.js';
-import { BACKUP_PART_LABELS } from '../lib/backup.js';
+import { BACKUP_PART_LABELS, BACKUP_PART_HINTS, BACKUP_TABS, BACKUP_EVERYTHING } from '../lib/backup.js';
 
 const router = Router();
 
@@ -125,13 +125,16 @@ router.put('/schedule', (req: Request, res: Response) => {
 
 // ── Backup by email ────────────────────────────────────────────────────────
 
-// GET /api/backup/email — who gets the weekly backup, what it holds, when
+// GET /api/backup/email — who gets the weekly backup and what (per recipient), when
+// (managed in User Management → Backups)
 router.get('/email', (req: Request, res: Response) => {
   if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
   res.json({
     settings: getBackupEmailSettings(),
     last: getLastBackupEmail(),
-    parts: BACKUP_PARTS.map(key => ({ key, label: BACKUP_PART_LABELS[key] })),
+    parts: BACKUP_PARTS.map(key => ({ key, label: BACKUP_PART_LABELS[key], hint: BACKUP_PART_HINTS[key] })),
+    tabs: BACKUP_TABS,
+    everything: BACKUP_EVERYTHING,
     timezone: BACKUP_TIMEZONE,
     email_configured: !!process.env.RESEND_API_KEY,
   });
@@ -141,14 +144,13 @@ router.get('/email', (req: Request, res: Response) => {
 router.put('/email', (req: Request, res: Response) => {
   if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
   const raw = req.body || {};
-  const typed = (Array.isArray(raw.recipients) ? raw.recipients : String(raw.recipients || '').split(/[,;\s]+/))
-    .map((s: unknown) => String(s).trim()).filter(Boolean);
-  const invalid = typed.filter((r: string) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r));
+  // recipients: [{ recipient: 'user:<id>' | 'email:<address>', parts: [...] }]
+  const list = Array.isArray(raw.recipients) ? raw.recipients : [];
+  const invalid = list.filter((r: any) => typeof r?.recipient === 'string' && r.recipient.startsWith('email:')
+    && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r.recipient.slice(6))).map((r: any) => r.recipient.slice(6));
   if (invalid.length) { res.status(400).json({ error: `Invalid email address: ${invalid.join(', ')}` }); return; }
-  if (!Array.isArray(raw.parts) || !raw.parts.some((p: any) => BACKUP_PARTS.includes(p))) {
-    res.status(400).json({ error: 'Choose at least one thing to include in the backup' });
-    return;
-  }
+  const empty = list.filter((r: any) => !Array.isArray(r?.parts) || !r.parts.some((p: any) => BACKUP_PARTS.includes(p)));
+  if (empty.length) { res.status(400).json({ error: 'Choose Everything or at least one tab for each person who gets the backup' }); return; }
   const settings = normalizeBackupEmailSettings(raw);
   saveBackupEmailSettings(settings);
   res.json({ settings });

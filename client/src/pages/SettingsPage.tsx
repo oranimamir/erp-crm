@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
 import { Settings, Lock, Monitor, Sun, Moon, Download, DatabaseBackup, Clock, HardDrive, CheckCircle, AlertTriangle } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDate } from '../lib/dates';
-import BackupEmailSettings from '../components/BackupEmailSettings';
 import DocumentEmailSettings from '../components/DocumentEmailSettings';
 import AiSpendingSettings from '../components/AiSpendingSettings';
 import OperationNotifySettings from '../components/OperationNotifySettings';
@@ -438,7 +438,14 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            <BackupEmailSettings />
+            {/* Who gets the backup email, and which tabs, is set per person in User Management */}
+            <div className="border-t border-gray-100 pt-4">
+              <p className="text-sm font-medium text-gray-900 mb-0.5">Backup by email</p>
+              <p className="text-sm text-gray-500">
+                Who receives the weekly backup email, and what (everything or chosen tabs), is set per person in{' '}
+                <Link to="/admin/users?tab=backups" className="text-primary-600 hover:underline">User Management → Backups</Link>.
+              </p>
+            </div>
 
             {/* Saved auto-backups */}
             <div className="border-t border-gray-100 pt-4">

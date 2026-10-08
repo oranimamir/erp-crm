@@ -15,12 +15,14 @@ import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
 import { Plus, Users, Pencil, Trash2, UserPlus, Mail, Clock, XCircle, Copy, Bell, BellOff, CheckCircle, Link } from 'lucide-react';
 import { formatDate } from '../lib/dates';
+import BackupRecipients from '../components/BackupRecipients';
 import NotificationRules, { scopeOf, scopeLabel, type NotificationRulesData, type Mute } from '../components/NotificationRules';
 
-type TabId = 'users' | 'notifications';
+type TabId = 'users' | 'notifications' | 'backups';
 const TABS: { id: TabId; label: string }[] = [
   { id: 'users', label: 'Users' },
   { id: 'notifications', label: 'Notifications' },
+  { id: 'backups', label: 'Backups' },
 ];
 
 const roleOptions = [
@@ -54,7 +56,7 @@ export default function AdminUsersPage() {
 
   // The tab (and the person picked on Notifications) live in the URL
   const [params, setParams] = useSearchParams();
-  const activeTab: TabId = params.get('tab') === 'notifications' ? 'notifications' : 'users';
+  const activeTab: TabId = params.get('tab') === 'notifications' ? 'notifications' : params.get('tab') === 'backups' ? 'backups' : 'users';
   const selectedRecipient = params.get('recipient');
   const goTab = (tab: TabId, recipient?: string) =>
     setParams(tab === 'users' ? {} : { tab, ...(recipient ? { recipient } : {}) });
@@ -215,6 +217,8 @@ export default function AdminUsersPage() {
           ))}
         </nav>
       </div>
+
+      {activeTab === 'backups' && <BackupRecipients />}
 
       {activeTab === 'notifications' && (
         rules ? (

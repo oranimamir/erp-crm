@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { removeBackupRecipientUser } from '../lib/backupEmail.js';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import db from '../database.js';
@@ -137,6 +138,7 @@ router.delete('/:id', requireAdmin, (req: Request, res: Response) => {
     return;
   }
   removeMutesForUser(userId);
+  removeBackupRecipientUser(userId);
   res.json({ message: 'User deleted' });
 });
 

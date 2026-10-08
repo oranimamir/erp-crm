@@ -170,13 +170,53 @@ export function listBackups(): { filename: string; size: number; created_at: str
 }
 
 /** What an emailed backup can hold — each goes out as its own ZIP. */
-export type BackupPart = 'database' | 'documents' | 'invoices' | 'operations';
+/**
+ * What a backup email can hold: the full backup (database + every upload),
+ * or one part per app tab — each an Excel of the tab's records plus its files.
+ * `invoices` (invoice PDFs by category) is kept for settings saved before the
+ * tab parts existed.
+ */
+export type BackupPart =
+  | 'database' | 'documents' | 'invoices'
+  | 'customers' | 'suppliers' | 'customer_invoices' | 'supplier_invoices' | 'orders'
+  | 'operations' | 'ncos' | 'inventory' | 'working_capital';
 
 export const BACKUP_PART_LABELS: Record<BackupPart, string> = {
   database: 'Database (all records)',
   documents: 'All uploaded documents',
   invoices: 'Invoices by category',
-  operations: 'Operations (folder per operation + overview)',
+  customers: 'Customers',
+  suppliers: 'Suppliers',
+  customer_invoices: 'Customer Invoices',
+  supplier_invoices: 'Supplier Invoices',
+  orders: 'Orders',
+  operations: 'Operations',
+  ncos: 'Non-Commercial Ops',
+  inventory: 'Inventory',
+  working_capital: 'Working Capital',
+};
+
+/** The tabs, in sidebar order — what a recipient picks from. */
+export const BACKUP_TABS: BackupPart[] = [
+  'customers', 'suppliers', 'customer_invoices', 'supplier_invoices', 'orders',
+  'operations', 'ncos', 'inventory', 'working_capital',
+];
+/** "Everything": the full backup. */
+export const BACKUP_EVERYTHING: BackupPart[] = ['database', 'documents'];
+
+export const BACKUP_PART_HINTS: Record<BackupPart, string> = {
+  database: 'Every record — enough to restore the app.',
+  documents: 'Every uploaded file. Usually too large to email.',
+  invoices: 'Customer and supplier invoice PDFs in folders.',
+  customers: 'Excel of the customers and their document profiles.',
+  suppliers: 'Excel of the suppliers, and each supplier\'s documents.',
+  customer_invoices: 'Excel of the customer invoices, payments and wire transfers, with the invoice and wire PDFs.',
+  supplier_invoices: 'Excel of the supplier invoices (demo and sales activities), with their PDFs.',
+  orders: 'Excel of the orders and their lines, with the order documents.',
+  operations: 'A folder per operation (order, documents by category, invoices) and an overview Excel; split when large.',
+  ncos: 'Excel of the non-commercial operations, with a folder of documents per NCO.',
+  inventory: 'Excel of products, packaging, batches and stock, with the batch and library documents.',
+  working_capital: 'Excel of the working capital forecasts.',
 };
 
 // ── Operations: a folder per operation, and an overview spreadsheet ─────────
@@ -313,10 +353,155 @@ async function writeOperationsParts(stamp: string): Promise<string[]> {
   return paths;
 }
 
+// ── One tab: an Excel of its records plus its files ─────────────────────────
+
+/** Rows of a query, or none when a table is missing on this install. */
+function rowsOf(sql: string): any[] {
+  try { return db.prepare(sql).all() as any[]; } catch { return []; }
+}
+
+/** Big / binary columns never go into the Excel. */
+const SKIP_COLUMNS = new Set(['embedded_pdf', 'password_hash', 'sha256', 'file_hash']);
+
+async function tabWorkbook(sheets: Array<{ name: string; rows: any[] }>): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  for (const sheet of sheets) {
+    const ws = wb.addWorksheet(sheet.name.slice(0, 31));
+    const keys = [...new Set(sheet.rows.flatMap(r => Object.keys(r)))].filter(k => !SKIP_COLUMNS.has(k));
+    ws.columns = keys.map(k => ({ header: k, key: k, width: Math.min(40, Math.max(10, k.length + 2)) }));
+    ws.getRow(1).font = { bold: true };
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+    for (const r of sheet.rows) {
+      const row: Record<string, unknown> = {};
+      for (const k of keys) {
+        const v = r[k];
+        // Excel cells hold at most 32,767 characters
+        row[k] = typeof v === 'string' && v.length > 32000 ? `${v.slice(0, 32000)}…` : v;
+      }
+      ws.addRow(row);
+    }
+  }
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+type TabFile = { full?: string; buffer?: Buffer; name: string };
+
+/** The records (sheets) and files of one tab. */
+function tabContent(part: BackupPart): { folder: string; sheets: Array<{ name: string; rows: any[] }>; files: TabFile[] } {
+  const used = new Set<string>();
+  const files: TabFile[] = [];
+  const addFile = (sub: string, dir: string, stored: string | null | undefined, name: string | null | undefined, folder: string) => {
+    if (!stored || !/^[a-zA-Z0-9._-]+$/.test(stored)) return;
+    const full = path.join(uploadsBase, sub, stored);
+    if (!fs.existsSync(full)) return;
+    const target = `${folder}/${sanitizeName(dir)}`;
+    files.push({ full, name: `${target}/${uniqueName(used, target, sanitizeName(name || stored))}` });
+  };
+
+  switch (part) {
+    case 'customers':
+      return { folder: 'Customers', files, sheets: [
+        { name: 'Customers', rows: rowsOf('SELECT * FROM customers ORDER BY name') },
+        { name: 'Document profiles', rows: rowsOf(`SELECT p.*, c.name AS customer_name FROM customer_document_profiles p LEFT JOIN customers c ON c.id = p.customer_id ORDER BY c.name`) },
+      ] };
+    case 'suppliers': {
+      for (const d of rowsOf(`SELECT sd.*, s.name AS supplier_name FROM supplier_documents sd JOIN suppliers s ON s.id = sd.supplier_id`)) {
+        addFile('supplier-docs', d.supplier_name, d.file_path, d.file_name, 'Suppliers');
+      }
+      return { folder: 'Suppliers', files, sheets: [
+        { name: 'Suppliers', rows: rowsOf('SELECT * FROM suppliers ORDER BY name') },
+        { name: 'Supplier documents', rows: rowsOf(`SELECT sd.id, s.name AS supplier, sd.title, sd.doc_type, sd.file_name, sd.notes, sd.created_at FROM supplier_documents sd JOIN suppliers s ON s.id = sd.supplier_id ORDER BY s.name`) },
+      ] };
+    }
+    case 'customer_invoices': {
+      for (const i of rowsOf(`SELECT invoice_number, file_path, file_name FROM invoices WHERE type = 'customer' AND file_path IS NOT NULL`)) {
+        addFile('invoices', 'Invoices', i.file_path, i.file_name || `${i.invoice_number}.pdf`, 'Customer Invoices');
+      }
+      for (const w of rowsOf(`SELECT w.file_path, w.file_name, i.invoice_number FROM wire_transfers w JOIN invoices i ON i.id = w.invoice_id WHERE i.type = 'customer' AND w.file_path IS NOT NULL`)) {
+        addFile('wire-transfers', 'Wire transfers', w.file_path, w.file_name || `${w.invoice_number} wire.pdf`, 'Customer Invoices');
+      }
+      return { folder: 'Customer Invoices', files, sheets: [
+        { name: 'Invoices', rows: rowsOf(`SELECT i.*, c.name AS customer_name, o.operation_number FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id LEFT JOIN operations o ON o.id = i.operation_id WHERE i.type = 'customer' ORDER BY i.invoice_date DESC`) },
+        { name: 'Wire transfers', rows: rowsOf(`SELECT w.*, i.invoice_number FROM wire_transfers w JOIN invoices i ON i.id = w.invoice_id WHERE i.type = 'customer' ORDER BY w.transfer_date DESC`) },
+        { name: 'Payments', rows: rowsOf(`SELECT p.*, i.invoice_number FROM payments p JOIN invoices i ON i.id = p.invoice_id WHERE i.type = 'customer' ORDER BY p.payment_date DESC`) },
+      ] };
+    }
+    case 'supplier_invoices': {
+      for (const r of rowsOf(`SELECT domain, invoice_id, supplier, pdf_filename, embedded_pdf FROM demo_invoices WHERE embedded_pdf IS NOT NULL`)) {
+        let b64 = String(r.embedded_pdf);
+        const at = b64.indexOf('base64,');
+        if (at >= 0) b64 = b64.slice(at + 7);
+        const buf = Buffer.from(b64, 'base64');
+        if (!buf.length) continue;
+        const folder = `Supplier Invoices/${r.domain === 'sales' ? 'Sales activities' : 'Demo expenses'}`;
+        let name = sanitizeName(r.pdf_filename || `${r.supplier || 'invoice'}-${r.invoice_id || ''}`);
+        if (!/\.[a-z0-9]+$/i.test(name)) name += '.pdf';
+        files.push({ buffer: buf, name: `${folder}/${uniqueName(used, folder, name)}` });
+      }
+      for (const i of rowsOf(`SELECT invoice_number, file_path, file_name FROM invoices WHERE type = 'supplier' AND file_path IS NOT NULL`)) {
+        addFile('invoices', 'Recorded supplier invoices', i.file_path, i.file_name || `${i.invoice_number}.pdf`, 'Supplier Invoices');
+      }
+      return { folder: 'Supplier Invoices', files, sheets: [
+        { name: 'Supplier invoices', rows: rowsOf(`SELECT * FROM demo_invoices ORDER BY issue_date DESC`) },
+        { name: 'Recorded (orders)', rows: rowsOf(`SELECT i.*, s.name AS supplier_name FROM invoices i LEFT JOIN suppliers s ON s.id = i.supplier_id WHERE i.type = 'supplier' ORDER BY i.invoice_date DESC`) },
+      ] };
+    }
+    case 'orders': {
+      for (const o of rowsOf(`SELECT order_number, file_path, file_name FROM orders WHERE file_path IS NOT NULL`)) {
+        addFile('orders', 'Order documents', o.file_path, o.file_name || `${o.order_number}.pdf`, 'Orders');
+      }
+      return { folder: 'Orders', files, sheets: [
+        { name: 'Orders', rows: rowsOf(`SELECT o.*, c.name AS customer_name, s.name AS supplier_name FROM orders o LEFT JOIN customers c ON c.id = o.customer_id LEFT JOIN suppliers s ON s.id = o.supplier_id ORDER BY o.created_at DESC`) },
+        { name: 'Order lines', rows: rowsOf(`SELECT oi.*, o.order_number FROM order_items oi JOIN orders o ON o.id = oi.order_id ORDER BY o.order_number, oi.id`) },
+      ] };
+    }
+    case 'ncos': {
+      for (const d of rowsOf(`SELECT d.file_path, d.file_name, n.nco_number, c.name AS category FROM nco_documents d JOIN non_commercial_operations n ON n.id = d.nco_id LEFT JOIN document_categories c ON c.id = d.category_id`)) {
+        addFile('operation-docs', `${d.nco_number}/${d.category || 'Other documents'}`, d.file_path, d.file_name, 'Non-Commercial Ops');
+      }
+      return { folder: 'Non-Commercial Ops', files, sheets: [
+        { name: 'NCOs', rows: rowsOf(`SELECT n.*, c.name AS customer_name, s.name AS supplier_name FROM non_commercial_operations n LEFT JOIN customers c ON c.id = n.customer_id LEFT JOIN suppliers s ON s.id = n.supplier_id ORDER BY n.nco_number`) },
+      ] };
+    }
+    case 'inventory': {
+      for (const d of rowsOf(`SELECT bd.file_path, bd.file_name, b.batch_number FROM batch_documents bd JOIN batches b ON b.id = bd.batch_id`)) {
+        addFile('batch-documents', `Batches/${d.batch_number}`, d.file_path, d.file_name, 'Inventory');
+      }
+      for (const d of rowsOf(`SELECT kind, file_path, file_name FROM product_documents`)) {
+        addFile('product-docs', `Documents/${String(d.kind).toUpperCase()}`, d.file_path, d.file_name, 'Inventory');
+      }
+      return { folder: 'Inventory', files, sheets: [
+        { name: 'Products', rows: rowsOf('SELECT * FROM products ORDER BY name') },
+        { name: 'Packaging', rows: rowsOf('SELECT * FROM packaging ORDER BY code') },
+        { name: 'Batches', rows: rowsOf('SELECT * FROM batches ORDER BY batch_number') },
+        { name: 'Warehouse stock', rows: rowsOf('SELECT * FROM warehouse_stock ORDER BY article') },
+        { name: 'Documents library', rows: rowsOf(`SELECT d.id, d.kind, d.title, d.doc_code, d.file_name, d.notes, d.created_at FROM product_documents d ORDER BY d.kind, d.title`) },
+      ] };
+    }
+    case 'working_capital':
+      return { folder: 'Working Capital', files, sheets: [
+        { name: 'Forecasts', rows: rowsOf(`SELECT w.*, s.name AS supplier_name FROM working_capital_forecasts w LEFT JOIN suppliers s ON s.id = w.supplier_id ORDER BY w.expected_date`) },
+      ] };
+    default:
+      return { folder: part, files, sheets: [] };
+  }
+}
+
 /** Writes one part's ZIP(s) into the backups folder and returns their paths. */
 export async function writeBackupPart(part: BackupPart, stamp: string): Promise<string[]> {
   if (!fs.existsSync(backupsDir)) fs.mkdirSync(backupsDir, { recursive: true });
   if (part === 'operations') return writeOperationsParts(stamp);
+  if (BACKUP_TABS.includes(part)) {
+    const content = tabContent(part);
+    const workbook = await tabWorkbook(content.sheets);
+    return [await writeZip(path.join(backupsDir, `email-${part}-${stamp}.zip`), archive => {
+      archive.append(workbook, { name: `${content.folder}/${content.folder}.xlsx` });
+      for (const f of content.files) {
+        if (f.buffer) archive.append(f.buffer, { name: f.name });
+        else if (f.full) archive.file(f.full, { name: f.name });
+      }
+    })];
+  }
   const filePath = path.join(backupsDir, `email-${part}-${stamp}.zip`);
   return [await writeZip(filePath, archive => {
     if (part === 'database') {
