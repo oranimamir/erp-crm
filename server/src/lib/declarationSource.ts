@@ -57,6 +57,29 @@ export function emptyDeclaration(): DeclarationData {
   };
 }
 
+/**
+ * A blank Certificate of Analysis: the products with their lots, production /
+ * expiry dates, the results table to fill in and the conformity statement.
+ */
+export function emptyCoa(lines: Array<{ product: string; lots: string[] }>): DeclarationData {
+  const products = lines.length ? lines : [{ product: '', lots: [] }];
+  const blocks: DeclarationBlock[] = [];
+  for (const l of products) {
+    blocks.push({
+      type: 'table', header: false,
+      rows: [['Product', l.product], ['Batch / lot', l.lots.join(', ')], ['Production date', ''], ['Expiry date', '']],
+    });
+    blocks.push({
+      type: 'table', header: true,
+      rows: [['Parameter', 'Specification', 'Method', 'Result'], ['', '', '', ''], ['', '', '', ''], ['', '', '', '']],
+    });
+  }
+  blocks.push({ type: 'paragraph', text: 'The product complies with the specification above.' });
+  return {
+    ...emptyDeclaration(), title: 'Certificate of Analysis', heading: 'Analysis results', blocks,
+  };
+}
+
 /** Keeps an image (signature) once, by content. */
 export function storeAsset(buf: Buffer, ext: string): string {
   fs.mkdirSync(declarationAssetsDir, { recursive: true });

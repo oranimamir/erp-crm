@@ -11,17 +11,17 @@ import ConfirmDialog from './ui/ConfirmDialog';
 import DocxTextEditModal from './DocxTextEditModal';
 
 /**
- * Inventory → Documents: the MSDS / product specification sheet / declaration
+ * Inventory → Documents: the MSDS / product specification sheet / declaration / COA
  * library, one list per kind. A document covers any number of products (an
  * MSDS covers a whole family); one with no product is general. Import ZIP
  * loads a whole folder at once. Operations take copies of these (operation
  * page → Add from library).
  */
 
-export type ProductDocKind = 'msds' | 'pds' | 'declaration';
-export const KINDS: ProductDocKind[] = ['msds', 'pds', 'declaration'];
-export const KIND_LABEL: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Product Specification Sheet', declaration: 'Declaration' };
-export const KIND_SHORT: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Spec sheet', declaration: 'Declaration' };
+export type ProductDocKind = 'msds' | 'pds' | 'declaration' | 'coa';
+export const KINDS: ProductDocKind[] = ['msds', 'pds', 'declaration', 'coa'];
+export const KIND_LABEL: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Product Specification Sheet', declaration: 'Declaration', coa: 'COA' };
+export const KIND_SHORT: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Spec sheet', declaration: 'Declaration', coa: 'COA' };
 
 interface Product { id: number; name: string; sku: string | null }
 export interface ProductDoc {

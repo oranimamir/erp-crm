@@ -44,7 +44,15 @@ export function libraryKindOf(category: string): ProductDocKind | null {
   if (c === 'msds') return 'msds';
   if (c === 'product specification sheet' || c === 'pds') return 'pds';
   if (c === 'declaration' || c === 'declarations') return 'declaration';
+  if (c === 'coa') return 'coa';
   return null;
+}
+
+/** A library COA naming one of the lots (title, code, notes or file name). */
+export function coaMatchesLots(doc: { title?: string | null; doc_code?: string | null; notes?: string | null; file_name?: string | null }, lots: Set<string>): boolean {
+  if (!lots.size) return false;
+  const text = norm([doc.title, doc.doc_code, doc.notes, doc.file_name].join(' '));
+  return [...lots].some(lot => lot.length >= 3 && text.includes(lot));
 }
 
 /** Most specific first: fewest products, then highest code, then newest. */
@@ -61,10 +69,13 @@ export function documentSources(owner: DocOwner, category: string): SourceDoc[] 
   const kind = libraryKindOf(category);
 
   // Library documents of the matching kind; the best fit per product suggested
+  // (COAs: those naming the owner's lots, else the best per product)
+  const lots = ownerLots(owner);
   if (kind) {
     const docs = listProductDocs('WHERE d.kind = ?', [kind]);
     const suggested = new Set<number>();
-    for (const line of suggestFor(ownerLines(owner).lines, docs)) {
+    if (kind === 'coa') docs.filter(d => coaMatchesLots(d, lots)).forEach(d => suggested.add(d.id));
+    if (!suggested.size) for (const line of suggestFor(ownerLines(owner).lines, docs)) {
       if (!line.product) continue;
       if (kind === 'declaration') line.documents.forEach((d: any) => suggested.add(d.id));
       else { const top = best(line.documents); if (top) suggested.add(top.id); }
@@ -80,7 +91,6 @@ export function documentSources(owner: DocOwner, category: string): SourceDoc[] 
   }
 
   // Batch documents (COAs first); those of the owner's lots suggested for quality certificates
-  const lots = ownerLots(owner);
   const quality = /quality|coa|analysis/.test(norm(category));
   const batchDocs = db.prepare(`
     SELECT bd.*, b.batch_number FROM batch_documents bd JOIN batches b ON b.id = bd.batch_id
@@ -202,7 +212,7 @@ export function ownerProductIds(owner: DocOwner): number[] {
  * later operations can use it. The same file (by content) is kept once.
  * Returns the library document id.
  */
-export function saveDeclarationToLibrary(buffer: Buffer, fileName: string, owner: DocOwner, userId: number | null): number | null {
+export function saveDeclarationToLibrary(buffer: Buffer, fileName: string, owner: DocOwner, userId: number | null, kind: 'declaration' | 'coa' = 'declaration'): number | null {
   const ext = path.extname(fileName).toLowerCase();
   if (!['.pdf', '.doc', '.docx', '.jpg', '.jpeg', '.png', '.webp'].includes(ext)) return null;
   const sha = crypto.createHash('sha256').update(buffer).digest('hex');
@@ -215,8 +225,8 @@ export function saveDeclarationToLibrary(buffer: Buffer, fileName: string, owner
   const { code, title } = parseLibraryFileName(fileName);
   const r = db.prepare(`
     INSERT INTO product_documents (kind, title, doc_code, file_path, file_name, notes, sha256, uploaded_by)
-    VALUES ('declaration', ?, ?, ?, ?, ?, ?, ?)
-  `).run(title, code, stored, fileName, `Uploaded on ${owner.number}`, sha, userId);
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(kind, title, code, stored, fileName, `Uploaded on ${owner.number}`, sha, userId);
   const id = Number(r.lastInsertRowid);
   addDocumentProducts(id, ownerProductIds(owner));
   return id;

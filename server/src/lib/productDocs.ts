@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import db from '../database.js';
 
 /**
- * Inventory → Documents: MSDS, product specification sheets and declarations.
+ * Inventory → Documents: MSDS, product specification sheets, declarations and COAs.
  * A document is linked to any number of products (`product_document_products`);
  * one with no product is general (applies to every product). An operation
  * takes a COPY of a library file, so replacing it in the library later never
@@ -17,11 +17,11 @@ export const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..'
 export const productDocsDir = path.join(uploadsBase, 'product-docs');
 const operationDocsDir = path.join(uploadsBase, 'operation-docs');
 
-export type ProductDocKind = 'msds' | 'pds' | 'declaration';
-export const PRODUCT_DOC_KINDS: ProductDocKind[] = ['msds', 'pds', 'declaration'];
-export const KIND_LABEL: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Product Specification Sheet', declaration: 'Declaration' };
+export type ProductDocKind = 'msds' | 'pds' | 'declaration' | 'coa';
+export const PRODUCT_DOC_KINDS: ProductDocKind[] = ['msds', 'pds', 'declaration', 'coa'];
+export const KIND_LABEL: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Product Specification Sheet', declaration: 'Declaration', coa: 'COA' };
 /** The operation document category each kind is filed under. */
-export const KIND_CATEGORY: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Product Specification Sheet', declaration: 'Declaration' };
+export const KIND_CATEGORY: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Product Specification Sheet', declaration: 'Declaration', coa: 'COA' };
 
 export interface LinkedProduct { id: number; name: string; sku: string | null }
 

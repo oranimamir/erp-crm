@@ -20,7 +20,7 @@ import { docTitle, type ProductDoc, type ProductDocKind } from './ProductDocumen
 interface SuggestLine { description: string; product: { id: number; name: string } | null; documents: ProductDoc[] }
 
 const KINDS: ProductDocKind[] = ['msds', 'pds', 'declaration'];
-const SECTION_TITLE: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Product Specification Sheet', declaration: 'Declarations' };
+const SECTION_TITLE: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Product Specification Sheet', declaration: 'Declarations', coa: 'COA' };
 
 /**
  * The most specific document of a kind for one product: fewest products
@@ -69,7 +69,7 @@ export default function AddFromLibraryModal({ open, onClose, owner, existingName
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [queries, setQueries] = useState<Record<ProductDocKind, string>>({ msds: '', pds: '', declaration: '' });
+  const [queries, setQueries] = useState<Record<ProductDocKind, string>>({ msds: '', pds: '', declaration: '', coa: '' });
 
   const have = useMemo(() => new Set(existingNames.map(n => n.toLowerCase())), [existingNames]);
   const suggested = useMemo(() => suggestionsOf(lines), [lines]);
@@ -78,7 +78,7 @@ export default function AddFromLibraryModal({ open, onClose, owner, existingName
   useEffect(() => {
     if (!open) return;
     setLoading(true);
-    setQueries({ msds: '', pds: '', declaration: '' });
+    setQueries({ msds: '', pds: '', declaration: '', coa: '' });
     Promise.all([
       api.get('/product-documents/suggest', { params: ownerParams(owner) }),
       api.get('/product-documents'),

@@ -141,3 +141,31 @@ export function isGeneratedDocument(owner: DocOwner, docId: number): boolean {
     UNION SELECT 1 FROM declarations WHERE nco_document_id = ?1
   `).get(docId);
 }
+
+/**
+ * The owner's products with their lot numbers (as written), for a COA: the
+ * generated invoice lines (final over draft), else the NCO lines, else the
+ * order lines without lots.
+ */
+export function ownerProductLots(owner: DocOwner): Array<{ product: string; lots: string[] }> {
+  const rows = db.prepare(`
+    SELECT data FROM invoice_documents WHERE ${owner.fk} = ?
+    ORDER BY CASE WHEN status = 'final' THEN 0 ELSE 1 END, updated_at DESC, id DESC
+  `).all(owner.id) as any[];
+  for (const row of rows) {
+    let data: any;
+    try { data = JSON.parse(row.data); } catch { continue; }
+    const items = Array.isArray(data?.items) ? data.items : [];
+    const out = items.map((it: any) => ({
+      product: String(it.commercial_name || it.product || it.description || it.name || '').trim(),
+      lots: (Array.isArray(it?.lots) ? it.lots : [it?.lot, it?.lot2, it?.lot3, it?.lot4])
+        .map((l: unknown) => String(l ?? '').trim()).filter(Boolean),
+    })).filter((l: any) => l.product);
+    if (out.length) return out;
+  }
+  if (owner.kind === 'nco') {
+    const nco = db.prepare('SELECT items FROM non_commercial_operations WHERE id = ?').get(owner.id) as any;
+    return parseNcoLines(nco?.items).filter(l => l.product).map(l => ({ product: String(l.product), lots: (l.lots || []).filter(Boolean) }));
+  }
+  return ownerLines(owner).lines.filter(l => l.description).map(l => ({ product: l.description, lots: [] }));
+}

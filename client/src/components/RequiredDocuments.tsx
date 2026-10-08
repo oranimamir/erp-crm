@@ -13,12 +13,14 @@ import { type DocOwner, ownerQuery } from '../lib/docOwner';
  * that category is filed. Choose picks documents already in the app (best fit
  * ticked); Upload files one from the computer straight into the category.
  * Then a General document tile (not counted): a supplier's documents, or an upload.
+ * The Declaration and COA tiles list what the generator made for this owner and
+ * open it ("Generate"); COA also keeps Choose (library / batch COAs as they are).
  */
 
 interface Doc { id: number; file_name: string; file_path: string; category_name: string | null }
 interface Category { id: number; name: string }
 
-export interface OperationDeclaration { id: number; title: string; status: 'draft' | 'final'; document_id: number | null; has_draft?: number | boolean }
+export interface OperationDeclaration { id: number; kind?: 'declaration' | 'coa'; title: string; status: 'draft' | 'final'; document_id: number | null; has_draft?: number | boolean }
 
 export default function RequiredDocuments({ owner, documents, categories, onUpload, onPreview, onFiled, onOpenFile, onEditText, declarations = [] }: {
   /** The operation or non-commercial operation the documents belong to. */
@@ -43,7 +45,11 @@ export default function RequiredDocuments({ owner, documents, categories, onUplo
   const [choosing, setChoosing] = useState<Category | null>(null);
   const [fromSupplier, setFromSupplier] = useState<Category | null>(null);
   const navigate = useNavigate();
-  const isDeclaration = (name: string) => name.toLowerCase() === 'declaration';
+  // Tiles the generator fills: Declaration, COA
+  const genKind = (name: string): 'declaration' | 'coa' | null =>
+    name.toLowerCase() === 'declaration' ? 'declaration' : name.toLowerCase() === 'coa' ? 'coa' : null;
+  const isDeclaration = (name: string) => genKind(name) !== null;
+  const generatedFor = (name: string) => declarations.filter(d => (d.kind || 'declaration') === genKind(name));
 
   const done = REQUIRED_OPERATION_DOCS.filter(c => docsInCategory(documents, c).length > 0).length;
   const categoryOf = (name: string) => categories.find(c => c.name.toLowerCase() === name.toLowerCase()) || null;
@@ -90,6 +96,8 @@ export default function RequiredDocuments({ owner, documents, categories, onUplo
           const filed = docsInCategory(documents, name);
           const category = categoryOf(name);
           const has = filed.length > 0;
+          const made = generatedFor(name);
+          const coa = genKind(name) === 'coa';
           return (
             <div key={name}
               className={`rounded-lg border px-3 py-2.5 flex flex-col gap-1.5 ${has ? 'border-green-200 bg-green-50/50' : 'border-gray-200 bg-gray-50/50'}`}>
@@ -101,11 +109,20 @@ export default function RequiredDocuments({ owner, documents, categories, onUplo
                   <span>{name}</span>
                 </span>
                 {isDeclaration(name) ? (
-                  <button type="button" onClick={() => navigate(`/declarations/new?${ownerQuery(owner)}`)}
-                    title="Generate a declaration — start from one in the system or upload one"
-                    className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 flex-shrink-0">
-                    <FilePlus2 size={12} /> {declarations.length || has ? 'Add declaration' : 'Generate'}
-                  </button>
+                  <span className="flex items-center gap-2 flex-shrink-0">
+                    {coa && category && (
+                      <button type="button" onClick={() => setChoosing(category)} disabled={busy !== null}
+                        title="Choose a COA already in the system (library, batches, other operations) as it is"
+                        className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 disabled:opacity-50">
+                        <ListChecks size={12} /> Choose
+                      </button>
+                    )}
+                    <button type="button" onClick={() => navigate(`/declarations/new?${ownerQuery(owner)}${coa ? '&kind=coa' : ''}`)}
+                      title={coa ? 'Generate a COA — start from the right one in the system (this operation\'s lots first), upload one or start blank' : 'Generate a declaration — start from one in the system or upload one'}
+                      className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700">
+                      <FilePlus2 size={12} /> {made.length || has ? (coa ? 'Add COA' : 'Add declaration') : 'Generate'}
+                    </button>
+                  </span>
                 ) : category && (
                   <span className="flex items-center gap-2 flex-shrink-0">
                     <button type="button" onClick={() => setChoosing(category)} disabled={busy !== null}
@@ -121,13 +138,13 @@ export default function RequiredDocuments({ owner, documents, categories, onUplo
                   </span>
                 )}
               </div>
-              {isDeclaration(name) && declarations.length > 0 && (
+              {isDeclaration(name) && made.length > 0 && (
                 <ul className="space-y-1">
-                  {declarations.map(dec => {
+                  {made.map(dec => {
                     const doc = dec.document_id ? filed.find(f => f.id === dec.document_id) : undefined;
                     return (
                       <li key={`dec${dec.id}`} className="flex items-start gap-1">
-                        <button type="button" onClick={() => navigate(`/declarations/${dec.id}`)} title="Open in the declaration generator"
+                        <button type="button" onClick={() => navigate(`/declarations/${dec.id}`)} title={`Open in the ${coa ? 'COA' : 'declaration'} generator`}
                           className="mt-0.5 flex-shrink-0 text-gray-400 hover:text-primary-600"><PenLine size={11} /></button>
                         <button type="button" onClick={() => (doc ? onPreview(doc, name) : navigate(`/declarations/${dec.id}`))}
                           className="flex items-start gap-1 text-left text-xs text-gray-600 hover:text-primary-600 max-w-full"
@@ -144,9 +161,9 @@ export default function RequiredDocuments({ owner, documents, categories, onUplo
                   })}
                 </ul>
               )}
-              {isDeclaration(name) && !has && declarations.length > 0 ? null : has ? (
+              {isDeclaration(name) && !has && made.length > 0 ? null : has ? (
                 <ul className="space-y-1">
-                  {filed.filter(d => !(isDeclaration(name) && declarations.some(dec => dec.document_id === d.id))).map(d => (
+                  {filed.filter(d => !(isDeclaration(name) && made.some(dec => dec.document_id === d.id))).map(d => (
                     <li key={d.id} className="flex items-start gap-1">
                       {onEditText && /\.docx$/i.test(d.file_name) && (
                         <button type="button" onClick={() => onEditText(d.id)} title="Edit the text"

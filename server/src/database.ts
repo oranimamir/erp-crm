@@ -2033,7 +2033,7 @@ export async function initializeDatabase() {
   const productDocumentsSql = (table: string) => `
     CREATE TABLE ${table} (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      kind TEXT NOT NULL CHECK (kind IN ('msds', 'pds', 'declaration')),
+      kind TEXT NOT NULL CHECK (kind IN ('msds', 'pds', 'declaration', 'coa')),
       title TEXT,
       doc_code TEXT,
       file_path TEXT NOT NULL,
@@ -2084,6 +2084,36 @@ export async function initializeDatabase() {
   }
   db.exec(productDocLinksSql);
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_product_doc_links_product ON product_document_products(product_id)`); } catch (_) {}
+
+  // The library's kind gains 'coa' (Inventory → Documents → COA). Rebuilt from
+  // its own stored SQL so later-added columns survive; the links keep pointing
+  // at product_documents by name.
+  try {
+    const docsSql = (db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='product_documents'").get() as any)?.sql as string | undefined;
+    if (docsSql && !docsSql.includes("'coa'")) {
+      const cols = (db.prepare(`PRAGMA table_info(product_documents)`).all() as any[]).map(c => c.name).join(', ');
+      const createNew = docsSql
+        .replace(/CHECK\s*\(\s*kind\s+IN\s*\(([^)]*)\)\s*\)/i, (_m, list) => `CHECK (kind IN (${list}, 'coa'))`)
+        .replace(/CREATE TABLE\s+(IF NOT EXISTS\s+)?["`]?product_documents["`]?/i, 'CREATE TABLE product_documents_new');
+      db.exec(`PRAGMA foreign_keys = OFF`, true);
+      try {
+        db.exec(`
+          BEGIN;
+          ${createNew};
+          INSERT INTO product_documents_new (${cols}) SELECT ${cols} FROM product_documents;
+          DROP TABLE product_documents;
+          ALTER TABLE product_documents_new RENAME TO product_documents;
+          COMMIT;
+        `, true);
+        db.saveToDisk();
+        console.log("[db] product_documents kind can be 'coa'");
+      } catch (err: any) {
+        console.error(`[db] Failed to add the COA kind: ${err?.message || err}`);
+        try { db.exec(`ROLLBACK`, true); } catch { /* not in a transaction */ }
+      }
+      db.exec(`PRAGMA foreign_keys = ON`, true);
+    }
+  } catch (_) { /* ignore */ }
 
   // products.sku optional: products added from the document library get their
   // SKU later. Rebuilt from its own stored SQL so later-added columns survive.
@@ -2171,6 +2201,8 @@ export async function initializeDatabase() {
   }
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_declarations_operation ON declarations(operation_id)`); } catch (_) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_declarations_nco ON declarations(nco_id)`); } catch (_) {}
+  // The generator also makes COAs: kind 'declaration' | 'coa'
+  try { db.exec(`ALTER TABLE declarations ADD COLUMN kind TEXT NOT NULL DEFAULT 'declaration'`); } catch (_) { /* column may already exist */ }
 
   // Supplier → Documents: certificates, contracts, specs… kept on the supplier;
   // the General document tile on an operation / NCO copies them in

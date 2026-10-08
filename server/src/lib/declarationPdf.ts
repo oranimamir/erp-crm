@@ -51,7 +51,7 @@ function runs(text: string): Array<{ text: string; bold: boolean }> {
   return out.length ? out : [{ text: ' ', bold: false }];
 }
 
-export async function buildDeclarationPdf(data: DeclarationData): Promise<Buffer> {
+export async function buildDeclarationPdf(data: DeclarationData, kind: 'declaration' | 'coa' = 'declaration'): Promise<Buffer> {
   const PDFDocument = (await import('pdfkit')).default;
   const doc = new PDFDocument({ size: 'A4', margin: 0, bufferPages: true });
   const chunks: Buffer[] = [];
@@ -65,7 +65,7 @@ export async function buildDeclarationPdf(data: DeclarationData): Promise<Buffer
   const tx = L + logoW + 24;
   const tw = R - tx;
   doc.font('Helvetica-Bold').fontSize(16).fillColor(GREEN);
-  const title = data.title || 'Declaration';
+  const title = data.title || (kind === 'coa' ? 'Certificate of Analysis' : 'Declaration');
   const titleH = doc.heightOfString(title, { width: tw, align: 'right' });
   let hy = TOP + Math.max(0, (logoH - titleH - 16) / 2);
   doc.text(title, tx, hy, { width: tw, align: 'right' });
@@ -179,7 +179,7 @@ export async function buildDeclarationPdf(data: DeclarationData): Promise<Buffer
   const closingH = 22 + (hasSig ? 74 : 30) + 34;
   y += 6;
   ensure(closingH);
-  const issued = `This statement was issued${data.place ? ` in ${data.place}` : ''}${data.date ? ` on ${declarationDate(data.date)}` : ''} by`;
+  const issued = `This ${kind === 'coa' ? 'certificate' : 'statement'} was issued${data.place ? ` in ${data.place}` : ''}${data.date ? ` on ${declarationDate(data.date)}` : ''} by`;
   doc.font('Helvetica').fontSize(BODY).fillColor(INK).text(issued, L, y, { width: W });
   y = doc.y + 6;
   if (hasSig) {

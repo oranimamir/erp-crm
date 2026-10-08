@@ -16,6 +16,9 @@ import { type DocOwner, ownerParams, ownerPage } from '../lib/docOwner';
  * one generated on another operation, an upload, or blank). /declarations/:id —
  * edit it with a live preview; Save draft keeps the form, Confirm & generate
  * files the PDF under the operation (category Declaration).
+ * With ?kind=coa it makes a Certificate of Analysis instead: library COAs (the
+ * operation's lots first), batch COAs, earlier ones, an upload or a blank COA
+ * laid out from the operation's products and lots; filed as COA.
  */
 
 type Block = { type: 'paragraph'; text: string } | { type: 'table'; rows: string[][]; header: boolean };
@@ -25,8 +28,12 @@ interface DeclarationData {
   blocks: Block[];
   place: string; date: string; signatory: string; role: string; signature_file: string | null;
 }
+type GenKind = 'declaration' | 'coa';
+const NAME: Record<GenKind, string> = { declaration: 'declaration', coa: 'COA' };
+const TITLE: Record<GenKind, string> = { declaration: 'Declaration', coa: 'Certificate of Analysis' };
+
 interface Declaration {
-  id: number; operation_id: number | null; nco_id: number | null; title: string; status: 'draft' | 'final';
+  id: number; kind?: GenKind; operation_id: number | null; nco_id: number | null; title: string; status: 'draft' | 'final';
   data: DeclarationData; draft: DeclarationData | null; file_path: string | null; file_name: string | null;
   /** The operation or NCO it belongs to (`kind`), in one shape */
   operation: { id: number; kind: 'operation' | 'nco'; operation_number: string; customer_name: string | null; customer_address: string | null } | null;
@@ -61,10 +68,13 @@ function StartDeclaration() {
   const ncoId = Number(params.get('nco_id'));
   const operationId = Number(params.get('operation_id'));
   const owner: DocOwner | null = ncoId ? { kind: 'nco', id: ncoId } : operationId ? { kind: 'operation', id: operationId } : null;
+  const kind: GenKind = params.get('kind') === 'coa' ? 'coa' : 'declaration';
+  const name = NAME[kind];
   const navigate = useNavigate();
   const { addToast } = useToast();
   const [library, setLibrary] = useState<any[]>([]);
   const [previous, setPrevious] = useState<any[]>([]);
+  const [batches, setBatches] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
@@ -73,19 +83,20 @@ function StartDeclaration() {
 
   useEffect(() => {
     if (!owner) return;
-    api.get('/declarations/sources', { params: ownerParams(owner) })
-      .then(({ data }) => { setLibrary(data.library || []); setPrevious(data.previous || []); })
-      .catch(() => addToast('Failed to load the declarations', 'error'))
+    api.get('/declarations/sources', { params: { ...ownerParams(owner), kind } })
+      .then(({ data }) => { setLibrary(data.library || []); setPrevious(data.previous || []); setBatches(data.batches || []); })
+      .catch(() => addToast(`Failed to load the ${name}s`, 'error'))
       .finally(() => setLoading(false));
-  }, [owner?.kind, owner?.id]);
+  }, [owner?.kind, owner?.id, kind]);
 
   async function start(body: FormData | Record<string, unknown>) {
     setBusy(true);
     try {
-      const { data } = await api.post('/declarations', body);
+      if (body instanceof FormData) body.append('kind', kind);
+      const { data } = await api.post('/declarations', body instanceof FormData ? body : { ...body, kind });
       navigate(`/declarations/${data.id}`, { replace: true });
     } catch (err: any) {
-      addToast(err.response?.data?.error || 'Could not start the declaration', 'error');
+      addToast(err.response?.data?.error || `Could not start the ${name}`, 'error');
       setBusy(false);
     }
   }
@@ -102,6 +113,8 @@ function StartDeclaration() {
   const suggested = library.filter(d => d.suggested && match(`${d.title} ${d.file_name}`));
   const others = library.filter(d => !d.suggested && match(`${d.title} ${d.file_name} ${d.products.map((p: any) => p.name).join(' ')}`));
   const prev = previous.filter(d => match(`${d.title} ${d.operation_number} ${d.customer_name || ''}`));
+  const batchList = batches.filter(b => match(`${b.batch_number} ${b.file_name} ${b.document_name || ''}`))
+    .sort((a, b) => Number(b.suggested) - Number(a.suggested));
 
   if (!owner) return <p className="text-sm text-gray-500">Open the generator from an operation's Shipping documents.</p>;
 
@@ -123,8 +136,8 @@ function StartDeclaration() {
         <ArrowLeft size={16} /> Back to {owner.kind === 'nco' ? 'the non-commercial operation' : 'operation'}
       </Link>
       <div>
-        <h1 className="text-xl font-bold text-gray-900">New declaration</h1>
-        <p className="text-sm text-gray-500">Start from a declaration in the system or upload one — you can change everything before generating the PDF.</p>
+        <h1 className="text-xl font-bold text-gray-900">New {kind === 'coa' ? 'Certificate of Analysis (COA)' : 'declaration'}</h1>
+        <p className="text-sm text-gray-500">Start from a {name} in the system or upload one — you can change everything before generating the PDF.</p>
       </div>
 
       <label
@@ -134,19 +147,19 @@ function StartDeclaration() {
         className={`flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed py-6 cursor-pointer transition-colors ${
           dragging ? 'border-primary-400 bg-primary-50' : 'border-gray-200 bg-white hover:bg-gray-50'}`}>
         {busy ? <Loader2 size={20} className="animate-spin text-primary-600" /> : <Upload size={20} className="text-gray-400" />}
-        <span className="text-sm text-gray-700">Upload a declaration — drag &amp; drop or click</span>
-        <span className="text-xs text-gray-400">Word (.docx) or PDF · also saved to Inventory → Documents → Declarations for later operations</span>
+        <span className="text-sm text-gray-700">Upload a {name} — drag &amp; drop or click</span>
+        <span className="text-xs text-gray-400">Word (.docx) or PDF · also saved to Inventory → Documents → {kind === 'coa' ? 'COA' : 'Declarations'} for later operations</span>
         <input ref={fileRef} type="file" accept=".docx,.pdf" className="hidden" onChange={e => { upload(e.target.files?.[0]); e.target.value = ''; }} />
       </label>
 
       <div className="flex items-center gap-3">
         <div className="relative flex-1 max-w-sm">
           <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search declarations…"
+          <input value={query} onChange={e => setQuery(e.target.value)} placeholder={`Search ${name}s…`}
             className="w-full rounded-lg border border-gray-300 pl-8 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
         </div>
         <Button variant="secondary" size="sm" disabled={busy} onClick={() => start(ownerParams(owner))}>
-          <FilePlus2 size={14} /> Start blank
+          <FilePlus2 size={14} /> {kind === 'coa' ? 'Blank COA (products & lots filled in)' : 'Start blank'}
         </Button>
       </div>
 
@@ -156,7 +169,7 @@ function StartDeclaration() {
         <div className="space-y-5">
           {suggested.length > 0 && (
             <section className="space-y-2">
-              <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Suggested for this operation's products</h2>
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Suggested for this operation's {kind === 'coa' ? 'lots / products' : 'products'}</h2>
               <div className="grid gap-2 sm:grid-cols-2">
                 {suggested.map(d => card(`l${d.id}`, d.title || d.file_name, d.products.map((p: any) => p.name).join(', '),
                   () => start({ ...ownerParams(owner), source_type: 'library', source_id: d.id }),
@@ -165,14 +178,24 @@ function StartDeclaration() {
             </section>
           )}
           <section className="space-y-2">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Declaration library</h2>
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500">{kind === 'coa' ? 'COA' : 'Declaration'} library</h2>
             {others.length ? (
               <div className="grid gap-2 sm:grid-cols-2">
                 {others.map(d => card(`l${d.id}`, d.title || d.file_name, d.products.length ? d.products.map((p: any) => p.name).join(', ') : 'General — all products',
                   () => start({ ...ownerParams(owner), source_type: 'library', source_id: d.id })))}
               </div>
-            ) : <p className="text-sm text-gray-400">{library.length ? 'Nothing matches.' : 'No declarations in the library yet — upload one above.'}</p>}
+            ) : <p className="text-sm text-gray-400">{library.length ? 'Nothing matches.' : `No ${name}s in the library yet — upload one above.`}</p>}
           </section>
+          {batchList.length > 0 && (
+            <section className="space-y-2">
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Batch COAs (Inventory → Batches)</h2>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {batchList.map(b => card(`b${b.id}`, `Batch ${b.batch_number}`, `${b.document_name || b.file_name} · ${formatDate(b.created_at)}`,
+                  () => start({ ...ownerParams(owner), source_type: 'batch', source_id: b.id }),
+                  b.suggested ? <span className="flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-xs font-medium text-emerald-700"><Sparkles size={11} /> This operation's lot</span> : undefined))}
+              </div>
+            </section>
+          )}
           {prev.length > 0 && (
             <section className="space-y-2">
               <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Generated on other operations</h2>
@@ -225,7 +248,7 @@ function DeclarationEditor({ id }: { id: number }) {
     if (!data) return;
     setPreviewing(true);
     try {
-      const res = await api.post('/declarations/preview', { data }, { responseType: 'blob' });
+      const res = await api.post('/declarations/preview', { data, kind: record?.kind }, { responseType: 'blob' });
       if (urlRef.current) URL.revokeObjectURL(urlRef.current);
       setPreviewUrl(URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' })));
     } catch {
@@ -255,10 +278,11 @@ function DeclarationEditor({ id }: { id: number }) {
     set({ blocks: next });
   };
   const generated = record.status === 'final';
+  const kind: GenKind = record.kind === 'coa' ? 'coa' : 'declaration';
 
   async function save(status: 'draft' | 'final') {
     if (!form) return;
-    if (status === 'final' && !form.title.trim()) { addToast('Give the declaration a title', 'error'); return; }
+    if (status === 'final' && !form.title.trim()) { addToast(`Give the ${NAME[kind]} a title`, 'error'); return; }
     setSaving(true);
     try {
       const { data } = await api.put(`/declarations/${id}`, { data: form, status });
@@ -275,7 +299,7 @@ function DeclarationEditor({ id }: { id: number }) {
     const res = await api.get(`/declarations/${id}/pdf`, { responseType: 'blob' });
     const href = URL.createObjectURL(res.data);
     const a = document.createElement('a');
-    a.href = href; a.download = record?.file_name || 'declaration.pdf'; a.click();
+    a.href = href; a.download = record?.file_name || `${NAME[kind]}.pdf`; a.click();
     setTimeout(() => URL.revokeObjectURL(href), 1000);
   }
 
@@ -303,7 +327,7 @@ function DeclarationEditor({ id }: { id: number }) {
             {previewing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
           </Button>
           <Button variant="secondary" size="sm" onClick={() => save('draft')} disabled={saving}
-            title={generated ? 'Keep these edits as a draft — the generated PDF stays until you regenerate' : 'Keep the declaration as a draft — nothing is filed yet'}>
+            title={generated ? 'Keep these edits as a draft — the generated PDF stays until you regenerate' : `Keep the ${NAME[kind]} as a draft — nothing is filed yet`}>
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save draft
           </Button>
           <Button size="sm" onClick={() => save('final')} disabled={saving}>
@@ -317,8 +341,8 @@ function DeclarationEditor({ id }: { id: number }) {
       </div>
 
       <div>
-        <h1 className="text-xl font-bold text-gray-900">{form.title || 'Declaration'}</h1>
-        <p className="text-sm text-gray-500">Declaration{op ? ` for ${op.operation_number}${op.customer_name ? ` · ${op.customer_name}` : ''}` : ''} — generated as a PDF and filed under its Declaration documents.</p>
+        <h1 className="text-xl font-bold text-gray-900">{form.title || TITLE[kind]}</h1>
+        <p className="text-sm text-gray-500">{kind === 'coa' ? 'COA' : 'Declaration'}{op ? ` for ${op.operation_number}${op.customer_name ? ` · ${op.customer_name}` : ''}` : ''} — generated as a PDF and filed under its {kind === 'coa' ? 'COA' : 'Declaration'} documents.</p>
       </div>
 
       {!generated && (
@@ -343,7 +367,7 @@ function DeclarationEditor({ id }: { id: number }) {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="sm:col-span-2">
                 <label className={labelCls}>Title *</label>
-                <input value={form.title} onChange={e => set({ title: e.target.value })} className={inputCls} placeholder="e.g. Midas Naturlac SL10 Composition" />
+                <input value={form.title} onChange={e => set({ title: e.target.value })} className={inputCls} placeholder={kind === 'coa' ? 'Certificate of Analysis' : 'e.g. Midas Naturlac SL10 Composition'} />
               </div>
               <div>
                 <label className={labelCls}>Department</label>
@@ -374,7 +398,7 @@ function DeclarationEditor({ id }: { id: number }) {
             )}
           </Section>
 
-          <Section icon={<AlignLeft size={16} />} title="Statement">
+          <Section icon={<AlignLeft size={16} />} title={kind === 'coa' ? 'Product, lots & results' : 'Statement'}>
             <p className="mb-3 text-xs text-gray-500">Wrap words in <code className="rounded bg-gray-100 px-1">**double stars**</code> for bold. Start a line with <code className="rounded bg-gray-100 px-1">• </code> for a bullet, <code className="rounded bg-gray-100 px-1">{'  – '}</code> for a sub-bullet.</p>
             <div className="space-y-3">
               {form.blocks.map((b, i) => (
@@ -399,7 +423,7 @@ function DeclarationEditor({ id }: { id: number }) {
               ))}
               <div className="flex gap-2">
                 <Button variant="secondary" size="sm" onClick={() => set({ blocks: [...form.blocks, { type: 'paragraph', text: '' }] })}><Plus size={14} /> Paragraph</Button>
-                <Button variant="secondary" size="sm" onClick={() => set({ blocks: [...form.blocks, { type: 'table', header: true, rows: [['Element', 'Value'], ['', '']] }] })}><Table2 size={14} /> Table</Button>
+                <Button variant="secondary" size="sm" onClick={() => set({ blocks: [...form.blocks, { type: 'table', header: true, rows: kind === 'coa' ? [['Parameter', 'Specification', 'Method', 'Result'], ['', '', '', '']] : [['Element', 'Value'], ['', '']] }] })}><Table2 size={14} /> Table</Button>
               </div>
             </div>
           </Section>
