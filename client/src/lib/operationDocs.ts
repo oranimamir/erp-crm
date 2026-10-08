@@ -37,7 +37,7 @@ export function missingRequired(docs: Array<{ category_name: string | null }>): 
 }
 
 /** Commercial documents first, then the shipping checklist in its order. */
-const SENDING_ORDER = ['invoice', 'packing list', 'bill of lading', ...REQUIRED_OPERATION_DOCS.map(norm)];
+const SENDING_ORDER = ['commercial invoice', 'invoice', 'sample invoice', 'packing list', 'bill of lading', ...REQUIRED_OPERATION_DOCS.map(norm)];
 
 /**
  * The order documents are listed, numbered and sent in: invoice, packing list,

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { CheckCircle2, Circle, Eye, Upload, Loader2, ClipboardCheck, ListChecks, Type, FilePlus2, PenLine } from 'lucide-react';
 import { REQUIRED_OPERATION_DOCS, docsInCategory } from '../lib/operationDocs';
 import ChooseDocumentModal from './ChooseDocumentModal';
+import { type DocOwner, ownerQuery } from '../lib/docOwner';
 
 /**
  * The shipping documents an operation needs (Quality, Origin, Insurance,
@@ -17,8 +18,9 @@ interface Category { id: number; name: string }
 
 export interface OperationDeclaration { id: number; title: string; status: 'draft' | 'final'; document_id: number | null; has_draft?: number | boolean }
 
-export default function RequiredDocuments({ operationId, documents, categories, onUpload, onPreview, onFiled, onOpenFile, onEditText, declarations = [] }: {
-  operationId: number;
+export default function RequiredDocuments({ owner, documents, categories, onUpload, onPreview, onFiled, onOpenFile, onEditText, declarations = [] }: {
+  /** The operation or non-commercial operation the documents belong to. */
+  owner: DocOwner;
   documents: Doc[];
   categories: Category[];
   /** After documents were chosen from the system. */
@@ -75,7 +77,7 @@ export default function RequiredDocuments({ operationId, documents, categories, 
       </div>
 
       <input ref={inputRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={onFile} />
-      <ChooseDocumentModal category={choosing} operationId={operationId} onClose={() => setChoosing(null)}
+      <ChooseDocumentModal category={choosing} owner={owner} onClose={() => setChoosing(null)}
         onFiled={onFiled} onUpload={onUpload} onPreview={onOpenFile} />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 p-4">
@@ -94,7 +96,7 @@ export default function RequiredDocuments({ operationId, documents, categories, 
                   <span>{name}</span>
                 </span>
                 {isDeclaration(name) ? (
-                  <button type="button" onClick={() => navigate(`/declarations/new?operation_id=${operationId}`)}
+                  <button type="button" onClick={() => navigate(`/declarations/new?${ownerQuery(owner)}`)}
                     title="Generate a declaration — start from one in the system or upload one"
                     className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 flex-shrink-0">
                     <FilePlus2 size={12} /> {declarations.length || has ? 'Add declaration' : 'Generate'}

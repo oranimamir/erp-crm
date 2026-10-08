@@ -22,9 +22,10 @@ const splitName = (name: string) => {
   return { base: m?.[1] || name, ext: m?.[2] || '' };
 };
 
-export default function OperationDocumentEditModal({ doc, operationId, categories, onClose, onSaved }: {
+export default function OperationDocumentEditModal({ doc, apiBase, categories, onClose, onSaved }: {
   doc: EditableDoc | null;
-  operationId: number | string;
+  /** The owner's API base: /operations/12 or /non-commercial-operations/5 */
+  apiBase: string;
   categories: Array<{ id: number; name: string }>;
   onClose: () => void;
   onSaved: () => void;
@@ -56,7 +57,7 @@ export default function OperationDocumentEditModal({ doc, operationId, categorie
       fd.append('file_name', `${name.trim()}${ext}`);
       fd.append('category_id', categoryId);
       fd.append('notes', notes.trim());
-      await api.put(`/operations/${operationId}/documents/${doc.id}`, fd);
+      await api.put(`${apiBase}/documents/${doc.id}`, fd);
       addToast('Document updated', 'success');
       onSaved();
       onClose();

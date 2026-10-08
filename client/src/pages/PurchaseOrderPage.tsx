@@ -54,7 +54,8 @@ interface PoData {
 interface PurchaseOrder {
   id: number;
   po_number: string;
-  order_id: number;
+  order_id: number | null;
+  nco_id?: number | null;
   operation_id: number | null;
   supplier_id: number | null;
   file_name: string | null;
@@ -197,6 +198,8 @@ export default function PurchaseOrderPage() {
 
   const orderIdParam = params.get('order_id');
   const operationIdParam = params.get('operation_id');
+  // A non-commercial operation instead of an order (?nco_id=)
+  const ncoIdParam = params.get('nco_id');
 
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState<PoData>(blankData());
@@ -204,6 +207,7 @@ export default function PurchaseOrderPage() {
   const [orderId, setOrderId] = useState<number | null>(orderIdParam ? Number(orderIdParam) : null);
   const [operationId, setOperationId] = useState<number | null>(operationIdParam ? Number(operationIdParam) : null);
   const [operationNumber, setOperationNumber] = useState('');
+  const [ncoId, setNcoId] = useState<number | null>(ncoIdParam ? Number(ncoIdParam) : null);
   const [entity, setEntity] = useState<string>('BE');
   const entities = useCompanyEntities();
   const [suppliers, setSuppliers] = useState<Array<{ id: number; name: string; category?: string }>>([]);
@@ -245,6 +249,7 @@ export default function PurchaseOrderPage() {
     setForm(toFormData(record.draft || record.data));
     setOrderId(record.order_id);
     setOperationId(record.operation_id);
+    setNcoId(record.nco_id ?? null);
     setSupplierId(record.supplier_id ?? null);
   }, []);
 
@@ -260,13 +265,13 @@ export default function PurchaseOrderPage() {
           setSuppliers(data.suppliers || []);
           return;
         }
-        if (!orderIdParam) {
+        if (!orderIdParam && !ncoIdParam) {
           addToast('No order selected', 'error');
           navigate('/operations');
           return;
         }
         const { data } = await api.get('/purchase-orders/prepare', {
-          params: { order_id: orderIdParam, operation_id: operationIdParam || undefined },
+          params: ncoIdParam ? { nco_id: ncoIdParam } : { order_id: orderIdParam, operation_id: operationIdParam || undefined },
         });
         if (cancelled) return;
         setSuppliers(data.suppliers || []);
@@ -281,6 +286,7 @@ export default function PurchaseOrderPage() {
             setOperationId(data.operation.id);
             setOperationNumber(data.operation.operation_number);
           }
+          if (data.nco) setOperationNumber(data.nco.nco_number);
         }
       } catch (err: any) {
         if (!cancelled) {
@@ -294,7 +300,7 @@ export default function PurchaseOrderPage() {
 
     load();
     return () => { cancelled = true; };
-  }, [id, orderIdParam]);
+  }, [id, orderIdParam, ncoIdParam]);
 
   useEffect(() => {
     if (!showEmail) return;
@@ -309,7 +315,9 @@ export default function PurchaseOrderPage() {
     if (purchaseOrder) { addToast('Already generated — edit the fields directly', 'info'); return; }
     try {
       const { data } = await api.get('/purchase-orders/prepare', {
-        params: { order_id: orderIdParam || orderId, operation_id: operationId || undefined, entity: nextEntity, supplier_id: supplierId || undefined },
+        params: ncoId
+          ? { nco_id: ncoId, entity: nextEntity, supplier_id: supplierId || undefined }
+          : { order_id: orderIdParam || orderId, operation_id: operationId || undefined, entity: nextEntity, supplier_id: supplierId || undefined },
       });
       if (data.draft) {
         const fresh = toFormData(data.draft);
@@ -361,19 +369,19 @@ export default function PurchaseOrderPage() {
   }
 
   async function handleSave(status: 'draft' | 'final') {
-    if (!orderId) { addToast('No order linked', 'error'); return; }
+    if (!orderId && !ncoId) { addToast('No order linked', 'error'); return; }
     // A draft can be saved before the supplier is known
     if (status === 'final' && !form.client_name.trim()) { addToast('Choose the supplier first', 'error'); return; }
     setSaving(true);
     try {
-      const body = { order_id: orderId, operation_id: operationId, supplier_id: supplierId, status, data: toPayload(form) };
+      const body = { order_id: orderId, operation_id: operationId, nco_id: ncoId, supplier_id: supplierId, status, data: toPayload(form) };
       const { data } = purchaseOrder
         ? await api.put(`/purchase-orders/${purchaseOrder.id}`, body)
         : await api.post('/purchase-orders', body);
       adopt(data);
       addToast(status === 'draft'
         ? `Draft ${data.po_number} saved`
-        : `Generated ${data.file_name}${operationId ? ' — filed under the operation documents' : ''}`, 'success');
+        : `Generated ${data.file_name}${operationId || ncoId ? ' — filed under the documents' : ''}`, 'success');
       if (!purchaseOrder) navigate(`/purchase-orders/${data.id}`, { replace: true });
     } catch (err: any) {
       addToast(err.response?.data?.error || (status === 'draft' ? 'Failed to save the draft' : 'Failed to generate the purchase order'), 'error');
@@ -432,13 +440,13 @@ export default function PurchaseOrderPage() {
   const isDraft = !purchaseOrder || purchaseOrder.status === 'draft';
   const generated = !!purchaseOrder && !isDraft;
 
-  const backTo = operationId ? `/operations/${operationId}` : '/operations';
+  const backTo = ncoId ? `/non-commercial-operations/${ncoId}` : operationId ? `/operations/${operationId}` : '/operations';
 
   return (
     <div className="space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
         <Link to={backTo} className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
-          <ArrowLeft size={16} /> Back to operation
+          <ArrowLeft size={16} /> Back to {ncoId ? 'the non-commercial operation' : 'operation'}
         </Link>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="secondary" size="sm" onClick={handlePreview} disabled={previewing}>

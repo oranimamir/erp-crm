@@ -1049,7 +1049,7 @@ export default function OperationDetailPage() {
 
       {/* ── Shipping documents checklist ───────────────────────────────────── */}
       <RequiredDocuments
-        operationId={operation.id}
+        owner={{ kind: 'operation', id: operation.id }}
         onFiled={fetchOperation}
         onOpenFile={openPreview}
         onEditText={docId => setTextDocId(docId)}
@@ -1109,7 +1109,7 @@ export default function OperationDetailPage() {
         <AddFromLibraryModal
           open={showLibrary}
           onClose={() => setShowLibrary(false)}
-          operationId={operation.id}
+          owner={{ kind: 'operation', id: operation.id }}
           existingNames={operation.documents.map(d => d.file_name)}
           onAdded={fetchOperation}
         />
@@ -1275,7 +1275,7 @@ export default function OperationDetailPage() {
       <DocxTextEditModal endpoint={textDocId !== null ? `/operations/${operation.id}/documents/${textDocId}/text` : null}
         title="Edit document text" note="Only this operation's copy changes — the library stays as it is."
         onClose={() => setTextDocId(null)} onSaved={fetchOperation} />
-      <OperationDocumentEditModal doc={editDoc} operationId={operation.id} categories={categories}
+      <OperationDocumentEditModal doc={editDoc} apiBase={`/operations/${operation.id}`} categories={categories}
         onClose={() => setEditDoc(null)} onSaved={fetchOperation} />
       {compareDocId !== null && (
         <DocumentCompareModal docs={operation.documents} initialLeft={compareDocId} onClose={() => setCompareDocId(null)} />

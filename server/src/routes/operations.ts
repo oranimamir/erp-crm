@@ -10,11 +10,10 @@ import { sendDocumentsEmail, withSizes } from '../lib/documentMail.js';
 import { uploadOperationDoc } from '../middleware/upload.js';
 import { deleteInvoiceDocument } from './invoice-documents.js';
 import { findBillOfLading } from './packing-lists.js';
-import { documentSources, fileFromSources, saveDeclarationToLibrary } from '../lib/documentSources.js';
+import { saveDeclarationToLibrary } from '../lib/documentSources.js';
+import { mountOwnerDocumentRoutes } from '../lib/ownerDocumentRoutes.js';
+import { getOwner } from '../lib/docOwner.js';
 import { deleteDeclaration } from './declarations.js';
-import { categoryIdByName } from '../lib/productDocs.js';
-import { readDocxParagraphs, writeDocxParagraphs } from '../lib/docxText.js';
-import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -786,7 +785,7 @@ router.post('/:id/documents', uploadOperationDoc.single('file'), (req: Request, 
   // A declaration uploaded here also goes into the library for later operations
   if (/^declarations?$/i.test(String((doc as any)?.category_name || '').trim())) {
     try {
-      saveDeclarationToLibrary(fs.readFileSync(req.file.path), req.file.originalname, operation.id, req.user?.userId ?? null);
+      saveDeclarationToLibrary(fs.readFileSync(req.file.path), req.file.originalname, getOwner('operation', operation.id)!, req.user?.userId ?? null);
     } catch (err: any) {
       console.error('[operations] could not save the declaration to the library:', err?.message || err);
     }
@@ -796,142 +795,9 @@ router.post('/:id/documents', uploadOperationDoc.single('file'), (req: Request, 
   res.status(201).json(doc);
 });
 
-// ── Shipping document tiles: choose from the system ────────────────────────
-
-/** GET /api/operations/:id/document-sources?category= — documents in the app that could fill the category. */
-router.get('/:id/document-sources', (req: Request, res: Response) => {
-  const category = String(req.query.category || '').trim();
-  if (!category) { res.status(400).json({ error: 'category is required' }); return; }
-  const op = db.prepare('SELECT id FROM operations WHERE id = ?').get(Number(req.params.id));
-  if (!op) { res.status(404).json({ error: 'Operation not found' }); return; }
-  res.json({ data: documentSources(Number(req.params.id), category) });
-});
-
-/** POST /api/operations/:id/documents/from-system — { category, items: [{ source, id }] } */
-router.post('/:id/documents/from-system', (req: Request, res: Response) => {
-  const op = db.prepare('SELECT id, operation_number FROM operations WHERE id = ?').get(Number(req.params.id)) as any;
-  if (!op) { res.status(404).json({ error: 'Operation not found' }); return; }
-  const category = String(req.body?.category || '').trim();
-  const items = Array.isArray(req.body?.items) ? req.body.items : [];
-  if (!category || !items.length) { res.status(400).json({ error: 'Choose at least one document' }); return; }
-  const categoryId = categoryIdByName(category);
-  if (!categoryId) { res.status(400).json({ error: 'Unknown category' }); return; }
-  const result = fileFromSources(op.id, categoryId, items);
-  if (result.added) {
-    notifyAdmin({
-      action: 'updated', entity: 'Operation', label: `Operation ${op.operation_number}`,
-      detail: `${result.added} document(s) filed as ${category}`,
-      performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
-    });
-  }
-  res.json(result);
-});
-
-// ── Edit the text of a Word document (declarations) ────────────────────────
-
-function wordDocOf(req: Request): any | null {
-  const doc = db.prepare('SELECT * FROM operation_documents WHERE id = ? AND operation_id = ?')
-    .get(Number(req.params.docId), Number(req.params.id)) as any;
-  return doc && /\.docx$/i.test(doc.file_name) && /^[a-zA-Z0-9._-]+$/.test(doc.file_path) ? doc : null;
-}
-
-// GET /api/operations/:id/documents/:docId/text — the paragraphs of a .docx
-router.get('/:id/documents/:docId/text', async (req: Request, res: Response) => {
-  const doc = wordDocOf(req);
-  if (!doc) { res.status(404).json({ error: 'Only Word (.docx) documents can be edited here' }); return; }
-  const abs = path.join(uploadsBase, 'operation-docs', doc.file_path);
-  if (!fs.existsSync(abs)) { res.status(404).json({ error: 'File not found' }); return; }
-  try {
-    res.json({ file_name: doc.file_name, paragraphs: await readDocxParagraphs(fs.readFileSync(abs)) });
-  } catch {
-    res.status(400).json({ error: 'The Word file could not be read' });
-  }
-});
-
-// PUT /api/operations/:id/documents/:docId/text — { edits: { [key]: text } }
-router.put('/:id/documents/:docId/text', async (req: Request, res: Response) => {
-  const doc = wordDocOf(req);
-  if (!doc) { res.status(404).json({ error: 'Only Word (.docx) documents can be edited here' }); return; }
-  const edits = req.body?.edits && typeof req.body.edits === 'object' ? req.body.edits : {};
-  const dir = path.join(uploadsBase, 'operation-docs');
-  const abs = path.join(dir, doc.file_path);
-  if (!fs.existsSync(abs)) { res.status(404).json({ error: 'File not found' }); return; }
-  try {
-    const { buffer, changed } = await writeDocxParagraphs(fs.readFileSync(abs), edits);
-    if (!changed) { res.json({ changed: 0 }); return; }
-    const stored = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}.docx`;
-    fs.writeFileSync(path.join(dir, stored), buffer);
-    db.prepare('UPDATE operation_documents SET file_path = ? WHERE id = ?').run(stored, doc.id);
-    try { fs.unlinkSync(abs); } catch { /* ignore */ }
-    const op = db.prepare('SELECT operation_number FROM operations WHERE id = ?').get(doc.operation_id) as any;
-    notifyAdmin({
-      action: 'updated', entity: 'Operation Document', label: `${op?.operation_number ?? ''} — ${doc.file_name}`,
-      detail: `text edited (${changed} paragraph${changed === 1 ? '' : 's'})`,
-      performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
-    });
-    res.json({ changed });
-  } catch {
-    res.status(400).json({ error: 'The Word file could not be saved' });
-  }
-});
-
-// ── Edit document ─────────────────────────────────────────────────────────────
-
-/** A PDF a generator filed (OC, PO, invoice, PL) — its file is replaced only by regenerating. */
-function isGeneratedDocument(docId: number): boolean {
-  return !!db.prepare(`
-    SELECT 1 FROM order_confirmations WHERE document_id = ?1
-    UNION SELECT 1 FROM purchase_orders WHERE document_id = ?1
-    UNION SELECT 1 FROM invoice_documents WHERE document_id = ?1
-    UNION SELECT 1 FROM packing_lists WHERE document_id = ?1 OR final_document_id = ?1
-    UNION SELECT 1 FROM declarations WHERE document_id = ?1
-  `).get(docId);
-}
-
-/**
- * PUT /api/operations/:id/documents/:docId — multipart: file_name, category_id,
- * notes, optional file (a new version). Fields left out keep their value; the
- * name keeps the file's extension.
- */
-router.put('/:id/documents/:docId', uploadOperationDoc.single('file'), (req: Request, res: Response) => {
-  const doc = db.prepare('SELECT * FROM operation_documents WHERE id = ? AND operation_id = ?')
-    .get(Number(req.params.docId), Number(req.params.id)) as any;
-  const dropUpload = () => { if (req.file) { try { fs.unlinkSync(req.file.path); } catch { /* ignore */ } } };
-  if (!doc) { dropUpload(); res.status(404).json({ error: 'Document not found' }); return; }
-  if (req.file && isGeneratedDocument(doc.id)) {
-    dropUpload();
-    res.status(400).json({ error: 'This PDF was generated — change it in its generator and regenerate' });
-    return;
-  }
-
-  const ext = path.extname(req.file?.originalname || doc.file_name);
-  let fileName = req.file ? req.file.originalname : doc.file_name;
-  if (req.body?.file_name !== undefined) {
-    const typed = String(req.body.file_name).replace(/[\\/:*?"<>|]+/g, '-').trim();
-    if (!typed) { dropUpload(); res.status(400).json({ error: 'The name cannot be empty' }); return; }
-    fileName = path.extname(typed).toLowerCase() === ext.toLowerCase() ? typed : `${typed}${ext}`;
-  }
-  const categoryId = req.body?.category_id === undefined ? doc.category_id : (Number(req.body.category_id) || null);
-  const notes = req.body?.notes === undefined ? doc.notes : (String(req.body.notes).trim() || null);
-
-  db.prepare('UPDATE operation_documents SET file_path = ?, file_name = ?, category_id = ?, notes = ? WHERE id = ?')
-    .run(req.file?.filename ?? doc.file_path, fileName, categoryId, notes, doc.id);
-  if (req.file) {
-    const old = path.join(uploadsBase, 'operation-docs', doc.file_path);
-    if (/^[a-zA-Z0-9._-]+$/.test(doc.file_path) && fs.existsSync(old)) { try { fs.unlinkSync(old); } catch { /* ignore */ } }
-  }
-
-  const op = db.prepare('SELECT operation_number FROM operations WHERE id = ?').get(doc.operation_id) as any;
-  notifyAdmin({
-    action: 'updated', entity: 'Operation Document', label: `${op?.operation_number ?? ''} — ${fileName}`,
-    detail: req.file ? 'new version uploaded' : undefined,
-    performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
-  });
-  res.json(db.prepare(`
-    SELECT od.*, dc.name as category_name FROM operation_documents od
-    LEFT JOIN document_categories dc ON od.category_id = dc.id WHERE od.id = ?
-  `).get(doc.id));
-});
+// ── Choose from the system, edit a document, edit a Word document's text ──
+// (shared with non-commercial operations — lib/ownerDocumentRoutes.ts)
+mountOwnerDocumentRoutes(router, 'operation');
 
 // ── Send documents by email ───────────────────────────────────────────────
 

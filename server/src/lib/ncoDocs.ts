@@ -148,3 +148,39 @@ export function deleteNcoUpload(row: { id: number; file_path: string }): void {
   }
   db.prepare('DELETE FROM nco_documents WHERE id = ?').run(row.id);
 }
+
+// ── Sample invoices ────────────────────────────────────────────────────────
+
+/**
+ * Sample invoice numbers: SI + entity + invoice date + a 3-digit running
+ * number per entity and day (SIBE20260813001). Separate from the commercial
+ * invoice series, which they never enter.
+ */
+export function nextSampleInvoiceNumber(entity: string, date?: string | null): string {
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? String(date) : new Date().toISOString().slice(0, 10);
+  const prefix = `SI${entity}${d.replace(/-/g, '')}`;
+  const rows = db.prepare(`SELECT invoice_number FROM invoice_documents WHERE invoice_number LIKE ?`).all(`${prefix}%`) as any[];
+  let max = 0;
+  for (const r of rows) {
+    const m = String(r.invoice_number).slice(prefix.length).match(/^(\d+)$/);
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return `${prefix}${String(max + 1).padStart(3, '0')}`;
+}
+
+/** The sample quantity in words, as the sample invoices print it: "1 * 0.25KG sample". */
+export function sampleQuantityText(quantity: unknown, unit?: string | null): string {
+  const q = Number(quantity) || 0;
+  if (!q) return '';
+  const qty = q.toLocaleString('en-US', { maximumFractionDigits: 3 });
+  return `1 * ${qty}${(unit || 'KG').toUpperCase()} sample`;
+}
+
+/** NCO lines as sample-invoice lines: packaging and the quantity in words filled in. */
+export function ncoSampleLines(lines: NcoLine[]): DocLine[] {
+  return ncoDocLines(lines).map(l => ({
+    ...l,
+    packaging: l.packaging || 'Sample bottle',
+    note: l.note || sampleQuantityText(l.quantity, l.quantity_unit),
+  }));
+}

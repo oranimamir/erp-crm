@@ -8,9 +8,10 @@ import api from '../lib/api';
 import { formatDate } from '../lib/dates';
 import { useToast } from '../contexts/ToastContext';
 import Button from '../components/ui/Button';
+import { type DocOwner, ownerParams, ownerPage } from '../lib/docOwner';
 
 /**
- * Declaration generator. /declarations/new?operation_id= — pick the starting
+ * Declaration generator. /declarations/new?operation_id= (or ?nco_id=) — pick the starting
  * document (a library declaration — those for the operation's products first —
  * one generated on another operation, an upload, or blank). /declarations/:id —
  * edit it with a live preview; Save draft keeps the form, Confirm & generate
@@ -25,9 +26,10 @@ interface DeclarationData {
   place: string; date: string; signatory: string; role: string; signature_file: string | null;
 }
 interface Declaration {
-  id: number; operation_id: number; title: string; status: 'draft' | 'final';
+  id: number; operation_id: number | null; nco_id: number | null; title: string; status: 'draft' | 'final';
   data: DeclarationData; draft: DeclarationData | null; file_path: string | null; file_name: string | null;
-  operation: { id: number; operation_number: string; customer_name: string | null; customer_address: string | null } | null;
+  /** The operation or NCO it belongs to (`kind`), in one shape */
+  operation: { id: number; kind: 'operation' | 'nco'; operation_number: string; customer_name: string | null; customer_address: string | null } | null;
 }
 
 const inputCls = 'block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500';
@@ -56,7 +58,9 @@ export default function DeclarationPage() {
 
 function StartDeclaration() {
   const [params] = useSearchParams();
+  const ncoId = Number(params.get('nco_id'));
   const operationId = Number(params.get('operation_id'));
+  const owner: DocOwner | null = ncoId ? { kind: 'nco', id: ncoId } : operationId ? { kind: 'operation', id: operationId } : null;
   const navigate = useNavigate();
   const { addToast } = useToast();
   const [library, setLibrary] = useState<any[]>([]);
@@ -68,12 +72,12 @@ function StartDeclaration() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!operationId) return;
-    api.get('/declarations/sources', { params: { operation_id: operationId } })
+    if (!owner) return;
+    api.get('/declarations/sources', { params: ownerParams(owner) })
       .then(({ data }) => { setLibrary(data.library || []); setPrevious(data.previous || []); })
       .catch(() => addToast('Failed to load the declarations', 'error'))
       .finally(() => setLoading(false));
-  }, [operationId]);
+  }, [owner?.kind, owner?.id]);
 
   async function start(body: FormData | Record<string, unknown>) {
     setBusy(true);
@@ -88,7 +92,7 @@ function StartDeclaration() {
   const upload = (file: File | undefined) => {
     if (!file) return;
     const fd = new FormData();
-    fd.append('operation_id', String(operationId));
+    for (const [k, v] of Object.entries(ownerParams(owner!))) fd.append(k, String(v));
     fd.append('file', file);
     start(fd);
   };
@@ -99,7 +103,7 @@ function StartDeclaration() {
   const others = library.filter(d => !d.suggested && match(`${d.title} ${d.file_name} ${d.products.map((p: any) => p.name).join(' ')}`));
   const prev = previous.filter(d => match(`${d.title} ${d.operation_number} ${d.customer_name || ''}`));
 
-  if (!operationId) return <p className="text-sm text-gray-500">Open the generator from an operation's Shipping documents.</p>;
+  if (!owner) return <p className="text-sm text-gray-500">Open the generator from an operation's Shipping documents.</p>;
 
   const card = (key: string, title: string, sub: string, onClick: () => void, tag?: React.ReactNode) => (
     <button key={key} type="button" onClick={onClick} disabled={busy}
@@ -115,8 +119,8 @@ function StartDeclaration() {
 
   return (
     <div className="space-y-5 max-w-4xl">
-      <Link to={`/operations/${operationId}`} className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
-        <ArrowLeft size={16} /> Back to operation
+      <Link to={ownerPage(owner)} className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
+        <ArrowLeft size={16} /> Back to {owner.kind === 'nco' ? 'the non-commercial operation' : 'operation'}
       </Link>
       <div>
         <h1 className="text-xl font-bold text-gray-900">New declaration</h1>
@@ -141,7 +145,7 @@ function StartDeclaration() {
           <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search declarations…"
             className="w-full rounded-lg border border-gray-300 pl-8 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
         </div>
-        <Button variant="secondary" size="sm" disabled={busy} onClick={() => start({ operation_id: operationId })}>
+        <Button variant="secondary" size="sm" disabled={busy} onClick={() => start(ownerParams(owner))}>
           <FilePlus2 size={14} /> Start blank
         </Button>
       </div>
@@ -155,7 +159,7 @@ function StartDeclaration() {
               <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Suggested for this operation's products</h2>
               <div className="grid gap-2 sm:grid-cols-2">
                 {suggested.map(d => card(`l${d.id}`, d.title || d.file_name, d.products.map((p: any) => p.name).join(', '),
-                  () => start({ operation_id: operationId, source_type: 'library', source_id: d.id }),
+                  () => start({ ...ownerParams(owner), source_type: 'library', source_id: d.id }),
                   <span className="flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-xs font-medium text-emerald-700"><Sparkles size={11} /> Suggested</span>))}
               </div>
             </section>
@@ -165,7 +169,7 @@ function StartDeclaration() {
             {others.length ? (
               <div className="grid gap-2 sm:grid-cols-2">
                 {others.map(d => card(`l${d.id}`, d.title || d.file_name, d.products.length ? d.products.map((p: any) => p.name).join(', ') : 'General — all products',
-                  () => start({ operation_id: operationId, source_type: 'library', source_id: d.id })))}
+                  () => start({ ...ownerParams(owner), source_type: 'library', source_id: d.id })))}
               </div>
             ) : <p className="text-sm text-gray-400">{library.length ? 'Nothing matches.' : 'No declarations in the library yet — upload one above.'}</p>}
           </section>
@@ -174,7 +178,7 @@ function StartDeclaration() {
               <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Generated on other operations</h2>
               <div className="grid gap-2 sm:grid-cols-2">
                 {prev.map(d => card(`d${d.id}`, d.title, `${d.operation_number}${d.customer_name ? ` · ${d.customer_name}` : ''} · ${formatDate(d.updated_at)}`,
-                  () => start({ operation_id: operationId, source_type: 'declaration', source_id: d.id })))}
+                  () => start({ ...ownerParams(owner), source_type: 'declaration', source_id: d.id })))}
               </div>
             </section>
           )}
@@ -291,8 +295,8 @@ function DeclarationEditor({ id }: { id: number }) {
   return (
     <div className="space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
-        <Link to={`/operations/${record.operation_id}`} className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
-          <ArrowLeft size={16} /> Back to operation{op ? ` ${op.operation_number}` : ''}
+        <Link to={record.nco_id ? `/non-commercial-operations/${record.nco_id}` : `/operations/${record.operation_id}`} className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
+          <ArrowLeft size={16} /> Back to {record.nco_id ? 'the non-commercial operation' : 'operation'}{op ? ` ${op.operation_number}` : ''}
         </Link>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="secondary" size="sm" onClick={() => preview()} disabled={previewing}>
@@ -314,7 +318,7 @@ function DeclarationEditor({ id }: { id: number }) {
 
       <div>
         <h1 className="text-xl font-bold text-gray-900">{form.title || 'Declaration'}</h1>
-        <p className="text-sm text-gray-500">Declaration{op ? ` for ${op.operation_number}${op.customer_name ? ` · ${op.customer_name}` : ''}` : ''} — generated as a PDF and filed under the operation's Declaration documents.</p>
+        <p className="text-sm text-gray-500">Declaration{op ? ` for ${op.operation_number}${op.customer_name ? ` · ${op.customer_name}` : ''}` : ''} — generated as a PDF and filed under its Declaration documents.</p>
       </div>
 
       {!generated && (

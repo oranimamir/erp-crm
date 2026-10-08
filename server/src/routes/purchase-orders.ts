@@ -8,6 +8,7 @@ import db from '../database.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { entityFromOperationNumber, entityProfile, isEntityCode, type EntityCode } from '../lib/companyEntity.js';
 import { deliveryTerms, prefillLines } from '../lib/documentPrefill.js';
+import { ncoSource, ncoDocLines, fileUnderNco, dropNcoDocumentRow } from '../lib/ncoDocs.js';
 import {
   buildPurchaseOrderPdf,
   computeTotals,
@@ -67,15 +68,26 @@ function supplierById(id: number | null | undefined): any {
  */
 async function renderAndFile(
   data: PurchaseOrderData,
-  opts: { operationId: number | null; existing?: any }
-): Promise<{ filePath: string; fileName: string; documentId: number | null }> {
+  opts: { operationId: number | null; ncoId?: number | null; existing?: any }
+): Promise<{ filePath: string; fileName: string; documentId: number | null; ncoDocumentId?: number | null }> {
   const pdf = await buildPurchaseOrderPdf(data);
 
   fs.mkdirSync(docsDir, { recursive: true });
   const storedName = `po-${Date.now()}-${crypto.randomBytes(6).toString('hex')}.pdf`;
   fs.writeFileSync(path.join(docsDir, storedName), pdf);
 
-  const displayName = purchaseOrderFileName(operationNumberFor(opts.operationId), data.po_number ?? null);
+  const ncoNumber = opts.ncoId ? (db.prepare('SELECT nco_number FROM non_commercial_operations WHERE id = ?').get(opts.ncoId) as any)?.nco_number : null;
+  const displayName = purchaseOrderFileName(ncoNumber || operationNumberFor(opts.operationId), data.po_number ?? null);
+
+  // A non-commercial operation's PO is filed under the NCO
+  if (opts.ncoId) {
+    if (opts.existing?.file_path) {
+      const old = path.join(docsDir, opts.existing.file_path);
+      if (fs.existsSync(old)) { try { fs.unlinkSync(old); } catch { /* best effort */ } }
+    }
+    const ncoDocumentId = fileUnderNco(opts.ncoId, opts.existing?.nco_document_id, 'Purchase Order', storedName, displayName, `Purchase order ${data.po_number || ''}`.trim());
+    return { filePath: storedName, fileName: displayName, documentId: null, ncoDocumentId };
+  }
 
   if (opts.existing?.file_path) {
     const old = path.join(docsDir, opts.existing.file_path);
@@ -107,9 +119,10 @@ async function renderAndFile(
   return { filePath: storedName, fileName: displayName, documentId };
 }
 
-function discardFiled(filed: { filePath: string; documentId: number | null }, keepDocumentId: number | null) {
+function discardFiled(filed: { filePath: string; documentId: number | null; ncoDocumentId?: number | null }, keepDocumentId: number | null, keepNcoDocumentId: number | null = null) {
   const orphan = path.join(docsDir, filed.filePath);
   if (fs.existsSync(orphan)) { try { fs.unlinkSync(orphan); } catch { /* best effort */ } }
+  if (filed.ncoDocumentId && filed.ncoDocumentId !== keepNcoDocumentId) dropNcoDocumentRow(filed.ncoDocumentId);
   if (filed.documentId && filed.documentId !== keepDocumentId) {
     try { db.prepare('DELETE FROM operation_documents WHERE id = ?').run(filed.documentId); } catch { /* best effort */ }
   }
@@ -123,6 +136,7 @@ function poNumberTaken(poNumber: string, exceptId?: number): boolean {
 // ── Prefill a draft from the customer's order ─────────────────────────────
 
 router.get('/prepare', (req: Request, res: Response) => {
+  if (req.query.nco_id) { prepareFromNco(req, res); return; }
   const orderId = parseInt(String(req.query.order_id || ''), 10);
   if (!Number.isInteger(orderId)) { res.status(400).json({ error: 'order_id is required' }); return; }
 
@@ -192,7 +206,60 @@ router.get('/prepare', (req: Request, res: Response) => {
   });
 });
 
+/**
+ * A non-commercial operation (samples or shipping): its lines with the
+ * purchase price left blank, the NCO's supplier (shipping) or one to choose,
+ * numbered and filed as the NCO.
+ */
+function prepareFromNco(req: Request, res: Response) {
+  const nco = ncoSource(Number(req.query.nco_id));
+  if (!nco) { res.status(404).json({ error: 'Non-commercial operation not found' }); return; }
+  const suppliers = db.prepare('SELECT id, name, category FROM suppliers ORDER BY name').all();
+  const existing = db.prepare('SELECT * FROM purchase_orders WHERE nco_id = ? ORDER BY id DESC LIMIT 1').get(nco.id) as any;
+  if (existing) { res.json({ existing: parseRecord(existing), suppliers }); return; }
+
+  const requested = String(req.query.entity || '').toUpperCase();
+  const entity: EntityCode = isEntityCode(requested) ? requested : (isEntityCode(nco.entity) ? nco.entity : 'BE');
+  const { bank_name: _bn, iban: _iban, bic: _bic, bank_address: _ba, ...issuer } = entityProfile(entity);
+  const requestedSupplier = parseInt(String(req.query.supplier_id || ''), 10);
+  const supplier = supplierById(Number.isInteger(requestedSupplier) ? requestedSupplier : nco.supplier_id);
+
+  const draft: PurchaseOrderData = {
+    ...issuer,
+    entity_code: entity,
+    po_number: `${nco.nco_number}PO`,
+    po_date: new Date().toISOString().slice(0, 10),
+    our_ref: nco.nco_number,
+    sq_number: '',
+    client_code: '',
+    client_name: supplier?.name || '',
+    billing_address: supplier?.address || '',
+    client_phone: supplier?.phone || '',
+    tax_id: supplier?.vat_number || '',
+    contact_email: supplier?.email || '',
+    items: ncoDocLines(nco.lines).map(line => ({ ...line, unit_price: null })),
+    delivery: '',
+    delivery_address: nco.type === 'samples' ? (nco.customer_address || '') : '',
+    delivery_contact: '',
+    delivery_date_text: '',
+    freight: 0,
+    vat: 0,
+    terms: '',
+  } as PurchaseOrderData;
+
+  res.json({
+    existing: null, draft, entity, supplier_id: supplier?.id ?? null, suppliers,
+    order: null, operation: null,
+    nco: { id: nco.id, nco_number: nco.nco_number },
+  });
+}
+
 // ── List / read ───────────────────────────────────────────────────────────
+
+router.get('/by-nco/:ncoId', (req: Request, res: Response) => {
+  const rows = db.prepare('SELECT * FROM purchase_orders WHERE nco_id = ? ORDER BY id DESC').all(Number(req.params.ncoId)) as any[];
+  res.json(rows.map(parseRecord));
+});
 
 router.get('/by-order/:orderId', (req: Request, res: Response) => {
   const rows = db.prepare(
@@ -225,14 +292,15 @@ router.post('/preview', async (req: Request, res: Response) => {
 // ── Create ────────────────────────────────────────────────────────────────
 
 router.post('/', async (req: Request, res: Response) => {
-  const { order_id, operation_id, supplier_id, data } = req.body as {
-    order_id?: number; operation_id?: number | null; supplier_id?: number | null; data?: PurchaseOrderData;
+  const { order_id, operation_id, supplier_id, data, nco_id } = req.body as {
+    order_id?: number; operation_id?: number | null; supplier_id?: number | null; data?: PurchaseOrderData; nco_id?: number | null;
   };
   // A draft is only the saved form: no PDF, nothing filed under the operation
   const isDraft = req.body?.status === 'draft';
 
-  if (!order_id) { res.status(400).json({ error: 'order_id is required' }); return; }
   if (!data || typeof data !== 'object') { res.status(400).json({ error: 'data is required' }); return; }
+  if (nco_id) { await createForNco(req, res, Number(nco_id), data, supplier_id ?? null, isDraft); return; }
+  if (!order_id) { res.status(400).json({ error: 'order_id is required' }); return; }
 
   const order = db.prepare('SELECT id, order_number FROM orders WHERE id = ?').get(order_id) as any;
   if (!order) { res.status(404).json({ error: 'Order not found' }); return; }
@@ -284,6 +352,33 @@ router.post('/', async (req: Request, res: Response) => {
   }
 });
 
+/** Create for a non-commercial operation: filed under the NCO, numbered after it. */
+async function createForNco(req: Request, res: Response, ncoId: number, data: PurchaseOrderData, supplierId: number | null, isDraft: boolean) {
+  const nco = db.prepare('SELECT id, nco_number FROM non_commercial_operations WHERE id = ?').get(ncoId) as any;
+  if (!nco) { res.status(404).json({ error: 'Non-commercial operation not found' }); return; }
+  const payload: PurchaseOrderData = { ...data, po_number: (data.po_number || '').trim() || `${nco.nco_number}PO` };
+  if (poNumberTaken(payload.po_number!)) { res.status(409).json({ error: `Purchase order ${payload.po_number} already exists` }); return; }
+  let filed: Awaited<ReturnType<typeof renderAndFile>> | null = null;
+  try {
+    if (!isDraft) filed = await renderAndFile(payload, { operationId: null, ncoId: nco.id });
+    const result = db.prepare(`
+      INSERT INTO purchase_orders (po_number, order_id, operation_id, supplier_id, data, file_path, file_name, document_id, created_by, status, nco_id, nco_document_id)
+      VALUES (?, NULL, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
+    `).run(payload.po_number, supplierId, JSON.stringify(payload), filed?.filePath ?? null, filed?.fileName ?? null,
+      req.user?.userId ?? null, isDraft ? 'draft' : 'final', nco.id, filed?.ncoDocumentId ?? null);
+    notifyAdmin({
+      action: 'created', entity: isDraft ? 'Purchase Order draft' : 'Purchase Order', label: payload.po_number!,
+      detail: nco.nco_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
+    });
+    res.status(201).json(parseRecord(db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(result.lastInsertRowid)));
+  } catch (err: any) {
+    if (filed) discardFiled(filed, null);
+    if (err?.message?.includes('UNIQUE')) { res.status(409).json({ error: `Purchase order ${payload.po_number} already exists` }); return; }
+    console.error('[purchase-orders] NCO create failed:', err?.message || err);
+    res.status(500).json({ error: 'Failed to generate the purchase order' });
+  }
+}
+
 // ── Update (regenerates the PDF and replaces the filed document) ──────────
 
 router.put('/:id', async (req: Request, res: Response) => {
@@ -315,19 +410,19 @@ router.put('/:id', async (req: Request, res: Response) => {
     return;
   }
 
-  let filed: { filePath: string; fileName: string; documentId: number | null } | null = null;
+  let filed: Awaited<ReturnType<typeof renderAndFile>> | null = null;
   try {
-    if (!isDraft) filed = await renderAndFile(payload, { operationId, existing });
+    if (!isDraft) filed = await renderAndFile(payload, { operationId: existing.nco_id ? null : operationId, ncoId: existing.nco_id ?? null, existing });
 
     db.prepare(`
       UPDATE purchase_orders
       SET po_number = ?, operation_id = ?, supplier_id = ?, data = ?, file_path = ?, file_name = ?, document_id = ?,
-        status = ?, draft_data = NULL, updated_at = datetime('now')
+        nco_document_id = ?, status = ?, draft_data = NULL, updated_at = datetime('now')
       WHERE id = ?
     `).run(
-      payload.po_number, operationId, supplier_id !== undefined ? supplier_id : existing.supplier_id,
+      payload.po_number, existing.nco_id ? null : operationId, supplier_id !== undefined ? supplier_id : existing.supplier_id,
       JSON.stringify(payload), filed?.filePath ?? null, filed?.fileName ?? null, filed?.documentId ?? null,
-      isDraft ? 'draft' : 'final', existing.id
+      filed?.ncoDocumentId ?? (isDraft ? existing.nco_document_id ?? null : null), isDraft ? 'draft' : 'final', existing.id
     );
 
     const row = db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(existing.id);
@@ -338,7 +433,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     });
     res.json(parseRecord(row));
   } catch (err: any) {
-    if (filed) discardFiled(filed, existing.document_id);
+    if (filed) discardFiled(filed, existing.document_id, existing.nco_document_id ?? null);
     if (err?.message?.includes('UNIQUE')) {
       res.status(409).json({ error: `Purchase order ${payload.po_number} already exists` });
       return;
@@ -436,16 +531,21 @@ router.post('/:id/email', async (req: Request, res: Response) => {
 
 // ── Delete ────────────────────────────────────────────────────────────────
 
-router.delete('/:id', (req: Request, res: Response) => {
-  const row = db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(Number(req.params.id)) as any;
-  if (!row) { res.status(404).json({ error: 'Purchase order not found' }); return; }
-
+/** Deletes a purchase order, its PDF and the document it filed (operation or NCO). */
+export function deletePurchaseOrderRow(row: any): void {
   if (row.file_path) {
     const filePath = path.join(docsDir, row.file_path);
     if (fs.existsSync(filePath)) { try { fs.unlinkSync(filePath); } catch { /* best effort */ } }
   }
   if (row.document_id) db.prepare('DELETE FROM operation_documents WHERE id = ?').run(row.document_id);
+  if (row.nco_document_id) dropNcoDocumentRow(row.nco_document_id);
   db.prepare('DELETE FROM purchase_orders WHERE id = ?').run(row.id);
+}
+
+router.delete('/:id', (req: Request, res: Response) => {
+  const row = db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(Number(req.params.id)) as any;
+  if (!row) { res.status(404).json({ error: 'Purchase order not found' }); return; }
+  deletePurchaseOrderRow(row);
 
   notifyAdmin({
     action: 'deleted', entity: 'Purchase Order', label: row.po_number,

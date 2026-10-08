@@ -1076,7 +1076,7 @@ function drawFooterBlocks(doc: any, layout: InvoiceLayout, data: DocumentData, t
     ['Address :', data.bank_address || ''],
   ].filter(([, v]) => !!v) as Array<[string, string]>;
 
-  if (!accountParts.length) return;
+  if (!accountParts.length || layout.show_bank === false) return;
 
   const lines = layout.bank_inline ? Math.min(2, accountParts.length) : accountParts.length;
   y = ensureRoom(doc, y + 10, HEADING * 1.4 + lines * BODY * 1.32);

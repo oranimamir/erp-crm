@@ -4,20 +4,22 @@ import crypto from 'crypto';
 import db from '../database.js';
 import { uploadsBase, listProductDocs, ProductDocKind, addDocumentProducts } from './productDocs.js';
 import { parseLibraryFileName } from './productLibrary.js';
-import { invoiceLines, suggestFor } from '../routes/product-documents.js';
+import { suggestFor } from '../routes/product-documents.js';
+import { DocOwner, ownerLines, ownerLots, insertOwnerDocument } from './docOwner.js';
 
 /**
- * "Choose from the system" on the operation's shipping document tiles: the
- * documents already somewhere in the app that could fill a category —
+ * "Choose from the system" on the shipping document tiles (operation or
+ * non-commercial operation): the documents already somewhere in the app that
+ * could fill a category —
  *  - library: Inventory → Documents (MSDS / spec sheets / declarations)
  *  - batch: Inventory → Batches documents (COAs), matched on the lots
- *  - this: this operation's documents with no category yet (filed in place)
- *  - other: the same category on other operations (e.g. a label reused)
+ *  - this: this owner's documents with no category yet (filed in place)
+ *  - other / other_nco: the same category on other operations / NCOs
  * The most suitable ones come back `suggested`. Choosing copies the file
- * under the operation (or, for `this`, just sets its category).
+ * under the owner (or, for `this`, just sets its category).
  */
 
-export type SourceType = 'library' | 'batch' | 'this' | 'other';
+export type SourceType = 'library' | 'batch' | 'this' | 'other' | 'other_nco';
 
 export interface SourceDoc {
   source: SourceType;
@@ -52,35 +54,15 @@ function best<T extends { products: any[]; doc_code: string | null; updated_at: 
   )[0];
 }
 
-/** The lots printed on the operation's invoice lines (else none). */
-function operationLots(operationId: number): Set<string> {
-  const lots = new Set<string>();
-  const rows = db.prepare('SELECT data FROM invoice_documents WHERE operation_id = ?').all(operationId) as any[];
-  for (const row of rows) {
-    let data: any;
-    try { data = JSON.parse(row.data); } catch { continue; }
-    for (const it of Array.isArray(data?.items) ? data.items : []) {
-      const list = Array.isArray(it?.lots) ? it.lots : [it?.lot, it?.lot2, it?.lot3, it?.lot4];
-      for (const l of list) if (l && String(l).trim()) lots.add(norm(l));
-    }
-  }
-  return lots;
-}
-
-export function documentSources(operationId: number, category: string): SourceDoc[] {
-  const op = db.prepare('SELECT id, order_id, customer_id FROM operations WHERE id = ?').get(operationId) as any;
-  if (!op) return [];
+export function documentSources(owner: DocOwner, category: string): SourceDoc[] {
   const out: SourceDoc[] = [];
   const kind = libraryKindOf(category);
 
   // Library documents of the matching kind; the best fit per product suggested
   if (kind) {
     const docs = listProductDocs('WHERE d.kind = ?', [kind]);
-    const lines = invoiceLines(op.id) ?? (op.order_id
-      ? db.prepare('SELECT description, client_product_name FROM order_items WHERE order_id = ? ORDER BY id').all(op.order_id) as any[]
-      : []);
     const suggested = new Set<number>();
-    for (const line of suggestFor(lines, docs)) {
+    for (const line of suggestFor(ownerLines(owner).lines, docs)) {
       if (!line.product) continue;
       if (kind === 'declaration') line.documents.forEach((d: any) => suggested.add(d.id));
       else { const top = best(line.documents); if (top) suggested.add(top.id); }
@@ -95,8 +77,8 @@ export function documentSources(operationId: number, category: string): SourceDo
     }
   }
 
-  // Batch documents (COAs first); those of the operation's lots suggested for quality certificates
-  const lots = operationLots(op.id);
+  // Batch documents (COAs first); those of the owner's lots suggested for quality certificates
+  const lots = ownerLots(owner);
   const quality = /quality|coa|analysis/.test(norm(category));
   const batchDocs = db.prepare(`
     SELECT bd.*, b.batch_number FROM batch_documents bd JOIN batches b ON b.id = bd.batch_id
@@ -111,30 +93,39 @@ export function documentSources(operationId: number, category: string): SourceDo
     });
   }
 
-  // This operation's documents with no category yet
-  const own = db.prepare(`SELECT * FROM operation_documents WHERE operation_id = ? AND category_id IS NULL ORDER BY created_at DESC`).all(op.id) as any[];
+  // This owner's documents with no category yet
+  const own = db.prepare(`SELECT * FROM ${owner.table} WHERE ${owner.fk} = ? AND category_id IS NULL ORDER BY created_at DESC`).all(owner.id) as any[];
   for (const d of own) {
     out.push({
-      source: 'this', id: d.id, title: d.file_name, subtitle: 'Already on this operation, no category yet',
+      source: 'this', id: d.id, title: d.file_name, subtitle: 'Already here, no category yet',
       file_name: d.file_name, file_path: d.file_path, subfolder: 'operation-docs', date: d.created_at, suggested: false,
     });
   }
 
-  // The same category on other operations, the same customer's first
+  // The same category on other operations and NCOs, the same customer's first
   const others = db.prepare(`
-    SELECT od.*, o.operation_number, o.customer_id, c.name AS customer_name
+    SELECT * FROM (
+    SELECT 'other' AS source, od.id, od.file_path, od.file_name, od.created_at, o.operation_number AS number, o.customer_id, c.name AS customer_name
     FROM operation_documents od
     JOIN document_categories dc ON dc.id = od.category_id
     JOIN operations o ON o.id = od.operation_id
     LEFT JOIN customers c ON c.id = o.customer_id
-    WHERE lower(dc.name) = lower(?) AND od.operation_id != ?
-    ORDER BY CASE WHEN o.customer_id = ? THEN 0 ELSE 1 END, od.created_at DESC
+    WHERE lower(dc.name) = lower(?1) AND NOT (?2 = 'operation' AND od.operation_id = ?3)
+    UNION ALL
+    SELECT 'other_nco' AS source, nd.id, nd.file_path, nd.file_name, nd.created_at, n.nco_number AS number, n.customer_id, c.name AS customer_name
+    FROM nco_documents nd
+    JOIN document_categories dc ON dc.id = nd.category_id
+    JOIN non_commercial_operations n ON n.id = nd.nco_id
+    LEFT JOIN customers c ON c.id = n.customer_id
+    WHERE lower(dc.name) = lower(?1) AND NOT (?2 = 'nco' AND nd.nco_id = ?3)
+    )
+    ORDER BY CASE WHEN customer_id = ?4 THEN 0 ELSE 1 END, created_at DESC
     LIMIT 100
-  `).all(category, op.id, op.customer_id ?? -1) as any[];
+  `).all(category, owner.kind, owner.id, owner.customerId ?? -1) as any[];
   for (const d of others) {
     out.push({
-      source: 'other', id: d.id, title: d.file_name,
-      subtitle: `${d.operation_number}${d.customer_name ? ` · ${d.customer_name}` : ''}`,
+      source: d.source, id: d.id, title: d.file_name,
+      subtitle: `${d.number}${d.customer_name ? ` · ${d.customer_name}` : ''}`,
       file_name: d.file_name, file_path: d.file_path, subfolder: 'operation-docs', date: d.created_at, suggested: false,
     });
   }
@@ -153,16 +144,15 @@ function copyIn(subfolder: string, filePath: string): string | null {
   return stored;
 }
 
-/** Files the chosen sources under the operation in `categoryId`. */
-export function fileFromSources(operationId: number, categoryId: number, items: Array<{ source: SourceType; id: number }>): { added: number; missing: string[] } {
+/** Files the chosen sources under the owner in `categoryId`. */
+export function fileFromSources(owner: DocOwner, categoryId: number, items: Array<{ source: SourceType; id: number }>): { added: number; missing: string[] } {
   let added = 0;
   const missing: string[] = [];
-  const insert = db.prepare('INSERT INTO operation_documents (operation_id, category_id, file_path, file_name, notes) VALUES (?, ?, ?, ?, ?)');
   for (const item of items) {
     const id = Number(item?.id);
     if (!Number.isInteger(id)) continue;
     if (item.source === 'this') {
-      const r = db.prepare('UPDATE operation_documents SET category_id = ? WHERE id = ? AND operation_id = ?').run(categoryId, id, operationId);
+      const r = db.prepare(`UPDATE ${owner.table} SET category_id = ? WHERE id = ? AND ${owner.fk} = ?`).run(categoryId, id, owner.id);
       if (r.changes) added++;
       continue;
     }
@@ -178,36 +168,35 @@ export function fileFromSources(operationId: number, categoryId: number, items: 
       subfolder = 'batch-documents';
       notes = row ? `From batch ${row.batch_number}` : null;
     } else if (item.source === 'other') {
-      row = db.prepare('SELECT od.file_path, od.file_name, o.operation_number FROM operation_documents od JOIN operations o ON o.id = od.operation_id WHERE od.id = ?').get(id);
+      row = db.prepare('SELECT od.file_path, od.file_name, o.operation_number AS number FROM operation_documents od JOIN operations o ON o.id = od.operation_id WHERE od.id = ?').get(id);
       subfolder = 'operation-docs';
-      notes = row ? `Copied from ${row.operation_number}` : null;
+      notes = row ? `Copied from ${row.number}` : null;
+    } else if (item.source === 'other_nco') {
+      row = db.prepare('SELECT nd.file_path, nd.file_name, n.nco_number AS number FROM nco_documents nd JOIN non_commercial_operations n ON n.id = nd.nco_id WHERE nd.id = ?').get(id);
+      subfolder = 'operation-docs';
+      notes = row ? `Copied from ${row.number}` : null;
     }
     if (!row) continue;
     const stored = copyIn(subfolder, row.file_path);
     if (!stored) { missing.push(row.file_name); continue; }
-    insert.run(operationId, categoryId, stored, row.file_name, notes);
+    insertOwnerDocument(owner, categoryId, stored, row.file_name, notes);
     added++;
   }
   return { added, missing };
 }
 
-/** The catalogue products on the operation's invoice (else order). */
-export function operationProductIds(operationId: number): number[] {
-  const op = db.prepare('SELECT id, order_id FROM operations WHERE id = ?').get(operationId) as any;
-  if (!op) return [];
-  const lines = invoiceLines(op.id) ?? (op.order_id
-    ? db.prepare('SELECT description, client_product_name FROM order_items WHERE order_id = ? ORDER BY id').all(op.order_id) as any[]
-    : []);
-  return [...new Set(suggestFor(lines, []).map(l => l.product?.id).filter((id): id is number => !!id))];
+/** The catalogue products on the owner's invoice (else its order / sample lines). */
+export function ownerProductIds(owner: DocOwner): number[] {
+  return [...new Set(suggestFor(ownerLines(owner).lines, []).map(l => l.product?.id).filter((id): id is number => !!id))];
 }
 
 /**
- * A declaration uploaded on an operation also goes into the library
- * (Inventory → Documents → Declarations), linked to the operation's products,
- * so later operations can use it. The same file (by content) is kept once.
+ * A declaration uploaded on an operation or NCO also goes into the library
+ * (Inventory → Documents → Declarations), linked to the owner's products, so
+ * later operations can use it. The same file (by content) is kept once.
  * Returns the library document id.
  */
-export function saveDeclarationToLibrary(buffer: Buffer, fileName: string, operationId: number, userId: number | null): number | null {
+export function saveDeclarationToLibrary(buffer: Buffer, fileName: string, owner: DocOwner, userId: number | null): number | null {
   const ext = path.extname(fileName).toLowerCase();
   if (!['.pdf', '.doc', '.docx', '.jpg', '.jpeg', '.png', '.webp'].includes(ext)) return null;
   const sha = crypto.createHash('sha256').update(buffer).digest('hex');
@@ -218,12 +207,11 @@ export function saveDeclarationToLibrary(buffer: Buffer, fileName: string, opera
   const stored = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`;
   fs.writeFileSync(path.join(dir, stored), buffer);
   const { code, title } = parseLibraryFileName(fileName);
-  const op = db.prepare('SELECT operation_number FROM operations WHERE id = ?').get(operationId) as any;
   const r = db.prepare(`
     INSERT INTO product_documents (kind, title, doc_code, file_path, file_name, notes, sha256, uploaded_by)
     VALUES ('declaration', ?, ?, ?, ?, ?, ?, ?)
-  `).run(title, code, stored, fileName, op ? `Uploaded on ${op.operation_number}` : null, sha, userId);
+  `).run(title, code, stored, fileName, `Uploaded on ${owner.number}`, sha, userId);
   const id = Number(r.lastInsertRowid);
-  addDocumentProducts(id, operationProductIds(operationId));
+  addDocumentProducts(id, ownerProductIds(owner));
   return id;
 }

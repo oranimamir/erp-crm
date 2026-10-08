@@ -5,6 +5,7 @@ import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import Modal from './ui/Modal';
 import Button from './ui/Button';
+import { type DocOwner, ownerParams } from '../lib/docOwner';
 import { docTitle, type ProductDoc, type ProductDocKind } from './ProductDocumentsTab';
 
 /**
@@ -52,17 +53,18 @@ function suggestionsOf(lines: SuggestLine[]): Map<number, string[]> {
   return out;
 }
 
-export default function AddFromLibraryModal({ open, onClose, operationId, existingNames, onAdded }: {
+export default function AddFromLibraryModal({ open, onClose, owner, existingNames, onAdded }: {
   open: boolean;
   onClose: () => void;
-  operationId: number;
+  /** The operation or non-commercial operation the copies are filed under. */
+  owner: DocOwner;
   /** File names already on the operation — those documents start unticked. */
   existingNames: string[];
   onAdded: () => void;
 }) {
   const { addToast } = useToast();
   const [lines, setLines] = useState<SuggestLine[]>([]);
-  const [source, setSource] = useState<'invoice' | 'order'>('order');
+  const [source, setSource] = useState<'invoice' | 'order' | 'lines'>('order');
   const [all, setAll] = useState<ProductDoc[]>([]);
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(false);
@@ -78,13 +80,13 @@ export default function AddFromLibraryModal({ open, onClose, operationId, existi
     setLoading(true);
     setQueries({ msds: '', pds: '', declaration: '' });
     Promise.all([
-      api.get('/product-documents/suggest', { params: { operation_id: operationId } }),
+      api.get('/product-documents/suggest', { params: ownerParams(owner) }),
       api.get('/product-documents'),
     ]).then(([s, d]) => {
       const suggestLines: SuggestLine[] = s.data.lines || [];
       const library: ProductDoc[] = d.data.data || [];
       setLines(suggestLines);
-      setSource(s.data.source === 'invoice' ? 'invoice' : 'order');
+      setSource(s.data.source === 'invoice' ? 'invoice' : s.data.source === 'lines' ? 'lines' : 'order');
       setAll(library);
       // Suggestions start ticked, unless already on the operation
       const byId = new Map(library.map(x => [x.id, x]));
@@ -96,7 +98,7 @@ export default function AddFromLibraryModal({ open, onClose, operationId, existi
       setPicked(start);
     }).catch(() => addToast('Failed to load the document library', 'error'))
       .finally(() => setLoading(false));
-  }, [open, operationId]);
+  }, [open, owner.kind, owner.id]);
 
   const toggle = (id: number) => setPicked(prev => {
     const next = new Set(prev);
@@ -107,7 +109,7 @@ export default function AddFromLibraryModal({ open, onClose, operationId, existi
   async function add() {
     setSaving(true);
     try {
-      const { data } = await api.post('/product-documents/copy', { ids: [...picked], operation_id: operationId });
+      const { data } = await api.post('/product-documents/copy', { ids: [...picked], ...ownerParams(owner) });
       addToast(`${data.added} document${data.added === 1 ? '' : 's'} added`, 'success');
       if (data.missing?.length) addToast(`Missing on the server: ${data.missing.join(', ')}`, 'error');
       onAdded();
@@ -180,7 +182,7 @@ export default function AddFromLibraryModal({ open, onClose, operationId, existi
               <span className="text-gray-400">No invoice or order lines on this operation — pick the documents below.</span>
             ) : (
               <>
-                Suggested for the products on this operation's {source}:{' '}
+                Suggested for the products on {source === 'lines' ? 'the sample lines' : `this ${owner.kind === 'nco' ? 'NCO' : 'operation'}'s ${source}`}:{' '}
                 <span className="font-medium text-gray-800">{matched.join(', ') || 'none matched'}</span>
                 {unmatched.length > 0 && (
                   <p className="mt-1 flex items-center gap-1.5 text-xs text-amber-700">

@@ -64,6 +64,8 @@ export interface InvoiceLayout {
    * first page; the invoices all list them separately.
    */
   bank_inline: boolean;
+  /** Print the bank block at all (sample invoices are never paid, so they leave it off). */
+  show_bank: boolean;
   /**
    * 2 = the HS code, lot and packing columns exist. Layouts saved before then
    * get those columns added once; after that, removing one sticks.
@@ -148,8 +150,53 @@ export const DEFAULT_LAYOUT: InvoiceLayout = {
   terms_heading: 'Terms & Conditions',
   bank_heading: 'Bank Transfer',
   bank_inline: false,
+  show_bank: true,
   columns_version: 2,
 };
+
+/**
+ * Sample invoices (non-commercial operations), after TripleW's sample invoice
+ * (SIBE20260813001): "Sample Invoice", client / billing / delivery, the line
+ * table with the sample quantity in words ("1 * 0.25KG sample bag") and the HS
+ * code under the name, Delivery / Delivery date / Documents, the
+ * no-commercial-value terms, and no bank block.
+ */
+export const SAMPLE_INVOICE_LAYOUT: InvoiceLayout = {
+  ...DEFAULT_LAYOUT,
+  title: 'Sample Invoice',
+  meta: [
+    { label: 'Date :', field: 'doc_date' },
+    { label: 'Invoice# :', field: 'doc_number' },
+    { label: 'Your order# :', field: 'po_number' },
+    { label: 'Our order# :', field: 'operation_number' },
+    { label: 'Client :', field: 'client_code' },
+    { label: 'Attention :', field: 'attention' },
+  ],
+  labels: { ...DEFAULT_LAYOUT.labels, to: 'Client:', address: 'Billing address:' },
+  columns: [
+    { key: 'line', label: 'Line', width: 34 },
+    { key: 'reference', label: 'Reference', width: 70 },
+    { key: 'commercial_name', label: 'Commercial name', width: 128 },
+    { key: 'packaging', label: 'Packaging', width: 72 },
+    { key: 'packing_note', label: 'Quantity', width: 90 },
+    { key: 'unit_price', label: 'Unit price', width: 72 },
+    { key: 'amount', label: 'Amount', width: 64 },
+  ],
+  hs_code: 'line',
+  show_lot: true,
+  show_line_note: false,
+  show_description: false,
+  details: [
+    { label: 'Delivery :', field: 'delivery' },
+    { label: 'Delivery address:', field: 'delivery_address' },
+    { label: 'Delivery date :', field: 'delivery_date_text' },
+    { label: 'Documents :', field: 'remarks' },
+  ],
+  totals: [{ label: 'Total value (customs)', field: 'total' }],
+  show_bank: false,
+};
+
+export const SAMPLE_INVOICE_TERMS = 'Sample without commercial value – value quoted for customs purpose only';
 
 const META_FIELDS: MetaField[] = [
   'doc_date', 'doc_number', 'sq_number', 'po_number', 'operation_number',
@@ -247,6 +294,7 @@ export function normalizeLayout(raw: unknown): InvoiceLayout {
     terms_heading: str(l.terms_heading, d.terms_heading),
     bank_heading: str(l.bank_heading, d.bank_heading),
     bank_inline: bool(l.bank_inline, d.bank_inline),
+    show_bank: bool(l.show_bank, d.show_bank),
     columns_version: 2,
   };
 }

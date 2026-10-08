@@ -28,11 +28,13 @@ const btn = 'flex items-center gap-1 text-xs sm:text-sm text-primary-600 hover:t
 
 const mark = (doc: Doc | null) => (!doc ? '' : doc.status === 'draft' ? ' (draft)' : ' ✓');
 
-export default function DocumentGenerators({ orderId, operationId, ncoId, refreshKey, onPreview }: {
+export default function DocumentGenerators({ orderId, operationId, ncoId, ncoType = 'samples', refreshKey, onPreview }: {
   orderId: number | null;
   operationId?: number | null;
-  /** A samples NCO instead of an order: OC, invoice and PL only (no supplier PO), filed under the NCO. */
+  /** A non-commercial operation instead of an order: everything is drafted from its lines and filed under it. */
   ncoId?: number | null;
+  /** Samples: OC, sample invoice, PL and supplier PO. Shipping (with a supplier): the supplier PO only. */
+  ncoType?: 'samples' | 'shipping';
   /** When given, each document with a filed PDF gets an eye icon that opens it here. */
   onPreview?: (item: PreviewTarget) => void;
   /** Changes when the documents may have changed (e.g. the operation's document count). */
@@ -47,7 +49,7 @@ export default function DocumentGenerators({ orderId, operationId, ncoId, refres
     const by = ncoId ? `by-nco/${ncoId}` : `by-order/${orderId}`;
     Promise.all([
       first(`/order-confirmations/${by}`),
-      ncoId ? Promise.resolve(null) : first(`/purchase-orders/${by}`),
+      first(`/purchase-orders/${by}`),
       first(`/invoice-documents/${by}`),
       first(`/packing-lists/${by}`),
     ]).then(([oc, po, invoice, pl]) => setDocs({ oc, po, invoice, pl }));
@@ -55,7 +57,8 @@ export default function DocumentGenerators({ orderId, operationId, ncoId, refres
 
   if (!orderId && !ncoId) return null;
   const q = ncoId ? `nco_id=${ncoId}` : `order_id=${orderId}${operationId ? `&operation_id=${operationId}` : ''}`;
-  const source = ncoId ? 'these samples' : 'this order';
+  const source = ncoId ? 'this NCO' : 'this order';
+  const poOnly = !!ncoId && ncoType === 'shipping';
   const invoiceFinal = !!docs.invoice && docs.invoice.status !== 'draft';
 
   const title = (doc: Doc | null, what: string) => !doc
@@ -84,21 +87,22 @@ export default function DocumentGenerators({ orderId, operationId, ncoId, refres
 
   return (
     <>
+      {!poOnly && <>
       <button className={btn} title={title(docs.oc, 'order confirmation')}
         onClick={() => navigate(docs.oc ? `/order-confirmations/${docs.oc.id}` : `/order-confirmations/new?${q}`)}>
         <FileCheck2 size={13} /> Order Confirmation{mark(docs.oc)}
       </button>
       {eye(docs.oc, 'Order confirmation')}
-      {!ncoId && <>
-        <button className={btn} title={title(docs.po, 'supplier purchase order')}
-          onClick={() => navigate(docs.po ? `/purchase-orders/${docs.po.id}` : `/purchase-orders/new?${q}`)}>
-          <ShoppingCart size={13} /> Supplier PO{mark(docs.po)}
-        </button>
-        {eye(docs.po, 'Supplier purchase order')}
       </>}
+      <button className={btn} title={title(docs.po, 'supplier purchase order')}
+        onClick={() => navigate(docs.po ? `/purchase-orders/${docs.po.id}` : `/purchase-orders/new?${q}`)}>
+        <ShoppingCart size={13} /> Supplier PO{mark(docs.po)}
+      </button>
+      {eye(docs.po, 'Supplier purchase order')}
+      {!poOnly && <>
       <button className={btn} title={title(docs.invoice, 'invoice')}
         onClick={() => navigate(docs.invoice ? `/invoices/documents/${docs.invoice.id}` : `/invoices/documents/new?${q}`)}>
-        <Receipt size={13} /> Invoice{mark(docs.invoice)}
+        <Receipt size={13} /> {ncoId ? 'Sample invoice' : 'Invoice'}{mark(docs.invoice)}
       </button>
       {eye(docs.invoice, 'Invoice')}
       {/* The packing list is built from the generated invoice */}
@@ -109,6 +113,7 @@ export default function DocumentGenerators({ orderId, operationId, ncoId, refres
         <Package size={13} /> Packing List{mark(docs.pl)}
       </button>
       {eye(docs.pl, docs.pl?.final_file_path ? 'Packing list' : 'Packing list (draft)')}
+      </>}
     </>
   );
 }

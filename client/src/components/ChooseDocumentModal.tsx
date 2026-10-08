@@ -5,6 +5,7 @@ import { formatDate } from '../lib/dates';
 import { useToast } from '../contexts/ToastContext';
 import Modal from './ui/Modal';
 import Button from './ui/Button';
+import { type DocOwner, ownerApi } from '../lib/docOwner';
 
 /**
  * A shipping document tile's "Choose": the documents already in the app that
@@ -28,10 +29,10 @@ const SOURCE_LABEL: Record<SourceType, string> = {
 const SOURCES: SourceType[] = ['library', 'batch', 'this', 'other'];
 const keyOf = (d: { source: SourceType; id: number }) => `${d.source}:${d.id}`;
 
-export default function ChooseDocumentModal({ category, operationId, onClose, onFiled, onUpload, onPreview }: {
+export default function ChooseDocumentModal({ category, owner, onClose, onFiled, onUpload, onPreview }: {
   /** The tile's category, e.g. "MSDS", "Quality certificate". */
   category: { id: number; name: string } | null;
-  operationId: number;
+  owner: DocOwner;
   onClose: () => void;
   /** After documents were filed (the page refreshes its documents). */
   onFiled: () => void;
@@ -51,7 +52,7 @@ export default function ChooseDocumentModal({ category, operationId, onClose, on
     if (!category) return;
     setLoading(true);
     setQuery('');
-    api.get(`/operations/${operationId}/document-sources`, { params: { category: category.name } })
+    api.get(`${ownerApi(owner)}/document-sources`, { params: { category: category.name } })
       .then(({ data }) => {
         const list: SourceDoc[] = data.data || [];
         setDocs(list);
@@ -59,7 +60,7 @@ export default function ChooseDocumentModal({ category, operationId, onClose, on
       })
       .catch(() => addToast('Failed to load the documents', 'error'))
       .finally(() => setLoading(false));
-  }, [category?.name, operationId]);
+  }, [category?.name, owner.kind, owner.id]);
 
   const q = query.trim().toLowerCase();
   const visible = useMemo(() => docs.filter(d => !q || `${d.title} ${d.subtitle} ${d.file_name}`.toLowerCase().includes(q)), [docs, q]);
@@ -77,7 +78,7 @@ export default function ChooseDocumentModal({ category, operationId, onClose, on
     setSaving(true);
     try {
       const items = docs.filter(d => picked.has(keyOf(d))).map(d => ({ source: d.source, id: d.id }));
-      const { data } = await api.post(`/operations/${operationId}/documents/from-system`, { category: category.name, items });
+      const { data } = await api.post(`${ownerApi(owner)}/documents/from-system`, { category: category.name, items });
       addToast(`${data.added} document${data.added === 1 ? '' : 's'} filed as ${category.name}`, 'success');
       if (data.missing?.length) addToast(`Missing on the server: ${data.missing.join(', ')}`, 'error');
       onFiled();

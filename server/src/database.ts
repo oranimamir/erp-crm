@@ -2021,7 +2021,7 @@ export async function initializeDatabase() {
   `);
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_nco_docs_nco ON nco_documents(nco_id)`); } catch (_) {}
   // Generated OC / invoice / PL for an NCO, filed under it (nco_document_id)
-  for (const table of ['order_confirmations', 'invoice_documents', 'packing_lists']) {
+  for (const table of ['order_confirmations', 'invoice_documents', 'packing_lists', 'purchase_orders']) {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN nco_id INTEGER`); } catch (_) { /* column may already exist */ }
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN nco_document_id INTEGER`); } catch (_) { /* column may already exist */ }
   }
@@ -2120,10 +2120,12 @@ export async function initializeDatabase() {
   // Declarations generated per operation (any number), drafted from a library
   // declaration, an earlier one or an uploaded file; final = PDF filed under
   // the operation as category Declaration
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS declarations (
+  // … or for a non-commercial operation (nco_id, filed in nco_documents)
+  const declarationsSql = (table: string) => `
+    CREATE TABLE ${table} (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      operation_id INTEGER NOT NULL,
+      operation_id INTEGER,
+      nco_id INTEGER,
       title TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'final')),
       data TEXT NOT NULL,
@@ -2132,15 +2134,43 @@ export async function initializeDatabase() {
       file_path TEXT,
       file_name TEXT,
       document_id INTEGER,
+      nco_document_id INTEGER,
       created_by INTEGER,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY (operation_id) REFERENCES operations(id)          ON DELETE CASCADE,
-      FOREIGN KEY (document_id)  REFERENCES operation_documents(id) ON DELETE SET NULL,
-      FOREIGN KEY (created_by)   REFERENCES users(id)               ON DELETE SET NULL
-    )
-  `);
+      FOREIGN KEY (operation_id)    REFERENCES operations(id)               ON DELETE CASCADE,
+      FOREIGN KEY (nco_id)          REFERENCES non_commercial_operations(id) ON DELETE CASCADE,
+      FOREIGN KEY (document_id)     REFERENCES operation_documents(id)      ON DELETE SET NULL,
+      FOREIGN KEY (nco_document_id) REFERENCES nco_documents(id)            ON DELETE SET NULL,
+      FOREIGN KEY (created_by)      REFERENCES users(id)                    ON DELETE SET NULL
+    )`;
+  const oldDeclSql = (db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='declarations'").get() as any)?.sql as string | undefined;
+  if (!oldDeclSql) {
+    db.exec(declarationsSql('declarations'));
+  } else if (!oldDeclSql.includes('nco_id')) {
+    // Built under a temp name, then drop + rename (nothing references declarations)
+    try {
+      db.exec(`PRAGMA foreign_keys = OFF`, true);
+      db.exec(`
+        BEGIN;
+        ${declarationsSql('declarations_new')};
+        INSERT INTO declarations_new (id, operation_id, title, status, data, draft_data, source, file_path, file_name, document_id, created_by, created_at, updated_at)
+          SELECT id, operation_id, title, status, data, draft_data, source, file_path, file_name, document_id, created_by, created_at, updated_at FROM declarations;
+        DROP TABLE declarations;
+        ALTER TABLE declarations_new RENAME TO declarations;
+        COMMIT;
+      `, true);
+      db.exec(`PRAGMA foreign_keys = ON`, true);
+      db.saveToDisk();
+      console.log('[db] declarations can belong to a non-commercial operation');
+    } catch (err: any) {
+      console.error(`[db] Failed to migrate declarations: ${err?.message || err}`);
+      try { db.exec(`ROLLBACK`, true); } catch { /* not in a transaction */ }
+      try { db.exec(`PRAGMA foreign_keys = ON`, true); } catch { /* ignore */ }
+    }
+  }
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_declarations_operation ON declarations(operation_id)`); } catch (_) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_declarations_nco ON declarations(nco_id)`); } catch (_) {}
 
   // Referential integrity is only as good as the last migration — surface any
   // violation in the logs rather than letting it rot silently as it did before.

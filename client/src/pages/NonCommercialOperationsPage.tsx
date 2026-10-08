@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Pencil, Trash2, Loader2, PackageOpen } from 'lucide-react';
+import { Plus, Pencil, Trash2, Loader2, PackageOpen, UserPlus, X } from 'lucide-react';
 import api from '../lib/api';
 import { formatDate } from '../lib/dates';
 import { useToast } from '../contexts/ToastContext';
@@ -58,11 +58,13 @@ function Pills<T extends string>({ value, options, onChange }: {
   );
 }
 
-interface FormState { entity: Entity; type: NcoType; customer_id: string; supplier_id: string; nco_date: string; notes: string }
+interface FormState { entity: Entity; type: NcoType; customer_id: string; supplier_id: string; nco_date: string; notes: string; nco_number: string }
+interface NewClient { name: string; company: string; address: string; contact_person: string; email: string; phone: string; vat_number: string }
+const emptyClient = (): NewClient => ({ name: '', company: '', address: '', contact_person: '', email: '', phone: '', vat_number: '' });
 
 const today = () => new Date().toISOString().slice(0, 10);
 const emptyForm = (entity: Entity = 'BE'): FormState =>
-  ({ entity, type: 'samples', customer_id: '', supplier_id: '', nco_date: today(), notes: '' });
+  ({ entity, type: 'samples', customer_id: '', supplier_id: '', nco_date: today(), notes: '', nco_number: '' });
 
 export default function NonCommercialOperationsPage() {
   const { addToast } = useToast();
@@ -80,6 +82,9 @@ export default function NonCommercialOperationsPage() {
   const [nextNumber, setNextNumber] = useState('');
   const [saving, setSaving] = useState(false);
   const [deleteRow, setDeleteRow] = useState<Nco | null>(null);
+  // A client added from this window (samples often go to someone new)
+  const [newClient, setNewClient] = useState<NewClient | null>(null);
+  const [savingClient, setSavingClient] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -115,6 +120,7 @@ export default function NonCommercialOperationsPage() {
   const openNew = () => {
     setEditing(null);
     setForm(emptyForm(entity || 'BE'));
+    setNewClient(null);
     setShowForm(true);
   };
 
@@ -124,8 +130,9 @@ export default function NonCommercialOperationsPage() {
       entity: row.entity, type: row.type,
       customer_id: row.customer_id ? String(row.customer_id) : '',
       supplier_id: row.supplier_id ? String(row.supplier_id) : '',
-      nco_date: row.nco_date || '', notes: row.notes || '',
+      nco_date: row.nco_date || '', notes: row.notes || '', nco_number: row.nco_number,
     });
+    setNewClient(null);
     setShowForm(true);
   };
 
@@ -138,6 +145,8 @@ export default function NonCommercialOperationsPage() {
         supplier_id: form.type === 'shipping' ? Number(form.supplier_id) || null : null,
         nco_date: form.nco_date,
         notes: form.notes,
+        // Blank = the next number in the series
+        ...(form.nco_number.trim() ? { nco_number: form.nco_number.trim() } : {}),
       };
       if (editing) {
         await api.put(`/non-commercial-operations/${editing.id}`, payload);
@@ -155,6 +164,24 @@ export default function NonCommercialOperationsPage() {
       addToast(err.response?.data?.error || 'Failed to save', 'error');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function addClient() {
+    if (!newClient?.name.trim()) { addToast('Give the client a name', 'error'); return; }
+    setSavingClient(true);
+    try {
+      const { data } = await api.post('/customers', {
+        ...newClient, name: newClient.name.trim(), company: newClient.company.trim() || newClient.name.trim(),
+      });
+      setCustomers(prev => [...prev, { id: data.id, name: data.name }].sort((a, b) => a.name.localeCompare(b.name)));
+      set({ customer_id: String(data.id) });
+      setNewClient(null);
+      addToast(`${data.name} added to Customers`, 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Could not add the client', 'error');
+    } finally {
+      setSavingClient(false);
     }
   }
 
@@ -246,18 +273,23 @@ export default function NonCommercialOperationsPage() {
       <Modal open={showForm} onClose={() => !saving && setShowForm(false)}
         title={editing ? `Edit ${editing.nco_number}` : 'New non-commercial operation'}>
         <div className="space-y-4">
-          {!editing && (
-            <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3">
+            {!editing && (
               <div className="space-y-1">
                 <label className="block text-xs font-medium text-gray-500">Entity</label>
                 <Pills value={form.entity} onChange={v => set({ entity: v })} options={[['BE', 'BE'], ['NL', 'NL']] as const} />
               </div>
-              <div className="space-y-1">
-                <label className="block text-xs font-medium text-gray-500">Number</label>
-                <div className="text-sm font-semibold text-gray-900 py-1">{nextNumber || '…'}</div>
-              </div>
+            )}
+            <div className={`space-y-1 ${editing ? 'col-span-2' : ''}`}>
+              <label className="block text-xs font-medium text-gray-500">Number</label>
+              <input value={form.nco_number} onChange={e => set({ nco_number: e.target.value })}
+                placeholder={editing ? editing.nco_number : (nextNumber || 'next in the series')}
+                className={`${inputCls} font-semibold`} />
+              <p className="text-[11px] text-gray-400">
+                {editing ? 'Change it to renumber — documents already generated keep their number.' : 'Leave empty for the next number in the series, or type your own.'}
+              </p>
             </div>
-          )}
+          </div>
 
           <div className="space-y-1">
             <label className="block text-xs font-medium text-gray-500">Type</label>
@@ -266,11 +298,44 @@ export default function NonCommercialOperationsPage() {
 
           {form.type === 'samples' ? (
             <div className="space-y-1">
-              <label className="block text-xs font-medium text-gray-500">Customer</label>
-              <select value={form.customer_id} onChange={e => set({ customer_id: e.target.value })} className={inputCls}>
-                <option value="">Choose the customer…</option>
-                {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-medium text-gray-500">Customer</label>
+                {!newClient && (
+                  <button type="button" onClick={() => setNewClient(emptyClient())}
+                    className="inline-flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700">
+                    <UserPlus size={12} /> New client
+                  </button>
+                )}
+              </div>
+              {!newClient ? (
+                <select value={form.customer_id} onChange={e => set({ customer_id: e.target.value })} className={inputCls}>
+                  <option value="">Choose the customer…</option>
+                  {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              ) : (
+                <div className="space-y-2 rounded-lg border border-primary-200 bg-primary-50/40 p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-gray-700">New client</span>
+                    <button type="button" onClick={() => setNewClient(null)} className="text-gray-400 hover:text-gray-600" title="Cancel"><X size={14} /></button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <input value={newClient.name} onChange={e => setNewClient({ ...newClient, name: e.target.value })} placeholder="Name *" className={inputCls} autoFocus />
+                    <input value={newClient.company} onChange={e => setNewClient({ ...newClient, company: e.target.value })} placeholder="Legal / company name" className={inputCls} />
+                  </div>
+                  <textarea rows={2} value={newClient.address} onChange={e => setNewClient({ ...newClient, address: e.target.value })} placeholder="Address (billing / delivery)" className={inputCls} />
+                  <div className="grid grid-cols-2 gap-2">
+                    <input value={newClient.contact_person} onChange={e => setNewClient({ ...newClient, contact_person: e.target.value })} placeholder="Contact person" className={inputCls} />
+                    <input value={newClient.email} onChange={e => setNewClient({ ...newClient, email: e.target.value })} placeholder="Email" className={inputCls} />
+                    <input value={newClient.phone} onChange={e => setNewClient({ ...newClient, phone: e.target.value })} placeholder="Phone" className={inputCls} />
+                    <input value={newClient.vat_number} onChange={e => setNewClient({ ...newClient, vat_number: e.target.value })} placeholder="VAT / Tax ID" className={inputCls} />
+                  </div>
+                  <div className="flex justify-end">
+                    <Button size="sm" onClick={addClient} disabled={savingClient || !newClient.name.trim()}>
+                      {savingClient ? <Loader2 size={14} className="animate-spin" /> : <UserPlus size={14} />} Add client
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="space-y-1">
@@ -299,7 +364,7 @@ export default function NonCommercialOperationsPage() {
 
           <div className="flex justify-end gap-2 pt-1">
             <Button variant="secondary" onClick={() => setShowForm(false)} disabled={saving}>Cancel</Button>
-            <Button onClick={save} disabled={saving || partyMissing}>
+            <Button onClick={save} disabled={saving || partyMissing || !!newClient}>
               {saving && <Loader2 size={14} className="animate-spin" />} {editing ? 'Save' : 'Create'}
             </Button>
           </div>

@@ -10,6 +10,7 @@ import {
   unlinkProductFile, matchProduct, copyToOperationDocs, categoryIdByName,
 } from '../lib/productDocs.js';
 import { importLibraryZip, parseLibraryFileName } from '../lib/productLibrary.js';
+import { ownerFromRequest, ownerLines, insertOwnerDocument } from '../lib/docOwner.js';
 import { readDocxParagraphs, writeDocxParagraphs } from '../lib/docxText.js';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -39,27 +40,6 @@ router.get('/', (req: Request, res: Response) => {
   res.json({ data: listProductDocs(conditions.length ? `WHERE ${conditions.join(' AND ')}` : '', params) });
 });
 
-/** Lines of the operation's generated invoice (final over draft, newest), else null. */
-export function invoiceLines(operationId: number): Array<{ description: string; client_product_name: string }> | null {
-  const rows = db.prepare(`
-    SELECT data FROM invoice_documents WHERE operation_id = ?
-    ORDER BY CASE WHEN status = 'final' THEN 0 ELSE 1 END, updated_at DESC, id DESC
-  `).all(operationId) as any[];
-  for (const row of rows) {
-    let data: any;
-    try { data = JSON.parse(row.data); } catch { continue; }
-    const items = Array.isArray(data?.items) ? data.items : Array.isArray(data?.lines) ? data.lines : [];
-    const lines = items
-      .map((it: any) => ({
-        description: [it.product, it.description, it.commercial_name, it.name].filter(Boolean).join(' '),
-        client_product_name: [it.client_product_name, it.reference].filter(Boolean).join(' '),
-      }))
-      .filter((l: any) => l.description || l.client_product_name);
-    if (lines.length) return lines;
-  }
-  return null;
-}
-
 /**
  * GET /api/product-documents/suggest?operation_id=
  * The operation's products — read off its generated invoice, else its order —
@@ -67,19 +47,13 @@ export function invoiceLines(operationId: number): Array<{ description: string; 
  * documents; plus the general documents (linked to no product).
  */
 router.get('/suggest', (req: Request, res: Response) => {
-  const operationId = Number(req.query.operation_id);
-  const op = Number.isInteger(operationId)
-    ? db.prepare('SELECT id, order_id FROM operations WHERE id = ?').get(operationId) as any
-    : null;
-  if (!op) { res.status(404).json({ error: 'Operation not found' }); return; }
-
-  const fromInvoice = invoiceLines(op.id);
-  const lines = fromInvoice ?? (op.order_id
-    ? db.prepare('SELECT id, description, client_product_name FROM order_items WHERE order_id = ? ORDER BY id').all(op.order_id) as any[]
-    : []);
+  // ?operation_id= or ?nco_id=
+  const owner = ownerFromRequest(req.query);
+  if (!owner) { res.status(404).json({ error: 'Operation not found' }); return; }
+  const { source, lines } = ownerLines(owner);
   const docs = listProductDocs();
   res.json({
-    source: fromInvoice ? 'invoice' : 'order',
+    source,
     lines: suggestFor(lines, docs),
     general: docs.filter(d => d.products.length === 0),
   });
@@ -219,11 +193,9 @@ router.delete('/:id', (req: Request, res: Response) => {
 router.post('/copy', (req: Request, res: Response) => {
   const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter((n: number) => Number.isInteger(n) && n > 0);
   if (!ids.length) { res.status(400).json({ error: 'Choose at least one document' }); return; }
-  const operationId = Number(req.body?.operation_id);
-  const op = Number.isInteger(operationId)
-    ? db.prepare('SELECT id, operation_number FROM operations WHERE id = ?').get(operationId) as any
-    : null;
-  if (!op) { res.status(404).json({ error: 'Operation not found' }); return; }
+  // { operation_id } or { nco_id }
+  const owner = ownerFromRequest(req.body);
+  if (!owner) { res.status(404).json({ error: 'Operation not found' }); return; }
 
   const added: any[] = [];
   const missing: string[] = [];
@@ -233,13 +205,14 @@ router.post('/copy', (req: Request, res: Response) => {
     const stored = copyToOperationDocs(doc);
     if (!stored) { missing.push(doc.file_name); continue; }
     const kind = doc.kind as ProductDocKind;
-    const result = db.prepare(`
-      INSERT INTO operation_documents (operation_id, category_id, file_path, file_name, notes) VALUES (?, ?, ?, ?, ?)
-    `).run(op.id, categoryIdByName(KIND_CATEGORY[kind]), stored, doc.file_name, `${KIND_LABEL[kind]} — ${docLabel(doc)}`);
-    added.push(result.lastInsertRowid);
+    added.push(insertOwnerDocument(owner, categoryIdByName(KIND_CATEGORY[kind]), stored, doc.file_name, `${KIND_LABEL[kind]} — ${docLabel(doc)}`));
   }
   if (added.length) {
-    notifyAdmin({ action: 'updated', entity: 'Operation', label: `Operation ${op.operation_number}`, detail: `${added.length} product document(s) added from the library`, ...who(req) });
+    notifyAdmin({
+      action: 'updated', entity: owner.kind === 'nco' ? 'Non-Commercial Operation' : 'Operation',
+      label: owner.kind === 'nco' ? owner.number : `Operation ${owner.number}`,
+      detail: `${added.length} product document(s) added from the library`, ...who(req),
+    });
   }
   res.json({ added: added.length, missing });
 });

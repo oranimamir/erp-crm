@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, PackageOpen, Plus, Trash2, Save, Loader2, Upload, FileText, Eye, Download, FileStack, Send,
+  Library, Edit2, Columns2, Type, Pencil, Check, X,
 } from 'lucide-react';
 import api from '../lib/api';
 import { formatDate } from '../lib/dates';
@@ -10,18 +11,27 @@ import { useFilePreview } from '../lib/useFilePreview';
 import Button from '../components/ui/Button';
 import DocumentGenerators from '../components/DocumentGenerators';
 import SendDocumentsModal from '../components/SendDocumentsModal';
+import RequiredDocuments, { type OperationDeclaration } from '../components/RequiredDocuments';
+import AddFromLibraryModal from '../components/AddFromLibraryModal';
+import OperationDocumentEditModal from '../components/OperationDocumentEditModal';
+import DocumentCompareModal from '../components/DocumentCompareModal';
+import DocxTextEditModal from '../components/DocxTextEditModal';
+import { missingRequired, sortForSending, docNumber } from '../lib/operationDocs';
 
 /**
- * One non-commercial operation. Samples: the sample lines are the source of
- * the generated order confirmation, invoice (own number, "No commercial
- * value", never revenue) and packing list, all filed here under Documents.
+ * One non-commercial operation, with what a regular operation has: the lines
+ * are the source of the generated documents — order confirmation, sample
+ * invoice (SI… number, "Sample without commercial value", never revenue),
+ * packing list and supplier PO (shipping NCOs: the PO only) — plus the
+ * shipping documents checklist, Add from library, declarations, and the
+ * numbered documents list (edit, compare, send). All filed here.
  */
 
 interface NcoLine {
   product: string; reference: string; quantity: string; quantity_unit: string;
   unit_price: string; currency: string; hs_code: string; lots: string;
 }
-interface NcoDoc { id: number; file_path: string; file_name: string; category_name: string | null; notes: string | null; created_at: string }
+interface NcoDoc { id: number; file_path: string; file_name: string; category_id: number | null; category_name: string | null; notes: string | null; created_at: string; file_size?: number | null }
 interface Nco {
   id: number; nco_number: string; entity: string; type: 'samples' | 'shipping';
   customer_id: number | null; supplier_id: number | null; customer_name: string | null; supplier_name: string | null;
@@ -65,11 +75,18 @@ export default function NcoDetailPage() {
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [showSend, setShowSend] = useState(false);
+  const [showLibrary, setShowLibrary] = useState(false);
+  const [editDoc, setEditDoc] = useState<NcoDoc | null>(null);
+  const [compareDocId, setCompareDocId] = useState<number | null>(null);
+  const [textDocId, setTextDocId] = useState<number | null>(null);
+  const [declarations, setDeclarations] = useState<OperationDeclaration[]>([]);
+  const [renaming, setRenaming] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
       const { data } = await api.get(`/non-commercial-operations/${id}`);
       setNco(data);
+      api.get(`/declarations/by-nco/${id}`).then(r => setDeclarations(r.data || [])).catch(() => setDeclarations([]));
       const form = (data.items || []).map(toForm);
       setLines(form.length ? form : [blankLine()]);
       setSavedLines(JSON.stringify((data.items || []).map((l: any) => toPayload(toForm(l)))));
@@ -134,6 +151,35 @@ export default function NcoDetailPage() {
     }
   }
 
+  /** One file into a category (shipping document tiles). */
+  async function uploadToCategory(file: File, categoryId: number) {
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('category_id', String(categoryId));
+      await api.post(`/non-commercial-operations/${id}/documents`, fd);
+      await load();
+      addToast('Document uploaded', 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Upload failed', 'error');
+    }
+  }
+
+  /** A number of the user's own instead of the series one. */
+  async function saveNumber() {
+    if (renaming === null || !nco) return;
+    const next = renaming.trim();
+    if (!next || next === nco.nco_number) { setRenaming(null); return; }
+    try {
+      const { data } = await api.put(`/non-commercial-operations/${id}`, { nco_number: next });
+      setNco(data);
+      setRenaming(null);
+      addToast(`Renumbered to ${data.nco_number} — documents already generated keep their number`, 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Could not change the number', 'error');
+    }
+  }
+
   async function deleteDoc(doc: NcoDoc) {
     if (!confirm(`Delete ${doc.file_name}? A generated document is deleted with it.`)) return;
     try {
@@ -149,6 +195,11 @@ export default function NcoDetailPage() {
 
   const isSamples = nco.type === 'samples';
   const fileOf = (d: NcoDoc) => ({ fileName: d.file_name, filePath: d.file_path, subfolder: 'operation-docs', label: d.category_name || undefined });
+  const owner = { kind: 'nco' as const, id: nco.id };
+  // Documents in sending order, numbered as they go out (superseded drafts unnumbered)
+  const sortedDocs = sortForSending(nco.documents);
+  const numberedDocs = sortedDocs.filter(d => !/-DRAFT\.pdf$/i.test(d.file_name));
+  const docNumbers = new Map(numberedDocs.map((d, i) => [d.id, docNumber(i, numberedDocs.length)]));
 
   return (
     <div className="space-y-5">
@@ -160,9 +211,22 @@ export default function NcoDetailPage() {
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-6 py-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-              <PackageOpen size={22} className="text-gray-400" /> {nco.nco_number}
-            </h1>
+            {renaming === null ? (
+              <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                <PackageOpen size={22} className="text-gray-400" /> {nco.nco_number}
+                <button type="button" onClick={() => setRenaming(nco.nco_number)} title="Use a number of your own"
+                  className="p-1 rounded text-gray-300 hover:text-primary-600 hover:bg-gray-100"><Pencil size={15} /></button>
+              </h1>
+            ) : (
+              <div className="flex items-center gap-2">
+                <PackageOpen size={22} className="text-gray-400" />
+                <input value={renaming} onChange={e => setRenaming(e.target.value)} autoFocus
+                  onKeyDown={e => { if (e.key === 'Enter') saveNumber(); if (e.key === 'Escape') setRenaming(null); }}
+                  className="rounded-lg border border-gray-300 px-2 py-1 text-xl font-bold text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500" />
+                <button type="button" onClick={saveNumber} title="Save the number" className="p-1.5 rounded-lg text-green-600 hover:bg-green-50"><Check size={18} /></button>
+                <button type="button" onClick={() => setRenaming(null)} title="Cancel" className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100"><X size={18} /></button>
+              </div>
+            )}
             <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
               <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${isSamples ? 'bg-amber-50 text-amber-700' : 'bg-sky-50 text-sky-700'}`}>
                 {isSamples ? 'Samples' : 'Shipping'}
@@ -247,19 +311,36 @@ export default function NcoDetailPage() {
       </div>
 
       {/* Generators */}
-      {isSamples && (
+      {(
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-5 py-4 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="font-semibold text-gray-800 flex items-center gap-2"><FileStack size={16} className="text-gray-500" /> Generate documents</h2>
             {linesDirty && <span className="text-xs text-amber-600">Save the lines first — new drafts are made from the saved lines</span>}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <DocumentGenerators orderId={null} ncoId={nco.id} refreshKey={nco.documents.length}
+            <DocumentGenerators orderId={null} ncoId={nco.id} ncoType={nco.type} refreshKey={nco.documents.length}
               onPreview={item => preview.open(item)} />
           </div>
-          <p className="text-xs text-gray-500">The invoice takes this NCO's number and is marked “No commercial value” — it never enters revenue or the invoice series.</p>
+          <p className="text-xs text-gray-500">
+            {isSamples
+              ? 'The sample invoice is numbered SI + entity + date (e.g. SIBE20260813001) and marked “Sample without commercial value” — it never enters revenue or the invoice series.'
+              : 'Shipping with a supplier: generate the purchase order from these lines.'}
+          </p>
         </div>
       )}
+
+      {/* Shipping documents checklist */}
+      <RequiredDocuments
+        owner={owner}
+        documents={nco.documents}
+        categories={categories}
+        onUpload={uploadToCategory}
+        onPreview={(doc, label) => preview.open({ ...fileOf(doc as NcoDoc), label })}
+        onFiled={load}
+        onOpenFile={item => preview.open(item)}
+        onEditText={docId => setTextDocId(docId)}
+        declarations={declarations}
+      />
 
       {/* Documents */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
@@ -267,9 +348,15 @@ export default function NcoDetailPage() {
           <h2 className="font-semibold text-gray-800 flex items-center gap-2">
             <FileText size={16} className="text-gray-500" /> Documents ({nco.documents.length})
           </h2>
-          <Button size="sm" variant="secondary" onClick={() => setShowSend(true)} disabled={nco.documents.length === 0}>
-            <Send size={14} /> Send documents
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setShowLibrary(true)}
+              title="Add MSDS / product specification sheets / declarations from Inventory → Documents">
+              <Library size={14} /> Add from library
+            </Button>
+            <Button size="sm" onClick={() => setShowSend(true)} disabled={nco.documents.length === 0}>
+              <Send size={14} /> Send documents
+            </Button>
+          </div>
         </div>
 
         <div className="px-5 pt-4 flex flex-wrap items-center gap-3">
@@ -299,8 +386,15 @@ export default function NcoDetailPage() {
           <p className="pb-6 text-center text-sm text-gray-400">No documents yet.</p>
         ) : (
           <ul className="divide-y divide-gray-100">
-            {nco.documents.map(doc => (
+            {sortedDocs.map(doc => (
               <li key={doc.id} className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50">
+                {docNumbers.has(doc.id) ? (
+                  <span className="w-7 flex-shrink-0 text-center text-xs font-semibold text-primary-700 bg-primary-50 rounded py-0.5" title="Order in the Send documents email">
+                    {docNumbers.get(doc.id)}
+                  </span>
+                ) : (
+                  <span className="w-7 flex-shrink-0 text-center text-[10px] text-gray-400" title="Draft — not sent by default">draft</span>
+                )}
                 <FileText size={18} className="text-gray-400 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-gray-800 truncate">{doc.file_name}</p>
@@ -312,6 +406,15 @@ export default function NcoDetailPage() {
                 </div>
                 <button onClick={() => preview.open(fileOf(doc))} className="p-1.5 rounded-lg hover:bg-gray-200 text-gray-500" title="Preview"><Eye size={15} /></button>
                 <button onClick={() => preview.download(fileOf(doc))} className="p-1.5 rounded-lg hover:bg-gray-200 text-gray-500" title="Download"><Download size={15} /></button>
+                {/\.docx$/i.test(doc.file_name) && (
+                  <button onClick={() => setTextDocId(doc.id)} className="p-1.5 rounded-lg hover:bg-gray-200 text-gray-500 hover:text-primary-600" title="Edit the text of this Word document"><Type size={15} /></button>
+                )}
+                <button onClick={() => setEditDoc(doc)} className="p-1.5 rounded-lg hover:bg-gray-200 text-gray-500 hover:text-primary-600" title="Edit name, category, notes or file"><Edit2 size={15} /></button>
+                <button onClick={() => setCompareDocId(doc.id)} disabled={nco.documents.length < 2}
+                  className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-gray-600 border border-gray-200 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title={nco.documents.length < 2 ? 'Add another document to compare with' : 'Compare with another document'}>
+                  <Columns2 size={13} /> Compare with
+                </button>
                 <button onClick={() => deleteDoc(doc)} className="p-1.5 rounded-lg hover:bg-red-100 text-gray-400 hover:text-red-600" title="Delete"><Trash2 size={15} /></button>
               </li>
             ))}
@@ -325,8 +428,21 @@ export default function NcoDetailPage() {
         endpoint={`/non-commercial-operations/${nco.id}/documents/email`}
         reference={nco.nco_number}
         partyName={(isSamples ? nco.customer_name : nco.supplier_name) || ''}
-        documents={nco.documents}
+        documents={sortedDocs}
+        missingRequired={missingRequired(nco.documents)}
+        defaultNumbered
       />
+
+      <AddFromLibraryModal open={showLibrary} onClose={() => setShowLibrary(false)} owner={owner}
+        existingNames={nco.documents.map(d => d.file_name)} onAdded={load} />
+      <OperationDocumentEditModal doc={editDoc} apiBase={`/non-commercial-operations/${nco.id}`} categories={categories}
+        onClose={() => setEditDoc(null)} onSaved={load} />
+      {compareDocId !== null && (
+        <DocumentCompareModal docs={nco.documents} initialLeft={compareDocId} onClose={() => setCompareDocId(null)} />
+      )}
+      <DocxTextEditModal endpoint={textDocId !== null ? `/non-commercial-operations/${nco.id}/documents/${textDocId}/text` : null}
+        title="Edit document text" note="Only this copy changes — the library stays as it is."
+        onClose={() => setTextDocId(null)} onSaved={load} />
 
       {preview.modal}
     </div>

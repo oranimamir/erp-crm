@@ -382,7 +382,7 @@ export default function InvoiceDocumentPage() {
       setEmailTo(prev => join(prev || form.contact_email || '', data?.invoice?.to));
       setEmailCc(prev => join(prev, data?.invoice?.cc));
     }).catch(() => { /* the dialog still works without defaults */ });
-    setEmailSubject(prev => prev || `Commercial Invoice ${form.doc_number}${form.client_name ? ` — ${form.client_name}` : ''}`);
+    setEmailSubject(prev => prev || `${ncoId ? 'Sample Invoice' : 'Commercial Invoice'} ${form.doc_number}${form.client_name ? ` — ${form.client_name}` : ''}`);
   }, [showEmail]);
 
   async function switchEntity(next: string) {
@@ -472,7 +472,8 @@ export default function InvoiceDocumentPage() {
     if (!profileId) { addToast('Confirm the customer entity first', 'error'); return; }
     setSavingLayout(true);
     try {
-      const { data } = await api.put(`/invoice-documents/layout/${profileId}`, { layout });
+      // A sample invoice's format is kept apart from the customer's commercial invoice format
+      const { data } = await api.put(`/invoice-documents/layout/${profileId}`, { layout }, { params: ncoId ? { kind: 'sample' } : {} });
       setLayout(withDefaults(data.layout));
       setLayoutSource(`saved on ${profileName || 'this customer'}`);
       addToast(data.message || 'Invoice format saved', 'success');
@@ -608,7 +609,7 @@ export default function InvoiceDocumentPage() {
       />
 
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Commercial Invoice</h1>
+        <h1 className="text-2xl font-bold text-gray-900">{ncoId ? 'Sample Invoice' : 'Commercial Invoice'}</h1>
         <p className="text-sm text-gray-500 mt-1">
           Check the details, then confirm to produce the PDF as{' '}
           <strong className="text-gray-700">{(form.doc_number || 'invoice').replace(/[^A-Za-z0-9._-]+/g, '-')}.pdf</strong>

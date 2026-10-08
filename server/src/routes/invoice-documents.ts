@@ -18,12 +18,12 @@ import {
   formatLongDate,
   type DocumentData,
 } from '../lib/document-pdf.js';
-import { normalizeLayout } from '../lib/invoiceLayout.js';
+import { normalizeLayout, SAMPLE_INVOICE_LAYOUT, SAMPLE_INVOICE_TERMS } from '../lib/invoiceLayout.js';
 import { getEurRate } from '../lib/fx.js';
 import { refreshEstimatedPaymentDate } from '../lib/paymentTerms.js';
 import { deletePackingListsForInvoice } from './packing-lists.js';
 import {
-  ncoSource, ncoDocLines, ncoProfile, ncoPartyFields, NCO_CURRENCY, NO_COMMERCIAL_VALUE,
+  ncoSource, ncoProfile, ncoPartyFields, NCO_CURRENCY, nextSampleInvoiceNumber, ncoSampleLines, sampleQuantityText,
   fileUnderNco, dropNcoDocumentRow,
 } from '../lib/ncoDocs.js';
 
@@ -152,7 +152,7 @@ async function renderAndFile(
 
   // An NCO's invoice is filed under the NCO instead
   const ncoDocumentId = opts.ncoId
-    ? fileUnderNco(opts.ncoId, opts.existing?.nco_document_id, 'Commercial Invoice', storedName, displayName, `Commercial Invoice ${data.doc_number || ''}`.trim())
+    ? fileUnderNco(opts.ncoId, opts.existing?.nco_document_id, 'Sample invoice', storedName, displayName, `Sample invoice ${data.doc_number || ''}`.trim())
     : null;
 
   return { filePath: storedName, fileName: displayName, documentId, ncoDocumentId };
@@ -505,8 +505,10 @@ router.get('/prepare', (req: Request, res: Response) => {
 });
 
 /**
- * A samples NCO: drafted from its order confirmation when there is one, else
- * from the NCO lines. Numbered as the NCO, printed "No commercial value".
+ * A samples NCO -> a Sample Invoice (TripleW's sample invoice layout): drafted
+ * from its order confirmation when there is one, else from the NCO lines.
+ * Numbered SI + entity + date + running number; "Sample without commercial
+ * value" terms; no bank block. Never a recorded invoice.
  */
 function prepareFromNco(req: Request, res: Response) {
   const nco = ncoSource(Number(req.query.nco_id));
@@ -530,37 +532,51 @@ function prepareFromNco(req: Request, res: Response) {
   const { match, profiles } = ncoProfile(nco, Number.isInteger(requestedProfile) ? requestedProfile : null);
   const profile = match.profile;
   const invDefaults = profile?.data.invoice || {};
-  const { layout, source: layoutSource } = resolveInvoiceLayout(nco.customer_id, profile, nco.customer_name);
+  // The customer's own sample-invoice format when one was saved, else the house one
+  const savedSample = (profile?.data as any)?.sample_invoice_layout;
+  const layout = normalizeLayout(savedSample && typeof savedSample === 'object' ? savedSample : SAMPLE_INVOICE_LAYOUT);
+  const layoutSource = savedSample ? `sample format saved on ${profile!.name}` : 'the TripleW sample invoice';
   const today = new Date().toISOString().slice(0, 10);
+  const party = ncoPartyFields(nco, profile);
 
   const draft: DocumentData = {
     ...issuer,
     entity_code: entity,
-    doc_number: nco.nco_number,
+    doc_number: nextSampleInvoiceNumber(entity, today),
     doc_date: today,
     sq_number: '',
     our_ref: nco.nco_number,
-    po_number: '',
+    po_number: 'Sample',
     operation_number: nco.nco_number,
-    ...ncoPartyFields(nco, profile),
-    items: ncoDocLines(nco.lines),
+    ...party,
+    client_code: party.client_code || 'Not applicable',
+    items: ncoSampleLines(nco.lines),
     delivery: invDefaults.delivery || '',
-    delivery_address: invDefaults.delivery_address || '',
+    delivery_address: invDefaults.delivery_address || party.billing_address || '',
     delivery_date_text: '',
+    remarks: 'Sample invoice, PSS, SDS, COA',
     product_reference: nco.lines[0]?.product || '',
     freight: 0,
     vat: 0,
     insurance: 0,
-    terms: '',
-    notes: NO_COMMERCIAL_VALUE,
+    terms: SAMPLE_INVOICE_TERMS,
+    notes: '',
     layout,
-  };
+  } as DocumentData;
   if (ocData) {
     for (const key of OC_CARRIED_FIELDS) {
       const value = ocData[key];
       if (value != null && String(value).trim() !== '') (draft as any)[key] = value;
     }
-    if (ocItems.length) draft.items = ocItems;
+    if (ocItems.length) {
+      draft.items = ocItems.map((it: any) => ({
+        ...it,
+        packaging: it.packaging || 'Sample bottle',
+        note: it.note || sampleQuantityText(it.quantity, it.quantity_unit),
+      }));
+    }
+    draft.layout = layout;
+    draft.terms = draft.terms || SAMPLE_INVOICE_TERMS;
   }
 
   res.json({
@@ -590,7 +606,8 @@ router.put('/layout/:profileId', (req: Request, res: Response) => {
 
   let data: any = {};
   try { data = JSON.parse(row.data); } catch { /* corrupt row → start clean */ }
-  data.invoice_layout = layout;
+  // ?kind=sample keeps a customer's sample-invoice format apart from their commercial one
+  if (req.query.kind === 'sample') data.sample_invoice_layout = layout; else data.invoice_layout = layout;
 
   db.prepare(`UPDATE customer_document_profiles SET data = ?, updated_at = datetime('now') WHERE id = ?`)
     .run(JSON.stringify(data), profileId);
@@ -707,16 +724,19 @@ router.post('/', async (req: Request, res: Response) => {
   }
 });
 
-/** Create for a samples NCO: own number (the NCO's), filed under the NCO, never a recorded invoice. */
+/** Create for a samples NCO: a sample invoice (SI... number), filed under the NCO, never a recorded invoice. */
 async function createForNco(req: Request, res: Response, nco: any, data: DocumentData, profileId: number | null, isDraft: boolean) {
+  const entity = isEntityCode(data.entity_code) ? data.entity_code : nco.entity;
   const payload: DocumentData = applyEntityBank({
     ...data,
-    doc_number: (data.doc_number || '').trim() || nco.nco_number,
+    doc_number: (data.doc_number || '').trim() || nextSampleInvoiceNumber(entity, data.doc_date),
     operation_number: data.operation_number || nco.nco_number,
   });
+  let renumberedFrom: string | null = null;
   if (numberTaken(payload.doc_number!)) {
-    res.status(409).json({ error: `Invoice ${payload.doc_number} already exists` });
-    return;
+    // Someone took this sample number meanwhile - take the next one of the day
+    renumberedFrom = payload.doc_number!;
+    payload.doc_number = nextSampleInvoiceNumber(entity, payload.doc_date);
   }
 
   let filed: Filed | null = null;
@@ -735,7 +755,7 @@ async function createForNco(req: Request, res: Response, nco: any, data: Documen
       detail: `${nco.nco_number} — no commercial value`,
       performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
     });
-    res.status(201).json({ ...parseRecord(row), renumbered_from: null });
+    res.status(201).json({ ...parseRecord(row), renumbered_from: renumberedFrom });
   } catch (err: any) {
     if (filed) discardFiled(filed, null);
     if (err?.message?.includes('UNIQUE')) {
@@ -775,8 +795,7 @@ router.put('/:id', async (req: Request, res: Response) => {
 
   let renumberedFrom: string | null = null;
   if (numberTaken(payload.doc_number!, existing.id, existing.invoice_id)) {
-    // An NCO invoice is outside the series — it is never renumbered into it
-    if (!wasDraft || existing.nco_id) {
+    if (!wasDraft) {
       res.status(409).json({ error: `Invoice ${payload.doc_number} already exists` });
       return;
     }
@@ -785,7 +804,8 @@ router.put('/:id', async (req: Request, res: Response) => {
       ? payload.entity_code
       : entityFromOperationNumber(operationNumberFor(operationId) || payload.operation_number || '');
     renumberedFrom = payload.doc_number!;
-    payload.doc_number = nextInvoiceNumber(entity, payload.doc_date);
+    // A sample invoice takes the next of its own SI series, never the commercial one
+    payload.doc_number = existing.nco_id ? nextSampleInvoiceNumber(entity, payload.doc_date) : nextInvoiceNumber(entity, payload.doc_date);
   }
 
   let filed: Filed | null = null;

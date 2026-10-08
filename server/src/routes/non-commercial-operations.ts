@@ -8,6 +8,12 @@ import { normalizeNcoLines, parseNcoLines, deleteNcoUpload } from '../lib/ncoDoc
 import { deleteOrderConfirmationRow } from './order-confirmations.js';
 import { deleteInvoiceDocument } from './invoice-documents.js';
 import { deletePackingListRow } from './packing-lists.js';
+import { deletePurchaseOrderRow } from './purchase-orders.js';
+import { deleteDeclaration } from './declarations.js';
+import { mountOwnerDocumentRoutes } from '../lib/ownerDocumentRoutes.js';
+import { saveDeclarationToLibrary } from '../lib/documentSources.js';
+import { getOwner } from '../lib/docOwner.js';
+import fs from 'fs';
 
 /**
  * Non-commercial operations (NCO): samples sent to a customer, or shipping with
@@ -44,6 +50,19 @@ function nextSeq(entity: string, year: number): number {
 const numberFor = (entity: string, year: number, seq: number) => `NCO${entity}${year}${String(seq).padStart(3, '0')}`;
 
 const validDate = (v: unknown) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+
+/** A number typed by the user instead of the series: letters, digits and - _ . / only. */
+const CUSTOM_NUMBER = /^[A-Za-z0-9][A-Za-z0-9._\-/]{1,39}$/;
+function customNumberError(number: string, exceptId?: number): string | null {
+  if (!CUSTOM_NUMBER.test(number)) return 'The number may use letters, digits and - _ . / only (2–40 characters)';
+  const taken = db.prepare('SELECT id FROM non_commercial_operations WHERE lower(nco_number) = lower(?)').get(number) as any;
+  return taken && taken.id !== exceptId ? `${number} is already used` : null;
+}
+/** The running number inside a typed number when it follows the series (NCOBE2026007 → 7), else 0. */
+function seqOf(number: string, entity: string, year: number): number {
+  const m = number.toUpperCase().match(new RegExp(`^NCO${entity}${year}(\\d{3,})$`));
+  return m ? Number(m[1]) : 0;
+}
 
 /**
  * The party the type asks for: a customer for samples, a raw-material /
@@ -118,6 +137,15 @@ router.post('/:id/documents', uploadOperationDoc.single('file'), (req: Request, 
   const categoryId = Number(req.body?.category_id) || null;
   const result = db.prepare('INSERT INTO nco_documents (nco_id, category_id, file_path, file_name, notes) VALUES (?, ?, ?, ?, ?)')
     .run(nco.id, categoryId, req.file.filename, req.file.originalname, String(req.body?.notes ?? '').trim() || null);
+  // A declaration uploaded here also goes into the library for later operations
+  const category = categoryId ? (db.prepare('SELECT name FROM document_categories WHERE id = ?').get(categoryId) as any)?.name : null;
+  if (/^declarations?$/i.test(String(category || '').trim())) {
+    try {
+      saveDeclarationToLibrary(fs.readFileSync(req.file.path), req.file.originalname, getOwner('nco', nco.id)!, req.user?.userId ?? null);
+    } catch (err: any) {
+      console.error('[nco] could not save the declaration to the library:', err?.message || err);
+    }
+  }
   notifyAdmin({ action: 'created', entity: 'Non-Commercial Operation Document', label: `${nco.nco_number} — ${req.file.originalname}`, ...who(req) });
   res.status(201).json(db.prepare(`${DOCS_SELECT} WHERE d.id = ?`).get(result.lastInsertRowid));
 });
@@ -154,7 +182,11 @@ router.delete('/:id/documents/:docId', (req: Request, res: Response) => {
   const oc = db.prepare('SELECT * FROM order_confirmations WHERE nco_document_id = ?').get(doc.id) as any;
   const inv = db.prepare('SELECT * FROM invoice_documents WHERE nco_document_id = ?').get(doc.id) as any;
   const pl = db.prepare('SELECT * FROM packing_lists WHERE nco_document_id = ? OR final_nco_document_id = ?').get(doc.id, doc.id) as any;
-  if (oc) deleteOrderConfirmationRow(oc);
+  const po = db.prepare('SELECT * FROM purchase_orders WHERE nco_document_id = ?').get(doc.id) as any;
+  const declaration = db.prepare('SELECT * FROM declarations WHERE nco_document_id = ?').get(doc.id) as any;
+  if (declaration) deleteDeclaration(declaration);
+  else if (po) deletePurchaseOrderRow(po);
+  else if (oc) deleteOrderConfirmationRow(oc);
   else if (inv) deleteInvoiceDocument(inv);
   else if (pl) deletePackingListRow(pl);
   else deleteNcoUpload(doc);
@@ -163,9 +195,10 @@ router.delete('/:id/documents/:docId', (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-// POST /api/non-commercial-operations — the number is given here, never typed
+// POST /api/non-commercial-operations — the next number in the series, unless one is typed (nco_number)
 router.post('/', (req: Request, res: Response) => {
   const { entity, type, customer_id, supplier_id, nco_date, notes, items } = req.body || {};
+  const typed = String(req.body?.nco_number ?? '').trim();
   if (!isEntityCode(entity)) { res.status(400).json({ error: 'Choose BE or NL' }); return; }
   if (!TYPES.includes(type)) { res.status(400).json({ error: 'Choose Samples or Shipping' }); return; }
   if (nco_date && !validDate(nco_date)) { res.status(400).json({ error: 'Invalid date' }); return; }
@@ -174,6 +207,18 @@ router.post('/', (req: Request, res: Response) => {
 
   const date = nco_date || new Date().toISOString().slice(0, 10);
   const year = yearOf(date);
+  if (typed) {
+    const error = customNumberError(typed);
+    if (error) { res.status(400).json({ error }); return; }
+    const result = db.prepare(`
+      INSERT INTO non_commercial_operations (nco_number, entity, year, seq, type, customer_id, supplier_id, nco_date, notes, created_by, items)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(typed, entity, year, seqOf(typed, entity, year), type, party.customer_id, party.supplier_id, date,
+      String(notes ?? '').trim() || null, req.user?.userId ?? null, JSON.stringify(normalizeNcoLines(items)));
+    notifyAdmin({ action: 'created', entity: 'Non-Commercial Operation', label: typed, detail: TYPE_LABEL[type as NcoType], ...who(req) });
+    res.status(201).json(detail(Number(result.lastInsertRowid)));
+    return;
+  }
   // Two people creating at once can pick the same number — the second takes the next one
   for (let attempt = 0; attempt < 5; attempt++) {
     const seq = nextSeq(entity, year);
@@ -195,7 +240,7 @@ router.post('/', (req: Request, res: Response) => {
   res.status(409).json({ error: 'Could not assign a number — try again' });
 });
 
-// PUT /api/non-commercial-operations/:id — a field left out keeps its value; the number never changes
+// PUT /api/non-commercial-operations/:id — a field left out keeps its value; nco_number renumbers (documents already generated keep theirs)
 router.put('/:id', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT * FROM non_commercial_operations WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Not found' }); return; }
@@ -214,15 +259,28 @@ router.put('/:id', (req: Request, res: Response) => {
   const date = body.nco_date === undefined ? existing.nco_date : (body.nco_date || null);
   const notes = body.notes === undefined ? existing.notes : (String(body.notes ?? '').trim() || null);
   const items = body.items === undefined ? existing.items : JSON.stringify(normalizeNcoLines(body.items));
+  let number = existing.nco_number as string;
+  if (body.nco_number !== undefined && String(body.nco_number).trim() && String(body.nco_number).trim() !== existing.nco_number) {
+    number = String(body.nco_number).trim();
+    const error = customNumberError(number, existing.id);
+    if (error) { res.status(400).json({ error }); return; }
+  }
 
   db.prepare(`
     UPDATE non_commercial_operations
-    SET type = ?, customer_id = ?, supplier_id = ?, nco_date = ?, notes = ?, items = ?, updated_at = datetime('now')
+    SET nco_number = ?, seq = ?, type = ?, customer_id = ?, supplier_id = ?, nco_date = ?, notes = ?, items = ?, updated_at = datetime('now')
     WHERE id = ?
-  `).run(type, party.customer_id, party.supplier_id, date, notes, items, existing.id);
-  notifyAdmin({ action: 'updated', entity: 'Non-Commercial Operation', label: existing.nco_number, ...who(req) });
+  `).run(number, number === existing.nco_number ? existing.seq : seqOf(number, existing.entity, existing.year),
+    type, party.customer_id, party.supplier_id, date, notes, items, existing.id);
+  notifyAdmin({
+    action: 'updated', entity: 'Non-Commercial Operation', label: number,
+    detail: number !== existing.nco_number ? `renumbered from ${existing.nco_number}` : undefined, ...who(req),
+  });
   res.json(detail(existing.id));
 });
+
+// Choose from the system, edit a document, edit a Word document's text (shared with operations)
+mountOwnerDocumentRoutes(router, 'nco');
 
 router.delete('/:id', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT id, nco_number FROM non_commercial_operations WHERE id = ?').get(req.params.id) as any;
@@ -231,6 +289,8 @@ router.delete('/:id', (req: Request, res: Response) => {
   for (const pl of db.prepare('SELECT * FROM packing_lists WHERE nco_id = ?').all(existing.id) as any[]) deletePackingListRow(pl);
   for (const inv of db.prepare('SELECT * FROM invoice_documents WHERE nco_id = ?').all(existing.id) as any[]) deleteInvoiceDocument(inv);
   for (const oc of db.prepare('SELECT * FROM order_confirmations WHERE nco_id = ?').all(existing.id) as any[]) deleteOrderConfirmationRow(oc);
+  for (const po of db.prepare('SELECT * FROM purchase_orders WHERE nco_id = ?').all(existing.id) as any[]) deletePurchaseOrderRow(po);
+  for (const d of db.prepare('SELECT * FROM declarations WHERE nco_id = ?').all(existing.id) as any[]) deleteDeclaration(d);
   for (const doc of db.prepare('SELECT * FROM nco_documents WHERE nco_id = ?').all(existing.id) as any[]) deleteNcoUpload(doc);
   db.prepare('DELETE FROM non_commercial_operations WHERE id = ?').run(existing.id);
   notifyAdmin({ action: 'deleted', entity: 'Non-Commercial Operation', label: existing.nco_number, ...who(req) });
