@@ -82,6 +82,7 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 
 ## Document Generators (OC, supplier PO, invoice, PL)
 - Generated from an order: `DocumentGenerators` (operation page + order page) shows each as none / (draft) / ✓
+- Drafts can be deleted: bin beside a draft in `DocumentGenerators` (OC / PO / invoice; PL only while never finalized) and beside draft declarations / COAs on their tile; "Delete draft" on the OC / PO / declaration pages (invoice + PL pages already had Delete); existing `DELETE` routes free the number
 - OC, PO, invoice: `status` 'draft' | 'final' — "Save draft" keeps the form only (no PDF, not filed); "Confirm & generate" files the PDF under the operation; never back to draft
 - Save draft on an already generated OC / PO / invoice stores the edits in `draft_data` (API returns it as `draft`); the filed PDF and recorded amount stay until Confirm & regenerate, which clears it
 - Compare buttons via `CompareButtons` (grey when the document is missing or still a draft): OC → order; PO → order, OC; invoice → order, OC, BL (`GET /api/operations/:id/bill-of-lading`); PL → order, OC, invoice, BL

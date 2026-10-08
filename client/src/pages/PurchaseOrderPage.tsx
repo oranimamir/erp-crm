@@ -442,6 +442,19 @@ export default function PurchaseOrderPage() {
 
   const backTo = ncoId ? `/non-commercial-operations/${ncoId}` : operationId ? `/operations/${operationId}` : '/operations';
 
+  /** A draft (never generated) can be thrown away; its number becomes free. */
+  async function handleDeleteDraft() {
+    if (!purchaseOrder || !isDraft) return;
+    if (!window.confirm(`Delete the draft purchase order ${purchaseOrder.po_number || ''}?`)) return;
+    try {
+      await api.delete(`/purchase-orders/${purchaseOrder.id}`);
+      addToast('Draft purchase order deleted', 'success');
+      navigate(backTo);
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to delete the draft', 'error');
+    }
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
@@ -471,6 +484,11 @@ export default function PurchaseOrderPage() {
           <Button variant="secondary" size="sm" onClick={handleDownload} disabled={!generated}>
             <FileDown size={14} /> Download PDF
           </Button>
+          {purchaseOrder && isDraft && (
+            <Button variant="secondary" size="sm" onClick={handleDeleteDraft} title="Delete this draft — nothing was generated">
+              <Trash2 size={14} /> Delete draft
+            </Button>
+          )}
           <Button variant="secondary" size="sm" onClick={() => setShowEmail(true)} disabled={!generated}>
             <Mail size={14} /> Send by email
           </Button>

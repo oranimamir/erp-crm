@@ -697,7 +697,7 @@ export default function OperationDetailPage() {
                   <Eye size={13} /> Preview
                 </button>
               )}
-              <DocumentGenerators orderId={operation.order_id} operationId={operation.id} refreshKey={operation.documents.length} onPreview={openPreview} />
+              <DocumentGenerators orderId={operation.order_id} operationId={operation.id} refreshKey={operation.documents.length} onPreview={openPreview} onChanged={fetchOperation} />
               <button
                 onClick={() => navigate(`/orders/${operation.order_id}/edit`)}
                 className="flex items-center gap-1 text-xs sm:text-sm text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2 py-1"
@@ -1015,6 +1015,7 @@ export default function OperationDetailPage() {
 
       {/* ── Shipping documents checklist ───────────────────────────────────── */}
       <RequiredDocuments
+        onDeclarationDeleted={fetchOperation}
         owner={{ kind: 'operation', id: operation.id }}
         onFiled={fetchOperation}
         onOpenFile={openPreview}

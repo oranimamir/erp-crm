@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FileCheck2, ShoppingCart, Receipt, Package, Eye } from 'lucide-react';
+import { FileCheck2, ShoppingCart, Receipt, Package, Eye, Trash2 } from 'lucide-react';
 import api from '../lib/api';
 
 /**
  * The four documents generated from an order — order confirmation, supplier
  * PO, invoice, packing list — each opening its generator. The label says
  * where each stands: nothing yet, a saved draft, or ✓ finalized (and filed in
- * the operation's Documents).
+ * the operation's Documents). A draft can be deleted (bin beside it).
  */
 
 interface Doc {
@@ -28,7 +28,7 @@ const btn = 'flex items-center gap-1 text-xs sm:text-sm text-primary-600 hover:t
 
 const mark = (doc: Doc | null) => (!doc ? '' : doc.status === 'draft' ? ' (draft)' : ' ✓');
 
-export default function DocumentGenerators({ orderId, operationId, ncoId, ncoType = 'samples', refreshKey, onPreview }: {
+export default function DocumentGenerators({ orderId, operationId, ncoId, ncoType = 'samples', refreshKey, onPreview, onChanged }: {
   orderId: number | null;
   operationId?: number | null;
   /** A non-commercial operation instead of an order: everything is drafted from its lines and filed under it. */
@@ -39,9 +39,12 @@ export default function DocumentGenerators({ orderId, operationId, ncoId, ncoTyp
   onPreview?: (item: PreviewTarget) => void;
   /** Changes when the documents may have changed (e.g. the operation's document count). */
   refreshKey?: unknown;
+  /** After a draft was deleted (a packing-list draft also had a filed PDF). */
+  onChanged?: () => void;
 }) {
   const navigate = useNavigate();
   const [docs, setDocs] = useState<State>({ oc: null, po: null, invoice: null, pl: null });
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     if (!orderId && !ncoId) return;
@@ -53,7 +56,7 @@ export default function DocumentGenerators({ orderId, operationId, ncoId, ncoTyp
       first(`/invoice-documents/${by}`),
       first(`/packing-lists/${by}`),
     ]).then(([oc, po, invoice, pl]) => setDocs({ oc, po, invoice, pl }));
-  }, [orderId, ncoId, refreshKey]);
+  }, [orderId, ncoId, refreshKey, reload]);
 
   if (!orderId && !ncoId) return null;
   const q = ncoId ? `nco_id=${ncoId}` : `order_id=${orderId}${operationId ? `&operation_id=${operationId}` : ''}`;
@@ -85,6 +88,28 @@ export default function DocumentGenerators({ orderId, operationId, ncoId, ncoTyp
     );
   };
 
+  /** A bin beside a draft (a PL only while it was never finalized). */
+  const ENDPOINT: Record<keyof State, string> = { oc: 'order-confirmations', po: 'purchase-orders', invoice: 'invoice-documents', pl: 'packing-lists' };
+  const NAME: Record<keyof State, string> = { oc: 'order confirmation', po: 'supplier PO', invoice: ncoId ? 'sample invoice' : 'invoice', pl: 'packing list' };
+  const bin = (key: keyof State) => {
+    const doc = docs[key];
+    if (!doc || doc.status !== 'draft' || doc.final_file_path) return null;
+    return (
+      <button type="button" title={`Delete the draft ${NAME[key]}`}
+        onClick={async () => {
+          if (!window.confirm(`Delete the draft ${NAME[key]}? Its number becomes free again.`)) return;
+          try {
+            await api.delete(`/${ENDPOINT[key]}/${doc.id}`);
+            setReload(n => n + 1);
+            onChanged?.();
+          } catch { window.alert(`Could not delete the draft ${NAME[key]}`); }
+        }}
+        className="-ml-1 p-1 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50">
+        <Trash2 size={14} />
+      </button>
+    );
+  };
+
   return (
     <>
       {!poOnly && <>
@@ -93,18 +118,21 @@ export default function DocumentGenerators({ orderId, operationId, ncoId, ncoTyp
         <FileCheck2 size={13} /> Order Confirmation{mark(docs.oc)}
       </button>
       {eye(docs.oc, 'Order confirmation')}
+      {bin('oc')}
       </>}
       <button className={btn} title={title(docs.po, 'supplier purchase order')}
         onClick={() => navigate(docs.po ? `/purchase-orders/${docs.po.id}` : `/purchase-orders/new?${q}`)}>
         <ShoppingCart size={13} /> Supplier PO{mark(docs.po)}
       </button>
       {eye(docs.po, 'Supplier purchase order')}
+      {bin('po')}
       {!poOnly && <>
       <button className={btn} title={title(docs.invoice, 'invoice')}
         onClick={() => navigate(docs.invoice ? `/invoices/documents/${docs.invoice.id}` : `/invoices/documents/new?${q}`)}>
         <Receipt size={13} /> {ncoId ? 'Sample invoice' : 'Invoice'}{mark(docs.invoice)}
       </button>
       {eye(docs.invoice, 'Invoice')}
+      {bin('invoice')}
       {/* The packing list is built from the generated invoice */}
       <button className={btn} disabled={!docs.pl && !invoiceFinal}
         title={docs.pl ? title(docs.pl, 'packing list')
@@ -113,6 +141,7 @@ export default function DocumentGenerators({ orderId, operationId, ncoId, ncoTyp
         <Package size={13} /> Packing List{mark(docs.pl)}
       </button>
       {eye(docs.pl, docs.pl?.final_file_path ? 'Packing list' : 'Packing list (draft)')}
+      {bin('pl')}
       </>}
     </>
   );

@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CheckCircle2, Circle, Eye, Upload, Loader2, ClipboardCheck, ListChecks, Type, FilePlus2, PenLine, Truck } from 'lucide-react';
+import { CheckCircle2, Circle, Eye, Upload, Loader2, ClipboardCheck, ListChecks, Type, FilePlus2, PenLine, Truck, Trash2 } from 'lucide-react';
+import api from '../lib/api';
 import { REQUIRED_OPERATION_DOCS, GENERAL_DOCUMENT, DOC_ACCEPT, docsInCategory } from '../lib/operationDocs';
 import ChooseDocumentModal from './ChooseDocumentModal';
 import SupplierDocumentPickerModal from './SupplierDocumentPickerModal';
@@ -22,7 +23,7 @@ interface Category { id: number; name: string }
 
 export interface OperationDeclaration { id: number; kind?: 'declaration' | 'coa'; title: string; status: 'draft' | 'final'; document_id: number | null; has_draft?: number | boolean }
 
-export default function RequiredDocuments({ owner, documents, categories, onUpload, onPreview, onFiled, onOpenFile, onEditText, declarations = [] }: {
+export default function RequiredDocuments({ owner, documents, categories, onUpload, onPreview, onFiled, onOpenFile, onEditText, declarations = [], onDeclarationDeleted }: {
   /** The operation or non-commercial operation the documents belong to. */
   owner: DocOwner;
   documents: Doc[];
@@ -35,6 +36,8 @@ export default function RequiredDocuments({ owner, documents, categories, onUplo
   onEditText?: (docId: number) => void;
   /** Declarations generated for this operation (the Declaration tile opens the generator). */
   declarations?: OperationDeclaration[];
+  /** After a draft declaration / COA was deleted. */
+  onDeclarationDeleted?: () => void;
   /** Uploads one file into the category; resolves when done (the page refreshes its documents). */
   onUpload: (file: File, categoryId: number) => Promise<void>;
   onPreview: (doc: Doc, category: string) => void;
@@ -157,6 +160,15 @@ export default function RequiredDocuments({ owner, documents, categories, onUplo
                             {dec.status === 'final' && dec.has_draft ? <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-700">edits pending</span> : null}
                           </span>
                         </button>
+                        {dec.status === 'draft' && (
+                          <button type="button" title={`Delete this draft ${coa ? 'COA' : 'declaration'}`}
+                            onClick={async () => {
+                              if (!window.confirm(`Delete the draft "${dec.title}"?`)) return;
+                              try { await api.delete(`/declarations/${dec.id}`); onDeclarationDeleted?.(); }
+                              catch { window.alert('Could not delete the draft'); }
+                            }}
+                            className="mt-0.5 ml-auto flex-shrink-0 text-gray-300 hover:text-red-600"><Trash2 size={11} /></button>
+                        )}
                       </li>
                     );
                   })}

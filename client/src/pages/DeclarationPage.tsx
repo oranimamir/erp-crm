@@ -295,6 +295,19 @@ function DeclarationEditor({ id }: { id: number }) {
     }
   }
 
+  /** A draft (never generated) can be thrown away. */
+  async function deleteDraft() {
+    if (!record || record.status !== 'draft') return;
+    if (!window.confirm(`Delete the draft "${record.title}"?`)) return;
+    try {
+      await api.delete(`/declarations/${record.id}`);
+      addToast('Draft deleted', 'success');
+      navigate(record.nco_id ? `/non-commercial-operations/${record.nco_id}` : `/operations/${record.operation_id}`);
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to delete the draft', 'error');
+    }
+  }
+
   async function download() {
     const res = await api.get(`/declarations/${id}/pdf`, { responseType: 'blob' });
     const href = URL.createObjectURL(res.data);
@@ -337,6 +350,11 @@ function DeclarationEditor({ id }: { id: number }) {
           <Button variant="secondary" size="sm" onClick={download} disabled={!generated}>
             <FileDown size={14} /> Download PDF
           </Button>
+          {!generated && (
+            <Button variant="secondary" size="sm" onClick={deleteDraft} title="Delete this draft — nothing was generated">
+              <Trash2 size={14} /> Delete draft
+            </Button>
+          )}
         </div>
       </div>
 

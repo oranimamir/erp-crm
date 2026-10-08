@@ -320,7 +320,7 @@ export default function NcoDetailPage() {
             {linesDirty && <span className="text-xs text-amber-600">Save the lines first — new drafts are made from the saved lines</span>}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <DocumentGenerators orderId={null} ncoId={nco.id} ncoType={nco.type} refreshKey={nco.documents.length}
+            <DocumentGenerators orderId={null} ncoId={nco.id} ncoType={nco.type} refreshKey={nco.documents.length} onChanged={load}
               onPreview={item => preview.open(item)} />
           </div>
           <p className="text-xs text-gray-500">
@@ -333,6 +333,7 @@ export default function NcoDetailPage() {
 
       {/* Shipping documents checklist */}
       <RequiredDocuments
+        onDeclarationDeleted={load}
         owner={owner}
         documents={nco.documents}
         categories={categories}

@@ -434,6 +434,19 @@ export default function OrderConfirmationPage() {
   const backTo = ncoId ? `/non-commercial-operations/${ncoId}`
     : operationId ? `/operations/${operationId}` : orderId ? `/orders/${orderId}` : '/operations';
 
+  /** A draft (never generated) can be thrown away; its number becomes free. */
+  async function handleDeleteDraft() {
+    if (!confirmation || !isDraft) return;
+    if (!window.confirm(`Delete the draft order confirmation ${confirmation.oc_number || ''}?`)) return;
+    try {
+      await api.delete(`/order-confirmations/${confirmation.id}`);
+      addToast('Draft order confirmation deleted', 'success');
+      navigate(backTo);
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to delete the draft', 'error');
+    }
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
@@ -465,6 +478,11 @@ export default function OrderConfirmationPage() {
             {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
             {generated ? 'Confirm & regenerate' : 'Confirm & generate'}
           </Button>
+          {confirmation && isDraft && (
+            <Button variant="secondary" size="sm" onClick={handleDeleteDraft} title="Delete this draft — nothing was generated">
+              <Trash2 size={14} /> Delete draft
+            </Button>
+          )}
           <Button variant="secondary" size="sm" onClick={handleDownload} disabled={!generated}>
             <FileDown size={14} /> Download PDF
           </Button>
