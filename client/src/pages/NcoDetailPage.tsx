@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import api from '../lib/api';
 import { formatDate } from '../lib/dates';
+import NcoStatusSelect from '../components/NcoStatusSelect';
 import { useToast } from '../contexts/ToastContext';
 import { useFilePreview } from '../lib/useFilePreview';
 import Button from '../components/ui/Button';
@@ -35,7 +36,7 @@ interface NcoDoc { id: number; file_path: string; file_name: string; category_id
 interface Nco {
   id: number; nco_number: string; entity: string; type: 'samples' | 'shipping';
   customer_id: number | null; supplier_id: number | null; customer_name: string | null; supplier_name: string | null;
-  nco_date: string | null; notes: string | null; items: any[]; documents: NcoDoc[];
+  nco_date: string | null; notes: string | null; status?: string; items: any[]; documents: NcoDoc[];
 }
 interface Category { id: number; name: string }
 
@@ -232,6 +233,7 @@ export default function NcoDetailPage() {
                 {isSamples ? 'Samples' : 'Shipping'}
               </span>
               <span className="rounded-full px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-600">{nco.entity}</span>
+              <NcoStatusSelect ncoId={nco.id} status={nco.status} onSaved={next => setNco(prev => (prev ? { ...prev, status: next } : prev))} />
               <span className="text-gray-700">
                 {isSamples ? 'To ' : 'With '}
                 <span className="font-medium">{(isSamples ? nco.customer_name : nco.supplier_name) || '—'}</span>

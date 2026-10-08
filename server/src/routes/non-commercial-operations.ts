@@ -29,6 +29,15 @@ const TYPES: NcoType[] = ['samples', 'shipping'];
 /** Shipping NCOs are with these supplier categories only. */
 const SHIPPING_SUPPLIER_CATEGORIES = ['raw_materials', 'blenders'];
 const TYPE_LABEL: Record<NcoType, string> = { samples: 'Samples', shipping: 'Shipping' };
+/** Where an NCO stands — client lib/ncoStatus.ts has the labels. */
+export const NCO_STATUSES = [
+  'requested', 'samples_in_preparation', 'samples_available', 'shipment_in_preparation', 'shipped', 'delivered', 'cancelled',
+] as const;
+const STATUS_LABEL: Record<string, string> = {
+  requested: 'Requested', samples_in_preparation: 'Samples in preparation', samples_available: 'Samples available',
+  shipment_in_preparation: 'Shipment in preparation', shipped: 'Shipped', delivered: 'Delivered', cancelled: 'Cancelled',
+};
+const isStatus = (v: unknown): v is string => NCO_STATUSES.includes(v as any);
 
 const SELECT = `
   SELECT n.*, c.name AS customer_name, s.name AS supplier_name, s.category AS supplier_category
@@ -94,6 +103,7 @@ router.get('/', (req: Request, res: Response) => {
   const type = String(req.query.type || '');
   if (isEntityCode(entity)) { conditions.push('n.entity = ?'); params.push(entity); }
   if (TYPES.includes(type as NcoType)) { conditions.push('n.type = ?'); params.push(type); }
+  if (isStatus(req.query.status)) { conditions.push('n.status = ?'); params.push(req.query.status); }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   res.json({ data: db.prepare(`${SELECT} ${where} ORDER BY n.year DESC, n.entity, n.seq DESC`).all(...params) });
 });
@@ -199,6 +209,8 @@ router.delete('/:id/documents/:docId', (req: Request, res: Response) => {
 router.post('/', (req: Request, res: Response) => {
   const { entity, type, customer_id, supplier_id, nco_date, notes, items } = req.body || {};
   const typed = String(req.body?.nco_number ?? '').trim();
+  const status = req.body?.status === undefined || req.body?.status === '' ? 'requested' : req.body.status;
+  if (!isStatus(status)) { res.status(400).json({ error: 'Unknown status' }); return; }
   if (!isEntityCode(entity)) { res.status(400).json({ error: 'Choose BE or NL' }); return; }
   if (!TYPES.includes(type)) { res.status(400).json({ error: 'Choose Samples or Shipping' }); return; }
   if (nco_date && !validDate(nco_date)) { res.status(400).json({ error: 'Invalid date' }); return; }
@@ -211,10 +223,10 @@ router.post('/', (req: Request, res: Response) => {
     const error = customNumberError(typed);
     if (error) { res.status(400).json({ error }); return; }
     const result = db.prepare(`
-      INSERT INTO non_commercial_operations (nco_number, entity, year, seq, type, customer_id, supplier_id, nco_date, notes, created_by, items)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO non_commercial_operations (nco_number, entity, year, seq, type, customer_id, supplier_id, nco_date, notes, created_by, items, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(typed, entity, year, seqOf(typed, entity, year), type, party.customer_id, party.supplier_id, date,
-      String(notes ?? '').trim() || null, req.user?.userId ?? null, JSON.stringify(normalizeNcoLines(items)));
+      String(notes ?? '').trim() || null, req.user?.userId ?? null, JSON.stringify(normalizeNcoLines(items)), status);
     notifyAdmin({ action: 'created', entity: 'Non-Commercial Operation', label: typed, detail: TYPE_LABEL[type as NcoType], ...who(req) });
     res.status(201).json(detail(Number(result.lastInsertRowid)));
     return;
@@ -225,10 +237,10 @@ router.post('/', (req: Request, res: Response) => {
     const number = numberFor(entity, year, seq);
     try {
       const result = db.prepare(`
-        INSERT INTO non_commercial_operations (nco_number, entity, year, seq, type, customer_id, supplier_id, nco_date, notes, created_by, items)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO non_commercial_operations (nco_number, entity, year, seq, type, customer_id, supplier_id, nco_date, notes, created_by, items, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(number, entity, year, seq, type, party.customer_id, party.supplier_id, date, String(notes ?? '').trim() || null,
-        req.user?.userId ?? null, JSON.stringify(normalizeNcoLines(items)));
+        req.user?.userId ?? null, JSON.stringify(normalizeNcoLines(items)), status);
       const row = detail(Number(result.lastInsertRowid));
       notifyAdmin({ action: 'created', entity: 'Non-Commercial Operation', label: number, detail: TYPE_LABEL[type as NcoType], ...who(req) });
       res.status(201).json(row);
@@ -259,6 +271,8 @@ router.put('/:id', (req: Request, res: Response) => {
   const date = body.nco_date === undefined ? existing.nco_date : (body.nco_date || null);
   const notes = body.notes === undefined ? existing.notes : (String(body.notes ?? '').trim() || null);
   const items = body.items === undefined ? existing.items : JSON.stringify(normalizeNcoLines(body.items));
+  const status = body.status === undefined || body.status === '' ? existing.status : body.status;
+  if (!isStatus(status)) { res.status(400).json({ error: 'Unknown status' }); return; }
   let number = existing.nco_number as string;
   if (body.nco_number !== undefined && String(body.nco_number).trim() && String(body.nco_number).trim() !== existing.nco_number) {
     number = String(body.nco_number).trim();
@@ -268,13 +282,17 @@ router.put('/:id', (req: Request, res: Response) => {
 
   db.prepare(`
     UPDATE non_commercial_operations
-    SET nco_number = ?, seq = ?, type = ?, customer_id = ?, supplier_id = ?, nco_date = ?, notes = ?, items = ?, updated_at = datetime('now')
+    SET nco_number = ?, seq = ?, type = ?, customer_id = ?, supplier_id = ?, nco_date = ?, notes = ?, items = ?, status = ?, updated_at = datetime('now')
     WHERE id = ?
   `).run(number, number === existing.nco_number ? existing.seq : seqOf(number, existing.entity, existing.year),
-    type, party.customer_id, party.supplier_id, date, notes, items, existing.id);
+    type, party.customer_id, party.supplier_id, date, notes, items, status, existing.id);
+  const changes = [
+    number !== existing.nco_number ? `renumbered from ${existing.nco_number}` : '',
+    status !== existing.status ? `status: ${STATUS_LABEL[existing.status] || existing.status} → ${STATUS_LABEL[status]}` : '',
+  ].filter(Boolean);
   notifyAdmin({
     action: 'updated', entity: 'Non-Commercial Operation', label: number,
-    detail: number !== existing.nco_number ? `renumbered from ${existing.nco_number}` : undefined, ...who(req),
+    detail: changes.length ? changes.join('; ') : undefined, ...who(req),
   });
   res.json(detail(existing.id));
 });

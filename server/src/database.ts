@@ -2006,6 +2006,8 @@ export async function initializeDatabase() {
 
   // NCO samples: lines (the generators' source — an NCO has no order) and documents
   try { db.exec(`ALTER TABLE non_commercial_operations ADD COLUMN items TEXT`); } catch (_) { /* column may already exist */ }
+  // Where the NCO stands (routes/non-commercial-operations.ts NCO_STATUSES)
+  try { db.exec(`ALTER TABLE non_commercial_operations ADD COLUMN status TEXT NOT NULL DEFAULT 'requested'`); } catch (_) { /* column may already exist */ }
   db.exec(`
     CREATE TABLE IF NOT EXISTS nco_documents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

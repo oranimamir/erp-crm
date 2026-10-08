@@ -8,6 +8,8 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
+import NcoStatusSelect from '../components/NcoStatusSelect';
+import { NCO_STATUSES } from '../lib/ncoStatus';
 
 /**
  * Non-commercial operations: samples sent to customers, and shipping with
@@ -30,6 +32,7 @@ interface Nco {
   supplier_category: string | null;
   nco_date: string | null;
   notes: string | null;
+  status: string;
 }
 
 interface Party { id: number; name: string; category?: string }
@@ -58,19 +61,20 @@ function Pills<T extends string>({ value, options, onChange }: {
   );
 }
 
-interface FormState { entity: Entity; type: NcoType; customer_id: string; supplier_id: string; nco_date: string; notes: string; nco_number: string }
+interface FormState { entity: Entity; type: NcoType; customer_id: string; supplier_id: string; nco_date: string; notes: string; nco_number: string; status: string }
 interface NewClient { name: string; company: string; address: string; contact_person: string; email: string; phone: string; vat_number: string }
 const emptyClient = (): NewClient => ({ name: '', company: '', address: '', contact_person: '', email: '', phone: '', vat_number: '' });
 
 const today = () => new Date().toISOString().slice(0, 10);
 const emptyForm = (entity: Entity = 'BE'): FormState =>
-  ({ entity, type: 'samples', customer_id: '', supplier_id: '', nco_date: today(), notes: '', nco_number: '' });
+  ({ entity, type: 'samples', customer_id: '', supplier_id: '', nco_date: today(), notes: '', nco_number: '', status: 'requested' });
 
 export default function NonCommercialOperationsPage() {
   const { addToast } = useToast();
   const navigate = useNavigate();
   const [entity, setEntity] = useState<'' | Entity>('');
   const [type, setType] = useState<'' | NcoType>('');
+  const [status, setStatus] = useState('');
   const [rows, setRows] = useState<Nco[]>([]);
   const [loading, setLoading] = useState(true);
   const [customers, setCustomers] = useState<Party[]>([]);
@@ -88,13 +92,13 @@ export default function NonCommercialOperationsPage() {
 
   const load = () => {
     setLoading(true);
-    api.get('/non-commercial-operations', { params: { entity: entity || undefined, type: type || undefined } })
+    api.get('/non-commercial-operations', { params: { entity: entity || undefined, type: type || undefined, status: status || undefined } })
       .then(res => setRows(res.data.data || []))
       .catch(() => addToast('Failed to load non-commercial operations', 'error'))
       .finally(() => setLoading(false));
   };
 
-  useEffect(load, [entity, type]);
+  useEffect(load, [entity, type, status]);
 
   useEffect(() => {
     api.get('/customers', { params: { limit: 10000 } })
@@ -130,7 +134,7 @@ export default function NonCommercialOperationsPage() {
       entity: row.entity, type: row.type,
       customer_id: row.customer_id ? String(row.customer_id) : '',
       supplier_id: row.supplier_id ? String(row.supplier_id) : '',
-      nco_date: row.nco_date || '', notes: row.notes || '', nco_number: row.nco_number,
+      nco_date: row.nco_date || '', notes: row.notes || '', nco_number: row.nco_number, status: row.status || 'requested',
     });
     setNewClient(null);
     setShowForm(true);
@@ -145,6 +149,7 @@ export default function NonCommercialOperationsPage() {
         supplier_id: form.type === 'shipping' ? Number(form.supplier_id) || null : null,
         nco_date: form.nco_date,
         notes: form.notes,
+        status: form.status,
         // Blank = the next number in the series
         ...(form.nco_number.trim() ? { nco_number: form.nco_number.trim() } : {}),
       };
@@ -208,6 +213,11 @@ export default function NonCommercialOperationsPage() {
       <div className="flex flex-wrap items-center gap-4">
         <Pills value={entity} onChange={setEntity} options={[['', 'All'], ['BE', 'BE'], ['NL', 'NL']] as const} />
         <Pills value={type} onChange={setType} options={[['', 'All types'], ['samples', 'Samples'], ['shipping', 'Shipping']] as const} />
+        <select value={status} onChange={e => setStatus(e.target.value)}
+          className="rounded-full border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-600 focus:outline-none focus:ring-2 focus:ring-primary-500">
+          <option value="">All statuses</option>
+          {NCO_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+        </select>
       </div>
 
       <Card>
@@ -227,6 +237,7 @@ export default function NonCommercialOperationsPage() {
                   <th className="px-4 py-3">Date</th>
                   <th className="px-4 py-3">Type</th>
                   <th className="px-4 py-3">Customer / Supplier</th>
+                  <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Notes</th>
                   <th className="px-4 py-3" />
                 </tr>
@@ -252,6 +263,12 @@ export default function NonCommercialOperationsPage() {
                           </>
                         ) : dash
                       )}
+                    </td>
+                    <td className="px-4 py-2.5 whitespace-nowrap">
+                      <NcoStatusSelect ncoId={r.id} status={r.status}
+                        onSaved={next => setRows(prev => (status && next !== status
+                          ? prev.filter(x => x.id !== r.id)
+                          : prev.map(x => (x.id === r.id ? { ...x, status: next } : x))))} />
                     </td>
                     <td className="px-4 py-2.5 text-gray-600 max-w-xs truncate" title={r.notes || ''}>{r.notes || dash}</td>
                     <td className="px-4 py-2.5 text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
@@ -289,6 +306,13 @@ export default function NonCommercialOperationsPage() {
                 {editing ? 'Change it to renumber — documents already generated keep their number.' : 'Leave empty for the next number in the series, or type your own.'}
               </p>
             </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-xs font-medium text-gray-500">Status</label>
+            <select value={form.status} onChange={e => set({ status: e.target.value })} className={inputCls}>
+              {NCO_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+            </select>
           </div>
 
           <div className="space-y-1">
