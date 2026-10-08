@@ -1,6 +1,10 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
+import path from 'path';
+import fs from 'fs';
 import { notifyAdmin } from '../lib/notify.js';
+import { uploadSupplierDoc } from '../middleware/upload.js';
+import { uploadsBase } from '../lib/productDocs.js';
 
 const router = Router();
 
@@ -28,6 +32,15 @@ router.get('/', (req: Request, res: Response) => {
   const suppliers = db.prepare(`SELECT * FROM suppliers ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
 
   res.json({ data: suppliers, total, page, limit, totalPages: Math.ceil(total / limit) });
+});
+
+// Suppliers that have documents (the General document tile's supplier picker)
+router.get('/with-documents', (_req: Request, res: Response) => {
+  res.json(db.prepare(`
+    SELECT s.id, s.name, s.category, COUNT(sd.id) AS document_count
+    FROM suppliers s JOIN supplier_documents sd ON sd.supplier_id = s.id
+    GROUP BY s.id ORDER BY LOWER(s.name)
+  `).all());
 });
 
 router.get('/:id', (req: Request, res: Response) => {
@@ -125,8 +138,11 @@ router.patch('/:id', (req: Request, res: Response) => {
 
 router.delete('/:id', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT name FROM suppliers WHERE id = ?').get(req.params.id) as any;
+  const files = db.prepare('SELECT file_path FROM supplier_documents WHERE supplier_id = ?').all(req.params.id) as any[];
   const result = db.prepare('DELETE FROM suppliers WHERE id = ?').run(req.params.id);
   if (result.changes === 0) { res.status(404).json({ error: 'Supplier not found' }); return; }
+  db.prepare('DELETE FROM supplier_documents WHERE supplier_id = ?').run(req.params.id);
+  files.forEach(f => unlinkSupplierFile(f.file_path));
   notifyAdmin({ action: 'deleted', entity: 'Supplier', label: existing?.name || `#${req.params.id}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.json({ message: 'Supplier deleted' });
 });
@@ -150,6 +166,77 @@ router.get('/:id/orders', (req: Request, res: Response) => {
 router.get('/:id/shipments', (req: Request, res: Response) => {
   const shipments = db.prepare('SELECT * FROM shipments WHERE supplier_id = ? ORDER BY created_at DESC').all(req.params.id);
   res.json(shipments);
+});
+
+// ── Documents ─────────────────────────────────────────────────────────────
+// Supplier-related documentation (certificates, contracts, specs…), files in
+// uploads/supplier-docs. Operations copy them in from the General document tile.
+
+const supplierDocsDir = path.join(uploadsBase, 'supplier-docs');
+const SAFE = /^[a-zA-Z0-9._-]+$/;
+
+function unlinkSupplierFile(stored: string) {
+  if (!SAFE.test(stored)) return;
+  try { fs.unlinkSync(path.join(supplierDocsDir, stored)); } catch { /* already gone */ }
+}
+
+const who = (req: Request) => ({ performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
+
+const docsOf = (supplierId: number) => db.prepare(`
+  SELECT sd.*, u.display_name AS uploaded_by_name FROM supplier_documents sd
+  LEFT JOIN users u ON u.id = sd.uploaded_by
+  WHERE sd.supplier_id = ? ORDER BY sd.created_at DESC, sd.id DESC
+`).all(supplierId).map((d: any) => {
+  let file_size: number | null = null;
+  try { if (SAFE.test(d.file_path)) file_size = fs.statSync(path.join(supplierDocsDir, d.file_path)).size; } catch { /* missing */ }
+  return { ...d, file_size };
+});
+
+router.get('/:id/documents', (req: Request, res: Response) => {
+  const supplier = db.prepare('SELECT id FROM suppliers WHERE id = ?').get(req.params.id) as any;
+  if (!supplier) { res.status(404).json({ error: 'Supplier not found' }); return; }
+  res.json(docsOf(supplier.id));
+});
+
+// POST /api/suppliers/:id/documents — multipart: files (one or more), doc_type, notes
+router.post('/:id/documents', uploadSupplierDoc.array('files', 20), (req: Request, res: Response) => {
+  const files = (req.files as Express.Multer.File[]) || [];
+  const supplier = db.prepare('SELECT id, name FROM suppliers WHERE id = ?').get(req.params.id) as any;
+  if (!supplier) { files.forEach(f => unlinkSupplierFile(f.filename)); res.status(404).json({ error: 'Supplier not found' }); return; }
+  if (!files.length) { res.status(400).json({ error: 'Choose at least one file' }); return; }
+  const docType = String(req.body?.doc_type ?? '').trim() || null;
+  const notes = String(req.body?.notes ?? '').trim() || null;
+  for (const f of files) {
+    db.prepare(`INSERT INTO supplier_documents (supplier_id, title, doc_type, file_path, file_name, notes, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(supplier.id, path.parse(f.originalname).name, docType, f.filename, f.originalname, notes, req.user?.userId ?? null);
+  }
+  notifyAdmin({
+    action: 'updated', entity: 'Supplier', label: supplier.name,
+    detail: `${files.length} document${files.length === 1 ? '' : 's'} uploaded`, ...who(req),
+  });
+  res.status(201).json(docsOf(supplier.id));
+});
+
+// PUT /api/suppliers/:id/documents/:docId — title / doc_type / notes; left out keeps, blank clears
+router.put('/:id/documents/:docId', (req: Request, res: Response) => {
+  const doc = db.prepare('SELECT * FROM supplier_documents WHERE id = ? AND supplier_id = ?').get(req.params.docId, req.params.id) as any;
+  if (!doc) { res.status(404).json({ error: 'Document not found' }); return; }
+  const pick = (key: string) => (req.body?.[key] === undefined ? doc[key] : (String(req.body[key]).trim() || null));
+  db.prepare('UPDATE supplier_documents SET title = ?, doc_type = ?, notes = ? WHERE id = ?')
+    .run(pick('title'), pick('doc_type'), pick('notes'), doc.id);
+  res.json(docsOf(doc.supplier_id).find((d: any) => d.id === doc.id));
+});
+
+router.delete('/:id/documents/:docId', (req: Request, res: Response) => {
+  const doc = db.prepare(`
+    SELECT sd.*, s.name AS supplier_name FROM supplier_documents sd JOIN suppliers s ON s.id = sd.supplier_id
+    WHERE sd.id = ? AND sd.supplier_id = ?
+  `).get(req.params.docId, req.params.id) as any;
+  if (!doc) { res.status(404).json({ error: 'Document not found' }); return; }
+  db.prepare('DELETE FROM supplier_documents WHERE id = ?').run(doc.id);
+  unlinkSupplierFile(doc.file_path);
+  notifyAdmin({ action: 'updated', entity: 'Supplier', label: doc.supplier_name, detail: `document deleted: ${doc.file_name}`, ...who(req) });
+  res.json({ ok: true });
 });
 
 export default router;

@@ -15,11 +15,13 @@ import { DocOwner, ownerLines, ownerLots, insertOwnerDocument } from './docOwner
  *  - batch: Inventory → Batches documents (COAs), matched on the lots
  *  - this: this owner's documents with no category yet (filed in place)
  *  - other / other_nco: the same category on other operations / NCOs
+ *  - supplier: a supplier's documents (General document tile; listed per
+ *    supplier by GET /api/suppliers/:id/documents, filed through here)
  * The most suitable ones come back `suggested`. Choosing copies the file
  * under the owner (or, for `this`, just sets its category).
  */
 
-export type SourceType = 'library' | 'batch' | 'this' | 'other' | 'other_nco';
+export type SourceType = 'library' | 'batch' | 'this' | 'other' | 'other_nco' | 'supplier';
 
 export interface SourceDoc {
   source: SourceType;
@@ -175,6 +177,10 @@ export function fileFromSources(owner: DocOwner, categoryId: number, items: Arra
       row = db.prepare('SELECT nd.file_path, nd.file_name, n.nco_number AS number FROM nco_documents nd JOIN non_commercial_operations n ON n.id = nd.nco_id WHERE nd.id = ?').get(id);
       subfolder = 'operation-docs';
       notes = row ? `Copied from ${row.number}` : null;
+    } else if (item.source === 'supplier') {
+      row = db.prepare('SELECT sd.file_path, sd.file_name, s.name AS supplier_name FROM supplier_documents sd JOIN suppliers s ON s.id = sd.supplier_id WHERE sd.id = ?').get(id);
+      subfolder = 'supplier-docs';
+      notes = row ? `From supplier ${row.supplier_name}` : null;
     }
     if (!row) continue;
     const stored = copyIn(subfolder, row.file_path);

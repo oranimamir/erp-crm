@@ -3,7 +3,7 @@ import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import Button from '../components/ui/Button';
-import { Building2, Plus, Save, Star, Trash2, Loader2, Landmark, X } from 'lucide-react';
+import { Building2, Plus, Save, Star, Trash2, Loader2, Landmark, X, FileDown } from 'lucide-react';
 
 // The TripleW legal entities that issue documents. An entity can hold several
 // banks, each with a USD and a EUR account; documents print the default bank's
@@ -79,8 +79,31 @@ function EntityCard({ entity, canEdit, onSaved, onDeleted, onDefault }: {
   const [form, setForm] = useState<Entity>(entity);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [pdfBank, setPdfBank] = useState('default');
+  const [downloading, setDownloading] = useState(false);
 
   useEffect(() => setForm(entity), [entity]);
+
+  // The saved details as a PDF in the invoice design, to send to a customer / supplier
+  async function downloadPdf() {
+    setDownloading(true);
+    try {
+      const resp = await api.get(`/company-entities/${entity.code}/pdf`, {
+        params: pdfBank === 'default' ? {} : { bank: pdfBank }, responseType: 'blob',
+      });
+      const url = URL.createObjectURL(resp.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${entity.company_name.replace(/[\\/:*?"<>|]+/g, '-') || entity.code} - Company details.pdf`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch {
+      addToast('Failed to create the PDF', 'error');
+    } finally {
+      setDownloading(false);
+    }
+  }
+  const namedBanks = entity.banks.map((b, i) => ({ i, label: b.bank_name || `Bank ${i + 1}` }));
 
   const set = (key: keyof Entity) => (value: string) => setForm(prev => ({ ...prev, [key]: value }));
   const ro = !canEdit;
@@ -130,7 +153,21 @@ function EntityCard({ entity, canEdit, onSaved, onDeleted, onDefault }: {
             <Star size={12} /> Set as default
           </button>
         )}
-        {canEdit && <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-2">
+          {namedBanks.length > 1 && (
+            <select value={pdfBank} onChange={e => setPdfBank(e.target.value)} title="Bank details printed on the PDF"
+              className="rounded-lg border border-gray-300 px-2 py-1 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500">
+              <option value="default">Default bank</option>
+              {namedBanks.filter(b => b.i !== entity.default_bank).map(b => <option key={b.i} value={String(b.i)}>{b.label}</option>)}
+              <option value="all">All banks</option>
+            </select>
+          )}
+          <Button size="sm" variant="secondary" onClick={downloadPdf} disabled={downloading}
+            title={dirty ? 'The PDF prints the saved details — save your changes first' : 'Download these details as a PDF to send'}>
+            {downloading ? <Loader2 size={14} className="animate-spin" /> : <FileDown size={14} />} PDF
+          </Button>
+        </div>
+        {canEdit && <div className="flex items-center gap-2">
           {!entity.is_default && (confirmDelete ? (
             <>
               <span className="text-xs text-red-600">Delete {entity.code}?</span>

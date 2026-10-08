@@ -5,6 +5,7 @@
  */
 export const REQUIRED_OPERATION_DOCS = [
   'Quality certificate',
+  'COA',
   'Origin certificate',
   'Insurance certificate',
   'Sanitary certificate',
@@ -18,6 +19,12 @@ export const REQUIRED_OPERATION_DOCS = [
 ] as const;
 
 const norm = (s: string | null | undefined) => (s || '').trim().toLowerCase();
+
+/**
+ * The open-ended tile under the checklist (not counted as required): any
+ * document, picked from a supplier's documents or uploaded.
+ */
+export const GENERAL_DOCUMENT = 'General document';
 
 /** Older category names that count for a checklist item. */
 const ALIASES: Record<string, string[]> = {
@@ -37,12 +44,12 @@ export function missingRequired(docs: Array<{ category_name: string | null }>): 
 }
 
 /** Commercial documents first, then the shipping checklist in its order. */
-const SENDING_ORDER = ['commercial invoice', 'invoice', 'sample invoice', 'packing list', 'bill of lading', ...REQUIRED_OPERATION_DOCS.map(norm)];
+const SENDING_ORDER = ['commercial invoice', 'invoice', 'sample invoice', 'packing list', 'bill of lading', ...REQUIRED_OPERATION_DOCS.map(norm), norm(GENERAL_DOCUMENT)];
 
 /**
  * The order documents are listed, numbered and sent in: invoice, packing list,
- * BL, then the checklist (certificates, EUR1, label, MSDS, spec sheet,
- * declarations), then any other category A–Z, then uncategorized; superseded
+ * BL, then the checklist (certificates, COA, EUR1, label, MSDS, spec sheet,
+ * declarations), general documents, then any other category A–Z, then uncategorized; superseded
  * DRAFT PDFs last. Oldest first within a category.
  */
 export function sortForSending<T extends { category_name: string | null; file_name: string; created_at?: string; id: number }>(docs: T[]): T[] {

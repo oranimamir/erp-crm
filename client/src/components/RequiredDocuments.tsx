@@ -1,16 +1,18 @@
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CheckCircle2, Circle, Eye, Upload, Loader2, ClipboardCheck, ListChecks, Type, FilePlus2, PenLine } from 'lucide-react';
-import { REQUIRED_OPERATION_DOCS, docsInCategory } from '../lib/operationDocs';
+import { CheckCircle2, Circle, Eye, Upload, Loader2, ClipboardCheck, ListChecks, Type, FilePlus2, PenLine, Truck } from 'lucide-react';
+import { REQUIRED_OPERATION_DOCS, GENERAL_DOCUMENT, docsInCategory } from '../lib/operationDocs';
 import ChooseDocumentModal from './ChooseDocumentModal';
+import SupplierDocumentPickerModal from './SupplierDocumentPickerModal';
 import { type DocOwner, ownerQuery } from '../lib/docOwner';
 
 /**
- * The shipping documents an operation needs (Quality, Origin, Insurance,
- * Sanitary, Phytosanitary certificates, EUR1, Label, MSDS, Product
+ * The shipping documents an operation needs (Quality certificate, COA, Origin,
+ * Insurance, Sanitary, Phytosanitary certificates, EUR1, Label, MSDS, Product
  * Specification Sheet, Declaration): one tile each, ticked once a document of
  * that category is filed. Choose picks documents already in the app (best fit
  * ticked); Upload files one from the computer straight into the category.
+ * Then a General document tile (not counted): a supplier's documents, or an upload.
  */
 
 interface Doc { id: number; file_name: string; file_path: string; category_name: string | null }
@@ -39,6 +41,7 @@ export default function RequiredDocuments({ owner, documents, categories, onUplo
   const [target, setTarget] = useState<Category | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [choosing, setChoosing] = useState<Category | null>(null);
+  const [fromSupplier, setFromSupplier] = useState<Category | null>(null);
   const navigate = useNavigate();
   const isDeclaration = (name: string) => name.toLowerCase() === 'declaration';
 
@@ -78,6 +81,8 @@ export default function RequiredDocuments({ owner, documents, categories, onUplo
 
       <input ref={inputRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={onFile} />
       <ChooseDocumentModal category={choosing} owner={owner} onClose={() => setChoosing(null)}
+        onFiled={onFiled} onUpload={onUpload} onPreview={onOpenFile} />
+      <SupplierDocumentPickerModal category={fromSupplier} owner={owner} onClose={() => setFromSupplier(null)}
         onFiled={onFiled} onUpload={onUpload} onPreview={onOpenFile} />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 p-4">
@@ -160,6 +165,48 @@ export default function RequiredDocuments({ owner, documents, categories, onUplo
             </div>
           );
         })}
+        {(() => {
+          const category = categoryOf(GENERAL_DOCUMENT);
+          const filed = docsInCategory(documents, GENERAL_DOCUMENT);
+          return (
+            <div className="rounded-lg border border-dashed border-gray-300 bg-white px-3 py-2.5 flex flex-col gap-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+                <span className="flex items-center gap-1.5 text-sm font-semibold text-gray-800">
+                  <FilePlus2 size={15} className="text-gray-400 flex-shrink-0" />
+                  <span>{GENERAL_DOCUMENT}</span>
+                </span>
+                {category && (
+                  <span className="flex items-center gap-2 flex-shrink-0">
+                    <button type="button" onClick={() => setFromSupplier(category)} disabled={busy !== null}
+                      title="Choose a document from a supplier's documents"
+                      className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 disabled:opacity-50">
+                      <Truck size={12} /> From supplier
+                    </button>
+                    <button type="button" onClick={() => pick(category)} disabled={busy !== null}
+                      title="Upload a document from your computer"
+                      className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 disabled:opacity-50">
+                      {busy === GENERAL_DOCUMENT ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />} Upload
+                    </button>
+                  </span>
+                )}
+              </div>
+              {filed.length ? (
+                <ul className="space-y-1">
+                  {filed.map(d => (
+                    <li key={d.id} className="flex items-start gap-1">
+                      <button type="button" onClick={() => onPreview(d, GENERAL_DOCUMENT)}
+                        className="flex items-start gap-1 text-left text-xs text-gray-600 hover:text-primary-600 max-w-full" title={`Preview ${d.file_name}`}>
+                        <Eye size={11} className="flex-shrink-0 mt-0.5" /> <span className="break-words min-w-0 [overflow-wrap:anywhere]">{d.file_name}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <span className="text-xs text-gray-400">Any other document — from a supplier or your computer</span>
+              )}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

@@ -41,5 +41,6 @@ router.get('/operation-docs/:filename', serveFile('operation-docs'));
 router.get('/batch-documents/:filename', serveFile('batch-documents'));
 router.get('/product-docs/:filename', serveFile('product-docs'));
 router.get('/declaration-assets/:filename', serveFile('declaration-assets'));
+router.get('/supplier-docs/:filename', serveFile('supplier-docs'));
 
 export default router;

@@ -1123,3 +1123,95 @@ function stampPageNumbers(doc: any, watermark?: string | null) {
       .text(`Page ${i + 1} of ${range.count}`, L, 812, { width: W, align: 'right', lineBreak: false });
   }
 }
+
+// ── TripleW company details sheet ─────────────────────────────────────────
+// The entity's details to send to a customer or supplier (vendor forms, KYC),
+// in the invoice's design: issuer block + logo, green title, then green-banded
+// tables for the company, delivery address and bank accounts.
+
+export interface CompanyDetailsBank {
+  bank_name: string; bank_address: string;
+  usd_account: string; usd_bic: string; eur_account: string; eur_bic: string;
+}
+
+export interface CompanyDetailsData {
+  code: string;
+  company_name: string;
+  address1: string; address2: string; address3: string;
+  tel: string; email: string; vat: string; kvk: string; contact_person: string;
+  delivery_address: string;
+  banks: CompanyDetailsBank[];
+  date: string; // ISO
+}
+
+/** A green header band, then label / value rows on the line-item green. */
+function drawDetailsTable(doc: any, heading: string, rows: Array<[string, string]>, top: number): number {
+  const filled = rows.filter(([, v]) => v);
+  if (!filled.length) return top;
+  const labelW = 170;
+  const pad = 6;
+  doc.font('Helvetica').fontSize(BODY);
+  const heights = filled.map(([, v]) => Math.max(BODY * 1.3, doc.heightOfString(v, { width: W - labelW - pad * 2 })) + pad * 2);
+  let y = ensureRoom(doc, top + 14, 24 + heights.reduce((a, b) => a + b, 0));
+
+  doc.rect(L, y, W, 22).fill(GREEN_HEAD);
+  doc.font('Helvetica-Bold').fontSize(BODY + 1).fillColor('#FFFFFF').text(heading, L + pad, y + 5.5, { width: W - pad * 2, lineBreak: false });
+  y += 22;
+  filled.forEach(([label, value], i) => {
+    const h = heights[i];
+    doc.rect(L, y, W, h).fill(i % 2 ? GREEN_PANEL : GREEN_ROW);
+    doc.font('Helvetica-Bold').fontSize(BODY).fillColor(BLACK).text(label, L + pad, y + pad, { width: labelW - pad * 2 });
+    doc.font('Helvetica').fontSize(BODY).fillColor(BLACK).text(value, L + labelW, y + pad, { width: W - labelW - pad * 2 });
+    y += h;
+  });
+  doc.moveTo(L, y).lineTo(R, y).lineWidth(0.5).strokeColor(GREEN_HEAD).stroke();
+  return y;
+}
+
+export async function buildCompanyDetailsPdf(data: CompanyDetailsData): Promise<Buffer> {
+  const PDFDocument = (await import('pdfkit')).default;
+  const doc = new PDFDocument({ size: 'A4', margin: 0, bufferPages: true });
+  const chunks: Buffer[] = [];
+  doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+  const done = new Promise<Buffer>((resolve) => doc.on('end', () => resolve(Buffer.concat(chunks))));
+
+  let y = drawHeader(doc, {
+    company_name: data.company_name, company_address1: data.address1, company_address2: data.address2,
+    company_address3: data.address3, company_contact: data.contact_person, company_tel: data.tel,
+    company_email: data.email, company_vat: data.vat, company_kvk: data.kvk,
+  } as DocumentData);
+
+  y += 14;
+  doc.font('Helvetica-Bold').fontSize(TITLE).fillColor(GREEN_TITLE).text('Company Details', L, y, { width: W, lineBreak: false });
+  y += TITLE * 1.5;
+  y += labelled(doc, 'Date:', formatLongDate(data.date), L, y, W, { size: META });
+
+  const address = [data.address1, data.address2, data.address3].filter(Boolean).join('\n');
+  y = drawDetailsTable(doc, 'Company', [
+    ['Company name', data.company_name],
+    ['Registered address', address],
+    ['VAT number', data.vat],
+    ['Company no. (KVK)', data.kvk],
+    ['Contact person', data.contact_person],
+    ['Phone', data.tel],
+    ['Email', data.email],
+  ], y);
+  y = drawDetailsTable(doc, 'Delivery address', [['Address', data.delivery_address]], y);
+
+  data.banks.forEach((bank, i) => {
+    const heading = data.banks.length > 1 ? `Bank details (${i + 1} of ${data.banks.length})` : 'Bank details';
+    y = drawDetailsTable(doc, heading, [
+      ['Beneficiary', data.company_name],
+      ['Bank', bank.bank_name],
+      ['Bank address', bank.bank_address],
+      ['EUR account (IBAN)', bank.eur_account],
+      ['EUR BIC / SWIFT', bank.eur_bic],
+      ['USD account (IBAN)', bank.usd_account],
+      ['USD BIC / SWIFT', bank.usd_bic],
+    ], y);
+  });
+
+  stampPageNumbers(doc);
+  doc.end();
+  return done;
+}

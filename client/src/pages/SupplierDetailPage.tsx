@@ -6,6 +6,7 @@ import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import { useToast } from '../contexts/ToastContext';
 import { formatDate } from '../lib/dates';
+import SupplierDocumentsTab from '../components/SupplierDocumentsTab';
 import { ArrowLeft, Mail, Phone, MapPin, DollarSign, Hash, UserRound, Loader2, Save, Receipt } from 'lucide-react';
 
 const categoryColors: Record<string, 'blue' | 'purple' | 'orange' | 'green'> = {
@@ -21,7 +22,7 @@ export default function SupplierDetailPage() {
   const [loading, setLoading] = useState(true);
   const [expenseInvoices, setExpenseInvoices] = useState<any[]>([]);
   const [params, setParams] = useSearchParams();
-  const tab: 'summary' | 'details' = params.get('tab') === 'details' ? 'details' : 'summary';
+  const tab: 'summary' | 'details' | 'documents' = params.get('tab') === 'details' ? 'details' : params.get('tab') === 'documents' ? 'documents' : 'summary';
 
   useEffect(() => {
     api.get(`/suppliers/${id}`)
@@ -68,7 +69,7 @@ export default function SupplierDetailPage() {
 
       <div className="border-b border-gray-200">
         <nav className="flex gap-0 -mb-px">
-          {(['summary', 'details'] as const).map(t => (
+          {(['summary', 'details', 'documents'] as const).map(t => (
             <button
               key={t}
               onClick={() => setParams(t === 'summary' ? {} : { tab: t })}
@@ -83,6 +84,7 @@ export default function SupplierDetailPage() {
       </div>
 
       {tab === 'details' && <SupplierDetailsForm supplier={supplier} onSaved={setSupplier} />}
+      {tab === 'documents' && <SupplierDocumentsTab supplierId={supplier.id} />}
 
       {tab === 'summary' && (() => {
         // Supplier invoices are recorded excl. VAT; EUR throughout, converted at the invoice date

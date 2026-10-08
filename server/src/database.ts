@@ -2172,6 +2172,27 @@ export async function initializeDatabase() {
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_declarations_operation ON declarations(operation_id)`); } catch (_) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_declarations_nco ON declarations(nco_id)`); } catch (_) {}
 
+  // Supplier → Documents: certificates, contracts, specs… kept on the supplier;
+  // the General document tile on an operation / NCO copies them in
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS supplier_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      supplier_id INTEGER NOT NULL,
+      title TEXT,
+      doc_type TEXT,
+      file_path TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      notes TEXT,
+      uploaded_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE CASCADE
+    )
+  `);
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_supplier_docs_supplier ON supplier_documents(supplier_id)`); } catch (_) {}
+  for (const name of ['COA', 'General document']) {
+    try { db.prepare('INSERT OR IGNORE INTO document_categories (name) VALUES (?)').run(name); } catch (_) { /* ignore */ }
+  }
+
   // Referential integrity is only as good as the last migration — surface any
   // violation in the logs rather than letting it rot silently as it did before.
   try {

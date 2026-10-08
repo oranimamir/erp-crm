@@ -76,3 +76,10 @@ export const uploadProductDoc = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: libraryFileFilter,
 });
+
+// Supplier documents (certificates, contracts, specs) — PDF, images or Word
+export const uploadSupplierDoc = multer({
+  storage: createStorage('supplier-docs'),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: libraryFileFilter,
+});

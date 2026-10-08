@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import db from '../database.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { ENTITY_CODE_PATTERN, listEntities } from '../lib/companyEntity.js';
+import { buildCompanyDetailsPdf } from '../lib/document-pdf.js';
 
 /** The TripleW entities that issue documents — edited on the TripleW Details page. */
 const router = Router();
@@ -51,6 +52,32 @@ function requireAdmin(req: Request, res: Response, next: Function) {
 
 router.get('/', (_req: Request, res: Response) => {
   res.json(listEntities().map(present));
+});
+
+// GET /api/company-entities/:code/pdf?bank=all|<index> — the entity's details
+// sheet to send (invoice design); by default with its default bank only
+router.get('/:code/pdf', async (req: Request, res: Response) => {
+  const entity = present(byCode(String(req.params.code).toUpperCase()));
+  if (!entity) { res.status(404).json({ error: 'Entity not found' }); return; }
+  const usable = (b: Bank) => BANK_FIELDS.some(f => b[f]);
+  const wanted = String(req.query.bank ?? '');
+  const banks: Bank[] = wanted === 'all'
+    ? entity.banks.filter(usable)
+    : [entity.banks[/^\d+$/.test(wanted) && Number(wanted) < entity.banks.length ? Number(wanted) : entity.default_bank]].filter(usable);
+  try {
+    const pdf = await buildCompanyDetailsPdf({
+      code: entity.code, company_name: clean(entity.company_name),
+      address1: clean(entity.address1), address2: clean(entity.address2), address3: clean(entity.address3),
+      tel: clean(entity.tel), email: clean(entity.email), vat: clean(entity.vat), kvk: clean(entity.kvk),
+      contact_person: clean(entity.contact_person), delivery_address: clean(entity.delivery_address),
+      banks, date: new Date().toISOString().slice(0, 10),
+    });
+    res.attachment(`${clean(entity.company_name).replace(/[\\/:*?"<>|]+/g, '-') || entity.code} - Company details.pdf`);
+    res.type('application/pdf');
+    res.send(pdf);
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to build the PDF' });
+  }
 });
 
 router.post('/', requireAdmin, (req: Request, res: Response) => {
