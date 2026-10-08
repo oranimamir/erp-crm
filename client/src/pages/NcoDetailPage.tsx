@@ -352,7 +352,7 @@ export default function NcoDetailPage() {
           </h2>
           <div className="flex items-center gap-2">
             <Button size="sm" variant="secondary" onClick={() => setShowLibrary(true)}
-              title="Add MSDS / product specification sheets / declarations from Inventory → Documents">
+              title="Add MSDS / product specification sheets / declarations / COAs from Inventory → Documents">
               <Library size={14} /> Add from library
             </Button>
             <Button size="sm" onClick={() => setShowSend(true)} disabled={nco.documents.length === 0}>

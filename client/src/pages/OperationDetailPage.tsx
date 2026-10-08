@@ -1046,7 +1046,7 @@ export default function OperationDetailPage() {
             <button
               type="button"
               onClick={() => setShowLibrary(true)}
-              title="Add MSDS / product specification sheets from Inventory → Documents"
+              title="Add MSDS / product specification sheets / declarations / COAs from Inventory → Documents"
               className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 border border-primary-200 bg-primary-50 rounded-lg px-2 py-1"
             >
               <Library size={12} /> Add from library

@@ -10,7 +10,7 @@ import {
   unlinkProductFile, matchProduct, copyToOperationDocs, categoryIdByName,
 } from '../lib/productDocs.js';
 import { importLibraryZip, parseLibraryFileName } from '../lib/productLibrary.js';
-import { ownerFromRequest, ownerLines, insertOwnerDocument } from '../lib/docOwner.js';
+import { ownerFromRequest, ownerLines, insertOwnerDocument, ownerProductLots } from '../lib/docOwner.js';
 import { readDocxParagraphs, writeDocxParagraphs } from '../lib/docxText.js';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -52,10 +52,20 @@ router.get('/suggest', (req: Request, res: Response) => {
   if (!owner) { res.status(404).json({ error: 'Operation not found' }); return; }
   const { source, lines } = ownerLines(owner);
   const docs = listProductDocs();
+  // COAs are per batch: those naming one of the owner's lots (title, code,
+  // notes, file name) are the suggestion, before any per-product pick
+  const lots = [...new Set(ownerProductLots(owner).flatMap(l => l.lots))].filter(l => l.length >= 3);
+  const coa_lot_matches: Record<number, string[]> = {};
+  for (const d of docs.filter(x => x.kind === 'coa')) {
+    const text = [d.title, d.doc_code, d.notes, d.file_name].join(' ').toLowerCase();
+    const hit = lots.filter(l => text.includes(l.toLowerCase()));
+    if (hit.length) coa_lot_matches[d.id] = hit;
+  }
   res.json({
     source,
     lines: suggestFor(lines, docs),
     general: docs.filter(d => d.products.length === 0),
+    coa_lot_matches,
   });
 });
 
