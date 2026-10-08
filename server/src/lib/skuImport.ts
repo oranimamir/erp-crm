@@ -76,9 +76,41 @@ export interface SkuPreviewRow {
   /** set: product has no SKU · change: a different SKU · same: already this · not_found · conflict: SKU used by another product */
   status: 'set' | 'change' | 'same' | 'not_found' | 'conflict';
   conflict_with?: string;
+  /** Matched by the grade code inside the reference rather than by name (e.g. CLNCG5H → Calcium Naturlac CG5H). */
+  by_code?: boolean;
 }
 
-export function previewSkus(pairs: Array<{ name: string; sku: string; sheet: string }>): SkuPreviewRow[] {
+/** Reference family letters → the word that names it in a product (to tell candidates apart). */
+const FAMILY_WORD: Record<string, string> = {
+  sl: 'sodium', pl: 'potassium', ml: 'midas', cl: 'calcium', fl: 'ferrous', zl: 'zinc', al: 'ammonium', el: 'ethyl', ll: 'lauryl',
+};
+
+/**
+ * A reference is family (2 letters) + brand letter (C = Circulac, N = Naturlac)
+ * + grade code: LAC·LA80, MLN·SL10, CLN·CG5H. The catalogue product with that
+ * grade code and brand, when there is exactly one (the family word decides
+ * between several).
+ */
+function byReference(sku: string, candidates: Array<{ id: number; name: string; sku: string | null }>) {
+  const ref = sku.toLowerCase();
+  const brand = ref[2] === 'c' ? 'circulac' : ref[2] === 'n' ? 'naturlac' : '';
+  const grade = ref.slice(3);
+  if (!brand || grade.length < 2) return null;
+  let hits = candidates.filter(p => { const s = signature(p.name); return s.code === grade && s.brand === brand; });
+  if (hits.length > 1) {
+    const word = FAMILY_WORD[ref.slice(0, 2)];
+    hits = word ? hits.filter(p => norm(p.name).split(' ').includes(word)) : hits.filter(p => !Object.values(FAMILY_WORD).some(w => norm(p.name).split(' ').includes(w)));
+  }
+  return hits.length === 1 ? hits[0] : null;
+}
+
+export interface SkuPreview {
+  rows: SkuPreviewRow[];
+  /** Catalogue products still without a SKU that no row of the file matched. */
+  unfilled: Array<{ id: number; name: string }>;
+}
+
+export function previewSkus(pairs: Array<{ name: string; sku: string; sheet: string }>): SkuPreview {
   const products = db.prepare('SELECT id, name, sku FROM products').all() as Array<{ id: number; name: string; sku: string | null }>;
   const byName = new Map(products.map(p => [norm(p.name), p]));
   const byCompact = new Map(products.map(p => [compact(p.name), p]));
@@ -94,20 +126,33 @@ export function previewSkus(pairs: Array<{ name: string; sku: string; sheet: str
       });
       product = hits.length === 1 ? hits[0] : null;
     }
-    return { pair, product };
+    return { pair, product, byCode: false };
   });
+  // Rows no name matched: by the grade code in their reference, among the products still unmatched
+  const taken = new Set(matched.flatMap(m => (m.product ? [m.product.id] : [])));
+  for (const m of matched) {
+    if (m.product) continue;
+    const hit = byReference(m.pair.sku, products.filter(p => !taken.has(p.id)));
+    if (hit) { m.product = hit; m.byCode = true; taken.add(hit.id); }
+  }
   // The SKU each product ends with after this import, so a code moving from one
   // product to another in the same file is not a conflict
   const after = new Map(products.map(p => [p.id, (p.sku || '').toUpperCase()]));
   for (const m of matched) if (m.product) after.set(m.product.id, m.pair.sku.toUpperCase());
 
-  return matched.map(({ pair, product }): SkuPreviewRow => {
+  const rows = matched.map(({ pair, product, byCode }): SkuPreviewRow => {
     if (!product) return { ...pair, product: null, status: 'not_found' };
+    const by_code = byCode || undefined;
     const holder = bySku.get(pair.sku.toUpperCase());
     if (holder && holder.id !== product.id && after.get(holder.id) === pair.sku.toUpperCase()) {
-      return { ...pair, product, status: 'conflict', conflict_with: holder.name };
+      return { ...pair, product, status: 'conflict', conflict_with: holder.name, by_code };
     }
     const status = !product.sku ? 'set' : product.sku.toUpperCase() === pair.sku.toUpperCase() ? 'same' : 'change';
-    return { ...pair, product, status };
+    return { ...pair, product, status, by_code };
   });
+  const unfilled = products
+    .filter(p => !p.sku && !taken.has(p.id))
+    .map(p => ({ id: p.id, name: p.name }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return { rows, unfilled };
 }

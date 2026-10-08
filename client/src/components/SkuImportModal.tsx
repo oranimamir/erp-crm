@@ -13,7 +13,7 @@ import Button from './ui/Button';
 
 type Status = 'set' | 'change' | 'same' | 'not_found' | 'conflict';
 interface Row {
-  name: string; sku: string; sheet: string; status: Status; conflict_with?: string;
+  name: string; sku: string; sheet: string; status: Status; conflict_with?: string; by_code?: boolean;
   product: { id: number; name: string; sku: string | null } | null;
 }
 
@@ -27,11 +27,13 @@ export default function SkuImportModal({ open, onClose, onSaved }: { open: boole
   const fileRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState('');
   const [rows, setRows] = useState<Row[] | null>(null);
+  // Catalogue products still without a SKU that the file doesn't cover
+  const [unfilled, setUnfilled] = useState<Array<{ id: number; name: string }>>([]);
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [reading, setReading] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  const close = () => { setRows(null); setFileName(''); setPicked(new Set()); onClose(); };
+  const close = () => { setRows(null); setUnfilled([]); setFileName(''); setPicked(new Set()); onClose(); };
 
   async function read(file: File | undefined) {
     if (!file) return;
@@ -43,6 +45,7 @@ export default function SkuImportModal({ open, onClose, onSaved }: { open: boole
       const { data } = await api.post('/products/import-skus', fd);
       const list: Row[] = data.rows || [];
       setRows(list);
+      setUnfilled(data.unfilled || []);
       setPicked(new Set(list.flatMap((r, i) => (r.status === 'set' || r.status === 'change' ? [i] : []))));
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Could not read the file', 'error');
@@ -92,7 +95,7 @@ export default function SkuImportModal({ open, onClose, onSaved }: { open: boole
               )}
               <span className="min-w-0 flex-1 truncate text-gray-800">
                 {r.product?.name ?? r.name}
-                {r.product && r.product.name !== r.name && <span className="ml-1 text-xs text-gray-400">(file: {r.name})</span>}
+                {r.product && r.product.name !== r.name && <span className="ml-1 text-xs text-gray-400">(file: {r.name}{r.by_code ? ' — matched by its code' : ''})</span>}
               </span>
               {r.status === 'change' && <span className="font-mono text-xs text-gray-400 line-through">{r.product?.sku}</span>}
               <span className="font-mono text-xs text-gray-900">{r.sku}</span>
@@ -125,6 +128,17 @@ export default function SkuImportModal({ open, onClose, onSaved }: { open: boole
             {section(['conflict'], false)}
             {section(['not_found'], false)}
             {section(['same'], false)}
+            {unfilled.length > 0 && (
+              <section className="space-y-1">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+                  Still without a SKU — not in this file <span className="font-normal text-amber-600">({unfilled.length})</span>
+                </h3>
+                <p className="text-xs text-gray-500">These catalogue products have no row in the Excel (or under a different name). Add their reference to the file, or type the SKU on the product.</p>
+                <div className="rounded-lg border border-amber-200 bg-amber-50/40 px-3 py-2 text-sm text-gray-700">
+                  {unfilled.map(u => u.name).join(' · ')}
+                </div>
+              </section>
+            )}
             {rows.some(r => r.status === 'not_found') && (
               <p className="flex items-center gap-1.5 text-xs text-amber-700">
                 <AlertTriangle size={12} /> Names not in the catalogue are left out — add those products first, then import again.

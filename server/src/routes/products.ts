@@ -64,7 +64,7 @@ router.post('/import-skus', excelUpload.single('file'), async (req, res) => {
   try {
     const pairs = await readWorkbookPairs(req.file.buffer);
     if (!pairs.length) return res.status(400).json({ error: 'No product name / reference pairs found in this file' });
-    res.json({ rows: previewSkus(pairs) });
+    res.json(previewSkus(pairs));
   } catch (err: any) {
     console.error('[products] SKU import read failed:', err?.message || err);
     res.status(400).json({ error: 'The Excel file could not be read' });
