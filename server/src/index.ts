@@ -7,6 +7,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import db, { initializeDatabase } from './database.js';
 import { backfillEstimatedPaymentDates } from './lib/paymentTerms.js';
+import { fileAllUnfiledGenerated } from './lib/fileGenerated.js';
 import { authenticateToken } from './middleware/auth.js';
 import authRoutes from './routes/auth.js';
 import customerRoutes from './routes/customers.js';
@@ -147,6 +148,13 @@ await initializeDatabase();
 
 // Operations invoiced before estimates were derived automatically still have an
 // empty payment date; fill those in once so the cash-flow forecasts see them.
+// Order confirmations / supplier POs generated before their order had an
+// operation: file them under it so they show in its Documents
+try {
+  const filedDocs = fileAllUnfiledGenerated();
+  if (filedDocs > 0) { console.log(`[startup] Filed ${filedDocs} generated OC / PO document(s) under their operation`); db.saveToDisk(); }
+} catch (err: any) { console.error('[startup] filing generated documents failed:', err?.message || err); }
+
 try {
   const filled = backfillEstimatedPaymentDates(db);
   if (filled > 0) {

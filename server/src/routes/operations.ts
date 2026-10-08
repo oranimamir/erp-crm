@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
 import { refreshEstimatedPaymentDate, dueDateForInvoice } from '../lib/paymentTerms.js';
+import { fileGeneratedForOperation } from '../lib/fileGenerated.js';
 import { getEurRate } from '../lib/fx.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { resolveCountry } from '../lib/portCountry.js';
@@ -450,6 +451,8 @@ router.get('/wire-match', async (req: Request, res: Response) => {
 // ── Single operation ──────────────────────────────────────────────────────────
 
 router.get('/:id', (req: Request, res: Response) => {
+  // An OC / PO generated before the order had this operation is filed now
+  try { if (fileGeneratedForOperation(Number(req.params.id))) db.saveToDisk(); } catch (err: any) { console.error('[operations] filing generated documents failed:', err?.message || err); }
   const operation = db.prepare(`
     SELECT op.*,
       -- order_id from the join, not op.*: a pointer at a deleted order reads NULL

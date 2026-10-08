@@ -88,6 +88,7 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - Compare buttons via `CompareButtons` (grey when the document is missing or still a draft): OC → order; PO → order, OC; invoice → order, OC, BL (`GET /api/operations/:id/bill-of-lading`); PL → order, OC, invoice, BL
 - PDFs leave off any table column nobody filled in (line/reference/name always kept) and the Terms heading when there are no terms
 - Operation page: eye icons beside each generator open its filed PDF (PL: final, else draft)
+- An OC / supplier PO generated before its order had an operation is filed under the operation later (`lib/fileGenerated.ts`: on `GET /api/operations/:id` and at startup; final, not NCO, no filed row, operation_id empty or this one)
 - Invoice "Our ref" = the operation number
 - Default email recipients (To/CC) for invoices and PLs: Settings → Document emails, `app_settings.document_emails` via `/api/settings/document-emails`; pre-filled in both Send by email dialogs (PL: `POST /api/packing-lists/:id/email`, final PDF else draft)
 
