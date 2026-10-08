@@ -1,16 +1,18 @@
 /**
  * Estimated payment date for an operation.
  *
- * The date a customer is expected to pay is derived from the order's payment
- * terms, counted from whichever document the terms reference:
+ * The date a customer is expected to pay is derived from the payment terms
+ * printed on the invoice (its "Payment terms" line, else its Terms &
+ * Conditions; an uploaded invoice with no terms stored falls back to the
+ * order's terms), counted from whichever document the terms reference:
  *
  *   "NET 60 DAYS FROM B/L"   → bl_date + 60
  *   "Net 45 Days"            → invoice_date + 45
  *   "45 JOURS FIN DE MOIS"   → invoice_date + 45, then out to that month's end
  *
- * Terms that name the Bill of Lading cannot be resolved until the BL date is
- * known, so they return null rather than silently falling back to the invoice
- * date — a 60-day term measured from the wrong document is off by weeks, and a
+ * Terms that name the Bill of Lading count from the BL date, else the shipment
+ * date the user confirmed; with neither they return null rather than silently
+ * falling back to the invoice date — a 60-day term measured from the wrong document is off by weeks, and a
  * blank cell is a question the user can answer while a wrong date is not.
  *
  * Terms are free text typed by whoever entered the order, so the parser is
@@ -116,6 +118,44 @@ export function computeEstimatedPaymentDate(input: EstimateInput): EstimateResul
   return { date, basis: fromBL ? 'bl' : 'invoice', days, endOfMonth: eom };
 }
 
+// ── The invoice's terms ──────────────────────────────────────────────────────
+
+export interface InvoiceTerms { terms: string; source: 'invoice' | 'order' }
+
+/**
+ * The payment terms an invoice states: a generated invoice's "Payment terms"
+ * line, else its Terms & Conditions (whichever names a day count first). An
+ * uploaded invoice has none stored, so the order's terms stand in. Null when
+ * nothing names a day count.
+ */
+export function termsForInvoice(db: any, invoiceId: number, orderTerms?: string | null): InvoiceTerms | null {
+  const docs = db.prepare(`
+    SELECT data FROM invoice_documents WHERE invoice_id = ?
+    ORDER BY CASE WHEN status = 'final' THEN 0 ELSE 1 END, updated_at DESC, id DESC
+  `).all(invoiceId) as any[];
+  for (const doc of docs) {
+    let data: any;
+    try { data = JSON.parse(doc.data); } catch { continue; }
+    for (const text of [data?.payment_terms, data?.terms]) {
+      if (text && paymentTermsDays(text) != null) return { terms: String(text).trim(), source: 'invoice' };
+    }
+  }
+  if (orderTerms && paymentTermsDays(orderTerms) != null) return { terms: orderTerms.trim(), source: 'order' };
+  return null;
+}
+
+/** An invoice's due date from its own terms (BL terms: the BL date, else the shipment date). */
+export function dueDateForInvoice(db: any, invoice: { id: number; invoice_date: string | null }, op: { bl_date?: string | null; ship_date?: string | null; order_terms?: string | null }):
+  { terms: InvoiceTerms | null; estimate: EstimateResult | null } {
+  const terms = termsForInvoice(db, invoice.id, op.order_terms);
+  const estimate = terms ? computeEstimatedPaymentDate({
+    payment_terms: terms.terms,
+    invoice_date: invoice.invoice_date,
+    bl_date: op.bl_date || op.ship_date || null,
+  }) : null;
+  return { terms, estimate };
+}
+
 // ── Persistence ──────────────────────────────────────────────────────────────
 
 /**
@@ -128,10 +168,10 @@ export type EstimateSource = 'auto' | 'manual';
 interface OperationDateRow {
   id: number;
   bl_date: string | null;
+  ship_date: string | null;
   estimated_payment_date: string | null;
   estimated_payment_date_source: EstimateSource | null;
   payment_terms: string | null;
-  invoice_date: string | null;
 }
 
 /**
@@ -141,20 +181,16 @@ interface OperationDateRow {
  * created, edited or deleted, or a BL date is recorded. A `manual` date is left
  * exactly as the user set it — this returns without writing.
  *
- * The invoice date used is the earliest invoice on the operation: payment terms
- * run from when the customer was first billed, and a later corrective invoice
- * does not restart the clock.
+ * The invoice used is the earliest on the operation (its date and its terms):
+ * payment terms run from when the customer was first billed, and a later
+ * corrective invoice does not restart the clock.
  */
 export function refreshEstimatedPaymentDate(db: any, operationId: number | null | undefined): void {
   if (!operationId) return;
 
   const row = db.prepare(`
-    SELECT op.id, op.bl_date, op.estimated_payment_date, op.estimated_payment_date_source,
-      o.payment_terms as payment_terms,
-      (SELECT MIN(i.invoice_date) FROM invoices i
-        WHERE i.operation_id = op.id AND i.type = 'customer'
-          AND i.status NOT IN ('cancelled', 'draft')
-          AND i.invoice_date IS NOT NULL) as invoice_date
+    SELECT op.id, op.bl_date, op.ship_date, op.estimated_payment_date, op.estimated_payment_date_source,
+      o.payment_terms as payment_terms
     FROM operations op
     LEFT JOIN orders o ON o.id = op.order_id
     WHERE op.id = ?
@@ -164,11 +200,14 @@ export function refreshEstimatedPaymentDate(db: any, operationId: number | null 
   // A date the user set by hand outranks anything derived from the terms.
   if (row.estimated_payment_date_source === 'manual') return;
 
-  const next = computeEstimatedPaymentDate({
-    payment_terms: row.payment_terms,
-    invoice_date: row.invoice_date,
-    bl_date: row.bl_date,
-  });
+  const first = db.prepare(`
+    SELECT id, invoice_date FROM invoices
+    WHERE operation_id = ? AND type = 'customer' AND status NOT IN ('cancelled', 'draft') AND invoice_date IS NOT NULL
+    ORDER BY invoice_date, id LIMIT 1
+  `).get(row.id) as { id: number; invoice_date: string } | undefined;
+  const next = first
+    ? dueDateForInvoice(db, first, { bl_date: row.bl_date, ship_date: row.ship_date, order_terms: row.payment_terms }).estimate
+    : null;
 
   const nextDate = next?.date ?? null;
   if (nextDate === row.estimated_payment_date) return;

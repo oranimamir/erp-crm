@@ -312,12 +312,12 @@ router.patch('/:id/status', (req: Request, res: Response) => {
   const { status, notes } = req.body;
   if (!status) { res.status(400).json({ error: 'Status is required' }); return; }
 
-  // When shipped, set payment_due_date = today + 45 days
+  // When shipped, the payment due date is the operation's estimate — from the
+  // invoice's payment terms (no fixed number of days)
   let paymentDueDate = existing.payment_due_date || null;
   if (status === 'shipped' && !existing.payment_due_date) {
-    const d = new Date();
-    d.setDate(d.getDate() + 45);
-    paymentDueDate = d.toISOString().slice(0, 10);
+    const op = db.prepare('SELECT estimated_payment_date FROM operations WHERE order_id = ? ORDER BY id DESC LIMIT 1').get(req.params.id) as any;
+    paymentDueDate = op?.estimated_payment_date || null;
   }
 
   db.prepare(`UPDATE orders SET status=?, payment_due_date=?, updated_at=datetime('now') WHERE id=?`)

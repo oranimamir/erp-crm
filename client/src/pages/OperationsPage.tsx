@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import api from '../lib/api';
+import ShipOperationModal from '../components/ShipOperationModal';
 import { useToast } from '../contexts/ToastContext';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
 import {
   Briefcase, Search, Plus, ChevronLeft, ChevronRight, FileText, Receipt,
-  FileSpreadsheet, ChevronUp, ChevronDown, Download, X, Truck, Loader2, ArrowLeftRight, Landmark, Filter, XCircle, Trash2, Pencil, Upload, RotateCcw, FileCheck2, ShoppingCart, Package,
+  FileSpreadsheet, ChevronUp, ChevronDown, Download, X, Loader2, ArrowLeftRight, Landmark, Filter, XCircle, Trash2, Pencil, Upload, RotateCcw, FileCheck2, ShoppingCart, Package,
 } from 'lucide-react';
 import { formatDate } from '../lib/dates';
 import { paymentTermsDays, paymentTermsMentionsBL, paymentTermsEndOfMonth, computeEstimatedPaymentDate } from '../lib/paymentTerms';
@@ -73,13 +74,6 @@ function suggestedCountry(op: { country_suggested?: string; order_destination?: 
 }
 
 // Detect if payment terms reference a BL date (e.g. "60 days from BL", "30d B/L")
-/** Local helper for the shipment form's due-date field — plain calendar maths. */
-function addDays(dateStr: string, days: number): string {
-  if (!dateStr) return '';
-  const d = new Date(dateStr + 'T12:00:00');
-  d.setDate(d.getDate() + days);
-  return d.toISOString().split('T')[0];
-}
 function todayISO() { return new Date().toISOString().split('T')[0]; }
 
 interface PreviewItem {
@@ -215,10 +209,6 @@ export default function OperationsPage() {
 
   // Ship modal
   const [shipTarget, setShipTarget] = useState<Operation | null>(null);
-  const [shipDate, setShipDate] = useState('');
-  const [payDays, setPayDays] = useState(45);
-  const [dueDate, setDueDate] = useState('');
-  const [savingShip, setSavingShip] = useState(false);
 
   // Inline edit mode for the estimated payment date (must click the edit button — no accidental edits)
   const [editingEpdId, setEditingEpdId] = useState<number | null>(null);
@@ -344,12 +334,8 @@ export default function OperationsPage() {
 
   const handleStatusChange = (id: number, newStatus: string) => {
     if (newStatus === 'shipped') {
-      const op = operations.find(o => o.id === id) || null;
-      const defaultDate = op?.ship_date || todayISO();
-      setShipTarget(op);
-      setShipDate(defaultDate);
-      setPayDays(45);
-      setDueDate(addDays(defaultDate, 45));
+      // The due dates come from each invoice's payment terms (ShipOperationModal)
+      setShipTarget(operations.find(o => o.id === id) || null);
       return;
     }
     applyStatus(id, newStatus);
@@ -383,21 +369,6 @@ export default function OperationsPage() {
       }
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Failed to update status', 'error');
-    }
-  };
-
-  const handleConfirmShip = async () => {
-    if (!shipTarget || !shipDate || !dueDate) return;
-    setSavingShip(true);
-    try {
-      await api.post(`/operations/${shipTarget.id}/ship`, { ship_date: shipDate, due_date: dueDate });
-      setOperations(prev => prev.map(op => op.id === shipTarget.id ? { ...op, status: 'shipped', ship_date: shipDate } : op));
-      setShipTarget(null);
-      addToast('Operation marked as shipped — invoices updated', 'success');
-    } catch (err: any) {
-      addToast(err.response?.data?.error || 'Failed to mark as shipped', 'error');
-    } finally {
-      setSavingShip(false);
     }
   };
 
@@ -1434,75 +1405,12 @@ export default function OperationsPage() {
 
       {/* ── Ship Modal ─────────────────────────────────────────────────────── */}
       {shipTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => !savingShip && setShipTarget(null)}>
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-              <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-                <Truck size={17} className="text-blue-500" />
-                Mark as Shipped — {shipTarget.operation_number}
-              </h3>
-              <button onClick={() => !savingShip && setShipTarget(null)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="px-5 py-5 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Shipment Date</label>
-                <input
-                  type="date"
-                  value={shipDate}
-                  onChange={e => { setShipDate(e.target.value); setDueDate(addDays(e.target.value, payDays)); }}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Payment Terms</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min={1}
-                    max={365}
-                    value={payDays}
-                    onChange={e => { const d = Math.max(1, parseInt(e.target.value) || 1); setPayDays(d); setDueDate(addDays(shipDate, d)); }}
-                    className="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  />
-                  <span className="text-sm text-gray-500">days after shipment</span>
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Invoice Due Date
-                  <span className="text-xs text-gray-400 font-normal ml-1.5">shipment + {payDays} days · editable</span>
-                </label>
-                <input
-                  type="date"
-                  value={dueDate}
-                  onChange={e => setDueDate(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                />
-              </div>
-            </div>
-
-            <div className="px-5 py-4 bg-gray-50 border-t border-gray-200 flex justify-end gap-3">
-              <button
-                onClick={() => setShipTarget(null)}
-                disabled={savingShip}
-                className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-100 disabled:opacity-60"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmShip}
-                disabled={savingShip || !shipDate || !dueDate}
-                className="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-60 flex items-center gap-2"
-              >
-                {savingShip ? <Loader2 size={15} className="animate-spin" /> : <Truck size={15} />}
-                {savingShip ? 'Saving...' : 'Confirm Shipment'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <ShipOperationModal operation={shipTarget} onClose={() => setShipTarget(null)}
+          onShipped={shipDate => {
+            setOperations(prev => prev.map(op => op.id === shipTarget.id ? { ...op, status: 'shipped', ship_date: shipDate } : op));
+            setShipTarget(null);
+            fetchOperations();
+          }} />
       )}
 
       {/* ── BL Date Prompt ─────────────────────────────────────────────────── */}

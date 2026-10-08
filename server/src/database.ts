@@ -767,7 +767,7 @@ export async function initializeDatabase() {
     } catch (_) { /* ignore */ }
   }
 
-  // Add payment_due_date to orders (set automatically when status → shipped)
+  // Add payment_due_date to orders (set when status → shipped, from the operation's estimated payment date)
   try { db.exec(`ALTER TABLE orders ADD COLUMN payment_due_date TEXT`); } catch (_) { /* column may already exist */ }
   // Backfill payment_date on paid invoices that are missing it (so they appear in cash flow)
   try {

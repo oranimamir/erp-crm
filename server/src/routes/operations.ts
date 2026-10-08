@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
-import { refreshEstimatedPaymentDate } from '../lib/paymentTerms.js';
+import { refreshEstimatedPaymentDate, dueDateForInvoice } from '../lib/paymentTerms.js';
 import { getEurRate } from '../lib/fx.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { resolveCountry } from '../lib/portCountry.js';
@@ -568,36 +568,65 @@ router.patch('/:id/status', (req: Request, res: Response) => {
 });
 
 // ── Ship operation ─────────────────────────────────────────────────────────────
-// Sets status to 'shipped' AND updates all customer invoices:
-//   invoice_date = ship_date, due_date = due_date, draft→sent
+// Sets status to 'shipped' AND updates all customer invoices: due date from
+// each invoice's own payment terms (or as the user set it), draft→sent.
+// No fixed number of days — an invoice whose terms can't be read keeps its due date.
 
+const ISO = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Each customer invoice with its terms and the due date they give for this shipment date. */
+function shipPreview(operationId: number, shipDate: string | null) {
+  const op = db.prepare(`
+    SELECT op.bl_date, o.payment_terms AS order_terms FROM operations op LEFT JOIN orders o ON o.id = op.order_id WHERE op.id = ?
+  `).get(operationId) as any;
+  const invoices = db.prepare(
+    "SELECT id, invoice_number, status, invoice_date, due_date FROM invoices WHERE operation_id = ? AND type = 'customer' ORDER BY invoice_date, id"
+  ).all(operationId) as any[];
+  return invoices.map(inv => {
+    const { terms, estimate } = dueDateForInvoice(db, inv, { bl_date: op?.bl_date, ship_date: shipDate, order_terms: op?.order_terms });
+    return {
+      id: inv.id, invoice_number: inv.invoice_number, status: inv.status, invoice_date: inv.invoice_date,
+      current_due_date: inv.due_date, terms: terms?.terms ?? null, terms_source: terms?.source ?? null,
+      due_date: estimate?.date ?? null, basis: estimate?.basis ?? null, days: estimate?.days ?? null, end_of_month: estimate?.endOfMonth ?? false,
+    };
+  });
+}
+
+// GET /api/operations/:id/ship-preview?ship_date=YYYY-MM-DD
+router.get('/:id/ship-preview', (req: Request, res: Response) => {
+  const existing = db.prepare('SELECT id FROM operations WHERE id = ?').get(req.params.id) as any;
+  if (!existing) { res.status(404).json({ error: 'Operation not found' }); return; }
+  const shipDate = ISO.test(String(req.query.ship_date || '')) ? String(req.query.ship_date) : null;
+  res.json({ invoices: shipPreview(existing.id, shipDate) });
+});
+
+// POST /api/operations/:id/ship — { ship_date, due_dates?: { [invoiceId]: 'YYYY-MM-DD' | '' } }
+// An invoice left out of due_dates gets the date its terms give; '' leaves its due date as it is.
 router.post('/:id/ship', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT * FROM operations WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Operation not found' }); return; }
 
-  const { ship_date, due_date } = req.body;
-  if (!ship_date || !due_date) {
-    res.status(400).json({ error: 'ship_date and due_date are required' }); return;
-  }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(ship_date) || !/^\d{4}-\d{2}-\d{2}$/.test(due_date)) {
-    res.status(400).json({ error: 'Dates must be YYYY-MM-DD' }); return;
+  const { ship_date } = req.body;
+  const chosen: Record<string, unknown> = req.body?.due_dates && typeof req.body.due_dates === 'object' ? req.body.due_dates : {};
+  if (!ship_date || !ISO.test(ship_date)) { res.status(400).json({ error: 'A shipment date (YYYY-MM-DD) is required' }); return; }
+  for (const v of Object.values(chosen)) {
+    if (v && !ISO.test(String(v))) { res.status(400).json({ error: 'Dates must be YYYY-MM-DD' }); return; }
   }
 
   // Update operation: status + ship_date (invoice_date stays on the invoice itself)
   db.prepare(`UPDATE operations SET status = 'shipped', ship_date = ?, updated_at = datetime('now') WHERE id = ?`).run(ship_date, req.params.id);
 
-  // Update customer invoices: set due_date only — invoice_date is per the uploaded invoice
-  const invoices = db.prepare(
-    "SELECT id, status FROM invoices WHERE operation_id = ? AND type = 'customer'"
-  ).all(req.params.id) as any[];
+  // Update customer invoices: due date from their terms — invoice_date is per the invoice
+  const invoices = shipPreview(existing.id, ship_date);
 
   for (const inv of invoices) {
     const newStatus = inv.status === 'draft' ? 'sent' : inv.status;
+    const picked = Object.prototype.hasOwnProperty.call(chosen, String(inv.id)) ? (String(chosen[String(inv.id)] || '') || null) : inv.due_date;
     db.prepare(`
       UPDATE invoices
-      SET due_date = ?, status = ?, updated_at = datetime('now')
+      SET due_date = COALESCE(?, due_date), status = ?, updated_at = datetime('now')
       WHERE id = ?
-    `).run(due_date, newStatus, inv.id);
+    `).run(picked, newStatus, inv.id);
 
     if (inv.status === 'draft') {
       try {
@@ -608,6 +637,8 @@ router.post('/:id/ship', (req: Request, res: Response) => {
     }
   }
 
+  // BL-based terms count from the shipment date until a BL date is recorded
+  refreshEstimatedPaymentDate(db, existing.id);
   notifyAdmin({ action: 'status changed', entity: 'Operation', label: existing.operation_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId, detail: 'shipped' });
   res.json({ ok: true, invoices_updated: invoices.length });
 });

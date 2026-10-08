@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import api from '../lib/api';
+import ShipOperationModal from '../components/ShipOperationModal';
 import { useToast } from '../contexts/ToastContext';
 import {
   ArrowLeft, Briefcase, ShoppingCart, FileText, Upload, Trash2,
@@ -149,12 +150,6 @@ function formatCurrency(amount: number, currency = 'USD') {
   return `${sym}${Number(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 function uid() { return Math.random().toString(36).slice(2); }
-function addDays(dateStr: string, days: number): string {
-  if (!dateStr) return '';
-  const d = new Date(dateStr + 'T12:00:00');
-  d.setDate(d.getDate() + days);
-  return d.toISOString().split('T')[0];
-}
 function todayISO() { return new Date().toISOString().split('T')[0]; }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -204,10 +199,6 @@ export default function OperationDetailPage() {
 
   // Ship modal
   const [showShipModal, setShowShipModal] = useState(false);
-  const [shipDate, setShipDate] = useState('');
-  const [payDays, setPayDays] = useState(45);
-  const [dueDate, setDueDate] = useState('');
-  const [savingShip, setSavingShip] = useState(false);
 
   // Order confirmation issued for the linked order, if any
 
@@ -471,11 +462,7 @@ export default function OperationDetailPage() {
 
   async function handleStatusChange(newStatus: string) {
     if (newStatus === 'shipped') {
-      // Intercept: open ship modal to confirm dates before saving
-      const defaultDate = operation?.ship_date || todayISO();
-      setShipDate(defaultDate);
-      setPayDays(45);
-      setDueDate(addDays(defaultDate, 45));
+      // Intercept: confirm the shipment date; due dates come from each invoice's payment terms
       setShowShipModal(true);
       return;
     }
@@ -497,21 +484,6 @@ export default function OperationDetailPage() {
       setOperation(prev => prev ? { ...prev, category } : prev);
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Failed to update category', 'error');
-    }
-  }
-
-  async function handleConfirmShip() {
-    if (!shipDate || !dueDate) return;
-    setSavingShip(true);
-    try {
-      await api.post(`/operations/${id}/ship`, { ship_date: shipDate, due_date: dueDate });
-      setShowShipModal(false);
-      addToast('Operation marked as shipped — invoices updated', 'success');
-      fetchOperation();
-    } catch (err: any) {
-      addToast(err.response?.data?.error || 'Failed to mark as shipped', 'error');
-    } finally {
-      setSavingShip(false);
     }
   }
 
@@ -682,13 +654,7 @@ export default function OperationDetailPage() {
             </select>
             {(operation.status === 'shipped' || operation.status === 'in clearance' || operation.status === 'delivered') && (
               <button
-                onClick={() => {
-                  const today = operation.ship_date || todayISO();
-                  setShipDate(today);
-                  setPayDays(45);
-                  setDueDate(addDays(today, 45));
-                  setShowShipModal(true);
-                }}
+                onClick={() => setShowShipModal(true)}
                 className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 border border-blue-200 bg-blue-50 rounded-lg px-2 py-1"
                 title="Edit shipment date / invoice due date"
               >
@@ -1295,134 +1261,8 @@ export default function OperationDetailPage() {
 
       {/* ── Ship Modal ─────────────────────────────────────────────────────── */}
       {showShipModal && operation && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => !savingShip && setShowShipModal(false)}>
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
-
-            {/* Header */}
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-              <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-                <Truck size={17} className="text-blue-500" />
-                Mark as Shipped — {operation.operation_number}
-              </h3>
-              <button
-                onClick={() => !savingShip && setShowShipModal(false)}
-                className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            {/* Body */}
-            <div className="px-5 py-5 space-y-4">
-
-              {/* Shipment date */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Shipment Date</label>
-                <input
-                  type="date"
-                  value={shipDate}
-                  onChange={e => {
-                    setShipDate(e.target.value);
-                    setDueDate(addDays(e.target.value, payDays));
-                  }}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                />
-              </div>
-
-              {/* Payment terms (days) */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Payment Terms</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min={1}
-                    max={365}
-                    value={payDays}
-                    onChange={e => {
-                      const d = Math.max(1, parseInt(e.target.value) || 1);
-                      setPayDays(d);
-                      setDueDate(addDays(shipDate, d));
-                    }}
-                    className="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  />
-                  <span className="text-sm text-gray-500">days after shipment</span>
-                </div>
-              </div>
-
-              {/* Due date — auto-calculated from ship date, manually overridable */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Invoice Due Date
-                  <span className="text-xs text-gray-400 font-normal ml-1.5">shipment date + {payDays} days · editable</span>
-                </label>
-                <input
-                  type="date"
-                  value={dueDate}
-                  onChange={e => setDueDate(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                />
-              </div>
-
-              {/* Invoice preview */}
-              {(() => {
-                const custInvoices = operation.invoices.filter(inv => inv.type === 'customer');
-                if (custInvoices.length === 0) {
-                  return (
-                    <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">
-                      No customer invoices linked — status will be updated but no invoice dates will be set.
-                    </div>
-                  );
-                }
-                return (
-                  <div className="rounded-lg bg-blue-50 border border-blue-200 px-4 py-3">
-                    <p className="text-xs font-semibold text-blue-700 mb-2 uppercase tracking-wide">
-                      {custInvoices.length} customer invoice{custInvoices.length > 1 ? 's' : ''} will be updated
-                    </p>
-                    <ul className="space-y-2">
-                      {custInvoices.map(inv => (
-                        <li key={inv.id} className="text-sm">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium text-blue-900">{inv.invoice_number}</span>
-                            {inv.status === 'draft' && (
-                              <span className="text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded">draft → sent</span>
-                            )}
-                          </div>
-                          <div className="text-xs text-blue-700 mt-0.5">
-                            Due date will be set to: <strong>{dueDate ? formatDate(dueDate) : '—'}</strong>
-                          </div>
-                          {inv.invoice_date && (
-                            <div className="text-xs text-blue-500 mt-0.5">
-                              Invoice date (unchanged): {formatDate(inv.invoice_date)}
-                            </div>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                );
-              })()}
-            </div>
-
-            {/* Footer */}
-            <div className="px-5 py-4 bg-gray-50 border-t border-gray-200 flex justify-end gap-3">
-              <button
-                onClick={() => setShowShipModal(false)}
-                disabled={savingShip}
-                className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-100 disabled:opacity-60"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmShip}
-                disabled={savingShip || !shipDate || !dueDate}
-                className="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-60 flex items-center gap-2"
-              >
-                {savingShip ? <Loader2 size={15} className="animate-spin" /> : <Truck size={15} />}
-                {savingShip ? 'Saving...' : 'Confirm Shipment'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <ShipOperationModal operation={operation} onClose={() => setShowShipModal(false)}
+          onShipped={() => { setShowShipModal(false); fetchOperation(); }} />
       )}
 
       {/* ── Link Order Modal ───────────────────────────────────────────────── */}
