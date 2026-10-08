@@ -52,10 +52,17 @@ export const uploadWireTransfer = multer({
   fileFilter,
 });
 
+// Operation / NCO documents: also Word, Excel, CSV and text (served as downloads, never inline)
+const operationDocExtensions = [...allowedExtensions, '.doc', '.docx', '.xls', '.xlsx', '.csv', '.txt'];
+const operationDocFileFilter = (_req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+  if (operationDocExtensions.includes(path.extname(file.originalname).toLowerCase())) cb(null, true);
+  else cb(new Error('Only PDF, images, Word, Excel, CSV and text files are allowed'));
+};
+
 export const uploadOperationDoc = multer({
   storage: createStorage('operation-docs'),
   limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter,
+  fileFilter: operationDocFileFilter,
 });
 
 export const uploadOrder = multer({

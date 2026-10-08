@@ -20,6 +20,9 @@ export const REQUIRED_OPERATION_DOCS = [
 
 const norm = (s: string | null | undefined) => (s || '').trim().toLowerCase();
 
+/** File types an operation / NCO document can be (server middleware/upload.ts). */
+export const DOC_ACCEPT = '.pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx,.csv,.txt';
+
 /**
  * The open-ended tile under the checklist (not counted as required): any
  * document, picked from a supplier's documents or uploaded.

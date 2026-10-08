@@ -18,7 +18,7 @@ import OperationDocumentEditModal from '../components/OperationDocumentEditModal
 import DocumentCompareModal from '../components/DocumentCompareModal';
 import DocxTextEditModal from '../components/DocxTextEditModal';
 import SendDocumentsModal from '../components/SendDocumentsModal';
-import { missingRequired, sortForSending, docNumber } from '../lib/operationDocs';
+import { missingRequired, sortForSending, docNumber, DOC_ACCEPT } from '../lib/operationDocs';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -140,7 +140,7 @@ const INVOICE_STATUS_COLORS: Record<string, string> = {
   overdue:   'bg-red-100   text-red-800',
   cancelled: 'bg-gray-100  text-gray-500',
 };
-const ACCEPTED_EXTS = '.pdf,.jpg,.jpeg,.png,.webp';
+const ACCEPTED_EXTS = DOC_ACCEPT;
 const ACCEPTED_MIME = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -336,7 +336,7 @@ export default function OperationDetailPage() {
       ACCEPTED_EXTS.split(',').some(ext => f.name.toLowerCase().endsWith(ext.replace('.', '.')))
     );
     const invalid = arr.length - valid.length;
-    if (invalid > 0) addToast(`${invalid} file(s) skipped — only PDF, JPEG, PNG, WebP allowed`, 'error');
+    if (invalid > 0) addToast(`${invalid} file(s) skipped — only PDF, images, Word, Excel, CSV and text allowed`, 'error');
     if (valid.length === 0) return;
     setPendingUploads(prev => [
       ...prev,
@@ -1113,7 +1113,7 @@ export default function OperationDetailPage() {
           <p className="text-sm font-medium text-gray-600">
             {isDragging ? 'Drop files here' : 'Drag & drop files here, or click to browse'}
           </p>
-          <p className="text-xs text-gray-400">PDF, JPEG, PNG, WebP · max 10 MB each</p>
+          <p className="text-xs text-gray-400">PDF, images, Word, Excel, CSV, text · max 10 MB each</p>
           <input ref={fileInputRef} type="file" accept={ACCEPTED_EXTS} multiple className="hidden" onChange={handleFileInputChange} />
         </div>
 

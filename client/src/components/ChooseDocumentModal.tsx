@@ -6,6 +6,7 @@ import { useToast } from '../contexts/ToastContext';
 import Modal from './ui/Modal';
 import Button from './ui/Button';
 import { type DocOwner, ownerApi } from '../lib/docOwner';
+import { DOC_ACCEPT } from '../lib/operationDocs';
 
 /**
  * A shipping document tile's "Choose": the documents already in the app that
@@ -91,11 +92,11 @@ export default function ChooseDocumentModal({ category, owner, onClose, onFiled,
   }
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
+    const files = Array.from(e.target.files || []);
     e.target.value = '';
-    if (!f || !category) return;
+    if (!files.length || !category) return;
     setSaving(true);
-    try { await onUpload(f, category.id); onClose(); } finally { setSaving(false); }
+    try { for (const f of files) await onUpload(f, category.id); onClose(); } finally { setSaving(false); }
   }
 
   const groups = SOURCES
@@ -104,7 +105,7 @@ export default function ChooseDocumentModal({ category, owner, onClose, onFiled,
 
   return (
     <Modal open onClose={onClose} title={`${category.name} — choose a document`} size="lg">
-      <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={onFile} />
+      <input ref={fileRef} type="file" multiple accept={DOC_ACCEPT} className="hidden" onChange={onFile} />
       {loading ? (
         <div className="flex justify-center py-10"><Loader2 size={20} className="animate-spin text-primary-600" /></div>
       ) : (

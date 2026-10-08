@@ -17,7 +17,7 @@ import AddFromLibraryModal from '../components/AddFromLibraryModal';
 import OperationDocumentEditModal from '../components/OperationDocumentEditModal';
 import DocumentCompareModal from '../components/DocumentCompareModal';
 import DocxTextEditModal from '../components/DocxTextEditModal';
-import { missingRequired, sortForSending, docNumber } from '../lib/operationDocs';
+import { missingRequired, sortForSending, docNumber, DOC_ACCEPT } from '../lib/operationDocs';
 
 /**
  * One non-commercial operation, with what a regular operation has: the lines
@@ -379,8 +379,8 @@ export default function NcoDetailPage() {
           }`}>
           {uploading ? <Loader2 size={20} className="animate-spin text-primary-500" /> : <Upload size={20} className="text-gray-400" />}
           <p className="text-sm text-gray-600">Drag & drop files (e.g. the invoice), or click to browse</p>
-          <p className="text-xs text-gray-400">PDF, JPEG, PNG, WebP · max 10 MB each</p>
-          <input ref={fileRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden"
+          <p className="text-xs text-gray-400">PDF, images, Word, Excel, CSV, text · max 10 MB each</p>
+          <input ref={fileRef} type="file" multiple accept={DOC_ACCEPT} className="hidden"
             onChange={e => { if (e.target.files) uploadFiles(e.target.files); e.target.value = ''; }} />
         </div>
 

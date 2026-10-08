@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CheckCircle2, Circle, Eye, Upload, Loader2, ClipboardCheck, ListChecks, Type, FilePlus2, PenLine, Truck } from 'lucide-react';
-import { REQUIRED_OPERATION_DOCS, GENERAL_DOCUMENT, docsInCategory } from '../lib/operationDocs';
+import { REQUIRED_OPERATION_DOCS, GENERAL_DOCUMENT, DOC_ACCEPT, docsInCategory } from '../lib/operationDocs';
 import ChooseDocumentModal from './ChooseDocumentModal';
 import SupplierDocumentPickerModal from './SupplierDocumentPickerModal';
 import { type DocOwner, ownerQuery } from '../lib/docOwner';
@@ -59,12 +59,13 @@ export default function RequiredDocuments({ owner, documents, categories, onUplo
     inputRef.current?.click();
   };
 
+  // Several files at once (General document); each is its own document in the category
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files || []);
     e.target.value = '';
-    if (!file || !target) return;
+    if (!files.length || !target) return;
     setBusy(target.name);
-    try { await onUpload(file, target.id); } finally { setBusy(null); }
+    try { for (const file of files) await onUpload(file, target.id); } finally { setBusy(null); }
   }
 
   return (
@@ -85,7 +86,7 @@ export default function RequiredDocuments({ owner, documents, categories, onUplo
         </div>
       </div>
 
-      <input ref={inputRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={onFile} />
+      <input ref={inputRef} type="file" multiple accept={DOC_ACCEPT} className="hidden" onChange={onFile} />
       <ChooseDocumentModal category={choosing} owner={owner} onClose={() => setChoosing(null)}
         onFiled={onFiled} onUpload={onUpload} onPreview={onOpenFile} />
       <SupplierDocumentPickerModal category={fromSupplier} owner={owner} onClose={() => setFromSupplier(null)}
@@ -191,6 +192,7 @@ export default function RequiredDocuments({ owner, documents, categories, onUplo
                 <span className="flex items-center gap-1.5 text-sm font-semibold text-gray-800">
                   <FilePlus2 size={15} className="text-gray-400 flex-shrink-0" />
                   <span>{GENERAL_DOCUMENT}</span>
+                  {filed.length > 0 && <span className="text-xs font-normal text-gray-400">({filed.length})</span>}
                 </span>
                 {category && (
                   <span className="flex items-center gap-2 flex-shrink-0">
@@ -200,9 +202,9 @@ export default function RequiredDocuments({ owner, documents, categories, onUplo
                       <Truck size={12} /> From supplier
                     </button>
                     <button type="button" onClick={() => pick(category)} disabled={busy !== null}
-                      title="Upload a document from your computer"
+                      title="Upload one or more documents from your computer — each is added to the list"
                       className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 disabled:opacity-50">
-                      {busy === GENERAL_DOCUMENT ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />} Upload
+                      {busy === GENERAL_DOCUMENT ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />} {filed.length ? 'Upload more' : 'Upload'}
                     </button>
                   </span>
                 )}

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { DOC_ACCEPT } from '../lib/operationDocs';
 import { Loader2, Upload } from 'lucide-react';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
@@ -92,7 +93,7 @@ export default function OperationDocumentEditModal({ doc, apiBase, categories, o
         <label className="flex items-center gap-2 rounded-lg border border-dashed border-gray-300 bg-gray-50 px-3 py-2.5 cursor-pointer hover:bg-gray-100">
           <Upload size={15} className="text-gray-400" />
           <span className="text-sm text-gray-600 truncate">{file ? file.name : 'Replace the file with a newer version (optional)'}</span>
-          <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden"
+          <input type="file" accept={DOC_ACCEPT} className="hidden"
             onChange={e => setFile(e.target.files?.[0] || null)} />
         </label>
         <div className="flex justify-end gap-2 pt-1">
