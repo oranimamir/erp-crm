@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
 import { refreshEstimatedPaymentDate, dueDateForInvoice } from '../lib/paymentTerms.js';
-import { fileGeneratedForOperation } from '../lib/fileGenerated.js';
+import { fileGeneratedForOperation, draftsForOperation } from '../lib/fileGenerated.js';
 import { getEurRate } from '../lib/fx.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { resolveCountry } from '../lib/portCountry.js';
@@ -504,7 +504,8 @@ router.get('/:id', (req: Request, res: Response) => {
     ORDER BY wt.created_at DESC
   `).all(Number(req.params.id));
 
-  res.json({ ...operation, documents: withSizes(documents as any[]), invoices, order_items: orderItems, wire_transfers });
+  res.json({ ...operation, documents: withSizes(documents as any[]), invoices, order_items: orderItems, wire_transfers,
+    generated_drafts: draftsForOperation(operation.id) });
 });
 
 // ── Create operation ──────────────────────────────────────────────────────────

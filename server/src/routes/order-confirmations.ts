@@ -415,7 +415,11 @@ router.put('/:id', async (req: Request, res: Response) => {
     ...data,
     oc_number: (data.oc_number || '').trim() || existing.oc_number,
   });
-  const operationId = existing.nco_id ? null : (operation_id !== undefined ? operation_id : existing.operation_id);
+  let operationId = existing.nco_id ? null : (operation_id !== undefined ? operation_id : existing.operation_id);
+  // Saved first without an operation (e.g. before the order had one): file it under the order's operation now
+  if (operationId == null && !existing.nco_id && existing.order_id) {
+    operationId = (db.prepare('SELECT id FROM operations WHERE order_id = ? ORDER BY id DESC LIMIT 1').get(existing.order_id) as any)?.id ?? null;
+  }
 
   if (ocNumberTaken(payload.oc_number!, existing.id)) {
     res.status(409).json({ error: `Order confirmation ${payload.oc_number} already exists` });

@@ -70,6 +70,9 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; source: RowSource } | null>(null);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editCat, setEditCat] = useState('');
+  // Main category being edited: Sales Activities or Demo Expenses
+  const [editDomain, setEditDomain] = useState<'demo' | 'sales'>(domain);
+  const categoriesOf = (d: 'demo' | 'sales') => d === 'demo' ? demoCategories : salesCategories;
   const [newCatName, setNewCatName] = useState('');
   const [dupLoading, setDupLoading] = useState(false);
   type DupSupplier = { name: string; count: number; invoiceIds: number[] };
@@ -136,11 +139,24 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
   };
 
   const handleUpdateCategory = async (row: SupplierRow) => {
-    if (!categories.includes(editCat)) {
+    if (!categoriesOf(editDomain).includes(editCat)) {
       addToast('Pick a category first', 'error');
       return;
     }
     try {
+      // Moved to the other main category (Sales Activities ↔ Demo Expenses), or a
+      // built-in entry: saved as the user's own mapping; its invoices follow
+      if (editDomain !== domain || row.source === 'hardcoded') {
+        const res = row.source === 'user-mapping' && row.id != null
+          ? await api.patch(`/demo-expenses/supplier-mappings/${row.id}`, { category: editCat, domain: editDomain })
+          : await api.post('/demo-expenses/supplier-mappings', { supplierName: row.name, category: editCat, domain: editDomain });
+        const cascaded = res.data?.cascadedInvoices || 0;
+        const where = editDomain === domain ? editCat : `${editDomain === 'demo' ? 'Demo Expenses' : 'Sales Activities'} / ${editCat}`;
+        addToast(`"${row.name}" → ${where}${cascaded > 0 ? ` · ${cascaded} invoices reclassified` : ''}`, 'success');
+        setEditingKey(null);
+        fetchData();
+        return;
+      }
       // Sales domain: always route through the mapping endpoint so invoice
       // categories cascade — the suppliers table is legacy and doesn't drive
       // invoice classification.
@@ -453,7 +469,8 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
               <tbody className="divide-y divide-gray-100">
                 {sortedRows.map((row) => {
                   const isEditing = editingKey === row.rowKey;
-                  const editable = row.source !== 'hardcoded' && (row.id != null || row.source === 'invoice-only');
+                  // Built-ins too: changing one saves the user's own mapping over it
+                  const editable = row.source === 'hardcoded' || row.id != null || row.source === 'invoice-only';
                   const deletable = editable && row.source !== 'invoice-only' && row.id != null;
                   const isSelected = selectedRowKeys.has(row.rowKey);
                   return (
@@ -484,11 +501,23 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
                     </td>
                     <td className="px-4 py-2.5">
                       {isEditing ? (
-                        <select value={editCat} onChange={e => setEditCat(e.target.value)}
-                          className="border border-gray-300 rounded px-2 py-0.5 text-xs bg-white focus:ring-2 focus:ring-primary-500"
-                          autoFocus>
-                          {categories.map(c => <option key={c} value={c}>{c}</option>)}
-                        </select>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <select value={editDomain} title="Main category"
+                            onChange={e => {
+                              const d = e.target.value as 'demo' | 'sales';
+                              setEditDomain(d);
+                              if (!categoriesOf(d).includes(editCat)) setEditCat(categoriesOf(d)[0] || '');
+                            }}
+                            className="border border-gray-300 rounded px-2 py-0.5 text-xs bg-white focus:ring-2 focus:ring-primary-500">
+                            <option value="sales">Sales Activities</option>
+                            <option value="demo">Demo Expenses</option>
+                          </select>
+                          <select value={editCat} onChange={e => setEditCat(e.target.value)} title="Sub category"
+                            className="border border-gray-300 rounded px-2 py-0.5 text-xs bg-white focus:ring-2 focus:ring-primary-500"
+                            autoFocus>
+                            {categoriesOf(editDomain).map(c => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                        </div>
                       ) : (
                         <span className="inline-flex items-center gap-1.5 text-xs font-medium">
                           <span className="w-2 h-2 rounded-sm" style={{ background: colorMap[row.category] || '#6b7280' }} />
@@ -505,8 +534,8 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
                           </>
                         ) : editable ? (
                           <>
-                            <button onClick={() => { setEditingKey(row.rowKey); setEditCat(categories.includes(row.category) ? row.category : (categories[0] || defaultCategory)); }} className="p-1 text-gray-400 hover:text-primary-600 rounded" title="Edit category"><Pencil size={14} /></button>
-                            {deletable && (
+                            <button onClick={() => { setEditingKey(row.rowKey); setEditDomain(domain); setEditCat(categories.includes(row.category) ? row.category : (categories[0] || defaultCategory)); }} className="p-1 text-gray-400 hover:text-primary-600 rounded" title="Change main category (Sales Activities / Demo Expenses) and sub category"><Pencil size={14} /></button>
+                            {deletable && row.source !== 'hardcoded' && (
                               <button onClick={() => setDeleteTarget({ id: row.id!, source: row.source })} className="p-1 text-gray-400 hover:text-red-600 rounded" title="Delete"><Trash2 size={14} /></button>
                             )}
                           </>

@@ -18,6 +18,8 @@ import OperationDocumentEditModal from '../components/OperationDocumentEditModal
 import DocumentCompareModal from '../components/DocumentCompareModal';
 import DocxTextEditModal from '../components/DocxTextEditModal';
 import SendDocumentsModal from '../components/SendDocumentsModal';
+import Modal from '../components/ui/Modal';
+import OrderFormPage from './OrderFormPage';
 import { missingRequired, sortForSending, docNumber, DOC_ACCEPT } from '../lib/operationDocs';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -104,6 +106,12 @@ interface Operation {
   invoices: Invoice[];
   order_items: OrderItem[];
   wire_transfers: WireTransfer[];
+  /** Documents saved as draft in a generator — no PDF yet, so not among `documents` */
+  generated_drafts?: GeneratedDraft[];
+}
+
+interface GeneratedDraft {
+  kind: string; id: number; label: string; number: string | null; updated_at: string | null; path: string;
 }
 
 interface PreviewItem {
@@ -204,6 +212,8 @@ export default function OperationDetailPage() {
 
   // Link Order modal
   const [showLinkOrder, setShowLinkOrder] = useState(false);
+  // Order form in a window on this page: { orderId } edits the linked order, {} makes a new one
+  const [orderForm, setOrderForm] = useState<{ orderId?: number } | null>(null);
   const [orderSearch, setOrderSearch] = useState('');
   const [availableOrders, setAvailableOrders] = useState<any[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
@@ -699,10 +709,18 @@ export default function OperationDetailPage() {
               )}
               <DocumentGenerators orderId={operation.order_id} operationId={operation.id} refreshKey={operation.documents.length} onPreview={openPreview} onChanged={fetchOperation} />
               <button
-                onClick={() => navigate(`/orders/${operation.order_id}/edit`)}
+                onClick={() => setOrderForm({ orderId: operation.order_id! })}
                 className="flex items-center gap-1 text-xs sm:text-sm text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2 py-1"
+                title="Edit the order here"
               >
                 <Edit2 size={13} /> Edit
+              </button>
+              <button
+                onClick={openLinkOrder}
+                className="flex items-center gap-1 text-xs sm:text-sm text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2 py-1"
+                title="Link a different order to this operation"
+              >
+                <Link2 size={13} /> Change
               </button>
               <button
                 onClick={handleUnlinkOrder}
@@ -797,7 +815,7 @@ export default function OperationDetailPage() {
           </div>
           <div className="flex gap-2 flex-shrink-0">
             <button
-              onClick={() => navigate(`/orders/new?operation_number=${encodeURIComponent(operation.operation_number)}`)}
+              onClick={() => setOrderForm({})}
               className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700"
             >
               <Plus size={14} /> New Order
@@ -1178,6 +1196,29 @@ export default function OperationDetailPage() {
           </div>
         )}
 
+        {(operation.generated_drafts?.length ?? 0) > 0 && (
+          <ul className="divide-y divide-gray-100 border-b border-gray-100 bg-amber-50/40">
+            {operation.generated_drafts!.map(d => (
+              <li key={`${d.kind}-${d.id}`} className="flex items-center gap-3 px-5 py-2.5">
+                <span className="w-7 flex-shrink-0 text-center text-[10px] text-amber-700" title="Saved as draft — not generated yet">draft</span>
+                <FileText size={18} className="text-amber-400 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-800 truncate">{d.label}{d.number ? ` ${d.number}` : ''}</p>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-xs bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-medium">Draft — no PDF yet</span>
+                    <span className="text-xs text-gray-500">Confirm &amp; generate it to file the PDF here</span>
+                    {d.updated_at && <span className="text-xs text-gray-400">{formatDate(d.updated_at)}</span>}
+                  </div>
+                </div>
+                <button onClick={() => navigate(d.path)}
+                  className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-primary-700 border border-primary-200 hover:bg-primary-50"
+                  title="Open the draft to finish and generate it">
+                  <Edit2 size={13} /> Open draft
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         {operation.documents.length === 0 && pendingUploads.length === 0 ? (
           <div className="text-center pb-8 pt-2 text-gray-400 text-sm">
             No documents yet — drag files above or click to upload.
@@ -1266,13 +1307,30 @@ export default function OperationDetailPage() {
           onShipped={() => { setShowShipModal(false); fetchOperation(); }} />
       )}
 
+      {/* ── Order form (edit / new) ────────────────────────────────────────── */}
+      {orderForm && (
+        <Modal open onClose={() => setOrderForm(null)} size="xl" closeOnBackdrop={false}
+          title={orderForm.orderId ? `Edit Order ${operation.order_number || ''}` : `New Order for ${operation.operation_number}`}>
+          <OrderFormPage embedded orderId={orderForm.orderId ?? null} operationNumber={operation.operation_number}
+            onCancel={() => setOrderForm(null)}
+            onDone={async saved => {
+              // A new order is linked to this operation if the save didn't already do it
+              if (!orderForm.orderId && saved?.id && saved.operation_id !== operation.id) {
+                try { await api.put(`/operations/${id}`, { order_id: saved.id }); } catch { /* shown as not linked */ }
+              }
+              setOrderForm(null);
+              fetchOperation();
+            }} />
+        </Modal>
+      )}
+
       {/* ── Link Order Modal ───────────────────────────────────────────────── */}
       {showLinkOrder && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowLinkOrder(false)}>
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
               <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-                <Link2 size={16} className="text-primary-600" /> Link Existing Order
+                <Link2 size={16} className="text-primary-600" /> {operation.order_id ? 'Change Linked Order' : 'Link Existing Order'}
               </h3>
               <button onClick={() => setShowLinkOrder(false)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
                 <X size={18} />

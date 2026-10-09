@@ -403,7 +403,11 @@ router.put('/:id', async (req: Request, res: Response) => {
     ...data,
     po_number: (data.po_number || '').trim() || existing.po_number,
   };
-  const operationId = operation_id !== undefined ? operation_id : existing.operation_id;
+  let operationId = operation_id !== undefined ? operation_id : existing.operation_id;
+  // Saved first without an operation (e.g. before the order had one): file it under the order's operation now
+  if (operationId == null && !existing.nco_id && existing.order_id) {
+    operationId = (db.prepare('SELECT id FROM operations WHERE order_id = ? ORDER BY id DESC LIMIT 1').get(existing.order_id) as any)?.id ?? null;
+  }
 
   if (poNumberTaken(payload.po_number!, existing.id)) {
     res.status(409).json({ error: `Purchase order ${payload.po_number} already exists` });

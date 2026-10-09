@@ -41,6 +41,7 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 
 ## Operations
 - `operations.category`: 'blending' | 'trading' (required for new operations)
+- Linked order card: Edit / New Order open the order form in a window on the operation page (`OrderFormPage` with `embedded`, `orderId`, `operationNumber`, `onDone`, `onCancel`; `Modal size="xl" closeOnBackdrop={false}`); Change links a different order (`PUT /operations/:id {order_id}`)
 - List filter All / BE / NL — entity read off the operation number (`entityFromOperationNumber`)
 - Payment dates come only from the invoice's payment terms — no fixed number of days: `termsForInvoice` / `dueDateForInvoice` in `lib/paymentTerms.ts` read a generated invoice's Payment terms line, else its Terms & Conditions (first with a day count); an uploaded invoice with none stored uses the order's terms. Invoice-date terms count from the invoice date, B/L terms from the BL date, else the shipment date; "end of month" honoured. Used by the estimated payment date (earliest invoice) and by Mark as Shipped (`components/ShipOperationModal.tsx`, `GET /api/operations/:id/ship-preview?ship_date=`, `POST /:id/ship {ship_date, due_dates?: {invoiceId: date}}` — each invoice's due date from its own terms, editable; no terms → its due date is kept). Order → shipped sets `payment_due_date` from the operation's estimate
 - Change emails: Settings → Operation change emails (`app_settings.operation_notifications`, `/api/settings/operation-notifications`, admin) — `notifyAdmin` with an `Operation…` entity also emails these recipients (not the person who acted), with what changed in `detail` (`describeChanges` in `routes/operations.ts`)
@@ -89,7 +90,8 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - Compare buttons via `CompareButtons` (grey when the document is missing or still a draft): OC → order; PO → order, OC; invoice → order, OC, BL (`GET /api/operations/:id/bill-of-lading`); PL → order, OC, invoice, BL
 - PDFs leave off any table column nobody filled in (line/reference/name always kept) and the Terms heading when there are no terms
 - Operation page: eye icons beside each generator open its filed PDF (PL: final, else draft)
-- An OC / supplier PO generated before its order had an operation is filed under the operation later (`lib/fileGenerated.ts`: on `GET /api/operations/:id` and at startup; final, not NCO, no filed row, operation_id empty or this one)
+- An OC / supplier PO / invoice generated before its order had an operation is filed under the operation later (`lib/fileGenerated.ts`: on `GET /api/operations/:id` and at startup; final, not NCO, no filed row, operation_id empty or this one); PUT on OC / PO / invoice with no operation falls back to the order's operation
+- Drafts (OC / PO / invoice / declaration / COA saved but not generated — no PDF) are listed at the top of the operation's Documents list with "Open draft" (`generated_drafts` on `GET /api/operations/:id`, `draftsForOperation`)
 - Invoice "Our ref" = the operation number
 - Default email recipients (To/CC) for invoices and PLs: Settings → Document emails, `app_settings.document_emails` via `/api/settings/document-emails`; pre-filled in both Send by email dialogs (PL: `POST /api/packing-lists/:id/email`, final PDF else draft)
 
@@ -127,6 +129,7 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 ## Customers & Suppliers
 - Customer page: Summary | Details. Details = per-entity profiles (`customer_document_profiles`), the source for OC/invoice customer details; the default entity is mirrored onto the `customers` row
 - Invoice drafts use the entity confirmed on the order's OC (`order_confirmations.profile_id`)
+- Suppliers list (Sales Activities / Demo Expenses tabs, `pages/SuppliersPage.tsx`): the pencil changes the main category (domain) and sub category — saved as a user mapping (`POST /demo-expenses/supplier-mappings` upsert by name, or `PATCH /:id {domain, category}`), invoices of that supplier follow; built-in demo entries can be changed too (a user mapping hides the built-in); sales list also shows sales mappings with no invoice yet; a mapping takes the Suppliers record's VAT no.
 - Supplier page: Summary | Details (edits the `suppliers` row, which the supplier PO reads) | Documents (`components/SupplierDocumentsTab.tsx`: `supplier_documents` — title, `doc_type`, notes; files in `uploads/supplier-docs`, any file type except programs / scripts / web pages (`BLOCKED_EXTENSIONS` in `middleware/upload.ts`), 100 MB each; a ZIP is unpacked into one document per file (folder kept in the title, notes "From <zip>", junk / blocked entries skipped, ≤ 2000 files / 1 GB) unless `unzip=false` ("Keep ZIP files whole"); `GET/POST /api/suppliers/:id/documents` (multipart `files`, POST returns `{documents, added, skipped}`), `PUT/DELETE /:id/documents/:docId`; deleting the supplier deletes them)
 - `lib/partyDetails.ts` reads a party's details off a PDF with Claude (cached in `party_extractions`); used once to seed the records
 

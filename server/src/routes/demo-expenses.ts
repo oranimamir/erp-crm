@@ -2160,7 +2160,12 @@ router.get('/demo-suppliers', (req: Request, res: Response) => {
     const domain = (req.query.domain as string) || 'demo';
     let hardcoded: { id?: number | null; mappingId?: number | null; suppliersId?: number | null; pattern: string; category: string; invoiceCount?: number; source: string }[] = [];
     if (domain === 'demo') {
-      hardcoded = DEMO_SUPPLIER_MAP.map(m => ({ pattern: m.pattern, category: m.category, source: 'hardcoded' }));
+      // A built-in the user has given their own mapping (moved to Sales, or another
+      // category) is listed through that mapping instead
+      const mapped = new Set((db.prepare('SELECT supplier_pattern, display_name FROM demo_supplier_mappings WHERE is_user_defined = 1').all() as any[])
+        .flatMap(m => [m.supplier_pattern, m.display_name]).filter(Boolean).map((n: string) => n.trim().toLowerCase()));
+      hardcoded = DEMO_SUPPLIER_MAP.filter(m => !mapped.has(m.pattern.trim().toLowerCase()))
+        .map(m => ({ pattern: m.pattern, category: m.category, source: 'hardcoded' }));
     } else if (domain === 'sales') {
       // Source of truth = distinct suppliers actually referenced by sales
       // invoices. Enrich with category + ids from the mapping tables so the
@@ -2211,6 +2216,14 @@ router.get('/demo-suppliers', (req: Request, res: Response) => {
           source: m ? 'user-mapping' : (s ? 'suppliers-table' : 'invoice-only'),
         };
       });
+      // Sales suppliers set up by hand (added here, or moved over from Demo) that have no invoice yet
+      const listed = new Set(invoiceRows.map((r: any) => r.name.toLowerCase()));
+      for (const [key, m] of mapByKey) {
+        if (listed.has(key)) continue;
+        hardcoded.push({ id: m.id, mappingId: m.id, suppliersId: supByKey.get(key)?.id ?? null,
+          pattern: m.display_name || m.supplier_pattern, category: m.category, invoiceCount: 0, source: 'user-mapping' });
+      }
+      hardcoded.sort((a, b) => a.pattern.localeCompare(b.pattern, undefined, { sensitivity: 'base' }));
     }
     const userDefined = db.prepare(
       'SELECT supplier_pattern as pattern, category FROM demo_supplier_mappings WHERE domain = ?'
@@ -2745,6 +2758,13 @@ router.post('/supplier-mappings', (req: Request, res: Response) => {
       ).run(trimmedName.toLowerCase(), domain, category, trimmedName);
       mappingId = result.lastInsertRowid as number;
       action = 'created';
+    }
+
+    // A VAT no. known on the Suppliers record goes onto the mapping, so a VAT
+    // match on a later invoice follows the domain / category chosen here
+    const supplierVat = (db.prepare('SELECT vat_number FROM suppliers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND vat_number IS NOT NULL').get(trimmedName) as any)?.vat_number;
+    if (supplierVat) {
+      db.prepare("UPDATE demo_supplier_mappings SET vat_number = ? WHERE id = ? AND (vat_number IS NULL OR vat_number = '')").run(supplierVat, mappingId);
     }
 
     // Cascade: every invoice that uses this exact supplier name follows the

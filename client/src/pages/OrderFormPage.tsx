@@ -78,13 +78,22 @@ const emptyItem = (): OrderItem => ({
 });
 
 // ── Component ─────────────────────────────────────────────────────────────
-export default function OrderFormPage() {
-  const { id }      = useParams();
+/**
+ * The order form — a page (/orders/new, /orders/:id/edit) or, with `embedded`,
+ * inside a window on the operation page (`orderId` to edit, `operationNumber`
+ * for a new order of that operation; `onDone` after saving, `onCancel`).
+ */
+export default function OrderFormPage({ embedded, orderId, operationNumber, onDone, onCancel }: {
+  embedded?: boolean; orderId?: number | null; operationNumber?: string;
+  onDone?: (saved: any) => void; onCancel?: () => void;
+} = {}) {
+  const params      = useParams();
+  const id          = embedded ? (orderId ? String(orderId) : undefined) : params.id;
   const navigate    = useNavigate();
   const [searchParams] = useSearchParams();
   const { addToast } = useToast();
   const isEditing   = Boolean(id);
-  const prefillOpNumber = searchParams.get('operation_number') || '';
+  const prefillOpNumber = embedded ? (operationNumber || '') : (searchParams.get('operation_number') || '');
 
   const [loading,      setLoading]      = useState(false);
   const [saving,       setSaving]       = useState(false);
@@ -180,7 +189,7 @@ export default function OrderFormPage() {
           setExistingFileName(o.file_name || o.file_path);
         }
       })
-      .catch(() => { addToast('Failed to load order', 'error'); navigate('/orders'); })
+      .catch(() => { addToast('Failed to load order', 'error'); if (embedded) onCancel?.(); else navigate('/orders'); })
       .finally(() => setLoading(false));
   }, [id]);
 
@@ -315,6 +324,7 @@ export default function OrderFormPage() {
         ? await api.put(`/orders/${id}`, payload)
         : await api.post('/orders', payload);
       addToast(isEditing ? 'Order updated' : 'Order created', 'success');
+      if (embedded) { onDone?.(saved); return; }
 
       // An order belongs to an operation, so that is where the work continues —
       // back to the operation itself when there is one, never the orders list.
@@ -353,10 +363,14 @@ export default function OrderFormPage() {
 
   return (
     <div className="space-y-6">
-      <Link to="/orders" className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
-        <ArrowLeft size={16} /> Back to Orders
-      </Link>
-      <h1 className="text-2xl font-bold text-gray-900">{isEditing ? 'Edit Order' : 'New Order'}</h1>
+      {!embedded && (
+        <>
+          <Link to="/orders" className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
+            <ArrowLeft size={16} /> Back to Orders
+          </Link>
+          <h1 className="text-2xl font-bold text-gray-900">{isEditing ? 'Edit Order' : 'New Order'}</h1>
+        </>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-6">
 
@@ -625,7 +639,9 @@ export default function OrderFormPage() {
 
         {/* ── Actions ──────────────────────────────────────────────────── */}
         <div className="flex items-center justify-end gap-3">
-          <Link to="/orders"><Button type="button" variant="secondary">Cancel</Button></Link>
+          {embedded
+            ? <Button type="button" variant="secondary" onClick={onCancel}>Cancel</Button>
+            : <Link to="/orders"><Button type="button" variant="secondary">Cancel</Button></Link>}
           <Button type="submit" disabled={saving}>
             {saving ? 'Saving...' : isEditing ? 'Update Order' : 'Create Order'}
           </Button>
