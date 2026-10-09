@@ -119,9 +119,13 @@ async function readAndStore(doc: any): Promise<void> {
   }
 }
 
-router.get('/:code/documents', (req: Request, res: Response) => {
+router.get('/:code/documents', async (req: Request, res: Response) => {
   const code = String(req.params.code).toUpperCase();
   if (!byCode(code)) { res.status(404).json({ error: 'Entity not found' }); return; }
+  // Documents that failed on the forced-tool error (fixed since) are read again once
+  const stale = db.prepare("SELECT * FROM company_entity_documents WHERE entity_code = ? AND extracted IS NULL AND read_error LIKE '%tool_choice%'").all(code) as any[];
+  for (const doc of stale) await readAndStore(doc);
+  if (stale.length) db.saveToDisk();
   res.json(docsOf(code));
 });
 
