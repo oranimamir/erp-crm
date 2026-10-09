@@ -127,7 +127,7 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 ## Customers & Suppliers
 - Customer page: Summary | Details. Details = per-entity profiles (`customer_document_profiles`), the source for OC/invoice customer details; the default entity is mirrored onto the `customers` row
 - Invoice drafts use the entity confirmed on the order's OC (`order_confirmations.profile_id`)
-- Supplier page: Summary | Details (edits the `suppliers` row, which the supplier PO reads) | Documents (`components/SupplierDocumentsTab.tsx`: `supplier_documents` — title, `doc_type`, notes; files in `uploads/supplier-docs`, PDF / Word / images; `GET/POST /api/suppliers/:id/documents` (multipart `files`), `PUT/DELETE /:id/documents/:docId`; deleting the supplier deletes them)
+- Supplier page: Summary | Details (edits the `suppliers` row, which the supplier PO reads) | Documents (`components/SupplierDocumentsTab.tsx`: `supplier_documents` — title, `doc_type`, notes; files in `uploads/supplier-docs`, any file type except programs / scripts / web pages (`BLOCKED_EXTENSIONS` in `middleware/upload.ts`), 100 MB each; a ZIP is unpacked into one document per file (folder kept in the title, notes "From <zip>", junk / blocked entries skipped, ≤ 2000 files / 1 GB) unless `unzip=false` ("Keep ZIP files whole"); `GET/POST /api/suppliers/:id/documents` (multipart `files`, POST returns `{documents, added, skipped}`), `PUT/DELETE /:id/documents/:docId`; deleting the supplier deletes them)
 - `lib/partyDetails.ts` reads a party's details off a PDF with Claude (cached in `party_extractions`); used once to seed the records
 
 ## Supplier Invoices (`/api/demo-expenses`, `demo_invoices`)

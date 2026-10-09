@@ -84,9 +84,21 @@ export const uploadProductDoc = multer({
   fileFilter: libraryFileFilter,
 });
 
-// Supplier documents (certificates, contracts, specs) — PDF, images or Word
+// Supplier documents: any kind of file (PDF, Office, images, ZIP — unpacked by
+// the route…) except programs and scripts. Only PDF / images ever render in
+// the browser; everything else is served as a download (routes/files.ts).
+export const BLOCKED_EXTENSIONS = new Set([
+  '.exe', '.msi', '.bat', '.cmd', '.com', '.scr', '.pif', '.cpl', '.dll', '.sys', '.ps1', '.psm1', '.vbs', '.vbe',
+  '.js', '.mjs', '.jse', '.wsf', '.wsh', '.hta', '.jar', '.sh', '.app', '.lnk', '.reg', '.html', '.htm', '.svg', '.xhtml',
+]);
+const supplierDocFileFilter = (_req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+  const ext = path.extname(file.originalname).toLowerCase();
+  if (ext && !BLOCKED_EXTENSIONS.has(ext)) cb(null, true);
+  else cb(new Error(`${file.originalname}: programs, scripts and web pages are not allowed`));
+};
+
 export const uploadSupplierDoc = multer({
   storage: createStorage('supplier-docs'),
-  limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: libraryFileFilter,
+  limits: { fileSize: 100 * 1024 * 1024 },
+  fileFilter: supplierDocFileFilter,
 });

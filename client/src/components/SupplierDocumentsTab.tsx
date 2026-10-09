@@ -9,8 +9,10 @@ import Button from './ui/Button';
 
 /**
  * Supplier → Documents: the supplier's own paperwork (certificates, contracts,
- * specifications…), kept on the supplier. An operation's General document
- * tile picks from here.
+ * specifications, price lists…), kept on the supplier — any kind of file
+ * except programs / scripts. A ZIP is unpacked into its files (each its own
+ * document, folder kept in the title) unless "Keep ZIP files whole" is ticked.
+ * An operation's General document tile picks from here.
  */
 
 export interface SupplierDocument {
@@ -19,7 +21,10 @@ export interface SupplierDocument {
   uploaded_by_name: string | null; created_at: string; file_size: number | null;
 }
 
-const TYPE_SUGGESTIONS = ['Certificate', 'COA', 'ISO certificate', 'Contract', 'Product specification', 'MSDS', 'Declaration', 'Price list', 'Company registration', 'Bank details'];
+const TYPE_SUGGESTIONS = ['Certificate', 'COA', 'ISO certificate', 'Contract', 'Product specification', 'MSDS', 'Declaration', 'Price list', 'Company registration', 'Bank details', 'Audit report', 'Correspondence'];
+/** Refused by the server (programs, scripts, web pages) — checked here first to say so straight away. */
+const BLOCKED = /\.(exe|msi|bat|cmd|com|scr|pif|cpl|dll|sys|ps1|psm1|vbs|vbe|js|mjs|jse|wsf|wsh|hta|jar|sh|app|lnk|reg|html?|svg|xhtml)$/i;
+const MAX_BYTES = 100 * 1024 * 1024;
 const PREVIEWABLE = /\.(pdf|jpe?g|png|webp)$/i;
 const fmtSize = (n: number | null) => n == null ? '' : n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
 const input = 'block w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500';
@@ -33,6 +38,7 @@ export default function SupplierDocumentsTab({ supplierId }: { supplierId: numbe
   const [files, setFiles] = useState<File[]>([]);
   const [docType, setDocType] = useState('');
   const [notes, setNotes] = useState('');
+  const [keepZips, setKeepZips] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [editing, setEditing] = useState<{ id: number; title: string; doc_type: string; notes: string } | null>(null);
@@ -46,6 +52,15 @@ export default function SupplierDocumentsTab({ supplierId }: { supplierId: numbe
       .finally(() => setLoading(false));
   }, [supplierId]);
 
+  /** Takes the chosen / dropped files, leaving out what can't be uploaded. */
+  function choose(list: File[]) {
+    const refused = list.filter(f => BLOCKED.test(f.name));
+    const tooBig = list.filter(f => f.size > MAX_BYTES);
+    if (refused.length) addToast(`Not allowed (programs / scripts / web pages): ${refused.map(f => f.name).join(', ')}`, 'error');
+    if (tooBig.length) addToast(`Over 100 MB: ${tooBig.map(f => f.name).join(', ')}`, 'error');
+    setFiles(list.filter(f => !BLOCKED.test(f.name) && f.size <= MAX_BYTES));
+  }
+
   async function upload() {
     if (!files.length) return;
     setUploading(true);
@@ -54,9 +69,11 @@ export default function SupplierDocumentsTab({ supplierId }: { supplierId: numbe
       files.forEach(f => form.append('files', f));
       form.append('doc_type', docType);
       form.append('notes', notes);
+      form.append('unzip', keepZips ? 'false' : 'true');
       const { data } = await api.post(`/suppliers/${supplierId}/documents`, form);
-      setDocs(data);
-      addToast(`${files.length} document${files.length === 1 ? '' : 's'} uploaded`, 'success');
+      setDocs(data.documents || []);
+      addToast(`${data.added} document${data.added === 1 ? '' : 's'} added`, 'success');
+      if (data.skipped?.length) addToast(`Left out: ${data.skipped.slice(0, 5).join('; ')}${data.skipped.length > 5 ? ` and ${data.skipped.length - 5} more` : ''}`, 'error');
       setFiles([]); setDocType(''); setNotes('');
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Upload failed', 'error');
@@ -98,21 +115,28 @@ export default function SupplierDocumentsTab({ supplierId }: { supplierId: numbe
         <div className="flex items-center gap-2">
           <Upload size={16} className="text-gray-400" />
           <h2 className="font-semibold text-gray-900">Upload documents</h2>
-          <span className="text-xs text-gray-400">PDF, Word or images · up to 10 MB each</span>
+          <span className="text-xs text-gray-400">Any file — PDF, Word, Excel, images, ZIP… · up to 100 MB each</span>
         </div>
-        <input ref={fileRef} type="file" multiple accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp" className="hidden"
-          onChange={e => { setFiles(Array.from(e.target.files || [])); e.target.value = ''; }} />
+        <input ref={fileRef} type="file" multiple className="hidden"
+          onChange={e => { choose(Array.from(e.target.files || [])); e.target.value = ''; }} />
         <div
           onClick={() => fileRef.current?.click()}
           onDragOver={e => { e.preventDefault(); setDragging(true); }}
           onDragLeave={() => setDragging(false)}
-          onDrop={e => { e.preventDefault(); setDragging(false); setFiles(Array.from(e.dataTransfer.files || [])); }}
+          onDrop={e => { e.preventDefault(); setDragging(false); choose(Array.from(e.dataTransfer.files || [])); }}
           className={`rounded-lg border-2 border-dashed px-4 py-6 text-center text-sm cursor-pointer transition-colors ${
             dragging ? 'border-primary-400 bg-primary-50' : 'border-gray-300 hover:border-primary-300 hover:bg-gray-50'}`}>
           {files.length
             ? <span className="text-gray-800">{files.map(f => f.name).join(', ')}</span>
             : <span className="text-gray-500">Drop files here or <span className="text-primary-600 font-medium">choose from your computer</span></span>}
         </div>
+        {files.some(f => /\.zip$/i.test(f.name)) && (
+          <label className="flex items-center gap-2 text-sm text-gray-700">
+            <input type="checkbox" checked={keepZips} onChange={e => setKeepZips(e.target.checked)}
+              className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+            Keep ZIP files whole <span className="text-xs text-gray-400">(otherwise each file inside becomes its own document, its folder kept in the name)</span>
+          </label>
+        )}
         {files.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
             <div>

@@ -3,7 +3,9 @@ import db from '../database.js';
 import path from 'path';
 import fs from 'fs';
 import { notifyAdmin } from '../lib/notify.js';
-import { uploadSupplierDoc } from '../middleware/upload.js';
+import crypto from 'crypto';
+import JSZip from 'jszip';
+import { uploadSupplierDoc, BLOCKED_EXTENSIONS } from '../middleware/upload.js';
 import { uploadsBase } from '../lib/productDocs.js';
 
 const router = Router();
@@ -198,23 +200,79 @@ router.get('/:id/documents', (req: Request, res: Response) => {
   res.json(docsOf(supplier.id));
 });
 
-// POST /api/suppliers/:id/documents — multipart: files (one or more), doc_type, notes
-router.post('/:id/documents', uploadSupplierDoc.array('files', 20), (req: Request, res: Response) => {
+/** Caps on what one ZIP may unpack to — a guard against archive bombs. */
+const ZIP_MAX_ENTRIES = 2000;
+const ZIP_MAX_BYTES = 1024 * 1024 * 1024;
+const ZIP_JUNK = /(^|\/)(__MACOSX\/|\.DS_Store$|Thumbs\.db$|desktop\.ini$)/i;
+
+/**
+ * POST /api/suppliers/:id/documents — multipart: files (one or more, any kind
+ * but programs / scripts), doc_type, notes, unzip ('false' keeps a ZIP whole).
+ * A ZIP is unpacked: each file in it becomes its own document, its folder kept
+ * in the title ("Certificates/ISO 9001").
+ */
+router.post('/:id/documents', uploadSupplierDoc.array('files', 50), async (req: Request, res: Response) => {
   const files = (req.files as Express.Multer.File[]) || [];
   const supplier = db.prepare('SELECT id, name FROM suppliers WHERE id = ?').get(req.params.id) as any;
   if (!supplier) { files.forEach(f => unlinkSupplierFile(f.filename)); res.status(404).json({ error: 'Supplier not found' }); return; }
   if (!files.length) { res.status(400).json({ error: 'Choose at least one file' }); return; }
   const docType = String(req.body?.doc_type ?? '').trim() || null;
   const notes = String(req.body?.notes ?? '').trim() || null;
-  for (const f of files) {
+  const unzip = req.body?.unzip !== 'false';
+  const insert = (title: string, stored: string, fileName: string, note: string | null) =>
     db.prepare(`INSERT INTO supplier_documents (supplier_id, title, doc_type, file_path, file_name, notes, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .run(supplier.id, path.parse(f.originalname).name, docType, f.filename, f.originalname, notes, req.user?.userId ?? null);
+      .run(supplier.id, title, docType, stored, fileName, note, req.user?.userId ?? null);
+
+  let added = 0;
+  const skipped: string[] = [];
+  for (const f of files) {
+    if (!(unzip && path.extname(f.originalname).toLowerCase() === '.zip')) {
+      insert(path.parse(f.originalname).name, f.filename, f.originalname, notes);
+      added++;
+      continue;
+    }
+    // A ZIP: each file inside becomes its own document
+    let zip: JSZip;
+    try {
+      zip = await JSZip.loadAsync(fs.readFileSync(path.join(supplierDocsDir, f.filename)));
+    } catch {
+      skipped.push(`${f.originalname} (not a readable ZIP — kept as it is)`);
+      insert(path.parse(f.originalname).name, f.filename, f.originalname, notes);
+      added++;
+      continue;
+    }
+    const entries = Object.values(zip.files).filter(e => !e.dir && !ZIP_JUNK.test(e.name));
+    if (entries.length > ZIP_MAX_ENTRIES) {
+      skipped.push(`${f.originalname} (more than ${ZIP_MAX_ENTRIES} files)`);
+      unlinkSupplierFile(f.filename);
+      continue;
+    }
+    let total = 0;
+    const note = [`From ${f.originalname}`, notes].filter(Boolean).join(' — ');
+    for (const entry of entries) {
+      const inner = entry.name.replace(/\\/g, '/').replace(/^\/+/, '');
+      const base = path.posix.basename(inner);
+      const ext = path.extname(base).toLowerCase();
+      if (!base || BLOCKED_EXTENSIONS.has(ext)) { skipped.push(`${inner} (file type not allowed)`); continue; }
+      const buf = await entry.async('nodebuffer');
+      total += buf.length;
+      if (total > ZIP_MAX_BYTES) { skipped.push(`${f.originalname} (unpacks to more than 1 GB — the rest was left out)`); break; }
+      const stored = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`;
+      fs.writeFileSync(path.join(supplierDocsDir, stored), buf);
+      // Title keeps the folder inside the ZIP, without the extension
+      const title = inner.replace(/\.[^./]+$/, '').replace(/[\\:*?"<>|]+/g, '-').slice(0, 200);
+      insert(title, stored, base.replace(/[\\/:*?"<>|]+/g, '-'), note);
+      added++;
+    }
+    unlinkSupplierFile(f.filename);
   }
-  notifyAdmin({
-    action: 'updated', entity: 'Supplier', label: supplier.name,
-    detail: `${files.length} document${files.length === 1 ? '' : 's'} uploaded`, ...who(req),
-  });
-  res.status(201).json(docsOf(supplier.id));
+  if (added) {
+    notifyAdmin({
+      action: 'updated', entity: 'Supplier', label: supplier.name,
+      detail: `${added} document${added === 1 ? '' : 's'} uploaded`, ...who(req),
+    });
+  }
+  res.status(201).json({ documents: docsOf(supplier.id), added, skipped });
 });
 
 // PUT /api/suppliers/:id/documents/:docId — title / doc_type / notes; left out keeps, blank clears

@@ -280,7 +280,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   console.error('[Error]', err?.message || err);
 
   if (err.code === 'LIMIT_FILE_SIZE') {
-    res.status(400).json({ error: 'File too large. Maximum size is 10MB.' });
+    res.status(400).json({ error: 'File too large for this upload (10 MB for documents, 100 MB for supplier documents / ZIPs).' });
     return;
   }
   // A malformed request body is the caller's mistake, not a server fault
@@ -293,7 +293,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
     return;
   }
   // Safe user-facing multer/upload errors
-  if (err.message?.includes('Only PDF') || err.message?.includes('files are allowed')) {
+  if (err.message?.includes('Only PDF') || err.message?.includes('files are allowed') || err.message?.includes('are not allowed')) {
     res.status(400).json({ error: err.message });
     return;
   }
