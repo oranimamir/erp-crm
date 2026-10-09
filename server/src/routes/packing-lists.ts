@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { Resend } from 'resend';
 import db from '../database.js';
+import { archiveStored, archiveFile, archiveBuffer, archivedBy, ownerOf, contextOf } from '../lib/archive.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { buildDocumentPdf, lotsOf, type DocumentData, type PackingRow } from '../lib/document-pdf.js';
 import { computePacking, listPackaging, matchPackaging, netKg, packagingById, type PackagingRow } from '../lib/packing.js';
@@ -280,10 +281,10 @@ export function deletePackingListsForInvoice(invoiceDocumentId: number) {
 
 /** Removes a packing list, its PDFs and the documents they are filed as. */
 export function deletePackingListRow(row: any) {
-  for (const stored of [row.file_path, row.final_file_path]) {
+  const owner = ownerOf(row.operation_id, row.nco_id);
+  for (const [stored, name] of [[row.file_path, row.file_name], [row.final_file_path, row.final_file_name]]) {
     if (!stored) continue;
-    const filePath = path.join(docsDir, stored);
-    if (fs.existsSync(filePath)) { try { fs.unlinkSync(filePath); } catch { /* best effort */ } }
+    archiveFile(path.join(docsDir, stored), { section: owner.section, context: contextOf(owner.number, `Packing list ${row.pl_number || ''}`), fileName: name });
   }
   for (const docId of [row.document_id, row.final_document_id]) {
     if (docId) db.prepare('DELETE FROM operation_documents WHERE id = ?').run(docId);

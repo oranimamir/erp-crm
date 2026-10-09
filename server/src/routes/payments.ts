@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
+import { archiveStored, archiveFile, archiveBuffer, archivedBy, ownerOf, contextOf } from '../lib/archive.js';
 import { uploadPayment } from '../middleware/upload.js';
 import { notifyAdmin } from '../lib/notify.js';
 import fs from 'fs';
@@ -89,8 +90,7 @@ router.put('/:id', uploadPayment.single('file'), (req: Request, res: Response) =
   let file_name = existing.file_name;
   if (req.file) {
     if (existing.file_path) {
-      const oldPath = path.join(uploadsBase, 'payments', existing.file_path);
-      if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+      archiveStored('payments', existing.file_path, { section: 'Payments', context: contextOf(existing.reference, 'replaced by a new file'), fileName: existing.file_name, reason: 'replaced' }, archivedBy(req));
     }
     file_path = req.file.filename;
     file_name = req.file.originalname;
@@ -123,8 +123,7 @@ router.delete('/:id', (req: Request, res: Response) => {
   if (!existing) { res.status(404).json({ error: 'Payment not found' }); return; }
 
   if (existing.file_path) {
-    const filePath = path.join(uploadsBase, 'payments', existing.file_path);
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    archiveStored('payments', existing.file_path, { section: 'Payments', context: contextOf(existing.reference, existing.payment_date), fileName: existing.file_name }, archivedBy(req));
   }
 
   db.prepare('DELETE FROM payments WHERE id = ?').run(req.params.id);

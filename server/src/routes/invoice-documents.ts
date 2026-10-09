@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { Resend } from 'resend';
 import db from '../database.js';
+import { archiveStored, archiveFile, archiveBuffer, archivedBy, ownerOf, contextOf } from '../lib/archive.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { applyEntityBank, entityFromOperationNumber, entityProfile, isEntityCode, type EntityCode } from '../lib/companyEntity.js';
 import {
@@ -286,8 +287,11 @@ async function syncRecordedInvoice(docId: number): Promise<void> {
  */
 export function deleteInvoiceDocument(row: any, opts: { keepRecorded?: boolean } = {}): void {
   if (row.file_path) {
-    const filePath = path.join(docsDir, row.file_path);
-    if (fs.existsSync(filePath)) { try { fs.unlinkSync(filePath); } catch { /* best effort */ } }
+    const owner = ownerOf(row.operation_id, row.nco_id);
+    archiveFile(path.join(docsDir, row.file_path), {
+      section: owner.section, context: contextOf(owner.number, `${row.nco_id ? 'Sample invoice' : 'Commercial invoice'} ${row.invoice_number || ''}`),
+      fileName: row.file_name,
+    });
   }
   if (row.document_id) db.prepare('DELETE FROM operation_documents WHERE id = ?').run(row.document_id);
   dropNcoDocumentRow(row.nco_document_id);

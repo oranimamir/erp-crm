@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import db from '../database.js';
+import { archiveStored, archiveFile, archiveBuffer, archivedBy, ownerOf, contextOf } from '../lib/archive.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { resolveUpload, streamZip, safeName } from '../lib/zipFiles.js';
 
@@ -337,15 +338,14 @@ router.delete('/:id', (req: Request, res: Response) => {
   // PDFs and the operation_documents rows pointing at them do not.
   const docsDir = path.join(uploadsBase, 'operation-docs');
   const generated = [
-    ...db.prepare('SELECT file_path, document_id FROM order_confirmations WHERE order_id = ?').all(req.params.id) as any[],
-    ...db.prepare('SELECT file_path, document_id FROM invoice_documents WHERE order_id = ?').all(req.params.id) as any[],
-    ...db.prepare('SELECT file_path, document_id FROM purchase_orders WHERE order_id = ?').all(req.params.id) as any[],
+    ...db.prepare("SELECT file_path, file_name, document_id, 'Order confirmation ' || COALESCE(oc_number, '') AS what FROM order_confirmations WHERE order_id = ?").all(req.params.id) as any[],
+    ...db.prepare("SELECT file_path, file_name, document_id, 'Commercial invoice ' || COALESCE(invoice_number, '') AS what FROM invoice_documents WHERE order_id = ?").all(req.params.id) as any[],
+    ...db.prepare("SELECT file_path, file_name, document_id, 'Purchase order ' || COALESCE(po_number, '') AS what FROM purchase_orders WHERE order_id = ?").all(req.params.id) as any[],
   ];
   for (const doc of generated) {
     if (doc.file_path) {
       try {
-        const full = path.join(docsDir, doc.file_path);
-        if (fs.existsSync(full)) fs.unlinkSync(full);
+        archiveFile(path.join(docsDir, path.basename(doc.file_path)), { section: 'Orders', context: contextOf(`Order ${existing.order_number}`, doc.what, '(order deleted)'), fileName: doc.file_name }, archivedBy(req));
       } catch (err) {
         console.warn('[orders] Failed to delete generated document:', err);
       }
@@ -360,8 +360,7 @@ router.delete('/:id', (req: Request, res: Response) => {
   // serving it, so a preview of the deleted order still renders.
   if (existing.file_path) {
     try {
-      const orderFile = path.join(uploadsBase, 'orders', path.basename(existing.file_path));
-      if (fs.existsSync(orderFile)) fs.unlinkSync(orderFile);
+      archiveStored('orders', existing.file_path, { section: 'Orders', context: `Order ${existing.order_number}`, fileName: existing.file_name }, archivedBy(req));
     } catch (err) {
       console.warn('[orders] Failed to delete order document:', err);
     }

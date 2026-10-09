@@ -3,6 +3,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import db from '../database.js';
+import { archiveStored, archiveFile, ownerOf, contextOf } from './archive.js';
 
 /**
  * Inventory → Documents: MSDS, product specification sheets, declarations and COAs.
@@ -82,6 +83,16 @@ export function parseProductIds(value: unknown): number[] | undefined {
 
 const SAFE_NAME = /^[a-zA-Z0-9._-]+$/;
 
+/** Moves a library document's file to the Archive (deleted, or replaced by a new version). */
+export function archiveProductFile(doc: { file_path: string | null; file_name?: string | null; title?: string | null; kind?: string | null }, reason: 'deleted' | 'replaced' = 'deleted'): void {
+  if (!doc.file_path || !SAFE_NAME.test(doc.file_path)) return;
+  const kind = ({ msds: 'MSDS', pds: 'Product Specification Sheet', declaration: 'Declaration', coa: 'COA' } as Record<string, string>)[doc.kind || ''] || 'Library';
+  archiveFile(path.join(productDocsDir, doc.file_path), {
+    section: 'Inventory documents', context: contextOf(kind, doc.title, reason === 'replaced' ? 'replaced by a new version' : null),
+    fileName: doc.file_name, reason,
+  });
+}
+
 export function unlinkProductFile(filePath: string | null | undefined): void {
   if (!filePath || !SAFE_NAME.test(filePath)) return;
   const abs = path.join(productDocsDir, filePath);
@@ -95,13 +106,13 @@ export function unlinkProductFile(filePath: string | null | undefined): void {
  */
 export function removeProductDocumentFiles(productId: number): void {
   const rows = db.prepare(`
-    SELECT d.id, d.file_path FROM product_documents d
+    SELECT d.id, d.file_path, d.file_name, d.title, d.kind FROM product_documents d
     JOIN product_document_products l ON l.document_id = d.id AND l.product_id = ?
     WHERE (SELECT COUNT(*) FROM product_document_products x WHERE x.document_id = d.id) = 1
   `).all(productId) as any[];
   for (const r of rows) {
     db.prepare('DELETE FROM product_documents WHERE id = ?').run(r.id);
-    unlinkProductFile(r.file_path);
+    archiveProductFile(r);
   }
 }
 

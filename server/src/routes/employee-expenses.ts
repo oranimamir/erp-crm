@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import ExcelJS from 'exceljs';
 import db from '../database.js';
+import { archiveStored, archiveFile, archiveBuffer, archivedBy, ownerOf, contextOf } from '../lib/archive.js';
 import { cellText, cellNumber, normalizeLabel, derivePeriodMonth, MONTHS } from '../lib/excel-helpers.js';
 
 const router = Router();
@@ -273,10 +274,10 @@ router.patch('/:id', (req: Request, res: Response) => {
 // DELETE /api/employee-expenses/:id
 router.delete('/:id', (req: Request, res: Response) => {
   const row = db.prepare(
-    `SELECT stored_filename FROM employee_expenses WHERE id = ?`
+    `SELECT stored_filename, original_filename, employee_name, period_label FROM employee_expenses WHERE id = ?`
   ).get(req.params.id) as any;
   if (!row) { res.status(404).json({ error: 'Not found' }); return; }
-  try { fs.unlinkSync(path.join(uploadsDir, row.stored_filename)); } catch { /* ignore */ }
+  archiveFile(path.join(uploadsDir, path.basename(row.stored_filename)), { section: 'Employee expenses', context: contextOf(row.employee_name, row.period_label), fileName: row.original_filename }, archivedBy(req));
   db.prepare(`DELETE FROM employee_expenses WHERE id = ?`).run(req.params.id);
   db.saveToDisk();
   res.json({ ok: true });

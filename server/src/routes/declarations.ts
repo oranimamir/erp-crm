@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import db from '../database.js';
+import { archiveStored, archiveFile, archiveBuffer, archivedBy, ownerOf, contextOf } from '../lib/archive.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { uploadsBase, productDocsDir, listProductDocs, categoryIdByName } from '../lib/productDocs.js';
 import {
@@ -289,18 +290,19 @@ router.get('/:id/pdf', (req: Request, res: Response) => {
 
 /** Deletes a declaration and the PDF it filed under its operation / NCO. */
 export function deleteDeclaration(row: any): void {
+  const label = row.kind === 'coa' ? 'COA' : 'Declaration';
   if (row.nco_document_id) {
     if (row.file_path && /^[a-zA-Z0-9._-]+$/.test(row.file_path)) {
-      const abs = path.join(docsDir, row.file_path);
-      if (fs.existsSync(abs)) { try { fs.unlinkSync(abs); } catch { /* best effort */ } }
+      const owner = ownerOf(null, row.nco_id);
+      archiveFile(path.join(docsDir, row.file_path), { section: owner.section, context: contextOf(owner.number, `${label} ${row.title || ''}`), fileName: row.file_name });
     }
     dropNcoDocumentRow(row.nco_document_id);
   }
   if (row.document_id) {
-    const doc = db.prepare('SELECT file_path FROM operation_documents WHERE id = ?').get(row.document_id) as any;
+    const doc = db.prepare('SELECT file_path, file_name, operation_id FROM operation_documents WHERE id = ?').get(row.document_id) as any;
     if (doc?.file_path && /^[a-zA-Z0-9._-]+$/.test(doc.file_path)) {
-      const abs = path.join(docsDir, doc.file_path);
-      if (fs.existsSync(abs)) { try { fs.unlinkSync(abs); } catch { /* best effort */ } }
+      const owner = ownerOf(doc.operation_id);
+      archiveFile(path.join(docsDir, doc.file_path), { section: owner.section, context: contextOf(owner.number, `${label} ${row.title || ''}`), fileName: doc.file_name });
     }
     db.prepare('DELETE FROM operation_documents WHERE id = ?').run(row.document_id);
   }

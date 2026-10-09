@@ -21,6 +21,7 @@ import PurchaseOrderPage from './pages/PurchaseOrderPage';
 import DeclarationPage from './pages/DeclarationPage';
 import PackingListPage from './pages/PackingListPage';
 import TripleWDetailsPage from './pages/TripleWDetailsPage';
+import ArchivePage from './pages/ArchivePage';
 import InvoiceDocumentPage from './pages/InvoiceDocumentPage';
 import ShipmentsPage from './pages/ShipmentsPage';
 import ShipmentFormPage from './pages/ShipmentFormPage';
@@ -75,6 +76,7 @@ export default function App() {
               <Route path="/packing-lists/new" element={<PackingListPage />} />
               <Route path="/packing-lists/:id" element={<PackingListPage />} />
               <Route path="/triplew" element={<TripleWDetailsPage />} />
+              <Route path="/archive" element={<ArchivePage />} />
               <Route path="/invoices/documents/new" element={<InvoiceDocumentPage />} />
               <Route path="/invoices/documents/:id" element={<InvoiceDocumentPage />} />
               <Route path="/shipments" element={<ShipmentsPage />} />

@@ -34,6 +34,11 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - User-entered text in email HTML goes through an escape helper
 - Update endpoints: a field left out keeps its stored value, a field sent blank clears it
 
+## Archive (deleted files)
+- A file a user deletes or replaces is never unlinked: `lib/archive.ts` `archiveStored(subfolder, storedName, meta, by?)` / `archiveFile(abs, …)` / `archiveBuffer(buf, …)` (supplier invoices' embedded PDFs) move it to `uploads/archive` and add an `archived_files` row (`section`, `context` e.g. "SOBE20260125 — Bill of Lading", `file_name`, `stored_name`, `size`, `reason` deleted | replaced, `deleted_by_*`, `deleted_at`); `archivedBy(req)`, else the request user from `requestUser` (AsyncLocalStorage set in `authenticateToken`); `ownerOf(operationId, ncoId)` / `contextOf(...)` build the labels. Never throws (falls back to removing the file)
+- Covered: operation / NCO documents (delete, replaced file, Word text edit), operation / order / invoice / supplier deletes, generated OC / PO / invoice / PL / declaration / COA PDFs, wire transfers, payments, library + batch documents, supplier documents, TripleW bank documents, employee expenses, supplier invoices (single, batch, month replace). NOT archived: refused uploads, a ZIP after unpacking, regenerated PDFs (the old generated version), DB / template files
+- New delete code must archive the same way. Page `/archive` (`pages/ArchivePage.tsx`, sidebar "Archive"): search, section filter, preview / download (`/api/files/archive/`), admin "Delete for good" (`DELETE /api/archive/:id`); `GET /api/archive?search=&section=&page=` returns `sections` counts
+
 ## Wire Transfers
 - `POST /invoices/:id/wire-transfers` — upload + mark invoice paid; fetches FX on upload date, stores `fx_rate` + `eur_amount`
 - `DELETE /invoices/:id/wire-transfers/:transferId` — reverts invoice to `sent`

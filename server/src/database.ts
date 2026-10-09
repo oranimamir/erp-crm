@@ -2223,6 +2223,22 @@ export async function initializeDatabase() {
     )
   `);
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_supplier_docs_supplier ON supplier_documents(supplier_id)`); } catch (_) {}
+  // Archive: every file a user deleted or replaced, moved to uploads/archive (lib/archive.ts)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS archived_files (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      section TEXT NOT NULL,
+      context TEXT,
+      file_name TEXT NOT NULL,
+      stored_name TEXT NOT NULL,
+      size INTEGER,
+      reason TEXT NOT NULL DEFAULT 'deleted',
+      deleted_by_id INTEGER,
+      deleted_by_name TEXT,
+      deleted_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_archived_files_deleted ON archived_files(deleted_at)`); } catch (_) {}
   // TripleW Details → Account ownership documents: bank letters per entity, with what was read off them
   db.exec(`
     CREATE TABLE IF NOT EXISTS company_entity_documents (

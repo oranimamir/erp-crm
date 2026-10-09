@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
+import { archiveStored, archiveFile, archiveBuffer, archivedBy, ownerOf, contextOf } from '../lib/archive.js';
 import { uploadInvoice, uploadWireTransfer } from '../middleware/upload.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { getEurRate } from '../lib/fx.js';
@@ -282,8 +283,7 @@ router.put('/:id', uploadInvoice.single('file'), async (req: Request, res: Respo
   if (req.file) {
     if (existing.file_path) {
       try {
-        const oldPath = path.join(uploadsBase, 'invoices', existing.file_path);
-        if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+        archiveStored('invoices', existing.file_path, { section: 'Invoices', context: contextOf(`Invoice ${existing.invoice_number}`, 'replaced by a new file'), fileName: existing.file_name, reason: 'replaced' }, archivedBy(req));
       } catch (err) {
         console.warn('[invoices] Failed to delete old invoice file:', err);
       }
@@ -392,8 +392,7 @@ router.delete('/:id', (req: Request, res: Response) => {
 
   if (existing.file_path) {
     try {
-      const filePath = path.join(uploadsBase, 'invoices', existing.file_path);
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      archiveStored('invoices', existing.file_path, { section: 'Invoices', context: contextOf(`Invoice ${existing.invoice_number}`, ownerOf(existing.operation_id).number), fileName: existing.file_name }, archivedBy(req));
     } catch (err) {
       console.warn('[invoices] Failed to delete invoice file:', err);
     }
@@ -401,12 +400,11 @@ router.delete('/:id', (req: Request, res: Response) => {
 
   // wire_transfers reference this invoice with ON DELETE RESTRICT, so they must
   // go first — and their proof files with them, which no cascade could remove.
-  const transfers = db.prepare('SELECT id, file_path FROM wire_transfers WHERE invoice_id = ?').all(req.params.id) as any[];
+  const transfers = db.prepare('SELECT id, file_path, file_name FROM wire_transfers WHERE invoice_id = ?').all(req.params.id) as any[];
   for (const wt of transfers) {
     if (wt.file_path) {
       try {
-        const wtPath = path.join(uploadsBase, 'wire-transfers', wt.file_path);
-        if (fs.existsSync(wtPath)) fs.unlinkSync(wtPath);
+        archiveStored('wire-transfers', wt.file_path, { section: 'Wire transfers', context: `Wire transfer for invoice ${existing.invoice_number} (invoice deleted)`, fileName: wt.file_name }, archivedBy(req));
       } catch (err) {
         console.warn('[invoices] Failed to delete wire transfer file:', err);
       }
@@ -529,8 +527,8 @@ router.delete('/:id/wire-transfers/:transferId', (req: Request, res: Response) =
   if (!transfer) { res.status(404).json({ error: 'Wire transfer not found' }); return; }
 
   if (transfer.file_path) {
-    const filePath = path.join(uploadsBase, 'wire-transfers', transfer.file_path);
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    const inv = db.prepare('SELECT invoice_number FROM invoices WHERE id = ?').get(req.params.id) as any;
+    archiveStored('wire-transfers', transfer.file_path, { section: 'Wire transfers', context: `Wire transfer for invoice ${inv?.invoice_number || ''}`, fileName: transfer.file_name }, archivedBy(req));
   }
 
   // Get invoice's operation_id before modifying

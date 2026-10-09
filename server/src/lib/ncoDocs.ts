@@ -2,6 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import db from '../database.js';
+import { archiveStored, archiveFile, ownerOf, contextOf } from './archive.js';
 import type { DocLine } from './document-pdf.js';
 import { listProfiles } from './documentPrefill.js';
 import { matchProfile } from './profileMatch.js';
@@ -141,10 +142,13 @@ export function dropNcoDocumentRow(id: number | null | undefined): void {
 }
 
 /** Deletes an uploaded NCO document: row and file. */
-export function deleteNcoUpload(row: { id: number; file_path: string }): void {
+export function deleteNcoUpload(row: { id: number; file_path: string; file_name?: string; nco_id?: number }): void {
   if (/^[a-zA-Z0-9._-]+$/.test(row.file_path)) {
     const abs = path.join(docsDir, row.file_path);
-    if (fs.existsSync(abs)) { try { fs.unlinkSync(abs); } catch { /* best effort */ } }
+    if (row.id > 0) {
+      // A document the user deletes goes to the Archive (id -1 = a refused upload, just removed)
+      archiveFile(abs, { section: 'Non-commercial operations', context: ownerOf(null, row.nco_id ?? null).number, fileName: row.file_name });
+    } else if (fs.existsSync(abs)) { try { fs.unlinkSync(abs); } catch { /* best effort */ } }
   }
   db.prepare('DELETE FROM nco_documents WHERE id = ?').run(row.id);
 }

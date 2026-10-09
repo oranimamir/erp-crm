@@ -43,5 +43,6 @@ router.get('/product-docs/:filename', serveFile('product-docs'));
 router.get('/declaration-assets/:filename', serveFile('declaration-assets'));
 router.get('/supplier-docs/:filename', serveFile('supplier-docs'));
 router.get('/entity-docs/:filename', serveFile('entity-docs'));
+router.get('/archive/:filename', serveFile('archive'));
 
 export default router;

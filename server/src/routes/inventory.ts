@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import db from '../database.js';
+import { archiveStored, archiveFile, archiveBuffer, archivedBy, ownerOf, contextOf } from '../lib/archive.js';
 import { notifyAdmin } from '../lib/notify.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -261,7 +262,11 @@ router.post('/batches/:id/documents', uploadBatchDoc.single('file'), (req: Reque
 router.delete('/batches/documents/:docId', (req: Request, res: Response) => {
   const doc = db.prepare('SELECT * FROM batch_documents WHERE id = ?').get(req.params.docId) as any;
   if (!doc) { res.status(404).json({ error: 'Document not found' }); return; }
-  try { fs.unlinkSync(path.join(batchDocDir, doc.file_path)); } catch (_) {}
+  const batch = db.prepare('SELECT * FROM batches WHERE id = ?').get(doc.batch_id) as any;
+  archiveStored('batch-documents', doc.file_path, {
+    section: 'Inventory batches', context: contextOf(batch?.lot_number || batch?.batch_number || (batch ? `Batch #${batch.id}` : null), doc.document_type, doc.document_name),
+    fileName: doc.file_name,
+  }, archivedBy(req));
   db.prepare('DELETE FROM batch_documents WHERE id = ?').run(req.params.docId);
   res.json({ message: 'Document deleted' });
 });

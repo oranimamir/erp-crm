@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { Resend } from 'resend';
 import db from '../database.js';
+import { archiveStored, archiveFile, archiveBuffer, archivedBy, ownerOf, contextOf } from '../lib/archive.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { entityFromOperationNumber, entityProfile, isEntityCode, type EntityCode } from '../lib/companyEntity.js';
 import { deliveryTerms, prefillLines } from '../lib/documentPrefill.js';
@@ -538,8 +539,8 @@ router.post('/:id/email', async (req: Request, res: Response) => {
 /** Deletes a purchase order, its PDF and the document it filed (operation or NCO). */
 export function deletePurchaseOrderRow(row: any): void {
   if (row.file_path) {
-    const filePath = path.join(docsDir, row.file_path);
-    if (fs.existsSync(filePath)) { try { fs.unlinkSync(filePath); } catch { /* best effort */ } }
+    const owner = ownerOf(row.operation_id, row.nco_id);
+    archiveFile(path.join(docsDir, row.file_path), { section: owner.section, context: contextOf(owner.number, `Purchase order ${row.po_number || ''}`), fileName: row.file_name });
   }
   if (row.document_id) db.prepare('DELETE FROM operation_documents WHERE id = ?').run(row.document_id);
   if (row.nco_document_id) dropNcoDocumentRow(row.nco_document_id);

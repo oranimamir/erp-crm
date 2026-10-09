@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
+import { archiveStored, archiveFile, archiveBuffer, archivedBy, ownerOf, contextOf } from '../lib/archive.js';
 import path from 'path';
 import fs from 'fs';
 import { notifyAdmin } from '../lib/notify.js';
@@ -140,11 +141,11 @@ router.patch('/:id', (req: Request, res: Response) => {
 
 router.delete('/:id', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT name FROM suppliers WHERE id = ?').get(req.params.id) as any;
-  const files = db.prepare('SELECT file_path FROM supplier_documents WHERE supplier_id = ?').all(req.params.id) as any[];
+  const files = db.prepare('SELECT file_path, file_name, title FROM supplier_documents WHERE supplier_id = ?').all(req.params.id) as any[];
   const result = db.prepare('DELETE FROM suppliers WHERE id = ?').run(req.params.id);
   if (result.changes === 0) { res.status(404).json({ error: 'Supplier not found' }); return; }
   db.prepare('DELETE FROM supplier_documents WHERE supplier_id = ?').run(req.params.id);
-  files.forEach(f => unlinkSupplierFile(f.file_path));
+  files.forEach(f => archiveStored('supplier-docs', f.file_path, { section: 'Suppliers', context: contextOf(existing?.name, f.title, '(supplier deleted)'), fileName: f.file_name }, archivedBy(req)));
   notifyAdmin({ action: 'deleted', entity: 'Supplier', label: existing?.name || `#${req.params.id}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.json({ message: 'Supplier deleted' });
 });
@@ -292,7 +293,7 @@ router.delete('/:id/documents/:docId', (req: Request, res: Response) => {
   `).get(req.params.docId, req.params.id) as any;
   if (!doc) { res.status(404).json({ error: 'Document not found' }); return; }
   db.prepare('DELETE FROM supplier_documents WHERE id = ?').run(doc.id);
-  unlinkSupplierFile(doc.file_path);
+  archiveStored('supplier-docs', doc.file_path, { section: 'Suppliers', context: contextOf(doc.supplier_name, doc.title), fileName: doc.file_name }, archivedBy(req));
   notifyAdmin({ action: 'updated', entity: 'Supplier', label: doc.supplier_name, detail: `document deleted: ${doc.file_name}`, ...who(req) });
   res.json({ ok: true });
 });

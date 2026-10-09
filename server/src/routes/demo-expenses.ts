@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import db from '../database.js';
+import { archiveStored, archiveFile, archiveBuffer, archivedBy, ownerOf, contextOf } from '../lib/archive.js';
 import JSZip from 'jszip';
 import { XMLParser } from 'fast-xml-parser';
 import multer from 'multer';
@@ -1667,6 +1668,7 @@ router.post('/confirm-import', async (req: Request, res: Response) => {
       if (replaceDemoMonth) {
         const old = db.prepare("SELECT id FROM demo_upload_batches WHERE month = ? AND domain = 'demo'").get(month) as any;
         if (old) {
+          archiveDemoInvoices('batch_id = ?', [old.id]);
           db.prepare('DELETE FROM demo_invoices WHERE batch_id = ?').run(old.id);
           db.prepare('DELETE FROM demo_upload_batches WHERE id = ?').run(old.id);
         }
@@ -1674,6 +1676,7 @@ router.post('/confirm-import', async (req: Request, res: Response) => {
       if (replaceSalesMonth) {
         const old = db.prepare("SELECT id FROM demo_upload_batches WHERE month = ? AND domain = 'sales'").get(month) as any;
         if (old) {
+          archiveDemoInvoices('batch_id = ?', [old.id]);
           db.prepare('DELETE FROM demo_invoices WHERE batch_id = ?').run(old.id);
           db.prepare('DELETE FROM demo_upload_batches WHERE id = ?').run(old.id);
         }
@@ -2063,10 +2066,23 @@ router.get('/batches', (req: Request, res: Response) => {
   }
 });
 
+/** Supplier invoices about to be deleted: their PDFs go to the Archive. */
+function archiveDemoInvoices(where: string, params: any[], req?: Request) {
+  const rows = db.prepare(`SELECT id, invoice_id, supplier, domain, embedded_pdf, pdf_filename FROM demo_invoices WHERE ${where} AND embedded_pdf IS NOT NULL AND embedded_pdf != ''`).all(...params) as any[];
+  for (const r of rows) {
+    archiveBuffer(Buffer.from(String(r.embedded_pdf), 'base64'), {
+      section: 'Supplier invoices',
+      context: contextOf(r.supplier, `Invoice ${r.invoice_id}`, r.domain === 'sales' ? 'Sales activities' : 'Demo expenses'),
+      fileName: r.pdf_filename || `${r.invoice_id || 'invoice'}.pdf`,
+    }, req ? archivedBy(req) : undefined);
+  }
+}
+
 router.delete('/batches/:id', (req: Request, res: Response) => {
   try {
     const batch = db.prepare('SELECT filename, month FROM demo_upload_batches WHERE id = ?').get(req.params.id) as any;
     if (!batch) { res.status(404).json({ error: 'Batch not found' }); return; }
+    archiveDemoInvoices('batch_id = ?', [req.params.id], req);
     db.prepare('DELETE FROM demo_invoices WHERE batch_id = ?').run(req.params.id);
     db.prepare('DELETE FROM demo_upload_batches WHERE id = ?').run(req.params.id);
     db.saveToDisk();
@@ -2088,6 +2104,7 @@ router.delete('/invoices/:id', (req: Request, res: Response) => {
     const inv = db.prepare('SELECT id, batch_id, invoice_id, supplier, amount FROM demo_invoices WHERE id = ?').get(req.params.id) as any;
     if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
+    archiveDemoInvoices('id = ?', [req.params.id], req);
     db.prepare('DELETE FROM demo_invoices WHERE id = ?').run(req.params.id);
 
     // Check if the parent batch has remaining invoices

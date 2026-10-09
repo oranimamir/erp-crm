@@ -47,6 +47,7 @@ import demoExpenseRoutes, { backfillDemoInvoicesFx, backfillDemoInvoicesHash } f
 import employeeExpenseRoutes, { backfillEmployeeExpensesHash } from './routes/employee-expenses.js';
 import workingCapitalRoutes from './routes/working-capital.js';
 import healthRoutes from './routes/health.js';
+import archiveRoutes from './routes/archive.js';
 import cron from 'node-cron';
 import { markOverdueInvoices } from './lib/overdue.js';
 import { checkEmailForStockUpdates } from './lib/email-stock.js';
@@ -263,6 +264,7 @@ app.use('/api/demo-expenses', authenticateToken, demoExpenseRoutes);
 app.use('/api/employee-expenses', authenticateToken, employeeExpenseRoutes);
 app.use('/api/working-capital', authenticateToken, workingCapitalRoutes);
 app.use('/api/health', authenticateToken, healthRoutes);
+app.use('/api/archive', authenticateToken, archiveRoutes);
 
 // ── Serve built client in production ─────────────────────────────────────────
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');

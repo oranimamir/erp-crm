@@ -7,7 +7,7 @@ import { notifyAdmin } from '../lib/notify.js';
 import {
   PRODUCT_DOC_KINDS, KIND_LABEL, KIND_CATEGORY, ProductDocKind, productDocsDir,
   listProductDocs, getProductDoc, docLabel, setDocumentProducts, parseProductIds,
-  unlinkProductFile, matchProduct, copyToOperationDocs, categoryIdByName,
+  unlinkProductFile, archiveProductFile, matchProduct, copyToOperationDocs, categoryIdByName,
 } from '../lib/productDocs.js';
 import { importLibraryZip, parseLibraryFileName } from '../lib/productLibrary.js';
 import { ownerFromRequest, ownerLines, insertOwnerDocument, ownerProductLots } from '../lib/docOwner.js';
@@ -142,7 +142,7 @@ router.put('/:id', uploadProductDoc.single('file'), (req: Request, res: Response
   );
   const productIds = parseProductIds(req.body?.product_ids);
   if (productIds) setDocumentProducts(existing.id, productIds);
-  if (req.file) unlinkProductFile(existing.file_path);
+  if (req.file) archiveProductFile(existing, 'replaced');
   notifyAdmin({ action: 'updated', entity: 'Product Document', label: `${KIND_LABEL[existing.kind as ProductDocKind]} — ${docLabel({ title, file_name: existing.file_name })}`, ...who(req) });
   res.json(getProductDoc(existing.id));
 });
@@ -178,7 +178,7 @@ router.put('/:id/text', async (req: Request, res: Response) => {
     fs.writeFileSync(path.join(productDocsDir, stored), buffer);
     db.prepare(`UPDATE product_documents SET file_path = ?, sha256 = NULL, uploaded_by = ?, updated_at = datetime('now') WHERE id = ?`)
       .run(stored, req.user?.userId ?? null, found.doc.id);
-    unlinkProductFile(found.doc.file_path);
+    archiveProductFile(found.doc, 'replaced');
     notifyAdmin({ action: 'updated', entity: 'Product Document', label: `${KIND_LABEL[found.doc.kind as ProductDocKind]} — ${docLabel(found.doc)}`, detail: 'text edited', ...who(req) });
     res.json({ changed });
   } catch {
@@ -190,7 +190,7 @@ router.delete('/:id', (req: Request, res: Response) => {
   const existing = getProductDoc(Number(req.params.id));
   if (!existing) { res.status(404).json({ error: 'Document not found' }); return; }
   db.prepare('DELETE FROM product_documents WHERE id = ?').run(existing.id);
-  unlinkProductFile(existing.file_path);
+  archiveProductFile(existing);
   notifyAdmin({ action: 'deleted', entity: 'Product Document', label: `${KIND_LABEL[existing.kind as ProductDocKind]} — ${docLabel(existing)}`, ...who(req) });
   res.json({ ok: true });
 });

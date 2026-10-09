@@ -8,6 +8,7 @@ import path from 'path';
 import { uploadEntityDoc } from '../middleware/upload.js';
 import { uploadsBase } from '../lib/productDocs.js';
 import { readBankDetails } from '../lib/bankDetailsReader.js';
+import { archiveStored, archivedBy } from '../lib/archive.js';
 
 /** The TripleW entities that issue documents — edited on the TripleW Details page. */
 const router = Router();
@@ -162,7 +163,7 @@ router.delete('/:code/documents/:docId', requireAdmin, (req: Request, res: Respo
   const doc = db.prepare('SELECT * FROM company_entity_documents WHERE id = ? AND entity_code = ?').get(req.params.docId, code) as any;
   if (!doc) { res.status(404).json({ error: 'Document not found' }); return; }
   db.prepare('DELETE FROM company_entity_documents WHERE id = ?').run(doc.id);
-  unlinkEntityFile(doc.file_path);
+  archiveStored('entity-docs', doc.file_path, { section: 'TripleW Details', context: `${code} — account ownership document`, fileName: doc.file_name }, archivedBy(req));
   db.saveToDisk();
   res.json({ ok: true });
 });
@@ -236,7 +237,9 @@ router.delete('/:code', requireAdmin, (req: Request, res: Response) => {
   if (listEntities().length <= 1) { res.status(400).json({ error: 'At least one entity is required' }); return; }
 
   db.prepare('DELETE FROM company_entities WHERE code = ?').run(code);
-  for (const d of db.prepare('SELECT file_path FROM company_entity_documents WHERE entity_code = ?').all(code) as any[]) unlinkEntityFile(d.file_path);
+  for (const d of db.prepare('SELECT file_path, file_name FROM company_entity_documents WHERE entity_code = ?').all(code) as any[]) {
+    archiveStored('entity-docs', d.file_path, { section: 'TripleW Details', context: `${code} — account ownership document (entity deleted)`, fileName: d.file_name }, archivedBy(req));
+  }
   db.prepare('DELETE FROM company_entity_documents WHERE entity_code = ?').run(code);
   db.saveToDisk();
 

@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
+import { archiveStored, archiveFile, archiveBuffer, archivedBy, ownerOf, contextOf } from '../lib/archive.js';
 import { refreshEstimatedPaymentDate, dueDateForInvoice } from '../lib/paymentTerms.js';
 import { fileGeneratedForOperation, draftsForOperation } from '../lib/fileGenerated.js';
 import { getEurRate } from '../lib/fx.js';
@@ -783,36 +784,35 @@ router.delete('/:id', (req: Request, res: Response) => {
   const op = db.prepare('SELECT id, operation_number, order_id FROM operations WHERE id = ?').get(req.params.id) as any;
   if (!op) { res.status(404).json({ error: 'Operation not found' }); return; }
 
-  const unlinkSafe = (folder: string, filePath: string | null | undefined) => {
+  // Files go to the Archive, labelled with the operation they belonged to
+  const unlinkSafe = (folder: string, filePath: string | null | undefined, fileName?: string | null, what?: string | null) => {
     if (!filePath) return;
-    const fp = path.join(uploadsBase, folder, path.basename(filePath));
-    if (fs.existsSync(fp)) {
-      try { fs.unlinkSync(fp); } catch (_) { /* ignore */ }
-    }
+    archiveStored(folder, filePath, { section: 'Operations', context: contextOf(op.operation_number, what, '(operation deleted)'), fileName }, archivedBy(req));
   };
 
   // 1. Linked invoices → wire transfers + invoice files + rows
-  const invoices = db.prepare('SELECT id, file_path FROM invoices WHERE operation_id = ?').all(op.id) as any[];
+  const invoices = db.prepare('SELECT id, invoice_number, file_path, file_name FROM invoices WHERE operation_id = ?').all(op.id) as any[];
   for (const inv of invoices) {
-    const transfers = db.prepare('SELECT id, file_path FROM wire_transfers WHERE invoice_id = ?').all(inv.id) as any[];
-    for (const t of transfers) unlinkSafe('wire-transfers', t.file_path);
+    const transfers = db.prepare('SELECT id, file_path, file_name FROM wire_transfers WHERE invoice_id = ?').all(inv.id) as any[];
+    for (const t of transfers) unlinkSafe('wire-transfers', t.file_path, t.file_name, `Wire transfer for ${inv.invoice_number}`);
     db.prepare('DELETE FROM wire_transfers WHERE invoice_id = ?').run(inv.id);
-    unlinkSafe('invoices', inv.file_path);
+    unlinkSafe('invoices', inv.file_path, inv.file_name, `Invoice ${inv.invoice_number}`);
     db.prepare('DELETE FROM invoices WHERE id = ?').run(inv.id);
   }
 
   // 2. Linked order → file + row
   if (op.order_id) {
-    const order = db.prepare('SELECT file_path FROM orders WHERE id = ?').get(op.order_id) as any;
+    const order = db.prepare('SELECT order_number, file_path, file_name FROM orders WHERE id = ?').get(op.order_id) as any;
     if (order) {
-      unlinkSafe('orders', order.file_path);
+      unlinkSafe('orders', order.file_path, order.file_name, `Order ${order.order_number}`);
       db.prepare('DELETE FROM orders WHERE id = ?').run(op.order_id);
     }
   }
 
   // 3. Operation documents (rows cascade via FK; remove files manually)
-  const docs = db.prepare('SELECT file_path FROM operation_documents WHERE operation_id = ?').all(op.id) as any[];
-  for (const doc of docs) unlinkSafe('operation-docs', doc.file_path);
+  const docs = db.prepare(`SELECT d.file_path, d.file_name, c.name AS category_name FROM operation_documents d
+    LEFT JOIN document_categories c ON c.id = d.category_id WHERE d.operation_id = ?`).all(op.id) as any[];
+  for (const doc of docs) unlinkSafe('operation-docs', doc.file_path, doc.file_name, doc.category_name);
 
   // 4. Operation row
   db.prepare('DELETE FROM operations WHERE id = ?').run(op.id);
@@ -931,8 +931,8 @@ router.delete('/:id/documents/:docId', (req: Request, res: Response) => {
     return;
   }
 
-  const fp = path.join(uploadsBase, 'operation-docs', doc.file_path);
-  if (fs.existsSync(fp)) fs.unlinkSync(fp);
+  const category = doc.category_id ? (db.prepare('SELECT name FROM document_categories WHERE id = ?').get(doc.category_id) as any)?.name : null;
+  archiveStored('operation-docs', doc.file_path, { section: 'Operations', context: contextOf(ownerOf(doc.operation_id).number, category), fileName: doc.file_name }, archivedBy(req));
 
   db.prepare('DELETE FROM operation_documents WHERE id = ?').run(doc.id);
   notifyAdmin({ action: 'deleted', entity: 'Operation Document', label: `${(db.prepare('SELECT operation_number FROM operations WHERE id = ?').get(doc.operation_id) as any)?.operation_number ?? ''} — ${doc.file_name || `Document #${doc.id}`}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });

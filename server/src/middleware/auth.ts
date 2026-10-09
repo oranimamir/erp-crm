@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import db from '../database.js';
+import { requestUser } from '../lib/archive.js';
 
 // If JWT_SECRET isn't set we fall back to an ephemeral random secret for the
 // lifetime of this process — never a hardcoded constant. Production is
@@ -66,7 +67,8 @@ export function authenticateToken(req: Request, res: Response, next: NextFunctio
     return;
   }
   req.user = { userId: user.id, username: user.username, display_name: user.display_name || user.username, role: user.role };
-  next();
+  // Lets deep helpers (e.g. the archive) know who is acting
+  requestUser.run({ id: user.id, name: req.user.display_name }, () => next());
 }
 
 export function generateToken(payload: AuthPayload): string {

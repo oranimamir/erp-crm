@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import db from '../database.js';
+import { archiveStored, archiveFile, ownerOf, contextOf } from './archive.js';
 import { notifyAdmin } from './notify.js';
 import { uploadOperationDoc } from '../middleware/upload.js';
 import { categoryIdByName, uploadsBase } from './productDocs.js';
@@ -85,7 +86,7 @@ export function mountOwnerDocumentRoutes(router: Router, kind: OwnerKind): void 
       const stored = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}.docx`;
       fs.writeFileSync(path.join(docsDir, stored), buffer);
       db.prepare(`UPDATE ${found.owner.table} SET file_path = ? WHERE id = ?`).run(stored, found.doc.id);
-      try { fs.unlinkSync(abs); } catch { /* ignore */ }
+      archiveFile(abs, { section: kind === 'nco' ? 'Non-commercial operations' : 'Operations', context: contextOf(found.owner.number, 'version before text edit'), fileName: found.doc.file_name, reason: 'replaced' });
       notifyAdmin({
         action: 'updated', entity: `${ENTITY[kind]} Document`, label: `${found.owner.number} — ${found.doc.file_name}`,
         detail: `text edited (${changed} paragraph${changed === 1 ? '' : 's'})`, ...who(req),
@@ -121,8 +122,7 @@ export function mountOwnerDocumentRoutes(router: Router, kind: OwnerKind): void 
     db.prepare(`UPDATE ${owner.table} SET file_path = ?, file_name = ?, category_id = ?, notes = ? WHERE id = ?`)
       .run(req.file?.filename ?? doc.file_path, fileName, categoryId, notes, doc.id);
     if (req.file && SAFE.test(doc.file_path)) {
-      const old = path.join(docsDir, doc.file_path);
-      if (fs.existsSync(old)) { try { fs.unlinkSync(old); } catch { /* ignore */ } }
+      archiveFile(path.join(docsDir, doc.file_path), { section: kind === 'nco' ? 'Non-commercial operations' : 'Operations', context: contextOf(owner.number, 'replaced by a new version'), fileName: doc.file_name, reason: 'replaced' });
     }
     notifyAdmin({
       action: 'updated', entity: `${ENTITY[kind]} Document`, label: `${owner.number} — ${fileName}`,

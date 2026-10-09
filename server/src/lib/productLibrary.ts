@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import JSZip from 'jszip';
 import db from '../database.js';
 import {
-  ProductDocKind, productDocsDir, norm, addDocumentProducts, unlinkProductFile,
+  ProductDocKind, productDocsDir, norm, addDocumentProducts, unlinkProductFile, archiveProductFile,
 } from './productDocs.js';
 
 /**
@@ -221,7 +221,7 @@ export async function importLibraryZip(buffer: Buffer, kind: ProductDocKind, use
       if (existing) {
         db.prepare(`UPDATE product_documents SET file_path = ?, file_name = ?, sha256 = ?, uploaded_by = ?, updated_at = datetime('now') WHERE id = ?`)
           .run(stored, fileName, sha, userId, existing.id);
-        unlinkProductFile(existing.file_path);
+        archiveProductFile(existing, 'replaced');
         result.replaced++;
         docId = existing.id;
       } else {
