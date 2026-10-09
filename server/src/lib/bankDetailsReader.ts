@@ -11,7 +11,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import crypto from 'crypto';
 import db from '../database.js';
 import { assertAiBudget } from './aiBudget.js';
-import { MODELS, logUsage, isPdf } from './supplierInvoiceReader.js';
+import { MODELS, logUsage, isPdf, strictSchema, forcedToolOk, replyJson } from './supplierInvoiceReader.js';
 
 export interface BankAccountReading { currency: string | null; iban: string | null; bic: string | null }
 export interface BankDetailsReading {
@@ -83,16 +83,22 @@ export async function readBankDetails(file: Buffer): Promise<BankDetailsReading 
 
   assertAiBudget(0.05);
   const client = new Anthropic();
-  const message: any = await client.messages.create({
-    model: MODELS['sonnet-pdf'],
-    max_tokens: 1500,
-    tools: [TOOL as any],
-    tool_choice: { type: 'tool', name: TOOL.name },
-    messages: [{ role: 'user', content: [block as any, { type: 'text', text: PROMPT }] }],
-  });
+  const model = MODELS['sonnet-pdf'];
+  // Newer models refuse a forced tool call — they answer in the JSON schema instead
+  const message: any = await client.messages.create((forcedToolOk(model)
+    ? {
+        model, max_tokens: 1500,
+        tools: [TOOL], tool_choice: { type: 'tool', name: TOOL.name },
+        messages: [{ role: 'user', content: [block, { type: 'text', text: PROMPT }] }],
+      }
+    : {
+        model, max_tokens: 1500,
+        output_config: { format: { type: 'json_schema', schema: strictSchema(TOOL.input_schema) } },
+        messages: [{ role: 'user', content: [block, { type: 'text', text: `${PROMPT} Answer as JSON in the given schema.` }] }],
+      }) as any);
   logUsage('bank-details', 'sonnet-pdf', message.usage, false);
 
-  const input = (message.content || []).find((b: any) => b.type === 'tool_use')?.input;
+  const input = replyJson(message);
   if (!input) return null;
   const result: BankDetailsReading = {
     bank_name: str(input.bank_name),

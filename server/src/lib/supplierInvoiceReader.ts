@@ -91,8 +91,36 @@ const SCHEMA = {
   },
 };
 
-// A forced tool call gives JSON on every model and in batches
+// A forced tool call gives JSON on Haiku; newer models (Sonnet 5.5) refuse a
+// forced tool_choice, so they answer in a JSON schema instead (structured output)
 const TOOL = { name: 'record_invoice', description: 'Record the figures read from the invoice', input_schema: SCHEMA };
+
+/** The schema with `additionalProperties: false` on every object, as structured output requires. */
+export function strictSchema(schema: any): any {
+  if (Array.isArray(schema)) return schema.map(strictSchema);
+  if (!schema || typeof schema !== 'object') return schema;
+  const out: any = Object.fromEntries(Object.entries(schema).map(([k, v]) => [k, strictSchema(v)]));
+  if (out.type === 'object') out.additionalProperties = false;
+  return out;
+}
+
+/** True for models that take a forced tool call (tool_choice type "tool"). */
+export function forcedToolOk(model: string): boolean {
+  return /haiku-4|sonnet-4|opus-4/.test(model);
+}
+
+/** The JSON a reply carries: the forced tool's input, else the structured-output text. */
+export function replyJson(message: any): any | null {
+  const content = message?.content || [];
+  const tool = content.find((b: any) => b.type === 'tool_use')?.input;
+  if (tool && typeof tool === 'object') return tool;
+  const text = content.find((b: any) => b.type === 'text')?.text;
+  if (!text) return null;
+  try { return JSON.parse(text); } catch { /* not JSON */ }
+  const m = /\{[\s\S]*\}/.exec(text);
+  if (m) { try { return JSON.parse(m[0]); } catch { /* not JSON */ } }
+  return null;
+}
 
 function instructions(categories: { demo: string[]; sales: string[] }): string {
   return `You read invoices received by TripleW, a Belgian company (TripleW BV; also TripleW NL BV). TripleW is always the BUYER — never give TripleW or its VAT number as the supplier.
@@ -168,12 +196,22 @@ export function buildReadParams(
     else return null;
     content.push({ type: 'text', text: 'Record this invoice.' });
   }
+  const model = MODELS[mode];
+  if (forcedToolOk(model)) {
+    return {
+      model,
+      max_tokens: 1500,
+      system: instructions(categories),
+      tools: [TOOL],
+      tool_choice: { type: 'tool', name: TOOL.name },
+      messages: [{ role: 'user', content }],
+    };
+  }
   return {
-    model: MODELS[mode],
+    model,
     max_tokens: 1500,
-    system: instructions(categories),
-    tools: [TOOL],
-    tool_choice: { type: 'tool', name: TOOL.name },
+    system: instructions(categories).replace('with the record_invoice tool', 'as JSON in the given schema'),
+    output_config: { format: { type: 'json_schema', schema: strictSchema(SCHEMA) } },
     messages: [{ role: 'user', content }],
   };
 }
@@ -183,7 +221,7 @@ const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? 
 
 /** Extraction from a model response (single call or a batch result). */
 export function parseReadResponse(message: any, mode: ReadMode): InvoiceExtraction | null {
-  const p = (message?.content || []).find((b: any) => b.type === 'tool_use')?.input;
+  const p = replyJson(message);
   if (!p || typeof p !== 'object') return null;
   const issueDate = str(p.issue_date);
   return {
