@@ -11,6 +11,7 @@ import { ArrowLeft, Upload, Loader2, FileText, X, CheckCircle } from 'lucide-rea
 const statusOptions = [
   { value: 'pre-ordered',  label: 'Pre-ordered' },
   { value: 'ordered',      label: 'Ordered' },
+  { value: 'in production', label: 'In Production' },
   { value: 'shipped',      label: 'Shipped' },
   { value: 'in clearance', label: 'In Clearance' },
   { value: 'delivered',    label: 'Delivered' },

@@ -14,6 +14,7 @@ import { buildDeclarationPdf } from '../lib/declarationPdf.js';
 import { saveDeclarationToLibrary, ownerProductIds, coaMatchesLots } from '../lib/documentSources.js';
 import { DocOwner, getOwner, ownerFromRequest, insertOwnerDocument, ownerLots, ownerProductLots } from '../lib/docOwner.js';
 import { dropNcoDocumentRow } from '../lib/ncoDocs.js';
+import { todayISO } from '../lib/today.js';
 
 /**
  * Declarations generated per operation or non-commercial operation (Shipping
@@ -167,7 +168,7 @@ router.post('/', memory.single('file'), async (req: Request, res: Response) => {
     } else if (req.body?.source_type === 'declaration') {
       const prev = getRow(Number(req.body.source_id));
       if (!prev) { res.status(404).json({ error: 'Declaration not found' }); return; }
-      data = { ...normalizeDeclaration(JSON.parse(prev.draft_data || prev.data)), date: new Date().toISOString().slice(0, 10) };
+      data = { ...normalizeDeclaration(JSON.parse(prev.draft_data || prev.data)), date: todayISO() };
       source = `declaration:${prev.id}`;
     } else {
       data = kind === 'coa' ? emptyCoa(ownerProductLots(owner)) : emptyDeclaration();

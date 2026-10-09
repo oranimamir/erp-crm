@@ -12,6 +12,7 @@ import { resolveCountry } from '../lib/portCountry.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { todayISO } from '../lib/today.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
@@ -183,7 +184,7 @@ router.get('/bulk-download', (req: Request, res: Response) => {
 
   if (!files.length) { res.status(404).json({ error: 'None of the selected invoices have an attached file' }); return; }
 
-  streamZip(res, `invoices-${new Date().toISOString().slice(0, 10)}.zip`, files);
+  streamZip(res, `invoices-${todayISO()}.zip`, files);
 });
 
 router.get('/:id', (req: Request, res: Response) => {
@@ -232,7 +233,7 @@ router.post('/', uploadInvoice.single('file'), async (req: Request, res: Respons
     let fx_rate: number | null = null;
     let eur_amount: number | null = null;
     if (invCurrency.toUpperCase() !== 'EUR') {
-      const dateForRate = invoice_date || new Date().toISOString().split('T')[0];
+      const dateForRate = invoice_date || todayISO();
       fx_rate = await getEurRate(invCurrency, dateForRate);
       eur_amount = parseFloat(amount) * fx_rate;
     }
@@ -294,7 +295,7 @@ router.put('/:id', uploadInvoice.single('file'), async (req: Request, res: Respo
 
   // A field left out keeps its stored value; a field sent blank clears it
   const keep = (sent: any, stored: any) => (sent === undefined ? stored : (sent === '' ? null : sent));
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayISO();
   const finalType = type || existing.type;
   const finalInvoiceDate = keep(invoice_date, existing.invoice_date);
   const finalStatus = status || existing.status;
@@ -303,8 +304,10 @@ router.put('/:id', uploadInvoice.single('file'), async (req: Request, res: Respo
     ?? (finalStatus === 'paid' ? (existing.payment_date || today) : null);
 
   // Recompute EUR conversion when amount or currency changes
-  const finalAmount = parseFloat(amount) || existing.amount;
-  const finalCurrency = (currency || existing.currency || 'USD').toUpperCase();
+  const parsedAmount = parseFloat(amount);
+  const finalAmount = Number.isFinite(parsedAmount) ? parsedAmount : existing.amount;
+  const finalCurrency = String(currency || existing.currency || 'USD').toUpperCase();
+  if (!/^[A-Z]{3}$/.test(finalCurrency)) { res.status(400).json({ error: 'Currency must be a 3-letter code' }); return; }
   let fx_rate = existing.fx_rate;
   let eur_amount = existing.eur_amount;
   if (finalCurrency !== 'EUR') {
@@ -366,7 +369,7 @@ router.patch('/:id/status', (req: Request, res: Response) => {
   // this, the invoice silently leaves Pending without entering Paid YTD and the
   // total revenues figure drops.
   if (status === 'paid' && !existing.payment_date) {
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayISO();
     db.prepare(`UPDATE invoices SET status=?, payment_date=?, updated_at=datetime('now') WHERE id=?`).run(status, today, req.params.id);
   } else if (status !== 'paid' && existing.status === 'paid') {
     // Reverting away from paid: clear payment_date so it doesn't pollute YTD if re-paid later
@@ -438,7 +441,7 @@ router.post('/:id/wire-transfers', uploadWireTransfer.single('file'), async (req
   const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id) as any;
   if (!invoice) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
-  const payment_date = req.body.payment_date || req.body.transfer_date || new Date().toISOString().split('T')[0];
+  const payment_date = req.body.payment_date || req.body.transfer_date || todayISO();
   const bank_reference = req.body.bank_reference || null;
   const amount = req.body.amount != null ? parseFloat(req.body.amount) : invoice.amount;
 

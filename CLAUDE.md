@@ -24,7 +24,9 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - Migrations: try/catch `ALTER TABLE` at bottom of `initializeDatabase()`
 - Currency: store `amount` + `currency` + `fx_rate` + `eur_amount`; aggregate via `COALESCE(eur_amount, amount)`; display EUR throughout
 - Theme: Zoho-CRM style tokens (primary blue, slate greys, radii, Lato) in `client/src/index.css` `@theme` — restyle there, don't move controls
-- Dates: use `formatDate()` from `client/src/lib/dates.ts` (DD/MM/YYYY)
+- Dates: use `formatDate()` from `client/src/lib/dates.ts` (DD/MM/YYYY); "today" is `todayISO()` (client `lib/dates.ts` = the user's local day, server `lib/today.ts` = Brussels) — never `new Date().toISOString().slice(0, 10)` (UTC, yesterday until 01:00/02:00)
+- Async route handlers: a throw/rejection goes to the error handler (`lib/asyncErrors.ts` patches Express 4, imported first in `index.ts`) — without it one bad request crashed the whole server
+- Operation statuses: pre-ordered, ordered, in production, shipped, in clearance, delivered, completed (`VALID_STATUSES` in `routes/operations.ts`, same lists on the Operations, operation and New Operation pages)
 
 ## Security
 - No public sign-up: accounts come from admin create or invite only; login is password + emailed OTP (5 wrong codes burn it; compare dates with `datetime(expires_at)`)

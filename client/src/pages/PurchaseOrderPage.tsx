@@ -10,6 +10,7 @@ import {
   ArrowLeft, Plus, Trash2, Loader2, Eye, X, FileDown, Mail,
   CheckCircle, FileText, RefreshCw, Building2, Package, Truck, AlertTriangle, Save,
 } from 'lucide-react';
+import { todayISO } from '../lib/dates';
 
 // Supplier purchase order for a trading operation — the order confirmation's
 // form, addressed to the supplier, with purchase prices typed in by hand.
@@ -94,7 +95,7 @@ const emptyLine = (n: number): PoLine => ({
 });
 
 const blankData = (): PoData => ({
-  po_number: '', po_date: new Date().toISOString().slice(0, 10),
+  po_number: '', po_date: todayISO(),
   sq_number: '', our_ref: '', client_code: '',
   client_name: '', billing_address: '', client_phone: '', tax_id: '', contact_email: '',
   items: [emptyLine(1)],

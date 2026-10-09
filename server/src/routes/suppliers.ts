@@ -95,18 +95,18 @@ router.post('/resolve', (req: Request, res: Response) => {
 });
 
 router.put('/:id', (req: Request, res: Response) => {
-  const existing = db.prepare('SELECT id, vat_number, contact_person FROM suppliers WHERE id = ?').get(req.params.id) as any;
+  const existing = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Supplier not found' }); return; }
 
   const { name, email, phone, address, category, notes, vat_number, contact_person } = req.body;
   if (!name || !category) { res.status(400).json({ error: 'Name and category are required' }); return; }
+  // A field left out keeps its stored value; a field sent blank clears it
+  const keep = (sent: any, stored: any) => (sent === undefined ? stored : (sent || null));
 
   db.prepare(
     `UPDATE suppliers SET name=?, email=?, phone=?, address=?, category=?, notes=?, vat_number=?, contact_person=?, updated_at=datetime('now') WHERE id=?`
-  ).run(name, email || null, phone || null, address || null, category, notes || null,
-    // Kept when a form that doesn't show them saves
-    vat_number !== undefined ? (vat_number || null) : existing.vat_number,
-    contact_person !== undefined ? (contact_person || null) : existing.contact_person,
+  ).run(name, keep(email, existing.email), keep(phone, existing.phone), keep(address, existing.address), category,
+    keep(notes, existing.notes), keep(vat_number, existing.vat_number), keep(contact_person, existing.contact_person),
     req.params.id);
 
   const supplier = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(req.params.id) as any;

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Truck, X, Loader2 } from 'lucide-react';
 import api from '../lib/api';
-import { formatDate } from '../lib/dates';
+import { formatDate, todayISO } from '../lib/dates';
 import { useToast } from '../contexts/ToastContext';
 
 /**
@@ -17,7 +17,6 @@ interface PreviewInvoice {
   due_date: string | null; basis: 'bl' | 'invoice' | null; days: number | null; end_of_month: boolean;
 }
 
-const todayISO = () => new Date().toISOString().slice(0, 10);
 
 export default function ShipOperationModal({ operation, onClose, onShipped }: {
   operation: { id: number; operation_number: string; ship_date?: string | null };

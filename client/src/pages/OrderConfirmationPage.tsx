@@ -11,6 +11,7 @@ import {
   ArrowLeft, Plus, Trash2, Loader2, Eye, X, FileDown, Mail,
   CheckCircle, FileText, RefreshCw, User, Package, Truck, Save,
 } from 'lucide-react';
+import { todayISO } from '../lib/dates';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -86,7 +87,7 @@ const emptyLine = (n: number): OcLine => ({
 });
 
 const blankData = (): OcData => ({
-  oc_number: '', oc_date: new Date().toISOString().slice(0, 10),
+  oc_number: '', oc_date: todayISO(),
   sq_number: '', our_ref: '', po_number: '', client_code: '',
   client_name: '', billing_address: '', client_phone: '', tax_id: '', contact_email: '',
   items: [emptyLine(1)],

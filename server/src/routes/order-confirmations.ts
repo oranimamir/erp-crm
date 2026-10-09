@@ -19,6 +19,7 @@ import {
 import {
   ncoSource, ncoDocLines, ncoProfile, ncoPartyFields, NCO_CURRENCY, fileUnderNco, dropNcoDocumentRow,
 } from '../lib/ncoDocs.js';
+import { todayISO } from '../lib/today.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
@@ -162,7 +163,7 @@ router.get('/prepare', (req: Request, res: Response) => {
 
   const items = db.prepare('SELECT * FROM order_items WHERE order_id = ? ORDER BY id').all(orderId) as any[];
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayISO();
   const isSupplier = order.type === 'supplier';
 
   // Which TripleW entity issues this — SOBE… is Belgian, SONL… Dutch. An
@@ -257,7 +258,7 @@ function prepareFromNco(req: Request, res: Response) {
     ...issuer,
     entity_code: entity,
     oc_number: nco.nco_number,
-    oc_date: new Date().toISOString().slice(0, 10),
+    oc_date: todayISO(),
     sq_number: '',
     our_ref: nco.nco_number,
     po_number: '',

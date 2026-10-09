@@ -12,6 +12,7 @@ import { computePacking, listPackaging, matchPackaging, netKg, packagingById, ty
 import { normalizePlLayout, resolvePlLayout } from '../lib/packingListLayout.js';
 import { resolveProfile } from '../lib/documentPrefill.js';
 import { fileUnderNco, dropNcoDocumentRow } from '../lib/ncoDocs.js';
+import { todayISO } from '../lib/today.js';
 
 /**
  * Packing lists: the goods of a generated invoice with their packaging, unit
@@ -351,7 +352,7 @@ router.get('/prepare', (req: Request, res: Response) => {
   const draft: PackingListData = withRows({
     ...header,
     doc_number: `${operationNumber || invoice.invoice_number}PL`,
-    doc_date: inv.doc_date || new Date().toISOString().slice(0, 10),
+    doc_date: inv.doc_date || todayISO(),
     invoice_number: invoice.invoice_number,
     notes: '',
     lines,

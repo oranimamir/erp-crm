@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import './lib/asyncErrors.js';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -280,6 +281,7 @@ app.use('/api', (_req, res) => {
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   // Log full error server-side only — never expose stack traces or DB details to clients
   console.error('[Error]', err?.message || err);
+  if (res.headersSent) return;
 
   if (err.code === 'LIMIT_FILE_SIZE') {
     res.status(400).json({ error: 'File too large for this upload (10 MB for documents, 100 MB for supplier documents / ZIPs).' });

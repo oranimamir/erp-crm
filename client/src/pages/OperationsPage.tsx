@@ -8,7 +8,7 @@ import {
   Briefcase, Search, Plus, ChevronLeft, ChevronRight, FileText, Receipt,
   FileSpreadsheet, ChevronUp, ChevronDown, Download, X, Loader2, ArrowLeftRight, Landmark, Filter, XCircle, Trash2, Pencil, Upload, RotateCcw, FileCheck2, ShoppingCart, Package,
 } from 'lucide-react';
-import { formatDate } from '../lib/dates';
+import { formatDate, todayISO } from '../lib/dates';
 import { paymentTermsDays, paymentTermsMentionsBL, paymentTermsEndOfMonth, computeEstimatedPaymentDate } from '../lib/paymentTerms';
 import { downloadExcel } from '../lib/exportExcel';
 
@@ -74,7 +74,6 @@ function suggestedCountry(op: { country_suggested?: string; order_destination?: 
 }
 
 // Detect if payment terms reference a BL date (e.g. "60 days from BL", "30d B/L")
-function todayISO() { return new Date().toISOString().split('T')[0]; }
 
 interface PreviewItem {
   fileName: string;

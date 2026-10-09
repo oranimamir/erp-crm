@@ -10,7 +10,7 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import { Plus, FileText, Eye, Trash2, FileDown, ChevronUp, ChevronDown, FileSpreadsheet, Landmark, Download, X, Loader2, Filter, CalendarDays, BarChart3 } from 'lucide-react';
-import { formatDate } from '../lib/dates';
+import { formatDate, todayISO } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
 import InvoiceRegister from '../components/InvoiceRegister';
 
@@ -156,7 +156,7 @@ export default function InvoicesPage() {
       const url = URL.createObjectURL(res.data);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `invoices-${new Date().toISOString().slice(0, 10)}.zip`;
+      a.download = `invoices-${todayISO()}.zip`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);

@@ -47,7 +47,7 @@ export const MODELS: Record<ReadMode, string> = {
 /** Approximate list prices, USD per million tokens (batch = half). Used for estimates and the spend log. */
 export const PRICES: Record<ReadMode, { input: number; output: number }> = {
   'haiku-text': { input: 1, output: 5 },
-  'sonnet-pdf': { input: 3, output: 15 },
+  'sonnet-pdf': { input: 2, output: 10 }, // Sonnet 5.5
 };
 
 export function costUsd(mode: ReadMode, inputTokens: number, outputTokens: number, batch: boolean): number {

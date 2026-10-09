@@ -542,7 +542,7 @@ router.get('/:id', (req: Request, res: Response) => {
 
 // ── Create operation ──────────────────────────────────────────────────────────
 
-const VALID_STATUSES = ['pre-ordered', 'ordered', 'shipped', 'in clearance', 'delivered', 'completed'];
+const VALID_STATUSES = ['pre-ordered', 'ordered', 'in production', 'shipped', 'in clearance', 'delivered', 'completed'];
 const VALID_CATEGORIES = ['blending', 'trading'];
 
 router.post('/', (req: Request, res: Response) => {
@@ -588,6 +588,10 @@ router.patch('/:id/status', (req: Request, res: Response) => {
   if (!existing) { res.status(404).json({ error: 'Operation not found' }); return; }
   const { status } = req.body;
   if (!status) { res.status(400).json({ error: 'status is required' }); return; }
+  if (!VALID_STATUSES.includes(status)) {
+    res.status(400).json({ error: `Invalid status. Expected one of: ${VALID_STATUSES.join(', ')}` });
+    return;
+  }
 
   if (status === 'completed') {
     if (existing.status !== 'delivered') {
@@ -751,6 +755,10 @@ router.put('/:id', (req: Request, res: Response) => {
   const { operation_number, status, notes, order_id, customer_id, supplier_id, category } = req.body;
   if (category !== undefined && category !== null && !VALID_CATEGORIES.includes(category)) {
     res.status(400).json({ error: 'Category must be blending or trading' });
+    return;
+  }
+  if (status && !VALID_STATUSES.includes(status)) {
+    res.status(400).json({ error: `Invalid status. Expected one of: ${VALID_STATUSES.join(', ')}` });
     return;
   }
   try {

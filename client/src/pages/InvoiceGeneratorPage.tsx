@@ -7,6 +7,7 @@ import {
   ArrowLeft, Plus, Trash2, Loader2, Upload, FileText, X,
   Eye, ShoppingCart, CheckCircle, FileDown, Search,
 } from 'lucide-react';
+import { todayISO } from '../lib/dates';
 
 // ── Unit conversion helpers ───────────────────────────────────────────────
 function toLbs(qty: number, unit: string): number {
@@ -91,7 +92,7 @@ export default function InvoiceGeneratorPage() {
   // Invoice header
   const [header, setHeader] = useState({
     invoice_number: '',
-    invoice_date:   new Date().toISOString().slice(0, 10),
+    invoice_date:   todayISO(),
     sq_number: '', ref_number: '', po_number: '',
   });
 

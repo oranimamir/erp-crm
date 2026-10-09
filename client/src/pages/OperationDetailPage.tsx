@@ -9,7 +9,7 @@ import {
   AlertCircle, Loader2, Edit2, Link2, Search, Truck, Landmark,
   FileCheck2, Receipt as ReceiptIcon, Package, Library, Send, Columns2, Type,
 } from 'lucide-react';
-import { formatDate } from '../lib/dates';
+import { formatDate, todayISO } from '../lib/dates';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
 import DocumentGenerators from '../components/DocumentGenerators';
 import RequiredDocuments, { type OperationDeclaration } from '../components/RequiredDocuments';
@@ -134,10 +134,11 @@ interface PendingUpload {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const STATUS_OPTIONS = ['pre-ordered', 'ordered', 'shipped', 'in clearance', 'delivered'];
+const STATUS_OPTIONS = ['pre-ordered', 'ordered', 'in production', 'shipped', 'in clearance', 'delivered'];
 const STATUS_COLORS: Record<string, string> = {
   'pre-ordered':   'bg-purple-100 text-purple-800',
   ordered:         'bg-yellow-100 text-yellow-800',
+  'in production': 'bg-pink-100   text-pink-800',
   shipped:         'bg-blue-100   text-blue-800',
   'in clearance':  'bg-orange-100 text-orange-800',
   delivered:       'bg-green-100  text-green-800',
@@ -159,7 +160,6 @@ function formatCurrency(amount: number, currency = 'USD') {
   return `${sym}${Number(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 function uid() { return Math.random().toString(36).slice(2); }
-function todayISO() { return new Date().toISOString().split('T')[0]; }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -192,7 +192,7 @@ export default function OperationDetailPage() {
 
   // Wire transfer upload (inline in invoices section)
   const [wireUploadInvoiceId, setWireUploadInvoiceId] = useState<number | null>(null);
-  const [wirePaymentDate, setWirePaymentDate] = useState(new Date().toISOString().split('T')[0]);
+  const [wirePaymentDate, setWirePaymentDate] = useState(todayISO());
   const [wireBankRef, setWireBankRef] = useState('');
   const [wireUploading, setWireUploading] = useState(false);
   const [wireUploadStatus, setWireUploadStatus] = useState('');
@@ -289,7 +289,7 @@ export default function OperationDetailPage() {
       addToast(alreadyPaid ? 'Wire transfer added to invoice' : 'Wire transfer uploaded — invoice marked as Paid', 'success');
       setWireUploadInvoiceId(null);
       setWireBankRef('');
-      setWirePaymentDate(new Date().toISOString().split('T')[0]);
+      setWirePaymentDate(todayISO());
       fetchOperation();
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Upload failed', 'error');
@@ -907,7 +907,7 @@ export default function OperationDetailPage() {
                     <div className="flex items-center justify-end gap-2">
                       {canUploadWire && (
                         <button
-                          onClick={() => { setWireUploadInvoiceId(isWireOpen ? null : inv.id); setWireBankRef(''); setWirePaymentDate(new Date().toISOString().split('T')[0]); }}
+                          onClick={() => { setWireUploadInvoiceId(isWireOpen ? null : inv.id); setWireBankRef(''); setWirePaymentDate(todayISO()); }}
                           className={`flex items-center gap-1 text-xs font-medium rounded-lg px-2 py-1 transition-colors ${isWireOpen ? 'bg-primary-100 text-primary-700' : 'text-green-600 hover:bg-green-50 border border-green-200'}`}
                         >
                           <Landmark size={12} /> {isWireOpen ? 'Cancel' : inv.status === 'paid' ? 'Add Payment' : 'Payment'}

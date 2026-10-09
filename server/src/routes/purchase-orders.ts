@@ -16,6 +16,7 @@ import {
   formatLongDate,
   type PurchaseOrderData,
 } from '../lib/document-pdf.js';
+import { todayISO } from '../lib/today.js';
 
 /**
  * Supplier purchase orders for trading operations: the customer's order bought
@@ -174,7 +175,7 @@ router.get('/prepare', (req: Request, res: Response) => {
     ...issuer,
     entity_code: entity,
     po_number: operation?.operation_number || order.order_number || '',
-    po_date: new Date().toISOString().slice(0, 10),
+    po_date: todayISO(),
     our_ref: operation?.operation_number || '',
     sq_number: '',
     client_code: '',
@@ -229,7 +230,7 @@ function prepareFromNco(req: Request, res: Response) {
     ...issuer,
     entity_code: entity,
     po_number: `${nco.nco_number}PO`,
-    po_date: new Date().toISOString().slice(0, 10),
+    po_date: todayISO(),
     our_ref: nco.nco_number,
     sq_number: '',
     client_code: '',

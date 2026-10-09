@@ -8,6 +8,7 @@ import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
 import FileUpload from '../components/ui/FileUpload';
 import { ArrowLeft, Plus, X, Loader2, Paperclip } from 'lucide-react';
+import { todayISO } from '../lib/dates';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 interface OrderItem {
@@ -122,7 +123,7 @@ export default function OrderFormPage({ embedded, orderId, operationNumber, oper
   const [form, setForm] = useState({
     operation_number: prefillOpNumber,
     order_number:  '',
-    order_date:    new Date().toISOString().slice(0, 10),
+    order_date:    todayISO(),
     type:          party?.type || 'customer',
     customer_id:   party?.type === 'customer' ? String(party.id) : '',
     supplier_id:   party?.type === 'supplier' ? String(party.id) : '',
@@ -164,7 +165,7 @@ export default function OrderFormPage({ embedded, orderId, operationNumber, oper
         setForm({
           operation_number: o.operation_number || '',
           order_number:  o.order_number  || '',
-          order_date:    o.order_date    || new Date().toISOString().slice(0, 10),
+          order_date:    o.order_date    || todayISO(),
           type:          o.type          || 'customer',
           customer_id:   o.customer_id   ? String(o.customer_id)  : '',
           supplier_id:   o.supplier_id   ? String(o.supplier_id)  : '',

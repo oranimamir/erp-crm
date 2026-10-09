@@ -12,7 +12,7 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import { Plus, ShoppingCart, Eye, Pencil, Trash2, Download, FileSpreadsheet, X } from 'lucide-react';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
-import { formatDate } from '../lib/dates';
+import { formatDate, todayISO } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
 
 const statusOptions = [
@@ -92,7 +92,7 @@ export default function OrdersPage() {
       const url = URL.createObjectURL(res.data);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `orders-${new Date().toISOString().slice(0, 10)}.zip`;
+      a.download = `orders-${todayISO()}.zip`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);

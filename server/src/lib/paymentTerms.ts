@@ -77,22 +77,22 @@ function toDayCount(raw: string): number | null {
   return Number.isFinite(n) && n >= 0 && n <= 365 ? n : null;
 }
 
-/** ISO date `days` after `dateStr`. Noon avoids DST shifting the result a day. */
+/** ISO date `days` after `dateStr`. Counted in UTC so neither DST nor the server's time zone shifts it a day. */
 export function addDays(dateStr: string, days: number): string | null {
   if (!dateStr) return null;
-  const d = new Date(`${dateStr.slice(0, 10)}T12:00:00`);
+  const d = new Date(`${dateStr.slice(0, 10)}T12:00:00Z`);
   if (isNaN(d.getTime())) return null;
-  d.setDate(d.getDate() + days);
+  d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().split('T')[0];
 }
 
 /** Last day of the month `dateStr` falls in. */
 export function endOfMonth(dateStr: string): string | null {
   if (!dateStr) return null;
-  const d = new Date(`${dateStr.slice(0, 10)}T12:00:00`);
+  const d = new Date(`${dateStr.slice(0, 10)}T12:00:00Z`);
   if (isNaN(d.getTime())) return null;
   // Day 0 of the next month is the last day of this one.
-  const last = new Date(d.getFullYear(), d.getMonth() + 1, 0, 12);
+  const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0, 12));
   return last.toISOString().split('T')[0];
 }
 

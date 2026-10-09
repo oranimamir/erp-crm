@@ -3,7 +3,7 @@ import api from '../lib/api';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import { Plus, Pencil, Trash2, X, Wallet, Filter, Search, Archive, ArchiveRestore } from 'lucide-react';
-import { formatDate } from '../lib/dates';
+import { formatDate, todayISO } from '../lib/dates';
 
 type Status = 'planned' | 'actualized' | 'cancelled';
 
@@ -84,7 +84,7 @@ const EMPTY_FORM: FormState = {
   operation_ids: [],
   amount: '',
   currency: 'EUR',
-  expected_date: new Date().toISOString().slice(0, 10),
+  expected_date: todayISO(),
   status: 'planned',
   notes: '',
 };

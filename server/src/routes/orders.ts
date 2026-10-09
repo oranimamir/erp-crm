@@ -6,6 +6,7 @@ import db from '../database.js';
 import { archiveStored, archiveFile, archiveBuffer, archivedBy, ownerOf, contextOf } from '../lib/archive.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { resolveUpload, streamZip, safeName } from '../lib/zipFiles.js';
+import { todayISO } from '../lib/today.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
@@ -43,7 +44,7 @@ router.get('/bulk-download', (req: Request, res: Response) => {
 
   if (!files.length) { res.status(404).json({ error: 'None of the selected orders have an attached document' }); return; }
 
-  streamZip(res, `orders-${new Date().toISOString().slice(0, 10)}.zip`, files);
+  streamZip(res, `orders-${todayISO()}.zip`, files);
 });
 
 router.get('/', (req: Request, res: Response) => {
@@ -312,6 +313,8 @@ router.patch('/:id/status', (req: Request, res: Response) => {
 
   const { status, notes } = req.body;
   if (!status) { res.status(400).json({ error: 'Status is required' }); return; }
+  const VALID = ['order_placed', 'confirmed', 'processing', 'shipped', 'delivered', 'completed', 'cancelled'];
+  if (!VALID.includes(status)) { res.status(400).json({ error: `Status must be one of: ${VALID.join(', ')}` }); return; }
 
   // When shipped, the payment due date is the operation's estimate — from the
   // invoice's payment terms (no fixed number of days)

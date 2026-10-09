@@ -27,6 +27,7 @@ import {
   ncoSource, ncoProfile, ncoPartyFields, NCO_CURRENCY, nextSampleInvoiceNumber, ncoSampleLines, sampleQuantityText,
   fileUnderNco, dropNcoDocumentRow,
 } from '../lib/ncoDocs.js';
+import { todayISO } from '../lib/today.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
@@ -221,7 +222,7 @@ async function syncRecordedInvoice(docId: number): Promise<void> {
   if (!customerId && !supplierId) return;
 
   const { total, currency } = computeTotals(data);
-  const invoiceDate = data.doc_date || new Date().toISOString().slice(0, 10);
+  const invoiceDate = data.doc_date || todayISO();
   let fxRate: number | null = null;
   let eurAmount: number | null = null;
   if (currency !== 'EUR') {
@@ -378,7 +379,7 @@ router.get('/prepare', (req: Request, res: Response) => {
 
   const items = db.prepare('SELECT * FROM order_items WHERE order_id = ? ORDER BY id').all(orderId) as any[];
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayISO();
   const isSupplier = order.type === 'supplier';
 
   // The order confirmation is what was agreed with the customer — the invoice
@@ -540,7 +541,7 @@ function prepareFromNco(req: Request, res: Response) {
   const savedSample = (profile?.data as any)?.sample_invoice_layout;
   const layout = normalizeLayout(savedSample && typeof savedSample === 'object' ? savedSample : SAMPLE_INVOICE_LAYOUT);
   const layoutSource = savedSample ? `sample format saved on ${profile!.name}` : 'the TripleW sample invoice';
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayISO();
   const party = ncoPartyFields(nco, profile);
 
   const draft: DocumentData = {

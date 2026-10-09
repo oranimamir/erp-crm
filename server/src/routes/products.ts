@@ -108,12 +108,13 @@ router.put('/:id', (req, res) => {
   if (typeof name !== 'string' || !name.trim()) {
     return res.status(400).json({ error: 'Name is required' });
   }
-  const existing = db.prepare('SELECT id, sku FROM products WHERE id = ?').get(id) as any;
+  const existing = db.prepare('SELECT id, sku, category, notes FROM products WHERE id = ?').get(id) as any;
   if (!existing) return res.status(404).json({ error: 'Product not found' });
   try {
     db.prepare(
       "UPDATE products SET name=?, sku=?, category=?, notes=?, updated_at=datetime('now') WHERE id=?"
-    ).run(name.trim(), sku === undefined ? existing.sku : skuOf(sku), category, notes ?? null, id);
+    ).run(name.trim(), sku === undefined ? existing.sku : skuOf(sku),
+      category === undefined ? existing.category : category, notes === undefined ? existing.notes : (notes || null), id);
     const updated = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as any;
     notifyAdmin({ action: 'updated', entity: 'Product', label: labelOf(updated), performedBy: (req as Request).user?.display_name || 'Unknown', performedById: (req as Request).user?.userId });
     res.json(updated);

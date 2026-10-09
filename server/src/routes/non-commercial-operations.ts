@@ -14,6 +14,7 @@ import { mountOwnerDocumentRoutes } from '../lib/ownerDocumentRoutes.js';
 import { saveDeclarationToLibrary } from '../lib/documentSources.js';
 import { getOwner } from '../lib/docOwner.js';
 import fs from 'fs';
+import { todayISO } from '../lib/today.js';
 
 /**
  * Non-commercial operations (NCO): samples sent to a customer, or shipping with
@@ -217,7 +218,7 @@ router.post('/', (req: Request, res: Response) => {
   const party = partyFor(type, customer_id, supplier_id);
   if ('error' in party) { res.status(400).json({ error: party.error }); return; }
 
-  const date = nco_date || new Date().toISOString().slice(0, 10);
+  const date = nco_date || todayISO();
   const year = yearOf(date);
   if (typed) {
     const error = customNumberError(typed);

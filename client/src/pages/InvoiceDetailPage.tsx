@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
-import { formatDate } from '../lib/dates';
+import { formatDate, todayISO } from '../lib/dates';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Select from '../components/ui/Select';
@@ -59,7 +59,7 @@ export default function InvoiceDetailPage() {
   const [updatingStatus, setUpdatingStatus] = useState(false);
 
   // Wire transfer inline form
-  const [wirePaymentDate, setWirePaymentDate] = useState(new Date().toISOString().split('T')[0]);
+  const [wirePaymentDate, setWirePaymentDate] = useState(todayISO());
   const [wireDateManuallySet, setWireDateManuallySet] = useState(false);
   const [wireBankRef, setWireBankRef] = useState('');
   const [wireUploading, setWireUploading] = useState(false);

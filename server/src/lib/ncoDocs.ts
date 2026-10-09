@@ -6,6 +6,7 @@ import { archiveStored, archiveFile, ownerOf, contextOf } from './archive.js';
 import type { DocLine } from './document-pdf.js';
 import { listProfiles } from './documentPrefill.js';
 import { matchProfile } from './profileMatch.js';
+import { todayISO } from './today.js';
 
 /**
  * Non-commercial operations (samples) as a source for the document generators:
@@ -161,7 +162,7 @@ export function deleteNcoUpload(row: { id: number; file_path: string; file_name?
  * invoice series, which they never enter.
  */
 export function nextSampleInvoiceNumber(entity: string, date?: string | null): string {
-  const d = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? String(date) : new Date().toISOString().slice(0, 10);
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? String(date) : todayISO();
   const prefix = `SI${entity}${d.replace(/-/g, '')}`;
   const rows = db.prepare(`SELECT invoice_number FROM invoice_documents WHERE invoice_number LIKE ?`).all(`${prefix}%`) as any[];
   let max = 0;

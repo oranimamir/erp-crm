@@ -4,7 +4,7 @@ import api from '../lib/api';
 import Card from '../components/ui/Card';
 import StatusBadge from '../components/ui/StatusBadge';
 import { TrendingUp, BarChart3, Scale, AlertTriangle, Users, Receipt, Info, X } from 'lucide-react';
-import { formatDate } from '../lib/dates';
+import { formatDate, todayISO } from '../lib/dates';
 
 interface Stats {
   customers: number;
@@ -620,7 +620,7 @@ export default function DashboardPage() {
 
       {/* Revenue Forecast */}
       {forecast.length > 0 && (() => {
-        const currentMonth = new Date().toISOString().slice(0, 7);
+        const currentMonth = todayISO().slice(0, 7);
         const maxBar = Math.max(...forecast.map((m: any) => m.paid + m.pending), 1);
         const totalPaid = forecast.reduce((s: number, m: any) => s + m.paid, 0);
         const totalPending = forecast.reduce((s: number, m: any) => s + m.pending, 0);

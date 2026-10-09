@@ -20,3 +20,12 @@ export function toInputDate(dateStr: string | null | undefined): string {
   if (match) return `${match[1]}-${match[2]}-${match[3]}`;
   return '';
 }
+
+/**
+ * Today as YYYY-MM-DD in the user's own time zone. `toISOString()` is UTC, so
+ * in Belgium it still says yesterday until 01:00 / 02:00 at night.
+ */
+export function todayISO(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}

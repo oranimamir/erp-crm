@@ -9,6 +9,7 @@ import { uploadEntityDoc } from '../middleware/upload.js';
 import { uploadsBase } from '../lib/productDocs.js';
 import { readBankDetails } from '../lib/bankDetailsReader.js';
 import { archiveStored, archivedBy } from '../lib/archive.js';
+import { todayISO } from '../lib/today.js';
 
 /** The TripleW entities that issue documents — edited on the TripleW Details page. */
 const router = Router();
@@ -76,7 +77,7 @@ router.get('/:code/pdf', async (req: Request, res: Response) => {
       address1: clean(entity.address1), address2: clean(entity.address2), address3: clean(entity.address3),
       tel: clean(entity.tel), email: clean(entity.email), vat: clean(entity.vat), kvk: clean(entity.kvk),
       contact_person: clean(entity.contact_person), delivery_address: clean(entity.delivery_address),
-      banks, date: new Date().toISOString().slice(0, 10),
+      banks, date: todayISO(),
     });
     res.attachment(`${clean(entity.company_name).replace(/[\\/:*?"<>|]+/g, '-') || entity.code} - Company details.pdf`);
     res.type('application/pdf');

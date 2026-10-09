@@ -6,6 +6,7 @@ import JSZip from 'jszip';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import db from '../database.js';
 import { uploadsBase } from './productDocs.js';
+import { todayISO } from './today.js';
 
 /**
  * Declarations: the generator's data, and drafting it from a starting
@@ -36,7 +37,7 @@ export interface DeclarationData {
 export const declarationAssetsDir = path.join(uploadsBase, 'declaration-assets');
 const SAFE = /^[a-zA-Z0-9._-]+$/;
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayISO();
 
 /** The signature used last, so a declaration started from a PDF is still signed. */
 export function lastSignature(): string | null {

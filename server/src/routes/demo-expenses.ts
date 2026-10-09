@@ -22,6 +22,7 @@ import {
   triageJob, stageCandidates, pollBatches, startBatchPoller, invoiceSignature, scopeOf,
   startRun, advanceRun, currentRun, triageInvoice,
 } from '../lib/invoiceCheck.js';
+import { todayISO } from '../lib/today.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
@@ -476,7 +477,7 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
   if (!text.trim()) {
     return {
       invoiceId: fileBaseName,
-      issueDate: new Date().toISOString().substring(0, 10),
+      issueDate: todayISO(),
       supplierName: 'Unknown',
       amount: 0,
       vatAmount: 0,
@@ -650,7 +651,7 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
     }
   }
   if (!issueDate) {
-    issueDate = new Date().toISOString().substring(0, 10);
+    issueDate = todayISO();
   }
 
   // ─── SUPPLIER NAME ──────────────────────────────────────────────────
@@ -1384,7 +1385,7 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
       }
     }
     const inferredMonth = Object.entries(monthCounts).sort((a, b) => b[1] - a[1])[0]?.[0]
-      || new Date().toISOString().substring(0, 7);
+      || todayISO().slice(0, 7);
 
     // Classify each invoice into domain + category
     const classified = deduped.map(inv => {
@@ -1481,7 +1482,7 @@ router.post('/upload-zip', upload.single('file'), async (req: Request, res: Resp
     const newInvoices = classified.filter((inv: any) => !sureDuplicate.has(inv));
 
     // Flag invoices that need user attention (amount=0, fallback date, unknown supplier, own-company, bad dates)
-    const today = new Date().toISOString().substring(0, 10);
+    const today = todayISO();
     const currentYear = new Date().getFullYear();
     const warnings: { invoiceId: string; supplier: string; issues: string[]; duplicateOf?: any }[] = [];
     for (const inv of newInvoices) {
@@ -1903,7 +1904,7 @@ router.get('/reconciliation', (_req: Request, res: Response) => {
 
 router.get('/data-quality', (req: Request, res: Response) => {
   try {
-    const today = new Date().toISOString().substring(0, 10);
+    const today = todayISO();
     const currentYear = new Date().getFullYear();
     const invoices = db.prepare('SELECT id, invoice_id, issue_date, supplier, amount, created_at FROM demo_invoices').all() as any[];
     const issues: { id: number; invoice_id: string; supplier: string; issue: string; detail: string }[] = [];
@@ -2598,7 +2599,7 @@ router.patch('/invoices/:id/date', (req: Request, res: Response) => {
     // Validate date sanity
     const dateObj = new Date(issue_date);
     const year = dateObj.getFullYear();
-    const today = new Date().toISOString().substring(0, 10);
+    const today = todayISO();
     const dateWarnings: string[] = [];
     if (year < 2020 || year > new Date().getFullYear() + 1) dateWarnings.push(`Year ${year} looks illogical`);
     if (issue_date > today) dateWarnings.push('Date is in the future');

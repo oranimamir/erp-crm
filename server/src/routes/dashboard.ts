@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
 import { getEurRate } from '../lib/fx.js';
+import { todayISO } from '../lib/today.js';
 
 const router = Router();
 
@@ -317,7 +318,7 @@ router.get('/open-totals', async (_req: Request, res: Response) => {
       WHERE i.type = 'customer' AND i.status IN ('draft', 'sent', 'overdue')
     `).all() as any[];
     await attachLiveEur(invoices);
-    const today = new Date().toISOString().substring(0, 10);
+    const today = todayISO();
     let openEur = 0, overdueEur = 0;
     for (const inv of invoices) {
       openEur += inv.live_eur_amount || 0;

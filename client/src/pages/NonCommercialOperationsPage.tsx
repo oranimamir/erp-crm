@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Pencil, Trash2, Loader2, PackageOpen, UserPlus, X } from 'lucide-react';
 import api from '../lib/api';
-import { formatDate } from '../lib/dates';
+import { formatDate, todayISO } from '../lib/dates';
 import { useToast } from '../contexts/ToastContext';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -65,7 +65,7 @@ interface FormState { entity: Entity; type: NcoType; customer_id: string; suppli
 interface NewClient { name: string; company: string; address: string; contact_person: string; email: string; phone: string; vat_number: string }
 const emptyClient = (): NewClient => ({ name: '', company: '', address: '', contact_person: '', email: '', phone: '', vat_number: '' });
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayISO();
 const emptyForm = (entity: Entity = 'BE'): FormState =>
   ({ entity, type: 'samples', customer_id: '', supplier_id: '', nco_date: today(), notes: '', nco_number: '', status: 'requested' });
 

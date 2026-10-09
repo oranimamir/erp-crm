@@ -15,6 +15,7 @@ import {
   CheckCircle, FileText, RefreshCw, User, Package, Truck, Factory,
   LayoutTemplate, ChevronDown, ChevronRight, Save,
 } from 'lucide-react';
+import { todayISO } from '../lib/dates';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -105,7 +106,7 @@ const emptyLine = (n: number): InvLine => ({
 });
 
 const blankData = (): InvData => ({
-  doc_number: '', doc_date: new Date().toISOString().slice(0, 10),
+  doc_number: '', doc_date: todayISO(),
   sq_number: '', our_ref: '', po_number: '', operation_number: '',
   client_code: '', attention: '', product_reference: '',
   client_name: '', billing_address: '',

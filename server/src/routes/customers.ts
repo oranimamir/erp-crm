@@ -50,18 +50,19 @@ router.post('/', (req: Request, res: Response) => {
 
 // Update customer
 router.put('/:id', (req: Request, res: Response) => {
-  const existing = db.prepare('SELECT id, vat_number, contact_person FROM customers WHERE id = ?').get(req.params.id) as any;
+  const existing = db.prepare('SELECT * FROM customers WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Customer not found' }); return; }
 
   const { name, email, phone, address, company, notes, vat_number, contact_person } = req.body;
   if (!name) { res.status(400).json({ error: 'Name is required' }); return; }
 
-  // VAT and contact are kept when a form that doesn't show them saves
+  // A field left out keeps its stored value; a field sent blank clears it
+  const keep = (sent: any, stored: any) => (sent === undefined ? stored : (sent || null));
   db.prepare(
     `UPDATE customers SET name=?, email=?, phone=?, address=?, company=?, notes=?, vat_number=?, contact_person=?, updated_at=datetime('now') WHERE id=?`
-  ).run(name, email || null, phone || null, address || null, company || null, notes || null,
-    vat_number !== undefined ? (vat_number || null) : existing.vat_number,
-    contact_person !== undefined ? (contact_person || null) : existing.contact_person,
+  ).run(name, keep(email, existing.email), keep(phone, existing.phone), keep(address, existing.address),
+    keep(company, existing.company), keep(notes, existing.notes),
+    keep(vat_number, existing.vat_number), keep(contact_person, existing.contact_person),
     req.params.id);
 
   const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(req.params.id) as any;
