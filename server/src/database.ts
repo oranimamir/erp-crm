@@ -2223,6 +2223,21 @@ export async function initializeDatabase() {
     )
   `);
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_supplier_docs_supplier ON supplier_documents(supplier_id)`); } catch (_) {}
+  // TripleW Details → Account ownership documents: bank letters per entity, with what was read off them
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS company_entity_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_code TEXT NOT NULL,
+      title TEXT,
+      file_path TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      extracted TEXT,
+      read_error TEXT,
+      notes TEXT,
+      uploaded_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
   for (const name of ['COA', 'General document']) {
     try { db.prepare('INSERT OR IGNORE INTO document_categories (name) VALUES (?)').run(name); } catch (_) { /* ignore */ }
   }

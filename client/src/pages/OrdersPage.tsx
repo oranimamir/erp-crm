@@ -201,7 +201,7 @@ export default function OrdersPage() {
             downloadExcel('orders', ['Order #', 'Customer / Supplier', 'Type', 'Amount', 'Status', 'Created'],
               res.data.data.map((o: any) => [o.order_number, o.customer_name || o.supplier_name || '', o.type, o.total_amount ?? '', o.status, formatDate(o.created_at) || '']));
           }}><FileSpreadsheet size={16} /> Export Excel</Button>
-          <Link to="/orders/new">
+          <Link to="/operations/new" title="An order starts its operation: upload it there, the operation is numbered automatically">
             <Button><Plus size={16} /> New Order</Button>
           </Link>
         </div>
@@ -256,7 +256,7 @@ export default function OrdersPage() {
             icon={<ShoppingCart size={24} />}
             title="No orders found"
             description="Get started by creating your first order."
-            action={<Link to="/orders/new"><Button size="sm"><Plus size={14} /> New Order</Button></Link>}
+            action={<Link to="/operations/new"><Button size="sm"><Plus size={14} /> New Order</Button></Link>}
           />
         ) : (
           <div className="overflow-x-auto">

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
@@ -82,9 +82,13 @@ const emptyItem = (): OrderItem => ({
  * The order form — a page (/orders/new, /orders/:id/edit) or, with `embedded`,
  * inside a window on the operation page (`orderId` to edit, `operationNumber`
  * for a new order of that operation; `onDone` after saving, `onCancel`).
+ * `operationId` fixes the operation (no operation choice shown; the order is
+ * linked to it), `party` presets the operation's customer / supplier and
+ * `initialFile` is read straight away (the order dropped on the operation page).
  */
-export default function OrderFormPage({ embedded, orderId, operationNumber, onDone, onCancel }: {
-  embedded?: boolean; orderId?: number | null; operationNumber?: string;
+export default function OrderFormPage({ embedded, orderId, operationNumber, operationId, party, initialFile, onDone, onCancel }: {
+  embedded?: boolean; orderId?: number | null; operationNumber?: string; operationId?: number | null;
+  party?: { type: 'customer' | 'supplier'; id: number } | null; initialFile?: File | null;
   onDone?: (saved: any) => void; onCancel?: () => void;
 } = {}) {
   const params      = useParams();
@@ -119,9 +123,9 @@ export default function OrderFormPage({ embedded, orderId, operationNumber, onDo
     operation_number: prefillOpNumber,
     order_number:  '',
     order_date:    new Date().toISOString().slice(0, 10),
-    type:          'customer',
-    customer_id:   '',
-    supplier_id:   '',
+    type:          party?.type || 'customer',
+    customer_id:   party?.type === 'customer' ? String(party.id) : '',
+    supplier_id:   party?.type === 'supplier' ? String(party.id) : '',
     // Shipping & terms
     inco_terms:    '',
     destination:   '',
@@ -193,6 +197,15 @@ export default function OrderFormPage({ embedded, orderId, operationNumber, onDo
       .finally(() => setLoading(false));
   }, [id]);
 
+  // The order dropped on the operation page is read as soon as the form opens
+  const scannedInitial = useRef(false);
+  useEffect(() => {
+    if (!initialFile || scannedInitial.current) return;
+    scannedInitial.current = true;
+    handleScanFile(initialFile);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialFile]);
+
   // ── Field helpers ────────────────────────────────────────────────────
   const updateField = (field: string, value: string) =>
     setForm(prev => ({ ...prev, [field]: value }));
@@ -235,7 +248,8 @@ export default function OrderFormPage({ embedded, orderId, operationNumber, onDo
       // Auto-fill header fields (only if not already filled)
       setForm(prev => ({
         ...prev,
-        operation_number: data.operation_number || prev.operation_number,
+        // The operation is fixed when the order is added from it
+        operation_number: operationId ? prev.operation_number : (data.operation_number || prev.operation_number),
         order_number:  data.order_number  || prev.order_number,
         order_date:    data.order_date    || prev.order_date,
         inco_terms:    data.inco_terms    || prev.inco_terms,
@@ -291,8 +305,8 @@ export default function OrderFormPage({ embedded, orderId, operationNumber, onDo
     setSaving(true);
     try {
       const payload = {
-        operation_number:  operationMode === 'new' ? (form.operation_number || null) : null,
-        link_operation_id: operationMode === 'existing' && linkOperationId ? Number(linkOperationId) : null,
+        operation_number:  operationId ? null : operationMode === 'new' ? (form.operation_number || null) : null,
+        link_operation_id: operationId ? operationId : operationMode === 'existing' && linkOperationId ? Number(linkOperationId) : null,
         order_number:  form.order_number,
         order_date:    form.order_date    || null,
         type:          form.type,
@@ -407,8 +421,8 @@ export default function OrderFormPage({ embedded, orderId, operationNumber, onDo
           <h2 className="text-base font-semibold text-gray-900 mb-4">Order Details</h2>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
 
-            {/* Operation section — spans full row */}
-            <div className="col-span-2 md:col-span-3">
+            {/* Operation section — spans full row; fixed when the order is added from its operation */}
+            {operationId ? null : <div className="col-span-2 md:col-span-3">
               <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Operation</label>
               <div className="flex gap-4 mb-2">
                 <label className="flex items-center gap-1.5 text-sm cursor-pointer">
@@ -455,7 +469,7 @@ export default function OrderFormPage({ embedded, orderId, operationNumber, onDo
                   ))}
                 </select>
               )}
-            </div>
+            </div>}
             <Input label="Order Number *" value={form.order_number}
               onChange={e => updateField('order_number', e.target.value)} placeholder="e.g. ORD-001" />
             <Input label="Date of Order" type="date" value={form.order_date}

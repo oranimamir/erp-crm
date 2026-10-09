@@ -3,6 +3,7 @@ import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import Button from '../components/ui/Button';
+import EntityBankDocuments from '../components/EntityBankDocuments';
 import { Building2, Plus, Save, Star, Trash2, Loader2, Landmark, X, FileDown } from 'lucide-react';
 
 // The TripleW legal entities that issue documents. An entity can hold several
@@ -257,6 +258,9 @@ export default function TripleWDetailsPage() {
   const [newCode, setNewCode] = useState('');
   const [newName, setNewName] = useState('');
   const [creating, setCreating] = useState(false);
+  const [tab, setTab] = useState<'details' | 'documents'>('details');
+  // Bumped when bank details are applied from a document, so the cards reload their forms
+  const [rev, setRev] = useState(0);
 
   const load = () =>
     api.get('/company-entities')
@@ -310,7 +314,21 @@ export default function TripleWDetailsPage() {
         )}
       </div>
 
-      {adding && canEdit && (
+      <div className="flex border-b border-gray-200">
+        {([['details', 'Details'], ['documents', 'Account ownership documents']] as const).map(([key, label]) => (
+          <button key={key} onClick={() => setTab(key)}
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${tab === key ? 'border-primary-600 text-primary-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'documents' && (loading
+        ? <div className="flex justify-center py-16"><Loader2 className="animate-spin text-primary-600" size={24} /></div>
+        : <EntityBankDocuments entities={entities} canEdit={canEdit}
+            onApplied={raw => { const saved = normalise(raw); setEntities(prev => prev.map(e => (e.code === saved.code ? saved : e))); setRev(r => r + 1); }} />)}
+
+      {tab === 'details' && adding && canEdit && (
         <div className="bg-white rounded-xl border border-primary-200 shadow-sm p-5 space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="font-semibold text-gray-800 text-sm">New entity</h2>
@@ -331,12 +349,12 @@ export default function TripleWDetailsPage() {
         </div>
       )}
 
-      {loading ? (
+      {tab === 'details' && (loading ? (
         <div className="flex justify-center py-16"><Loader2 className="animate-spin text-primary-600" size={24} /></div>
       ) : (
         entities.map(entity => (
           <EntityCard
-            key={entity.code}
+            key={`${entity.code}-${rev}`}
             entity={entity}
             canEdit={canEdit}
             onSaved={saved => setEntities(prev => prev.map(e => (e.code === saved.code ? saved : e)))}
@@ -344,7 +362,7 @@ export default function TripleWDetailsPage() {
             onDefault={makeDefault}
           />
         ))
-      )}
+      ))}
     </div>
   );
 }

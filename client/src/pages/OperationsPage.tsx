@@ -658,7 +658,8 @@ export default function OperationsPage() {
                 New Operation
               </button>
               <button
-                onClick={() => navigate('/orders/new')}
+                onClick={() => navigate('/operations/new')}
+                title="Start from the client's order: it opens a new operation (numbered automatically) with the order attached"
                 className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700"
               >
                 <Plus size={16} />

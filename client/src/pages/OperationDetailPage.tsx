@@ -20,6 +20,7 @@ import DocxTextEditModal from '../components/DocxTextEditModal';
 import SendDocumentsModal from '../components/SendDocumentsModal';
 import Modal from '../components/ui/Modal';
 import OrderFormPage from './OrderFormPage';
+import InvoiceFormPage from './InvoiceFormPage';
 import { missingRequired, sortForSending, docNumber, DOC_ACCEPT } from '../lib/operationDocs';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -213,7 +214,11 @@ export default function OperationDetailPage() {
   // Link Order modal
   const [showLinkOrder, setShowLinkOrder] = useState(false);
   // Order form in a window on this page: { orderId } edits the linked order, {} makes a new one
-  const [orderForm, setOrderForm] = useState<{ orderId?: number } | null>(null);
+  const [orderForm, setOrderForm] = useState<{ orderId?: number; file?: File } | null>(null);
+  const [orderDrag, setOrderDrag] = useState(false);
+  const orderFileRef = useRef<HTMLInputElement>(null);
+  // Invoice upload / edit in a window on this page: { invoiceId } edits, {} adds
+  const [invoiceForm, setInvoiceForm] = useState<{ invoiceId?: number } | null>(null);
   const [orderSearch, setOrderSearch] = useState('');
   const [availableOrders, setAvailableOrders] = useState<any[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
@@ -807,12 +812,28 @@ export default function OperationDetailPage() {
         </div>
       ) : (
         /* No order linked */
-        <div className="bg-white rounded-xl border border-dashed border-gray-300 shadow-sm p-6 flex flex-col sm:flex-row items-center gap-4">
+        <div
+          onDragOver={e => { e.preventDefault(); setOrderDrag(true); }}
+          onDragLeave={() => setOrderDrag(false)}
+          onDrop={e => {
+            e.preventDefault(); setOrderDrag(false);
+            const f = e.dataTransfer.files?.[0];
+            if (f) setOrderForm({ file: f });
+          }}
+          className={`bg-white rounded-xl border-2 border-dashed shadow-sm p-6 flex flex-col sm:flex-row items-center gap-4 transition-colors ${orderDrag ? 'border-primary-400 bg-primary-50' : 'border-gray-300'}`}>
+          <input ref={orderFileRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) setOrderForm({ file: f }); }} />
           <ShoppingCart size={28} className="text-gray-300 flex-shrink-0" />
           <div className="flex-1 text-center sm:text-left">
-            <p className="text-sm font-medium text-gray-700">No order linked yet</p>
-            <p className="text-xs text-gray-500 mt-0.5">Create a new order or link an existing one to this operation.</p>
+            <p className="text-sm font-medium text-gray-700">No order linked yet — drop the client's order here</p>
+            <p className="text-xs text-gray-500 mt-0.5">It is read automatically and attached to {operation.operation_number}. Or enter it by hand, or link an existing order.</p>
           </div>
+          <button
+            onClick={() => orderFileRef.current?.click()}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-primary-300 text-primary-700 rounded-lg hover:bg-primary-50 flex-shrink-0"
+          >
+            <Upload size={14} /> Upload order
+          </button>
           <div className="flex gap-2 flex-shrink-0">
             <button
               onClick={() => setOrderForm({})}
@@ -838,7 +859,7 @@ export default function OperationDetailPage() {
             Invoices ({operation.invoices.length})
           </h2>
           <button
-            onClick={() => navigate(`/invoices/new?operation_id=${operation.id}`)}
+            onClick={() => setInvoiceForm({})}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-primary-600 text-white rounded-lg hover:bg-primary-700"
           >
             <Plus size={13} /> New Invoice
@@ -849,7 +870,7 @@ export default function OperationDetailPage() {
           <div className="px-5 py-8 text-center text-gray-400 text-sm">
             No invoices yet.{' '}
             <button
-              onClick={() => navigate(`/invoices/new?operation_id=${operation.id}`)}
+              onClick={() => setInvoiceForm({})}
               className="text-primary-600 hover:underline"
             >
               Create one
@@ -909,7 +930,7 @@ export default function OperationDetailPage() {
                         </>
                       )}
                       <button
-                        onClick={() => navigate(`/invoices/${inv.id}/edit`)}
+                        onClick={() => setInvoiceForm({ invoiceId: inv.id })}
                         className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
                       >
                         <Edit2 size={13} /> Edit
@@ -1312,6 +1333,9 @@ export default function OperationDetailPage() {
         <Modal open onClose={() => setOrderForm(null)} size="xl" closeOnBackdrop={false}
           title={orderForm.orderId ? `Edit Order ${operation.order_number || ''}` : `New Order for ${operation.operation_number}`}>
           <OrderFormPage embedded orderId={orderForm.orderId ?? null} operationNumber={operation.operation_number}
+            operationId={operation.id} initialFile={orderForm.file ?? null}
+            party={operation.customer_id ? { type: 'customer', id: operation.customer_id }
+              : operation.supplier_id ? { type: 'supplier', id: operation.supplier_id } : null}
             onCancel={() => setOrderForm(null)}
             onDone={async saved => {
               // A new order is linked to this operation if the save didn't already do it
@@ -1321,6 +1345,16 @@ export default function OperationDetailPage() {
               setOrderForm(null);
               fetchOperation();
             }} />
+        </Modal>
+      )}
+
+      {/* ── Invoice form (upload / edit) ───────────────────────────────────── */}
+      {invoiceForm && (
+        <Modal open onClose={() => setInvoiceForm(null)} size="xl" closeOnBackdrop={false}
+          title={invoiceForm.invoiceId ? 'Edit Invoice' : `New Invoice for ${operation.operation_number}`}>
+          <InvoiceFormPage embedded invoiceId={invoiceForm.invoiceId ?? null} operationId={operation.id}
+            onCancel={() => setInvoiceForm(null)}
+            onDone={() => { setInvoiceForm(null); fetchOperation(); }} />
         </Modal>
       )}
 

@@ -450,6 +450,37 @@ router.get('/wire-match', async (req: Request, res: Response) => {
 
 // ── Single operation ──────────────────────────────────────────────────────────
 
+/**
+ * The next operation number of an entity and year: SO + entity + year +
+ * running number, one after the highest already used (on operations, or
+ * written on an order), keeping its zero padding — SOBE20260124 → SOBE20260125;
+ * the first of a year is SO<entity><year>0001.
+ */
+export function nextOperationNumber(entity: string, year: number = new Date().getFullYear()): string {
+  const prefix = `SO${entity.toUpperCase()}${year}`;
+  const pattern = new RegExp(`^${prefix}(\\d+)$`, 'i');
+  const used = [
+    ...(db.prepare('SELECT operation_number AS n FROM operations WHERE UPPER(operation_number) LIKE ?').all(`${prefix}%`) as any[]),
+    ...(db.prepare('SELECT operation_number AS n FROM orders WHERE operation_number IS NOT NULL AND UPPER(operation_number) LIKE ?').all(`${prefix}%`) as any[]),
+  ];
+  let max = 0;
+  let width = 4;
+  for (const { n } of used) {
+    const m = pattern.exec(String(n || '').trim());
+    if (!m) continue;
+    const value = Number(m[1]);
+    if (value > max) { max = value; width = Math.max(4, m[1].length); }
+  }
+  return `${prefix}${String(max + 1).padStart(width, '0')}`;
+}
+
+// GET /api/operations/next-number?entity=BE — preview of the automatic number
+router.get('/next-number', (req: Request, res: Response) => {
+  const entity = String(req.query.entity || '').toUpperCase();
+  if (!isEntityCode(entity)) { res.status(400).json({ error: 'Choose the entity (BE or NL)' }); return; }
+  res.json({ operation_number: nextOperationNumber(entity) });
+});
+
 router.get('/:id', (req: Request, res: Response) => {
   // An OC / PO generated before the order had this operation is filed now
   try { if (fileGeneratedForOperation(Number(req.params.id))) db.saveToDisk(); } catch (err: any) { console.error('[operations] filing generated documents failed:', err?.message || err); }
@@ -514,9 +545,13 @@ const VALID_STATUSES = ['pre-ordered', 'ordered', 'shipped', 'in clearance', 'de
 const VALID_CATEGORIES = ['blending', 'trading'];
 
 router.post('/', (req: Request, res: Response) => {
-  const { operation_number, order_id, customer_id, supplier_id, notes, status, category } = req.body;
+  const { order_id, customer_id, supplier_id, notes, status, category } = req.body;
+  // Blank number + entity → the next automatic number, allocated here so two people creating at once can't collide
+  const entity = String(req.body?.entity || '').toUpperCase();
+  const operation_number = String(req.body?.operation_number || '').trim()
+    || (isEntityCode(entity) ? nextOperationNumber(entity) : '');
   if (!operation_number) {
-    res.status(400).json({ error: 'operation_number is required' });
+    res.status(400).json({ error: 'Enter an operation number or choose the entity (BE / NL)' });
     return;
   }
   if (!VALID_CATEGORIES.includes(category)) {
@@ -537,7 +572,8 @@ router.post('/', (req: Request, res: Response) => {
     res.status(201).json(op);
   } catch (err: any) {
     if (err.message?.includes('UNIQUE')) {
-      res.status(409).json({ error: 'Operation number already exists' });
+      const suggested = nextOperationNumber(entityFromOperationNumber(operation_number));
+      res.status(409).json({ error: `Operation number ${operation_number} already exists — next free: ${suggested}`, suggested });
     } else {
       res.status(400).json({ error: err.message });
     }

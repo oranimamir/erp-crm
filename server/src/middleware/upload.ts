@@ -78,6 +78,13 @@ const libraryFileFilter = (_req: any, file: Express.Multer.File, cb: multer.File
   else cb(new Error('Only PDF, Word, JPEG, PNG and WebP files are allowed'));
 };
 
+// TripleW bank ownership documents (bank letters): PDF or images, read by Claude
+export const uploadEntityDoc = multer({
+  storage: createStorage('entity-docs'),
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter,
+});
+
 export const uploadProductDoc = multer({
   storage: createStorage('product-docs'),
   limits: { fileSize: 10 * 1024 * 1024 },

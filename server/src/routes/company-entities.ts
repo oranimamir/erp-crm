@@ -3,6 +3,11 @@ import db from '../database.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { ENTITY_CODE_PATTERN, listEntities } from '../lib/companyEntity.js';
 import { buildCompanyDetailsPdf } from '../lib/document-pdf.js';
+import fs from 'fs';
+import path from 'path';
+import { uploadEntityDoc } from '../middleware/upload.js';
+import { uploadsBase } from '../lib/productDocs.js';
+import { readBankDetails } from '../lib/bankDetailsReader.js';
 
 /** The TripleW entities that issue documents — edited on the TripleW Details page. */
 const router = Router();
@@ -80,6 +85,84 @@ router.get('/:code/pdf', async (req: Request, res: Response) => {
   }
 });
 
+// ── Account ownership documents (bank letters) ─────────────────────────────
+
+const entityDocsDir = path.join(uploadsBase, 'entity-docs');
+const SAFE = /^[a-zA-Z0-9._-]+$/;
+
+function unlinkEntityFile(name: string | null | undefined) {
+  if (!name || !SAFE.test(name)) return;
+  const full = path.join(entityDocsDir, name);
+  if (fs.existsSync(full)) { try { fs.unlinkSync(full); } catch { /* best effort */ } }
+}
+
+function presentDoc(row: any) {
+  let extracted = null;
+  try { extracted = row.extracted ? JSON.parse(row.extracted) : null; } catch { /* unreadable */ }
+  return { ...row, extracted };
+}
+
+function docsOf(code: string) {
+  return (db.prepare('SELECT * FROM company_entity_documents WHERE entity_code = ? ORDER BY created_at DESC, id DESC').all(code) as any[]).map(presentDoc);
+}
+
+/** Reads one stored document and saves the reading (or why it failed). */
+async function readAndStore(doc: any): Promise<void> {
+  try {
+    if (!SAFE.test(doc.file_path)) throw new Error('Invalid file');
+    const reading = await readBankDetails(fs.readFileSync(path.join(entityDocsDir, doc.file_path)));
+    db.prepare('UPDATE company_entity_documents SET extracted = ?, read_error = ? WHERE id = ?')
+      .run(reading ? JSON.stringify(reading) : null, reading ? null : 'No bank details found on the document', doc.id);
+  } catch (err: any) {
+    const msg = err?.name === 'AiBudgetError' ? 'Monthly AI spending limit reached' : (err?.message || 'Could not read the document');
+    db.prepare('UPDATE company_entity_documents SET read_error = ? WHERE id = ?').run(String(msg).slice(0, 300), doc.id);
+  }
+}
+
+router.get('/:code/documents', (req: Request, res: Response) => {
+  const code = String(req.params.code).toUpperCase();
+  if (!byCode(code)) { res.status(404).json({ error: 'Entity not found' }); return; }
+  res.json(docsOf(code));
+});
+
+// POST /api/company-entities/:code/documents — multipart files (PDF / images); each is read for its bank details
+router.post('/:code/documents', requireAdmin, uploadEntityDoc.array('files', 20), async (req: Request, res: Response) => {
+  const files = (req.files as Express.Multer.File[]) || [];
+  const code = String(req.params.code).toUpperCase();
+  const entity = byCode(code);
+  if (!entity) { files.forEach(f => unlinkEntityFile(f.filename)); res.status(404).json({ error: 'Entity not found' }); return; }
+  if (!files.length) { res.status(400).json({ error: 'Choose at least one file' }); return; }
+  const notes = clean(req.body?.notes) || null;
+  for (const f of files) {
+    const r = db.prepare('INSERT INTO company_entity_documents (entity_code, title, file_path, file_name, notes, uploaded_by) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(code, path.parse(f.originalname).name, f.filename, f.originalname, notes, req.user?.userId ?? null);
+    await readAndStore(db.prepare('SELECT * FROM company_entity_documents WHERE id = ?').get(r.lastInsertRowid));
+  }
+  db.saveToDisk();
+  notifyAdmin({ action: 'updated', entity: 'TripleW Entity', label: `${entity.company_name} (${code})`, detail: `${files.length} account ownership document${files.length === 1 ? '' : 's'} uploaded`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
+  res.status(201).json(docsOf(code));
+});
+
+// POST /api/company-entities/:code/documents/:docId/read — read again (e.g. after an AI outage)
+router.post('/:code/documents/:docId/read', requireAdmin, async (req: Request, res: Response) => {
+  const code = String(req.params.code).toUpperCase();
+  const doc = db.prepare('SELECT * FROM company_entity_documents WHERE id = ? AND entity_code = ?').get(req.params.docId, code) as any;
+  if (!doc) { res.status(404).json({ error: 'Document not found' }); return; }
+  await readAndStore(doc);
+  db.saveToDisk();
+  res.json(presentDoc(db.prepare('SELECT * FROM company_entity_documents WHERE id = ?').get(doc.id)));
+});
+
+router.delete('/:code/documents/:docId', requireAdmin, (req: Request, res: Response) => {
+  const code = String(req.params.code).toUpperCase();
+  const doc = db.prepare('SELECT * FROM company_entity_documents WHERE id = ? AND entity_code = ?').get(req.params.docId, code) as any;
+  if (!doc) { res.status(404).json({ error: 'Document not found' }); return; }
+  db.prepare('DELETE FROM company_entity_documents WHERE id = ?').run(doc.id);
+  unlinkEntityFile(doc.file_path);
+  db.saveToDisk();
+  res.json({ ok: true });
+});
+
 router.post('/', requireAdmin, (req: Request, res: Response) => {
   const code = clean(req.body?.code).toUpperCase();
   const name = clean(req.body?.company_name);
@@ -149,6 +232,8 @@ router.delete('/:code', requireAdmin, (req: Request, res: Response) => {
   if (listEntities().length <= 1) { res.status(400).json({ error: 'At least one entity is required' }); return; }
 
   db.prepare('DELETE FROM company_entities WHERE code = ?').run(code);
+  for (const d of db.prepare('SELECT file_path FROM company_entity_documents WHERE entity_code = ?').all(code) as any[]) unlinkEntityFile(d.file_path);
+  db.prepare('DELETE FROM company_entity_documents WHERE entity_code = ?').run(code);
   db.saveToDisk();
 
   notifyAdmin({ action: 'deleted', entity: 'TripleW Entity', label: `${existing.company_name} (${code})`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });

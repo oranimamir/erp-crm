@@ -162,13 +162,23 @@ function addDays(dateStr: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-export default function InvoiceFormPage() {
-  const { id } = useParams();
+/**
+ * Upload / edit a recorded invoice — a page (/invoices/new, /invoices/:id/edit)
+ * or, with `embedded`, a window on the operation page (`invoiceId` to edit,
+ * `operationId` preset; `onDone` after saving, `onCancel`).
+ */
+export default function InvoiceFormPage({ embedded, invoiceId, operationId, onDone, onCancel }: {
+  embedded?: boolean; invoiceId?: number | null; operationId?: number | null;
+  onDone?: () => void; onCancel?: () => void;
+} = {}) {
+  const params = useParams();
+  const id = embedded ? (invoiceId ? String(invoiceId) : undefined) : params.id;
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { addToast } = useToast();
   const isEdit = Boolean(id);
-  const prefillOperationId = searchParams.get('operation_id') || '';
+  const prefillOperationId = embedded ? (operationId ? String(operationId) : '') : (searchParams.get('operation_id') || '');
+  const leave = () => { if (embedded) onCancel?.(); else navigate('/invoices'); };
 
   const [form, setForm] = useState<InvoiceForm>({ ...emptyForm, operation_id: prefillOperationId });
   const [paymentTerms, setPaymentTerms] = useState('');
@@ -372,7 +382,7 @@ export default function InvoiceFormPage() {
         });
         addToast('Invoice created', 'success');
       }
-      navigate('/invoices');
+      if (embedded) onDone?.(); else navigate('/invoices');
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Failed to save invoice', 'error');
     } finally {
@@ -394,16 +404,20 @@ export default function InvoiceFormPage() {
 
   return (
     <div className="space-y-6">
-      <button
-        onClick={() => navigate('/invoices')}
-        className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700"
-      >
-        <ArrowLeft size={16} /> Back to Invoices
-      </button>
+      {!embedded && (
+        <>
+          <button
+            onClick={() => navigate('/invoices')}
+            className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700"
+          >
+            <ArrowLeft size={16} /> Back to Invoices
+          </button>
 
-      <h1 className="text-2xl font-bold text-gray-900">
-        {isEdit ? 'Edit Invoice' : 'New Invoice'}
-      </h1>
+          <h1 className="text-2xl font-bold text-gray-900">
+            {isEdit ? 'Edit Invoice' : 'New Invoice'}
+          </h1>
+        </>
+      )}
 
       <Card className="p-6">
         <form onSubmit={handleSubmit} className="space-y-6">
@@ -566,7 +580,7 @@ export default function InvoiceFormPage() {
           </div>
 
           <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
-            <Button variant="secondary" type="button" onClick={() => navigate('/invoices')}>
+            <Button variant="secondary" type="button" onClick={leave}>
               Cancel
             </Button>
             <Button type="submit" disabled={saving}>

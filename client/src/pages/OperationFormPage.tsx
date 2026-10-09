@@ -70,6 +70,13 @@ export default function OperationFormPage() {
     notes: '',
   });
 
+  // Automatic number: SO + entity + year + running number (server `GET /operations/next-number`)
+  const [entities, setEntities] = useState<Array<{ code: string; company_name: string; is_default: number }>>([]);
+  const [entity, setEntity] = useState('');
+  const [autoNumber, setAutoNumber] = useState('');
+  // True once the user typed a number (or the order carried one) — the automatic one no longer replaces it
+  const [ownNumber, setOwnNumber] = useState(false);
+
   const [scanning, setScanning] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [order, setOrder] = useState<PendingOrder | null>(null);
@@ -83,6 +90,27 @@ export default function OperationFormPage() {
       setSuppliers(sRes.data.data || sRes.data);
     });
   }, []);
+
+  useEffect(() => {
+    api.get('/company-entities').then(({ data }) => {
+      const list = data || [];
+      setEntities(list);
+      setEntity(prev => prev || (list.find((e: any) => e.is_default) || list[0])?.code || 'BE');
+    }).catch(() => setEntity(prev => prev || 'BE'));
+  }, []);
+
+  useEffect(() => {
+    if (!entity) return;
+    api.get('/operations/next-number', { params: { entity } })
+      .then(({ data }) => {
+        setAutoNumber(data.operation_number);
+        if (!ownNumber) setForm(prev => ({ ...prev, operation_number: data.operation_number }));
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entity]);
+
+  const useAutomatic = () => { setOwnNumber(false); setForm(prev => ({ ...prev, operation_number: autoNumber })); };
 
   const set = (field: string, value: string) =>
     setForm(prev => ({ ...prev, [field]: value }));
@@ -116,10 +144,18 @@ export default function OperationFormPage() {
         items: Array.isArray(data.items) ? data.items : [],
       });
 
+      // An order that already carries our operation number (SOBE…) keeps it, under its entity
+      if (data.operation_number && !ownNumber) {
+        setOwnNumber(true);
+        const code = entities.map(e => e.code).sort((a, b) => b.length - a.length)
+          .find(c => String(data.operation_number).toUpperCase().startsWith(`SO${c}`));
+        if (code) setEntity(code);
+      }
+
       // The order is what starts the operation — carry across what it tells us
       setForm(prev => ({
         ...prev,
-        operation_number: prev.operation_number || data.operation_number || '',
+        operation_number: (!ownNumber && data.operation_number) ? data.operation_number : prev.operation_number,
         status: prev.status === 'pre-ordered' ? 'ordered' : prev.status,
         ...(data.type === 'customer' && data.customer_id
           ? { partyType: 'customer', customer_id: String(data.customer_id) } : {}),
@@ -155,8 +191,8 @@ export default function OperationFormPage() {
   // ── Submit ────────────────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.operation_number.trim()) {
-      addToast('Operation number is required', 'error');
+    if (ownNumber ? !form.operation_number.trim() : !entity) {
+      addToast(ownNumber ? 'Operation number is required' : 'Choose the entity (BE / NL)', 'error');
       return;
     }
     if (!form.category) {
@@ -178,7 +214,9 @@ export default function OperationFormPage() {
 
     try {
       const payload: any = {
-        operation_number: form.operation_number.trim(),
+        // The automatic number is allocated by the server at creation, so two people can't take the same one
+        operation_number: ownNumber ? form.operation_number.trim() : '',
+        entity,
         status: form.status,
         category: form.category,
         notes: form.notes || null,
@@ -190,6 +228,7 @@ export default function OperationFormPage() {
       operationId = data.id;
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Failed to create operation', 'error');
+      if (err.response?.data?.suggested) { setOwnNumber(false); setAutoNumber(err.response.data.suggested); set('operation_number', err.response.data.suggested); }
       setSaving(false);
       return;
     }
@@ -251,7 +290,7 @@ export default function OperationFormPage() {
 
       <h1 className="text-2xl font-bold text-gray-900">New Operation</h1>
       <p className="text-sm text-gray-500 -mt-4">
-        Upload the client's order to start the operation, or create it now and link an order later.
+        Upload the client's order to start the operation — choose BE or NL and the number is given automatically — or create it now and add the order from its page.
       </p>
 
       <Card className="p-6">
@@ -380,14 +419,34 @@ export default function OperationFormPage() {
           </div>
 
           {/* ── Operation ──────────────────────────────────────────────── */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-gray-100">
-            <Input
-              label="Operation Number *"
-              value={form.operation_number}
-              onChange={e => set('operation_number', e.target.value)}
-              placeholder="e.g. OP-2024-001"
-              autoFocus
-            />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-gray-100">
+            <div className="space-y-1">
+              <label className="block text-sm font-medium text-gray-700">Entity *</label>
+              <div className="flex gap-2">
+                {(entities.length ? entities.map(e => e.code) : ['BE', 'NL']).map(code => (
+                  <button key={code} type="button" onClick={() => setEntity(code)}
+                    title={entities.find(e => e.code === code)?.company_name}
+                    className={`px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                      entity === code ? 'border-primary-500 bg-primary-50 text-primary-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                    }`}>
+                    {code}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Input
+                label="Operation Number *"
+                value={form.operation_number}
+                onChange={e => { setOwnNumber(true); set('operation_number', e.target.value); }}
+                placeholder={autoNumber || 'SOBE20260001'}
+              />
+              <p className="text-xs text-gray-500">
+                {ownNumber
+                  ? <>Your own number. {autoNumber && <button type="button" onClick={useAutomatic} className="text-primary-600 hover:underline">Use automatic ({autoNumber})</button>}</>
+                  : 'Automatic — next number for this entity and year (taken when you create it). Type to use your own.'}
+              </p>
+            </div>
             <Select
               label="Status"
               value={form.status}
