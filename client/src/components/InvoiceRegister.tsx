@@ -20,7 +20,8 @@ interface RegisterRow {
   po_number: string | null;
   operation_id: number | null;
   operation_number: string | null;
-  category: 'blending' | 'trading' | null;
+  category: 'blending' | 'trading' | 'technology' | null;
+  technology_operation_id?: number | null;
   entity: string;
 }
 
@@ -29,13 +30,14 @@ type SortKey = 'invoice_number' | 'created_at' | 'invoice_date' | 'customer_name
 
 const COLUMNS: Array<[SortKey, string]> = [
   ['invoice_number', 'Invoice #'], ['created_at', 'Created'], ['invoice_date', 'Invoice date'], ['customer_name', 'Client'],
-  ['country', 'Country'], ['order', 'Order #'], ['operation_number', 'Operation #'], ['category', 'Blending / Trading'],
+  ['country', 'Country'], ['order', 'Order #'], ['operation_number', 'Operation #'], ['category', 'Category'],
 ];
 
 const sortValue = (r: RegisterRow, key: SortKey): string =>
   key === 'order' ? (r.order_number || r.po_number || '') : String(r[key] ?? '');
 
-const categoryLabel = (c: string | null) => (c === 'blending' ? 'Blending' : c === 'trading' ? 'Trading' : '');
+const categoryLabel = (c: string | null) =>
+  (c === 'blending' ? 'Blending' : c === 'trading' ? 'Trading' : c === 'technology' ? 'Technology' : '');
 
 /**
  * Every customer invoice in invoice-number order, to check the numbering runs
@@ -147,12 +149,15 @@ export default function InvoiceRegister() {
                     <td className="px-4 py-2.5 text-gray-600">
                       {r.operation_number && r.operation_id
                         ? <Link to={`/operations/${r.operation_id}`} className="hover:underline">{r.operation_number}</Link>
-                        : dash}
+                        : r.operation_number && r.technology_operation_id
+                          ? <Link to={`/technology-operations/${r.technology_operation_id}`} className="hover:underline">{r.operation_number}</Link>
+                          : dash}
                     </td>
                     <td className="px-4 py-2.5">
                       {r.category ? (
                         <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
-                          r.category === 'blending' ? 'bg-purple-50 text-purple-700' : 'bg-sky-50 text-sky-700'
+                          r.category === 'blending' ? 'bg-purple-50 text-purple-700'
+                            : r.category === 'technology' ? 'bg-emerald-50 text-emerald-700' : 'bg-sky-50 text-sky-700'
                         }`}>{categoryLabel(r.category)}</span>
                       ) : dash}
                     </td>

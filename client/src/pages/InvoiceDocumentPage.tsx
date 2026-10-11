@@ -77,6 +77,8 @@ interface InvoiceRecord {
   invoice_number: string;
   order_id: number | null;
   nco_id?: number | null;
+  /** A technology operation's invoice (TI…). */
+  to_id?: number | null;
   operation_id: number | null;
   file_name: string | null;
   sent_to: string | null;
@@ -118,7 +120,7 @@ const blankData = (): InvData => ({
   manufacturer: '', country_of_origin: '', terms: '',
 });
 
-function toFormData(raw: any): InvData {
+function toFormData(raw: any, blankUnit = false): InvData {
   const merged: any = { ...blankData(), ...(raw || {}) };
   for (const key of FORM_KEYS) {
     merged[key] = merged[key] == null ? (blankData() as any)[key] : String(merged[key]);
@@ -131,7 +133,7 @@ function toFormData(raw: any): InvData {
     commercial_name: item?.commercial_name ?? '',
     packaging: item?.packaging ?? '',
     quantity: item?.quantity == null ? '' : String(item.quantity),
-    quantity_unit: item?.quantity_unit || 'KG',
+    quantity_unit: item?.quantity_unit || (blankUnit ? '' : 'KG'),
     unit_price: item?.unit_price == null ? '' : String(item.unit_price),
     currency: item?.currency || 'EUR',
     hs_code: item?.hs_code ?? '',
@@ -224,6 +226,9 @@ export default function InvoiceDocumentPage() {
   const orderIdParam = params.get('order_id');
   // A samples NCO stands in for the order
   const ncoIdParam = params.get('nco_id');
+  // A technology operation: the invoice bills its expenses (TI… series)
+  const toIdParam = params.get('to_id');
+  const expenseIdsParam = params.get('expense_ids');
   const operationIdParam = params.get('operation_id');
 
   const [loading, setLoading] = useState(true);
@@ -232,8 +237,12 @@ export default function InvoiceDocumentPage() {
   const [packingListId, setPackingListId] = useState<number | null>(null);
   const [orderId, setOrderId] = useState<number | null>(orderIdParam ? Number(orderIdParam) : null);
   const [ncoId, setNcoId] = useState<number | null>(ncoIdParam ? Number(ncoIdParam) : null);
-  /** What the draft is prepared from: the NCO, else the order. */
-  const sourceParams = () => (ncoIdParam || ncoId) ? { nco_id: ncoIdParam || ncoId } : { order_id: orderIdParam || orderId };
+  const [toId, setToId] = useState<number | null>(toIdParam ? Number(toIdParam) : null);
+  const isTech = !!(toIdParam || toId);
+  /** What the draft is prepared from: the technology operation, the NCO, else the order. */
+  const sourceParams = () => (toIdParam || toId)
+    ? { to_id: toIdParam || toId, ...(expenseIdsParam ? { expense_ids: expenseIdsParam } : {}) }
+    : (ncoIdParam || ncoId) ? { nco_id: ncoIdParam || ncoId } : { order_id: orderIdParam || orderId };
   const [operationId, setOperationId] = useState<number | null>(operationIdParam ? Number(operationIdParam) : null);
 
   const [entity, setEntity] = useState<string>('BE');
@@ -283,6 +292,16 @@ export default function InvoiceDocumentPage() {
   const addItem = () =>
     setForm(prev => ({ ...prev, items: [...prev.items, emptyLine(prev.items.length + 1)] }));
 
+  /** A technology invoice's fee on top of the expenses at cost: one line, the amount typed in. */
+  const addFeeLine = () =>
+    setForm(prev => ({
+      ...prev,
+      items: [...prev.items, {
+        ...emptyLine(prev.items.length + 1), commercial_name: 'Service fee', quantity: '1', quantity_unit: '',
+        currency: prev.items.find(i => i.currency)?.currency || 'EUR', lots: [],
+      }],
+    }));
+
   const removeItem = (index: number) =>
     setForm(prev => ({
       ...prev,
@@ -294,9 +313,10 @@ export default function InvoiceDocumentPage() {
     setEntityConfirmed(true);
     // Edits saved as a draft on a generated invoice pick up where they were left
     const shown = rec.draft || rec.data;
-    setForm(toFormData(shown));
+    setForm(toFormData(shown, !!rec.to_id));
     setOrderId(rec.order_id);
     setNcoId(rec.nco_id ?? null);
+    setToId(rec.to_id ?? null);
     setOperationId(rec.operation_id);
     setIncludeOrigin(!!(shown.manufacturer || shown.country_of_origin));
     setLayout(withDefaults(shown.layout));
@@ -309,11 +329,11 @@ export default function InvoiceDocumentPage() {
       params: { ...sourceParams(), ...opts },
     });
     if (data.existing) { adopt(data.existing); return; }
-    setForm(toFormData(data.draft));
+    setForm(toFormData(data.draft, !!data.technology));
     setFromOc(!!data.oc);
     setLayout(withDefaults(data.layout));
     setLayoutSource(data.layout_source || 'the standard company template');
-    setCustomerId(data.order?.customer_id ?? data.nco?.customer_id ?? null);
+    setCustomerId(data.order?.customer_id ?? data.nco?.customer_id ?? data.technology?.customer_id ?? null);
     setEntity(data.entity);
     setProfiles(data.profiles || []);
     setProfileId(data.profile_id ?? null);
@@ -322,7 +342,7 @@ export default function InvoiceDocumentPage() {
     setMatchConfident(!!data.match_confident);
     setIncludeOrigin(!!data.layout?.origin && !!(data.draft?.manufacturer || data.draft?.country_of_origin));
     if (data.operation) setOperationId(data.operation.id);
-  }, [orderIdParam, orderId, ncoIdParam, ncoId, adopt]);
+  }, [orderIdParam, orderId, ncoIdParam, ncoId, toIdParam, toId, expenseIdsParam, adopt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -334,7 +354,7 @@ export default function InvoiceDocumentPage() {
           if (!cancelled) adopt(data);
           return;
         }
-        if (!orderIdParam && !ncoIdParam) {
+        if (!orderIdParam && !ncoIdParam && !toIdParam) {
           addToast('No order selected', 'error');
           navigate('/operations');
           return;
@@ -352,7 +372,7 @@ export default function InvoiceDocumentPage() {
 
     load();
     return () => { cancelled = true; };
-  }, [id, orderIdParam, ncoIdParam]);
+  }, [id, orderIdParam, ncoIdParam, toIdParam]);
 
   // The order's confirmation, for "Compare with OC"
   useEffect(() => {
@@ -383,7 +403,7 @@ export default function InvoiceDocumentPage() {
       setEmailTo(prev => join(prev || form.contact_email || '', data?.invoice?.to));
       setEmailCc(prev => join(prev, data?.invoice?.cc));
     }).catch(() => { /* the dialog still works without defaults */ });
-    setEmailSubject(prev => prev || `${ncoId ? 'Sample Invoice' : 'Commercial Invoice'} ${form.doc_number}${form.client_name ? ` — ${form.client_name}` : ''}`);
+    setEmailSubject(prev => prev || `${ncoId ? 'Sample Invoice' : isTech ? 'Invoice' : 'Commercial Invoice'} ${form.doc_number}${form.client_name ? ` — ${form.client_name}` : ''}`);
   }, [showEmail]);
 
   async function switchEntity(next: string) {
@@ -404,7 +424,7 @@ export default function InvoiceDocumentPage() {
         params: { ...sourceParams(), entity, profile_id: nextId },
       });
       if (data.draft) {
-        setForm(toFormData(data.draft));
+        setForm(toFormData(data.draft, !!data.technology));
         setLayout(withDefaults(data.layout));
         setLayoutSource(data.layout_source || 'the standard company template');
         setProfileName(data.profile_name ?? null);
@@ -430,10 +450,10 @@ export default function InvoiceDocumentPage() {
   }
 
   async function handleSave(status: 'draft' | 'final') {
-    if (!orderId && !ncoId) { addToast('No order linked', 'error'); return; }
+    if (!orderId && !ncoId && !toId) { addToast('No order linked', 'error'); return; }
     setSaving(true);
     try {
-      const body = { order_id: orderId, nco_id: ncoId, operation_id: operationId, profile_id: profileId, status, data: toPayload(form, includeOrigin, layout) };
+      const body = { order_id: orderId, nco_id: ncoId, to_id: toId, operation_id: operationId, profile_id: profileId, status, data: toPayload(form, includeOrigin, layout) };
       const { data } = record
         ? await api.put(`/invoice-documents/${record.id}`, body)
         : await api.post('/invoice-documents', body);
@@ -461,7 +481,7 @@ export default function InvoiceDocumentPage() {
     try {
       await api.delete(`/invoice-documents/${record.id}`);
       addToast(`Invoice ${record.invoice_number} deleted`, 'success');
-      navigate(operationId ? `/operations/${operationId}` : orderId ? `/orders/${orderId}` : '/operations');
+      navigate(toId ? `/technology-operations/${toId}` : operationId ? `/operations/${operationId}` : orderId ? `/orders/${orderId}` : '/operations');
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Failed to delete the invoice', 'error');
       setDeleting(false);
@@ -474,7 +494,7 @@ export default function InvoiceDocumentPage() {
     setSavingLayout(true);
     try {
       // A sample invoice's format is kept apart from the customer's commercial invoice format
-      const { data } = await api.put(`/invoice-documents/layout/${profileId}`, { layout }, { params: ncoId ? { kind: 'sample' } : {} });
+      const { data } = await api.put(`/invoice-documents/layout/${profileId}`, { layout }, { params: ncoId ? { kind: 'sample' } : toId ? { kind: 'technology' } : {} });
       setLayout(withDefaults(data.layout));
       setLayoutSource(`saved on ${profileName || 'this customer'}`);
       addToast(data.message || 'Invoice format saved', 'success');
@@ -540,26 +560,26 @@ export default function InvoiceDocumentPage() {
   const isDraft = !record || record.status === 'draft';
   const generated = !!record && !isDraft;
 
-  const backTo = ncoId ? `/non-commercial-operations/${ncoId}`
+  const backTo = toId ? `/technology-operations/${toId}` : ncoId ? `/non-commercial-operations/${ncoId}`
     : operationId ? `/operations/${operationId}` : orderId ? `/orders/${orderId}` : '/operations';
 
   return (
     <div className="space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
         <Link to={backTo} className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
-          <ArrowLeft size={16} /> Back to {ncoId ? 'samples' : operationId ? 'operation' : 'order'}
+          <ArrowLeft size={16} /> Back to {toId ? 'technology operation' : ncoId ? 'samples' : operationId ? 'operation' : 'order'}
         </Link>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="secondary" size="sm" onClick={handlePreview} disabled={previewing}>
             {previewing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
           </Button>
-          <CompareButtons
+          {!isTech && <CompareButtons
             kinds={['order', 'oc', 'bl']}
             orderId={orderId}
             operationId={operationId}
             title="Invoice"
             renderPreview={async () => (await api.post('/invoice-documents/preview', { data: toPayload(form, includeOrigin, layout) }, { responseType: 'blob' })).data as Blob}
-          />
+          />}
           <Button variant="secondary" size="sm" onClick={() => handleSave('draft')} disabled={saving}
             title={generated
               ? 'Keep these edits as a draft — the generated PDF stays as it is until you regenerate'
@@ -581,11 +601,11 @@ export default function InvoiceDocumentPage() {
           <Button variant="secondary" size="sm" onClick={() => setShowEmail(true)} disabled={!generated}>
             <Mail size={14} /> Send by email
           </Button>
-          <Button variant="secondary" size="sm" disabled={!generated}
+          {!isTech && <Button variant="secondary" size="sm" disabled={!generated}
             onClick={() => record && navigate(packingListId ? `/packing-lists/${packingListId}` : `/packing-lists/new?invoice_document_id=${record.id}`)}
             title={generated ? 'Packing list for this invoice' : 'Generate the invoice first'}>
             <Package size={14} /> Packing list{packingListId ? ' ✓' : ''}
-          </Button>
+          </Button>}
           {record && (
             <Button variant="secondary" size="sm" onClick={handleDelete} disabled={deleting}
               title="Delete this invoice and free its number">
@@ -610,7 +630,7 @@ export default function InvoiceDocumentPage() {
       />
 
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">{ncoId ? 'Sample Invoice' : 'Commercial Invoice'}</h1>
+        <h1 className="text-2xl font-bold text-gray-900">{isTech ? 'Technology Invoice' : ncoId ? 'Sample Invoice' : 'Commercial Invoice'}</h1>
         <p className="text-sm text-gray-500 mt-1">
           Check the details, then confirm to produce the PDF as{' '}
           <strong className="text-gray-700">{(form.doc_number || 'invoice').replace(/[^A-Za-z0-9._-]+/g, '-')}.pdf</strong>
@@ -779,7 +799,7 @@ export default function InvoiceDocumentPage() {
           </div>
 
           {/* Origin block — opt-in, per the template */}
-          <Section
+          {!isTech && <Section
             icon={<Factory size={16} />}
             title="Manufacturer & country of origin"
             action={
@@ -805,7 +825,7 @@ export default function InvoiceDocumentPage() {
                 Not included. Tick <strong className="text-gray-600">Add to this invoice</strong> if this shipment needs the manufacturer and origin declared.
               </p>
             )}
-          </Section>
+          </Section>}
         </div>
 
         <div className="space-y-5">
@@ -837,6 +857,7 @@ export default function InvoiceDocumentPage() {
                     <div className="space-y-1">
                       <label className="block text-xs font-medium text-gray-500">Unit</label>
                       <select value={item.quantity_unit} onChange={e => setItem(index, { quantity_unit: e.target.value })} className={inputCls}>
+                        {(isTech || !item.quantity_unit) && <option value="">—</option>}
                         {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
                       </select>
                     </div>
@@ -861,6 +882,12 @@ export default function InvoiceDocumentPage() {
                 className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50">
                 <Plus size={14} /> Add line
               </button>
+              {isTech && (
+                <button type="button" onClick={addFeeLine}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm border border-primary-200 text-primary-700 rounded-lg hover:bg-primary-50">
+                  <Plus size={14} /> Add service fee line
+                </button>
+              )}
 
               <AreaField label="Notes (printed under the table)" value={form.notes} onChange={v => set('notes', v)}
                 rows={3} placeholder="e.g. Goods shipped in 2 x 20' containers" />

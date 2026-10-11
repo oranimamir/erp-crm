@@ -2258,6 +2258,56 @@ export async function initializeDatabase() {
     try { db.prepare('INSERT OR IGNORE INTO document_categories (name) VALUES (?)').run(name); } catch (_) { /* ignore */ }
   }
 
+  // Technology operations (TO…): services reimbursed on expenses, invoiced as TI… (routes/technology-operations.ts)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS technology_operations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      to_number TEXT UNIQUE NOT NULL,
+      entity TEXT NOT NULL,
+      year INTEGER NOT NULL,
+      seq INTEGER NOT NULL DEFAULT 0,
+      customer_id INTEGER,
+      title TEXT,
+      to_date TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      notes TEXT,
+      created_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL
+    )
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS technology_expenses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      to_id INTEGER NOT NULL,
+      expense_date TEXT,
+      supplier_name TEXT,
+      reference TEXT,
+      description TEXT,
+      net_amount REAL NOT NULL DEFAULT 0,
+      vat_amount REAL,
+      total_amount REAL,
+      currency TEXT NOT NULL DEFAULT 'EUR',
+      fx_rate REAL,
+      eur_amount REAL,
+      file_path TEXT,
+      file_name TEXT,
+      sha256 TEXT,
+      read_by TEXT,
+      read_warning TEXT,
+      invoice_document_id INTEGER,
+      created_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (to_id) REFERENCES technology_operations(id) ON DELETE CASCADE
+    )
+  `);
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_tech_expenses_to ON technology_expenses(to_id)`); } catch (_) {}
+  try { db.exec(`ALTER TABLE invoice_documents ADD COLUMN to_id INTEGER`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE invoices ADD COLUMN technology_operation_id INTEGER`); } catch (_) { /* column may already exist */ }
+  // A fresh database loses quantity_mt in the invoices CHECK rebuild above — add it back
+  try { db.exec(`ALTER TABLE invoices ADD COLUMN quantity_mt REAL`); } catch (_) { /* column may already exist */ }
+
   // Referential integrity is only as good as the last migration — surface any
   // violation in the logs rather than letting it rot silently as it did before.
   try {

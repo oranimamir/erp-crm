@@ -113,18 +113,22 @@ router.get('/register', (req: Request, res: Response) => {
     SELECT i.id, i.invoice_number, i.invoice_date, i.created_at, i.status, i.po_number,
       c.name AS customer_name,
       op.id AS operation_id, op.operation_number, op.category, op.country AS operation_country,
-      o.id AS order_id, o.order_number, o.destination AS order_destination
+      o.id AS order_id, o.order_number, o.destination AS order_destination,
+      t.id AS technology_operation_id, t.to_number
     FROM invoices i
     LEFT JOIN customers c ON c.id = i.customer_id
     LEFT JOIN operations op ON op.id = COALESCE(i.operation_id,
       (SELECT id FROM operations WHERE operation_number = i.our_ref LIMIT 1))
     LEFT JOIN orders o ON o.id = op.order_id
+    LEFT JOIN technology_operations t ON t.id = i.technology_operation_id
     WHERE i.type = 'customer'
   `).all() as any[];
 
   const data = rows
     .map(r => ({
       ...r,
+      // A technology invoice (TI…) shows its TO number as the operation, category "technology"
+      ...(r.to_number && !r.operation_number ? { operation_number: r.to_number, category: 'technology' } : {}),
       entity: entityFromOperationNumber(r.operation_number || r.invoice_number),
       country: r.operation_country || resolveCountry(r.order_destination) || null,
     }))

@@ -19,7 +19,7 @@ import {
   formatLongDate,
   type DocumentData,
 } from '../lib/document-pdf.js';
-import { normalizeLayout, SAMPLE_INVOICE_LAYOUT, SAMPLE_INVOICE_TERMS } from '../lib/invoiceLayout.js';
+import { normalizeLayout, SAMPLE_INVOICE_LAYOUT, SAMPLE_INVOICE_TERMS, TECHNOLOGY_INVOICE_LAYOUT } from '../lib/invoiceLayout.js';
 import { getEurRate } from '../lib/fx.js';
 import { refreshEstimatedPaymentDate } from '../lib/paymentTerms.js';
 import { deletePackingListsForInvoice } from './packing-lists.js';
@@ -44,10 +44,14 @@ function invoiceFileName(invoiceNumber: string | null): string {
   return `${stem.replace(/[^A-Za-z0-9._-]+/g, '-')}.pdf`;
 }
 
-/** The series an invoice belongs to: CIBE… for Belgian, CINL… for Dutch. */
-function invoiceSeriesPrefix(entity: EntityCode, dateIso?: string | null): string {
-  const year = (dateIso || new Date().toISOString()).slice(0, 4);
-  return `CI${entity}${year}`;
+/**
+ * The series an invoice belongs to: CIBE… for Belgian, CINL… for Dutch;
+ * technology operations' invoices run their own TIBE… / TINL… series.
+ */
+type InvoiceSeries = 'CI' | 'TI';
+function invoiceSeriesPrefix(entity: EntityCode, dateIso?: string | null, series: InvoiceSeries = 'CI'): string {
+  const year = (dateIso || todayISO()).slice(0, 4);
+  return `${series}${entity}${year}`;
 }
 
 /** Every number already used in a series, from both generated and recorded invoices. */
@@ -78,13 +82,44 @@ function issuedInSeries(prefix: string): number[] {
  * Dutch (SONL…) one continues CINL…, each independently.
  *
  * The sequence is the four-digit form the company already uses
- * (CIBE20260101 … CIBE20260119), starting a new year at 0101.
+ * (CIBE20260101 … CIBE20260119), starting a new year at 0101. Technology
+ * invoices (TI) start a year at 0001.
  */
-function nextInvoiceNumber(entity: EntityCode, dateIso?: string | null): string {
-  const prefix = invoiceSeriesPrefix(entity, dateIso);
+function nextInvoiceNumber(entity: EntityCode, dateIso?: string | null, series: InvoiceSeries = 'CI'): string {
+  const prefix = invoiceSeriesPrefix(entity, dateIso, series);
   const used = issuedInSeries(prefix);
-  const next = used.length ? Math.max(...used) + 1 : 101;
+  const next = used.length ? Math.max(...used) + 1 : (series === 'TI' ? 1 : 101);
   return `${prefix}${String(next).padStart(4, '0')}`;
+}
+
+/** The technology operation an invoice is for, with its customer (drafting / recording a TI). */
+function technologySource(toId: number): any | null {
+  return db.prepare(`
+    SELECT t.*, c.name AS customer_name, c.email AS customer_email, c.phone AS customer_phone,
+           c.address AS customer_address, c.company AS customer_company,
+           c.vat_number AS customer_vat, c.contact_person AS customer_contact
+    FROM technology_operations t
+    LEFT JOIN customers c ON c.id = t.customer_id
+    WHERE t.id = ?
+  `).get(toId) as any;
+}
+
+/** Expense ids sent by the client: a list of positive integers. */
+function expenseIdsOf(raw: unknown): number[] {
+  const list = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
+  return [...new Set(list.map(v => Number(v)).filter(n => Number.isInteger(n) && n > 0))];
+}
+
+/**
+ * The expenses a technology invoice bills: the ones chosen, of that operation,
+ * not already on another invoice. Re-saving moves the links to the new choice.
+ */
+function linkExpenses(docId: number, toId: number, ids: number[]): void {
+  db.prepare('UPDATE technology_expenses SET invoice_document_id = NULL WHERE invoice_document_id = ?').run(docId);
+  for (const id of ids) {
+    db.prepare('UPDATE technology_expenses SET invoice_document_id = ? WHERE id = ? AND to_id = ? AND invoice_document_id IS NULL')
+      .run(docId, id, toId);
+  }
 }
 
 function operationNumberFor(operationId: number | null): string | null {
@@ -211,13 +246,15 @@ async function syncRecordedInvoice(docId: number): Promise<void> {
   // An NCO (samples) invoice has no commercial value — never a recorded invoice, never revenue
   if (!docRow || docRow.nco_id) return;
   const data = parseRecord(docRow).data as DocumentData;
+  // A technology invoice bills the operation's customer
+  const tech = docRow.to_id ? db.prepare('SELECT id, to_number, customer_id FROM technology_operations WHERE id = ?').get(docRow.to_id) as any : null;
   const order = docRow.order_id
     ? db.prepare('SELECT id, type, customer_id, supplier_id FROM orders WHERE id = ?').get(docRow.order_id) as any
     : null;
 
   const isSupplier = order?.type === 'supplier';
-  const customerId = isSupplier ? null : (order?.customer_id ?? null);
-  const supplierId = isSupplier ? (order?.supplier_id ?? null) : null;
+  const customerId = tech ? (tech.customer_id ?? null) : isSupplier ? null : (order?.customer_id ?? null);
+  const supplierId = !tech && isSupplier ? (order?.supplier_id ?? null) : null;
   // The invoices table insists on a counterparty for its type
   if (!customerId && !supplierId) return;
 
@@ -246,9 +283,9 @@ async function syncRecordedInvoice(docId: number): Promise<void> {
   if (!linked) linked = db.prepare('SELECT * FROM invoices WHERE invoice_number = ?').get(docRow.invoice_number) as any;
 
   const fields = [
-    docRow.invoice_number, customerId, supplierId, isSupplier ? 'supplier' : 'customer',
+    docRow.invoice_number, customerId, supplierId, !tech && isSupplier ? 'supplier' : 'customer',
     total, currency, invoiceDate, data.our_ref || null, data.po_number || null,
-    docRow.operation_id ?? null, fxRate, eurAmount, linesTonnage(data.items),
+    docRow.operation_id ?? null, fxRate, eurAmount, tech ? null : linesTonnage(data.items), tech?.id ?? null,
   ];
 
   let invoiceId: number;
@@ -260,15 +297,15 @@ async function syncRecordedInvoice(docId: number): Promise<void> {
     db.prepare(`
       UPDATE invoices SET invoice_number = ?, customer_id = ?, supplier_id = ?, type = ?, amount = ?, currency = ?,
         invoice_date = ?, our_ref = ?, po_number = ?, operation_id = ?, fx_rate = ?, eur_amount = ?, quantity_mt = ?,
-        file_path = COALESCE(?, file_path), file_name = COALESCE(?, file_name), updated_at = datetime('now')
+        technology_operation_id = ?, file_path = COALESCE(?, file_path), file_name = COALESCE(?, file_name), updated_at = datetime('now')
       WHERE id = ?
     `).run(...fields, storedName, storedName ? docRow.file_name : null, linked.id);
     invoiceId = linked.id;
   } else {
     const result = db.prepare(`
       INSERT INTO invoices (invoice_number, customer_id, supplier_id, type, amount, currency, invoice_date, our_ref, po_number,
-        operation_id, fx_rate, eur_amount, quantity_mt, status, file_path, file_name)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sent', ?, ?)
+        operation_id, fx_rate, eur_amount, quantity_mt, technology_operation_id, status, file_path, file_name)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sent', ?, ?)
     `).run(...fields, storedName, storedName ? docRow.file_name : null);
     invoiceId = Number(result.lastInsertRowid);
     db.prepare(`INSERT INTO status_history (entity_type, entity_id, new_status, changed_by) VALUES ('invoice', ?, 'sent', ?)`)
@@ -288,9 +325,12 @@ async function syncRecordedInvoice(docId: number): Promise<void> {
  */
 export function deleteInvoiceDocument(row: any, opts: { keepRecorded?: boolean } = {}): void {
   if (row.file_path) {
-    const owner = ownerOf(row.operation_id, row.nco_id);
+    const owner = row.to_id
+      ? { section: 'Technology operations', number: (db.prepare('SELECT to_number FROM technology_operations WHERE id = ?').get(row.to_id) as any)?.to_number || '' }
+      : ownerOf(row.operation_id, row.nco_id);
+    const kind = row.to_id ? 'Technology invoice' : row.nco_id ? 'Sample invoice' : 'Commercial invoice';
     archiveFile(path.join(docsDir, row.file_path), {
-      section: owner.section, context: contextOf(owner.number, `${row.nco_id ? 'Sample invoice' : 'Commercial invoice'} ${row.invoice_number || ''}`),
+      section: owner.section, context: contextOf(owner.number, `${kind} ${row.invoice_number || ''}`),
       fileName: row.file_name,
     });
   }
@@ -298,6 +338,8 @@ export function deleteInvoiceDocument(row: any, opts: { keepRecorded?: boolean }
   dropNcoDocumentRow(row.nco_document_id);
   // The packing list packs this invoice's goods, so it goes with it
   deletePackingListsForInvoice(row.id);
+  // The expenses it billed can be invoiced again
+  try { db.prepare('UPDATE technology_expenses SET invoice_document_id = NULL WHERE invoice_document_id = ?').run(row.id); } catch { /* table unavailable */ }
   db.prepare('DELETE FROM invoice_documents WHERE id = ?').run(row.id);
 
   if (opts.keepRecorded || !row.invoice_id) return;
@@ -352,6 +394,7 @@ const OC_CARRIED_FIELDS = [
 
 router.get('/prepare', (req: Request, res: Response) => {
   if (req.query.nco_id) { prepareFromNco(req, res); return; }
+  if (req.query.to_id) { prepareFromTechnology(req, res); return; }
   const orderId = parseInt(String(req.query.order_id || ''), 10);
   if (!Number.isInteger(orderId)) { res.status(400).json({ error: 'order_id is required' }); return; }
 
@@ -595,6 +638,132 @@ function prepareFromNco(req: Request, res: Response) {
   });
 }
 
+const ddmmyyyy = (iso?: string | null) => {
+  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : '';
+};
+
+/**
+ * A technology operation -> a TI invoice: one line per chosen expense
+ * (`expense_ids`, default every expense not yet invoiced), billed at cost — the
+ * net amount, converted to the invoice currency (EUR unless `currency`); a fee
+ * line can be added on the form. Always a new invoice (an operation can have several).
+ */
+async function prepareFromTechnologyAsync(req: Request, res: Response) {
+  const tech = technologySource(Number(req.query.to_id));
+  if (!tech) { res.status(404).json({ error: 'Technology operation not found' }); return; }
+
+  const chosen = expenseIdsOf(req.query.expense_ids);
+  const expenses = (chosen.length
+    ? db.prepare(`SELECT * FROM technology_expenses WHERE to_id = ? AND id IN (${chosen.map(() => '?').join(',')})`).all(tech.id, ...chosen)
+    : db.prepare('SELECT * FROM technology_expenses WHERE to_id = ? AND invoice_document_id IS NULL').all(tech.id)
+  ) as any[];
+  expenses.sort((a, b) => String(a.expense_date || '').localeCompare(String(b.expense_date || '')) || a.id - b.id);
+
+  const requested = String(req.query.entity || '').toUpperCase();
+  const entity: EntityCode = isEntityCode(requested) ? requested : isEntityCode(tech.entity) ? tech.entity : entityFromOperationNumber(tech.to_number);
+  const currency = /^[A-Z]{3}$/.test(String(req.query.currency || '').toUpperCase()) ? String(req.query.currency).toUpperCase() : 'EUR';
+  const today = todayISO();
+  const issuer = entityProfile(entity, currency);
+
+  const requestedProfile = parseInt(String(req.query.profile_id || ''), 10);
+  const { match, profiles } = ncoProfile(tech, Number.isInteger(requestedProfile) ? requestedProfile : null);
+  const profile = match.profile;
+  const invDefaults = profile?.data.invoice || {};
+  const savedLayout = (profile?.data as any)?.technology_invoice_layout;
+  const layout = normalizeLayout(savedLayout && typeof savedLayout === 'object' ? savedLayout : TECHNOLOGY_INVOICE_LAYOUT);
+  const layoutSource = savedLayout ? `technology invoice format saved on ${profile!.name}` : 'the TripleW technology invoice';
+  const profileBank = Object.fromEntries(
+    (['bank_name', 'iban', 'bic', 'bank_address'] as const)
+      .map(key => [key, String(invDefaults[key] ?? '').trim()])
+      .filter(([, value]) => !!value)
+  );
+
+  // Each expense at cost: its net amount in the invoice currency
+  let invoiceRate: number | null = null;
+  const items = [];
+  for (const [i, e] of expenses.entries()) {
+    const net = Number(e.net_amount) || 0;
+    const from = String(e.currency || 'EUR').toUpperCase();
+    let price = net;
+    let note = '';
+    if (from !== currency) {
+      let eur: number | null = e.eur_amount != null ? Number(e.eur_amount) : null;
+      if (eur == null) { try { eur = net * await getEurRate(from, e.expense_date || today); } catch { eur = null; } }
+      if (eur != null && currency !== 'EUR') {
+        try { invoiceRate = invoiceRate ?? await getEurRate(currency, today); } catch { invoiceRate = null; }
+        eur = invoiceRate ? eur / invoiceRate : null;
+      }
+      if (eur != null) {
+        price = Math.round(eur * 100) / 100;
+        note = `${from} ${net.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} converted to ${currency}`;
+      } else {
+        note = `${from} amount — convert to ${currency}`;
+      }
+    }
+    const name = [e.description || 'Expense', e.supplier_name].filter(Boolean).join(' — ');
+    items.push({
+      line: i + 1,
+      reference: e.reference || '',
+      commercial_name: e.expense_date ? `${name}, ${ddmmyyyy(e.expense_date)}` : name,
+      packaging: '',
+      quantity: 1,
+      quantity_unit: '',
+      unit_price: price,
+      currency,
+      hs_code: '',
+      description: '',
+      lots: [],
+      lot: '',
+      note,
+    });
+  }
+
+  const draft = {
+    ...issuer,
+    ...profileBank,
+    bank_override: Object.keys(profileBank).length > 0,
+    entity_code: entity,
+    doc_number: nextInvoiceNumber(entity, today, 'TI'),
+    doc_date: today,
+    sq_number: '',
+    our_ref: tech.to_number,
+    po_number: '',
+    operation_number: tech.to_number,
+    ...ncoPartyFields(tech, profile),
+    items,
+    expense_ids: expenses.map(e => e.id),
+    delivery: '',
+    delivery_address: '',
+    delivery_date_text: '',
+    payment_terms: invDefaults.payment_terms || '',
+    remarks: tech.title ? `Reimbursement of expenses — ${tech.title}` : 'Reimbursement of expenses',
+    product_reference: '',
+    freight: 0,
+    vat: 0,
+    insurance: 0,
+    terms: invDefaults.terms || '',
+    notes: '',
+    layout,
+  } as DocumentData;
+
+  res.json({
+    existing: null, draft, oc: null,
+    entity, layout, layout_source: layoutSource, profiles,
+    profile_id: profile?.id ?? null, profile_name: profile?.name ?? null,
+    matched_by: match.matchedBy, match_confident: match.confident,
+    order: null, operation: null, nco: null,
+    technology: { id: tech.id, to_number: tech.to_number, customer_id: tech.customer_id, customer_name: tech.customer_name },
+  });
+}
+
+function prepareFromTechnology(req: Request, res: Response) {
+  prepareFromTechnologyAsync(req, res).catch(err => {
+    console.error('[invoice-documents] TI prepare failed:', err?.message || err);
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to draft the invoice' });
+  });
+}
+
 // ── Save a layout as the customer's own ───────────────────────────────────
 
 /**
@@ -612,7 +781,9 @@ router.put('/layout/:profileId', (req: Request, res: Response) => {
   let data: any = {};
   try { data = JSON.parse(row.data); } catch { /* corrupt row → start clean */ }
   // ?kind=sample keeps a customer's sample-invoice format apart from their commercial one
-  if (req.query.kind === 'sample') data.sample_invoice_layout = layout; else data.invoice_layout = layout;
+  if (req.query.kind === 'sample') data.sample_invoice_layout = layout;
+  else if (req.query.kind === 'technology') data.technology_invoice_layout = layout;
+  else data.invoice_layout = layout;
 
   db.prepare(`UPDATE customer_document_profiles SET data = ?, updated_at = datetime('now') WHERE id = ?`)
     .run(JSON.stringify(data), profileId);
@@ -657,10 +828,19 @@ router.post('/preview', async (req: Request, res: Response) => {
 // ── Create ────────────────────────────────────────────────────────────────
 
 router.post('/', async (req: Request, res: Response) => {
-  const { order_id, operation_id, profile_id, data, nco_id } = req.body as {
-    order_id?: number; operation_id?: number | null; profile_id?: number | null; data?: DocumentData; nco_id?: number | null;
+  const { order_id, operation_id, profile_id, data, nco_id, to_id } = req.body as {
+    order_id?: number; operation_id?: number | null; profile_id?: number | null; data?: DocumentData; nco_id?: number | null; to_id?: number | null;
   };
   const isDraft = req.body?.status === 'draft';
+
+  // A technology operation's invoice: TI series, its expenses linked
+  if (to_id) {
+    const tech = technologySource(Number(to_id));
+    if (!tech) { res.status(404).json({ error: 'Technology operation not found' }); return; }
+    if (!data || typeof data !== 'object') { res.status(400).json({ error: 'data is required' }); return; }
+    await createForTechnology(req, res, tech, data, profile_id ?? null, isDraft);
+    return;
+  }
 
   // A samples NCO stands in for the order; its invoice is numbered as the NCO
   const nco = nco_id ? db.prepare('SELECT id, nco_number, type, entity FROM non_commercial_operations WHERE id = ?').get(nco_id) as any : null;
@@ -772,6 +952,54 @@ async function createForNco(req: Request, res: Response, nco: any, data: Documen
   }
 }
 
+/** Create for a technology operation: a TI… invoice, a recorded invoice (revenue) once generated. */
+async function createForTechnology(req: Request, res: Response, tech: any, data: DocumentData, profileId: number | null, isDraft: boolean) {
+  const entity: EntityCode = isEntityCode(data.entity_code) ? data.entity_code
+    : isEntityCode(tech.entity) ? tech.entity : entityFromOperationNumber(tech.to_number);
+  const expenseIds = expenseIdsOf(req.body?.expense_ids ?? (data as any).expense_ids);
+  const payload: DocumentData = applyEntityBank({
+    ...data,
+    expense_ids: expenseIds,
+    doc_number: (data.doc_number || '').trim() || nextInvoiceNumber(entity, data.doc_date, 'TI'),
+    operation_number: data.operation_number || tech.to_number,
+  } as DocumentData);
+  const renumberedFrom = numberTaken(payload.doc_number!) ? payload.doc_number! : null;
+  if (renumberedFrom) payload.doc_number = nextInvoiceNumber(entity, payload.doc_date, 'TI');
+
+  let filed: Filed | null = null;
+  try {
+    if (!isDraft) filed = await renderAndFile(payload, { operationId: null });
+    const result = db.prepare(`
+      INSERT INTO invoice_documents (invoice_number, order_id, operation_id, profile_id, data, file_path, file_name, document_id, created_by, status, to_id)
+      VALUES (?, NULL, NULL, ?, ?, ?, ?, NULL, ?, ?, ?)
+    `).run(
+      payload.doc_number, profileId, JSON.stringify(payload), filed?.filePath ?? null, filed?.fileName ?? null,
+      req.user?.userId ?? null, isDraft ? 'draft' : 'final', tech.id
+    );
+    const docId = Number(result.lastInsertRowid);
+    linkExpenses(docId, tech.id, expenseIds);
+    if (!isDraft) {
+      try { await syncRecordedInvoice(docId); }
+      catch (err: any) { console.error('[invoice-documents] filing as recorded invoice failed:', err?.message || err); }
+    }
+    const row = db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(docId);
+    notifyAdmin({
+      action: 'created', entity: isDraft ? 'Technology Invoice draft' : 'Technology Invoice', label: payload.doc_number!,
+      detail: tech.to_number,
+      performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
+    });
+    res.status(201).json({ ...parseRecord(row), renumbered_from: renumberedFrom });
+  } catch (err: any) {
+    if (filed) discardFiled(filed, null);
+    if (err?.message?.includes('UNIQUE')) {
+      res.status(409).json({ error: `Invoice ${payload.doc_number} already exists` });
+      return;
+    }
+    console.error('[invoice-documents] TI create failed:', err?.message || err);
+    res.status(500).json({ error: 'Failed to generate the invoice' });
+  }
+}
+
 // ── Update ────────────────────────────────────────────────────────────────
 
 router.put('/:id', async (req: Request, res: Response) => {
@@ -792,13 +1020,15 @@ router.put('/:id', async (req: Request, res: Response) => {
     return;
   }
 
+  const expenseIds = existing.to_id ? expenseIdsOf(req.body?.expense_ids ?? (data as any).expense_ids) : [];
   const payload: DocumentData = applyEntityBank({
     ...data,
+    ...(existing.to_id ? { expense_ids: expenseIds } : {}),
     doc_number: (data.doc_number || '').trim() || existing.invoice_number,
-  });
-  let operationId = existing.nco_id ? null : (operation_id !== undefined ? operation_id : existing.operation_id);
+  } as DocumentData);
+  let operationId = existing.nco_id || existing.to_id ? null : (operation_id !== undefined ? operation_id : existing.operation_id);
   // Saved first without an operation (e.g. before the order had one): file it under the order's operation now
-  if (operationId == null && !existing.nco_id && existing.order_id) {
+  if (operationId == null && !existing.nco_id && !existing.to_id && existing.order_id) {
     operationId = (db.prepare('SELECT id FROM operations WHERE order_id = ? ORDER BY id DESC LIMIT 1').get(existing.order_id) as any)?.id ?? null;
   }
 
@@ -814,7 +1044,8 @@ router.put('/:id', async (req: Request, res: Response) => {
       : entityFromOperationNumber(operationNumberFor(operationId) || payload.operation_number || '');
     renumberedFrom = payload.doc_number!;
     // A sample invoice takes the next of its own SI series, never the commercial one
-    payload.doc_number = existing.nco_id ? nextSampleInvoiceNumber(entity, payload.doc_date) : nextInvoiceNumber(entity, payload.doc_date);
+    payload.doc_number = existing.nco_id ? nextSampleInvoiceNumber(entity, payload.doc_date)
+      : nextInvoiceNumber(entity, payload.doc_date, existing.to_id ? 'TI' : 'CI');
   }
 
   let filed: Filed | null = null;
@@ -831,6 +1062,7 @@ router.put('/:id', async (req: Request, res: Response) => {
       filed?.filePath ?? null, filed?.fileName ?? null, filed?.documentId ?? null, filed?.ncoDocumentId ?? null,
       isDraft ? 'draft' : 'final', existing.id
     );
+    if (existing.to_id) linkExpenses(existing.id, existing.to_id, expenseIds);
 
     if (!isDraft) {
       try { await syncRecordedInvoice(existing.id); }
@@ -840,7 +1072,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     const row = db.prepare('SELECT * FROM invoice_documents WHERE id = ?').get(existing.id);
     notifyAdmin({
       action: wasDraft && !isDraft ? 'created' : 'updated',
-      entity: isDraft ? 'Commercial Invoice draft' : 'Commercial Invoice', label: payload.doc_number!,
+      entity: `${existing.to_id ? 'Technology' : 'Commercial'} Invoice${isDraft ? ' draft' : ''}`, label: payload.doc_number!,
       performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
     });
     res.json({ ...parseRecord(row), renumbered_from: renumberedFrom });
@@ -888,7 +1120,7 @@ router.post('/:id/email', async (req: Request, res: Response) => {
 
   const data = parseRecord(row).data as DocumentData;
   const subject = String(req.body?.subject || '').trim()
-    || `Commercial Invoice ${row.invoice_number}${data.client_name ? ` — ${data.client_name}` : ''}`;
+    || `${row.to_id ? 'Invoice' : 'Commercial Invoice'} ${row.invoice_number}${data.client_name ? ` — ${data.client_name}` : ''}`;
   const bodyText = String(req.body?.message || '').trim();
   const { total, currency } = computeTotals(data);
 
@@ -897,7 +1129,7 @@ router.post('/:id/email', async (req: Request, res: Response) => {
   <p style="font-size:15px;">Dear ${escapeHtml(data.client_name || 'Sir/Madam')},</p>
   ${bodyText
       ? `<p style="font-size:14px;white-space:pre-wrap;">${escapeHtml(bodyText)}</p>`
-      : `<p style="font-size:14px;">Please find attached our commercial invoice <strong>${escapeHtml(row.invoice_number)}</strong>.</p>`}
+      : `<p style="font-size:14px;">Please find attached our ${row.to_id ? '' : 'commercial '}invoice <strong>${escapeHtml(row.invoice_number)}</strong>.</p>`}
   <table style="width:100%;border-collapse:collapse;font-size:14px;border:1px solid #e5e7eb;border-radius:8px;margin-top:16px;">
     <tr style="background:#f9fafb;"><td style="padding:8px 12px;color:#6b7280;">Invoice</td><td style="padding:8px 12px;font-weight:600;">${escapeHtml(row.invoice_number)}</td></tr>
     <tr><td style="padding:8px 12px;color:#6b7280;">Date</td><td style="padding:8px 12px;">${escapeHtml(formatLongDate(data.doc_date))}</td></tr>

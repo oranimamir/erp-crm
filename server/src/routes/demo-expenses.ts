@@ -459,7 +459,7 @@ function parseDateToISO(d: string): string | null {
   return null;
 }
 
-async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
+export async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
   let text = '';
   try {
     const result = await (pdfParse as any)(pdfBuffer);
@@ -978,7 +978,7 @@ async function parsePDFInvoice(pdfBuffer: Buffer, pdfFilename: string) {
 const BASE_DEMO_CATEGORIES = ['Salaries', 'Cars', 'Overhead', 'Consumables', 'Materials', 'Utilities and Maintenance', 'Feedstock', 'Subcontractors and Consultants', 'Regulatory', 'Equipment', 'Couriers', 'Other'];
 const BASE_SALES_CATEGORIES = ['Raw Materials', 'Logistics', 'Blenders', 'Shipping', 'Other'];
 
-function invoiceCategories(): { demo: string[]; sales: string[] } {
+export function invoiceCategories(): { demo: string[]; sales: string[] } {
   const custom = db.prepare('SELECT name, domain FROM demo_custom_categories').all() as any[];
   return {
     demo: [...new Set([...BASE_DEMO_CATEGORIES, ...custom.filter(c => c.domain === 'demo').map(c => c.name)])],

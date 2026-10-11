@@ -109,3 +109,10 @@ export const uploadSupplierDoc = multer({
   limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter: supplierDocFileFilter,
 });
+
+// Technology operations: expense receipts / supplier invoices (PDF or images, read by Claude)
+export const uploadTechnologyExpense = multer({
+  storage: createStorage('technology-expenses'),
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter,
+});

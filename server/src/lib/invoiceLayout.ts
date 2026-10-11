@@ -196,7 +196,46 @@ export const SAMPLE_INVOICE_LAYOUT: InvoiceLayout = {
   show_bank: false,
 };
 
-export const SAMPLE_INVOICE_TERMS = 'Sample without commercial value – value quoted for customs purpose only';
+/**
+ * Technology invoices (TI…, technology operations): the expenses re-invoiced at
+ * cost, one line each (supplier's invoice no., what it was), plus any fee line.
+ */
+export const TECHNOLOGY_INVOICE_LAYOUT: InvoiceLayout = {
+  ...DEFAULT_LAYOUT,
+  title: 'Invoice',
+  meta: [
+    { label: 'Date :', field: 'doc_date' },
+    { label: 'Invoice# :', field: 'doc_number' },
+    { label: 'Your ref# :', field: 'po_number' },
+    { label: 'Our ref# :', field: 'operation_number' },
+    { label: 'Client :', field: 'client_code' },
+    { label: 'Attention :', field: 'attention' },
+  ],
+  columns: [
+    { key: 'line', label: 'Line', width: 34 },
+    { key: 'reference', label: 'Reference', width: 80 },
+    { key: 'commercial_name', label: 'Description', width: 210 },
+    { key: 'quantity', label: 'Quantity', width: 50 },
+    { key: 'unit_price', label: 'Unit price', width: 66 },
+    { key: 'amount', label: 'Amount', width: 66 },
+  ],
+  // 'line' so a line's note (the original amount of a foreign-currency expense) prints under it
+  hs_code: 'line',
+  show_lot: false,
+  show_line_note: true,
+  show_description: false,
+  details: [
+    { label: 'Payment terms :', field: 'payment_terms' },
+    { label: 'Remarks :', field: 'remarks' },
+  ],
+  totals: [
+    { label: 'Subtotal', field: 'subtotal' },
+    { label: 'Vat', field: 'vat' },
+    { label: 'Total', field: 'total' },
+  ],
+};
+
+export const SAMPLE_INVOICE_TERMS ='Sample without commercial value – value quoted for customs purpose only';
 
 const META_FIELDS: MetaField[] = [
   'doc_date', 'doc_number', 'sq_number', 'po_number', 'operation_number',
