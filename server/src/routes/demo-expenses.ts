@@ -1060,51 +1060,19 @@ type ReadInvoice = Awaited<ReturnType<typeof parsePDFInvoice>> & {
 // After "credit used up", skip AI for a few minutes instead of failing on every file of the ZIP
 let creditOutUntil = 0;
 
-/**
- * Step 1 on upload (free): the basic reader's figures count when the PDF text
- * confirms them (net, VAT, total, currency, number, date — the full check's
- * text check) and exactly one known supplier's VAT number is printed on it.
- * Then no AI is needed for this invoice.
- */
-function verifyBasicReading(text: string, r: Awaited<ReturnType<typeof parsePDFInvoice>>, index: SupplierIndex): { supplier: string; vat: string } | null {
-  if (!(Math.abs(r.amount) > 0)) return null;
-  // Credit notes need the sign right — leave them to the AI
-  if (/credit\s*-?\s*no(ta|te)|creditnota|note\s+de\s+cr[ée]dit|gutschrift|\bavoir\b/i.test(text)) return null;
-  const t = triageInvoice(text, { amount: r.amount, vat_amount: r.vatAmount, currency: r.currency, invoice_id: r.invoiceId, issue_date: r.issueDate, supplier: '' });
-  if (t.status !== 'needs_ai' && t.status !== 'confirmed') return null;
-  if (t.reasons.some(x => x !== 'supplier_not_found')) return null;
-  const compact = text.toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const hits = new Map<string, string>();
-  for (const sup of knownSupplierList(index)) {
-    if (sup.vat && !isOwnCompany(sup.name) && compact.includes(sup.vat)) hits.set(sup.vat, sup.name);
-  }
-  if (hits.size !== 1) return null;
-  const [[vat, name]] = [...hits];
-  return { supplier: name, vat };
-}
-
-async function readPdfInvoice(buf: Buffer, fileName: string, fileHash: string, index: SupplierIndex, force = false): Promise<ReadInvoice> {
+// Uploads are read by Sonnet from the PDF (lib/supplierInvoiceReader.ts). There is no
+// free "confirmed by the text" shortcut any more: in testing it passed invoices whose
+// figures were wrong (a VAT of 0 matching other numbers printed on the page).
+async function readPdfInvoice(buf: Buffer, fileName: string, fileHash: string, _index: SupplierIndex, force = false): Promise<ReadInvoice> {
   const textResult = await parsePDFInvoice(buf, fileName);
   let x: InvoiceExtraction | null = null;
   let aiProblem: string | undefined;
-  // A saved reading needs no AI, credit or not
+  // A saved PDF / e-invoice reading needs no AI, credit or not (a Haiku text reading is read again)
   const saved = force ? null : cachedInvoiceExtraction(fileHash);
-  if (saved) x = saved;
-  else {
-    // Step 1: free — confirmed by the PDF text, no AI
-    if (!force) {
-      const { text } = await pdfText(buf);
-      const ok = verifyBasicReading(text, textResult, index);
-      if (ok) {
-        console.log(`[invoice-reader] ${fileName}: confirmed by the text check (no AI) — ${ok.supplier} net=${textResult.amount} vat=${textResult.vatAmount}`);
-        return { ...textResult, supplierName: ok.supplier, supplierVat: ok.vat, parseWarnings: [] };
-      }
-    }
-  }
+  if (saved && saved.read_by !== 'haiku-text') x = saved;
   if (x) { /* saved reading */ }
   else if (Date.now() < creditOutUntil) aiProblem = 'credit';
   else {
-    // Steps 2–3: AI on the text, then the PDF when needed
     try {
       x = await readSupplierInvoice({ fileHash, file: buf, categories: invoiceCategories(), force });
     } catch (err: any) {

@@ -292,8 +292,11 @@ export function isCreditError(err: any): boolean {
 // ── Single invoice (uploads, re-read) ───────────────────────────────────────
 
 /**
- * Read one invoice now: text with Haiku, then the PDF with Sonnet when there
- * is no usable text or the text reading does not add up. Returns null when AI
+ * Read one invoice now: Sonnet reads the PDF / image itself (~$0.014 an
+ * invoice). Haiku on the text misread 5 of 63 real invoices in testing (VAT
+ * base taken as net, customer number as invoice number), Sonnet none, so Haiku
+ * is only used for a file Sonnet can't take, and a saved Haiku reading is read
+ * again. Returns null when AI
  * reading is not configured or nothing could be read — the caller falls back
  * to the regex reader. `force` skips the cache.
  */
@@ -306,26 +309,26 @@ export async function readSupplierInvoice(opts: {
 }): Promise<InvoiceExtraction | null> {
   if (!opts.force) {
     const hit = cached(opts.fileHash);
-    if (hit) return hit;
+    if (hit && hit.read_by !== 'haiku-text') return hit;
   }
   if (!invoiceReaderConfigured()) return null;
   const client = new Anthropic();
 
-  const text = opts.text ?? (isPdf(opts.file) ? (await pdfText(opts.file)).text : '');
   let result: InvoiceExtraction | null = null;
-  if (hasUsableText(text)) {
-    assertAiBudget(0.01);
-    const res: any = await client.messages.create(buildReadParams('haiku-text', { text }, opts.categories));
-    logUsage('invoice read', 'haiku-text', res.usage, false);
-    result = parseReadResponse(res, 'haiku-text');
-  }
-  if (!readingHolds(result)) {
-    const params = buildReadParams('sonnet-pdf', { file: opts.file }, opts.categories);
-    if (params) {
-      assertAiBudget(0.05);
-      const res: any = await client.messages.create(params);
-      logUsage('invoice read', 'sonnet-pdf', res.usage, false);
-      result = parseReadResponse(res, 'sonnet-pdf') ?? result;
+  const params = buildReadParams('sonnet-pdf', { file: opts.file }, opts.categories);
+  if (params) {
+    assertAiBudget(0.05);
+    const res: any = await client.messages.create(params);
+    logUsage('invoice read', 'sonnet-pdf', res.usage, false);
+    result = parseReadResponse(res, 'sonnet-pdf');
+  } else {
+    // Not a PDF / image Sonnet can take: its text, if any, with Haiku
+    const text = opts.text ?? '';
+    if (hasUsableText(text)) {
+      assertAiBudget(0.01);
+      const res: any = await client.messages.create(buildReadParams('haiku-text', { text }, opts.categories));
+      logUsage('invoice read', 'haiku-text', res.usage, false);
+      result = parseReadResponse(res, 'haiku-text');
     }
   }
   if (result) rememberExtraction(opts.fileHash, result);
