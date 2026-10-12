@@ -1,13 +1,16 @@
 /**
- * Full check of the stored supplier invoices, cheapest first:
- *   Stage 1 (free)  — the PDF's text is searched for the stored net, VAT, total,
- *                     currency, invoice number, date and supplier. All found
- *                     and consistent → confirmed, no AI.
- *   Stage 2 (Sonnet)— everything the text check could not confirm: Sonnet reads
- *                     the PDF itself, through the Message Batches API (half
- *                     price). Haiku text readings (from uploads or older checks)
- *                     are not trusted for the check — they made wrong
- *                     suggestions — and are read again from the PDF.
+ * Full check of the stored supplier invoices:
+ *   Stage 1 (free)  — the PDF's text is extracted and searched for the stored
+ *                     figures (invoice_triage / invoice_texts: pages, hashes).
+ *                     It no longer marks anything correct on its own.
+ *   Stage 2 (Sonnet)— every invoice without a PDF / e-invoice reading yet is
+ *                     read ONCE by Sonnet from the PDF itself, through the
+ *                     Message Batches API (half price, ~$0.007 an invoice).
+ * Chosen after a test on 88 real invoices (Oct 2026): Sonnet on the PDF read
+ * 77/77 right; Opus was no better at 2.5x the price; Haiku on the text misread
+ * 5/63; and the text check passed 2 invoices whose stored figures were wrong
+ * (a stored VAT of 0 matching other numbers on the page). Haiku readings
+ * (uploads, older checks) are therefore never used by the check.
  * Readings land in invoice_extractions (shared with uploads), so nothing is
  * paid for twice. The check never changes an invoice.
  */
@@ -261,10 +264,9 @@ export function stageCandidates(mode: ReadMode, scope: Scope = null): Candidate[
     if (mode === 'haiku-text') {
       wanted = r.status === 'needs_ai' && !x;
     } else {
-      // Everything the text check could not confirm; a PDF (or e-invoice XML) reading already made counts,
-      // a text reading does not
+      // Every invoice once: a PDF (or e-invoice XML) reading already made counts, a text reading does not
       const pdfRead = x && x.read_by !== 'haiku-text';
-      wanted = !pdfRead && (r.status === 'needs_ai' || r.status === 'no_text');
+      wanted = !pdfRead;
     }
     if (!wanted) continue;
     seen.add(r.file_hash);

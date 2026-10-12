@@ -3573,7 +3573,14 @@ function sameInvoiceNumber(stored: string, read: string): boolean {
   const a = compactId(stored), b = compactId(read);
   if (!b || a === b || a.includes(b) || b.includes(a) && a.length >= 4) return true;
   const tail = (s: string) => s.replace(/\D/g, '').slice(-6);
-  return tail(a).length === 6 && tail(a) === tail(b);
+  if (tail(a).length === 6 && tail(a) === tail(b)) return true;
+  // The same digit groups with / without zero padding: "VF2026/833" ↔ "2026000833"
+  const padded = (x: string, y: string) => {
+    const groups = (x.match(/\d+/g) || []).map(g => g.replace(/^0+/, '')).filter(Boolean);
+    const digits = (y.match(/\d+/g) || []).join('');
+    return groups.length >= 2 && groups.join('').length >= 4 && new RegExp(`^0*${groups.join('0*')}$`).test(digits);
+  };
+  return padded(String(read || ''), String(stored || '')) || padded(String(stored || ''), String(read || ''));
 }
 
 /** Same supplier: same name once legal forms / punctuation go, or one's words inside the other's. */
@@ -3582,13 +3589,13 @@ function sameSupplier(a: string, b: string): boolean {
   if (na === nb) return true;
   // Near spelling (a typo or missing letter in the stored name)
   if (Math.min(na.length, nb.length) >= 5 && levenshtein(na, nb) / Math.max(na.length, nb.length) <= 0.15) return true;
-  const ta = supplierTokens(a), tb = supplierTokens(b);
+  // Web addresses ("dhl.com") count by their name; word order doesn't matter ("Sociaal Secretariaat Acerta" ↔ "Acerta Sociaal Secretariaat vzw")
+  const WEB = new Set(['www', 'com', 'be', 'nl', 'eu', 'net', 'org', 'de', 'fr', 'co', 'uk']);
+  const ta = supplierTokens(a).filter(w => !WEB.has(w)), tb = supplierTokens(b).filter(w => !WEB.has(w));
   const [short, long] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
   if (short.join('').length < 3) return false;
-  for (let i = 0; i + short.length <= long.length; i++) {
-    if (short.every((w, k) => long[i + k] === w)) return true;
-  }
-  return false;
+  const longSet = new Set(long);
+  return short.every(w => longSet.has(w));
 }
 
 // Fix from the full check: the reading's values ("Fix") or the user's own (manual).
@@ -3705,10 +3712,18 @@ router.get('/full-check', async (req: Request, res: Response) => {
       const cached = cachedInvoiceExtraction(row.file_hash);
       const x = cached && cached.read_by !== 'haiku-text' ? cached : null;
 
-      if (!x || x.net_amount == null) {
+      // The text check alone never confirms: it passed wrong stored figures in testing
+      if (!x) {
         if (!triageCurrent) { report.push({ ...base, status: 'not_checked' }); continue; }
-        if (row.t_status === 'confirmed') { report.push({ ...base, status: 'ok', verified_by: VERIFIED_BY.text }); continue; }
         report.push({ ...base, status: pending.has(row.file_hash) ? 'waiting' : 'not_read', reasons: (row.t_reasons || '').split(',').filter(Boolean) });
+        continue;
+      }
+      // Read, but no amounts on it (a statement, tax filing, receipt annex…): look once and keep or change
+      if (x.net_amount == null) {
+        report.push({
+          ...base, status: accepted ? 'accepted' : 'unclear', ...accepted,
+          warnings: [x.is_invoice ? 'no_amounts' : 'not_an_invoice'], verified_by: VERIFIED_BY[x.read_by || 'opus-pdf'],
+        });
         continue;
       }
 

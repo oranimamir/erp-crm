@@ -8,8 +8,8 @@ import PdfPreview from './ui/PdfPreview';
 
 /**
  * Full check of every supplier invoice:
- *   1. free text check (the stored figures are searched in the PDF text)
- *   2. AI reads the PDF itself (Sonnet, batch — half price) for what 1 could not confirm
+ *   1. the PDF text is extracted (free)
+ *   2. AI reads each PDF once (Sonnet, batch — half price); readings are kept, so a re-check only reads new invoices
  * Review in one window: the list on the left, the selected invoice's PDF on the
  * right beside stored vs. suggested values — Change invoice (the suggestion or
  * own values) or Keep original.
@@ -96,6 +96,7 @@ const WARNING_LABELS: Record<string, string> = {
   vat_rate_unusual: 'Unusual VAT rate',
   foreign_vat: 'Foreign supplier charges VAT',
   not_an_invoice: 'Not an invoice (statement / tax filing?)',
+  no_amounts: 'No amounts found on the invoice',
   rule_foreign_vat: 'No PDF · foreign supplier charging VAT (reverse charge expected)',
   rule_vat_too_high: 'No PDF · VAT above 30% of net',
   rule_may_include_vat: 'No PDF · Belgian supplier without VAT — amount may include 21%',
@@ -259,7 +260,7 @@ export default function InvoiceFullCheck({ onClose, scope, onScopeChange }: {
               {!running && <ScopeSwitch value={scope} onChange={onScopeChange} />}
             </div>
             <p className="text-sm text-gray-500 mt-0.5">
-              Every invoice is compared with its PDF — free where the PDF text confirms it, otherwise AI reads the PDF itself.
+              Every invoice is compared with its PDF as read by AI — each PDF is read once, a re-check only reads new or changed ones.
               {data && <> AI this month: <strong>{usd(data.budget.spent_usd)}</strong> of {usd(data.budget.monthly_usd)} (limit in Settings).</>}
             </p>
           </div>
@@ -280,14 +281,14 @@ export default function InvoiceFullCheck({ onClose, scope, onScopeChange }: {
                   </p>
                   {run.status === 'text' ? (
                     <>
-                      <p className="text-sm text-gray-600">Comparing the stored figures with the PDFs (free){run.text_progress.total > 0 && ` — ${run.text_progress.done} of ${run.text_progress.total}`}</p>
+                      <p className="text-sm text-gray-600">Preparing the PDFs (free){run.text_progress.total > 0 && ` — ${run.text_progress.done} of ${run.text_progress.total}`}</p>
                       {run.text_progress.total > 0 && (
                         <div className="h-1.5 bg-gray-100 rounded-full max-w-md"><div className="h-1.5 bg-primary-600 rounded-full" style={{ width: `${(run.text_progress.done / run.text_progress.total) * 100}%` }} /></div>
                       )}
                     </>
                   ) : (
                     <p className="text-sm text-gray-600">
-                      AI is reading {run.ai_reading} invoice PDF(s) that could not be confirmed for free.
+                      AI is reading {run.ai_reading} invoice PDF(s) not read before (about $0.007 each).
                       This usually takes under an hour — you can close this window and come back; the results will be here.
                     </p>
                   )}
