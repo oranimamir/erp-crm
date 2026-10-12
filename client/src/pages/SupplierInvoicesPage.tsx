@@ -16,6 +16,8 @@ import SearchBar from '../components/ui/SearchBar';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import PdfPreview from '../components/ui/PdfPreview';
 import InvoiceFullCheck, { ScopeSwitch, type CheckScope } from '../components/InvoiceFullCheck';
+import ProjectExpenseUpload, { type ProjectOption } from '../components/ProjectExpenseUpload';
+import NetSalaryImportModal from '../components/NetSalaryImportModal';
 
 const CAT_COLORS: Record<string, string> = {
   'Salaries': '#6366f1', 'Cars': '#8b5cf6', 'Overhead': '#3b82f6',
@@ -28,7 +30,11 @@ const CAT_COLORS: Record<string, string> = {
 const DOMAIN_COLORS: Record<string, string> = {
   demo: 'bg-emerald-100 text-emerald-700',
   sales: 'bg-blue-100 text-blue-700',
+  project: 'bg-violet-100 text-violet-700',
 };
+
+const DOMAIN_LABELS: Record<string, string> = { demo: 'Demo', sales: 'Sales', project: 'Project' };
+type Domain = 'demo' | 'sales' | 'project';
 
 const SUPPLIER_COLORS = [
   '#6366f1', '#f59e0b', '#10b981', '#ef4444', '#3b82f6', '#8b5cf6',
@@ -413,7 +419,7 @@ function InvoiceViewer({ invoiceId, onClose }: { invoiceId: number; onClose: () 
 // MAIN PAGE
 // ═══════════════════════════════════════════════════════════════════════════════
 
-type SubTab = 'demo' | 'sales' | 'summary' | 'employees';
+type SubTab = 'demo' | 'sales' | 'project' | 'summary' | 'employees';
 
 interface EmployeeExpense {
   id: number;
@@ -516,7 +522,7 @@ export default function SupplierInvoicesPage() {
   const [editingRow, setEditingRow] = useState<number | null>(null);
   const [editSupplier, setEditSupplier] = useState('');
   const [editCategory, setEditCategory] = useState('');
-  const [editDomain, setEditDomain] = useState<'demo' | 'sales'>('demo');
+  const [editDomain, setEditDomain] = useState<Domain>('demo');
   const [editAmount, setEditAmount] = useState<number>(0);
   const [editVat, setEditVat] = useState<number>(0);
   const [editCurrency, setEditCurrency] = useState('EUR');
@@ -542,7 +548,13 @@ export default function SupplierInvoicesPage() {
   const [editingExpenseDraft, setEditingExpenseDraft] = useState<Partial<EmployeeExpense>>({});
   const employeeFileRef = useRef<HTMLInputElement>(null);
 
-  const domainCategories = activeTab === 'demo' ? demoCategories : salesCategories;
+  // Project expenses: the sub categories are the technology projects
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
+  useEffect(() => { api.get('/demo-expenses/projects').then(r => setProjects(r.data)).catch(() => {}); }, [activeTab]);
+  const projectLabels = useMemo(() => projects.map(p => p.label), [projects]);
+  const categoriesOf = (d: string) => (d === 'sales' ? salesCategories : d === 'project' ? projectLabels : demoCategories);
+  const domainCategories = categoriesOf(activeTab);
+  const [showSalaryImport, setShowSalaryImport] = useState(false);
 
   // Reset filters when switching tabs
   const handleTabChange = (tab: SubTab) => {
@@ -1273,13 +1285,13 @@ export default function SupplierInvoicesPage() {
                   Filters
                   {hasFilters && <span className="w-2 h-2 rounded-full bg-primary-500" />}
                 </button>
-                <button
+                {activeTab !== 'project' && <button
                   onClick={() => { setShowAddSupplier(true); setNewSupplierCategory(domainCategories[0]); }}
                   className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors"
                 >
                   <UserPlus size={16} />
                   Add Supplier
-                </button>
+                </button>}
               </>
             )}
           </div>
@@ -1307,6 +1319,16 @@ export default function SupplierInvoicesPage() {
               }`}
             >
               Sales Activities
+            </button>
+            <button
+              onClick={() => handleTabChange('project')}
+              className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'project'
+                  ? 'border-primary-600 text-primary-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Project Expenses
             </button>
             <button
               onClick={() => handleTabChange('employees')}
@@ -1741,10 +1763,11 @@ export default function SupplierInvoicesPage() {
 
                 {/* Domain breakdown */}
                 {monthlySummary.domain_totals.length > 0 && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className={`grid grid-cols-1 gap-4 ${monthlySummary.domain_totals.length > 2 ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
                     {monthlySummary.domain_totals.map(dt => (
                       <Card key={dt.domain} className="p-4">
-                        <h3 className="text-sm font-semibold text-gray-900 capitalize mb-2">{dt.domain === 'demo' ? 'Demo Expenses' : 'Sales Activities'}</h3>
+                        <h3 className="text-sm font-semibold text-gray-900 capitalize mb-2">{dt.domain === 'demo' ? 'Demo Expenses' : dt.domain === 'sales' ? 'Sales Activities' : 'Project Expenses'}</h3>
+                        {dt.domain === 'project' && <p className="text-xs text-gray-400 -mt-1.5 mb-2">Reimbursed through TI invoices, not in the totals above</p>}
                         <div className="grid grid-cols-3 gap-3 text-sm">
                           <div>
                             <p className="text-xs text-gray-400">Amount</p>
@@ -2148,6 +2171,14 @@ export default function SupplierInvoicesPage() {
           </div>
         ) : (
           <>
+            {activeTab === 'project' && <ProjectExpenseUpload key={projects.length} projects={projects} onUploaded={fetchAll} />}
+            {activeTab === 'demo' && (
+              <div className="flex justify-end">
+                <Button variant="secondary" onClick={() => setShowSalaryImport(true)}>
+                  <FileSpreadsheet size={16} /> Import net salaries
+                </Button>
+              </div>
+            )}
             {/* Summary cards */}
             {grandTotal > 0 && (
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
@@ -2269,18 +2300,19 @@ export default function SupplierInvoicesPage() {
                             <td className="px-4 py-3">
                               {isEditing ? (
                                 <select value={editDomain} onChange={e => {
-                                  const d = e.target.value as 'demo' | 'sales';
+                                  const d = e.target.value as Domain;
                                   setEditDomain(d);
-                                  const cats = d === 'sales' ? salesCategories : demoCategories;
+                                  const cats = categoriesOf(d);
                                   if (!cats.includes(editCategory)) setEditCategory(cats[0] || 'Other');
                                 }}
                                   className="border border-gray-300 rounded px-2 py-0.5 text-xs bg-white focus:ring-2 focus:ring-primary-500">
                                   <option value="demo">Demo</option>
                                   <option value="sales">Sales</option>
+                                  {(projects.length > 0 || editDomain === 'project') && <option value="project">Project</option>}
                                 </select>
                               ) : (
                                 <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${DOMAIN_COLORS[inv.domain] || 'bg-gray-100 text-gray-700'}`}>
-                                  {inv.domain === 'demo' ? 'Demo' : inv.domain === 'sales' ? 'Sales' : inv.domain}
+                                  {DOMAIN_LABELS[inv.domain] || inv.domain}
                                 </span>
                               )}
                             </td>
@@ -2288,7 +2320,7 @@ export default function SupplierInvoicesPage() {
                               {isEditing ? (
                                 <select value={editCategory} onChange={e => setEditCategory(e.target.value)}
                                   className="border border-gray-300 rounded px-2 py-0.5 text-xs bg-white focus:ring-2 focus:ring-primary-500">
-                                  {(editDomain === 'sales' ? salesCategories : demoCategories).map(c => <option key={c} value={c}>{c}</option>)}
+                                  {[...new Set([...categoriesOf(editDomain), ...(editDomain === 'project' && editCategory ? [editCategory] : [])])].map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
                               ) : (
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium" style={{ background: (CAT_COLORS[inv.category] || '#6b7280') + '18', color: CAT_COLORS[inv.category] || '#6b7280' }}>
@@ -2340,7 +2372,7 @@ export default function SupplierInvoicesPage() {
                                   </>
                                 ) : (
                                   <>
-                                      <button onClick={() => { setEditingRow(inv.id); setEditSupplier(inv.supplier); setEditCategory(inv.category); setEditDomain((inv.domain as 'demo' | 'sales') || 'demo'); setEditAmount(inv.amount); setEditVat(inv.vat_amount || 0); setEditCurrency(inv.currency || 'EUR'); setEditDate(inv.issue_date || ''); }}
+                                      <button onClick={() => { setEditingRow(inv.id); setEditSupplier(inv.supplier); setEditCategory(inv.category); setEditDomain((inv.domain as Domain) || 'demo'); setEditAmount(inv.amount); setEditVat(inv.vat_amount || 0); setEditCurrency(inv.currency || 'EUR'); setEditDate(inv.issue_date || ''); }}
                                         className="text-gray-400 hover:text-primary-600 transition-colors" title="Edit invoice">
                                         <Pencil size={14} />
                                       </button>
@@ -2400,7 +2432,7 @@ export default function SupplierInvoicesPage() {
               <Card className="p-12 text-center">
                 <FileSpreadsheet size={48} className="mx-auto text-gray-300 mb-4" />
                 <h3 className="text-lg font-medium text-gray-900 mb-2">
-                  No {activeTab === 'demo' ? 'demo expense' : 'sales activity'} invoices yet
+                  No {activeTab === 'demo' ? 'demo expense' : activeTab === 'project' ? 'project expense' : 'sales activity'} invoices yet
                 </h3>
                 <p className="text-sm text-gray-500">
                   Upload a ZIP file from the Monthly Summary tab. Invoices will be automatically classified by supplier.
@@ -2411,6 +2443,7 @@ export default function SupplierInvoicesPage() {
         )}
 
       {/* Invoice Viewer Modal */}
+      {showSalaryImport && <NetSalaryImportModal onClose={() => setShowSalaryImport(false)} onImported={fetchAll} />}
       {showFullCheck && <InvoiceFullCheck scope={checkScope} onScopeChange={setCheckScope} onClose={() => { setShowFullCheck(false); fetchAll(); }} />}
       {viewingInvoice && <InvoiceViewer invoiceId={viewingInvoice} onClose={() => setViewingInvoice(null)} />}
 

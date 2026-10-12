@@ -2308,6 +2308,11 @@ export async function initializeDatabase() {
   // A fresh database loses quantity_mt in the invoices CHECK rebuild above — add it back
   try { db.exec(`ALTER TABLE invoices ADD COLUMN quantity_mt REAL`); } catch (_) { /* column may already exist */ }
 
+  // Project expenses: supplier invoices (domain 'project') mirrored as technology operation expenses
+  try { db.exec(`ALTER TABLE demo_invoices ADD COLUMN to_id INTEGER`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE technology_expenses ADD COLUMN demo_invoice_id INTEGER`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_tech_expenses_demo_invoice ON technology_expenses(demo_invoice_id)`); } catch (_) {}
+
   // Referential integrity is only as good as the last migration — surface any
   // violation in the logs rather than letting it rot silently as it did before.
   try {

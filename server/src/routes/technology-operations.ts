@@ -12,6 +12,7 @@ import { uploadTechnologyExpense } from '../middleware/upload.js';
 import { parsePDFInvoice, invoiceCategories } from './demo-expenses.js';
 import { deleteInvoiceDocument } from './invoice-documents.js';
 import { todayISO } from '../lib/today.js';
+import { syncProjectExpenses, relabelProject } from '../lib/projectExpenses.js';
 
 /**
  * Technology operations (TO): technology services TripleW provides and is
@@ -113,6 +114,7 @@ function detail(id: number | string) {
 
 // GET /api/technology-operations?entity=BE&status=open&search=
 router.get('/', (req: Request, res: Response) => {
+  syncProjectExpenses();
   const conditions: string[] = [];
   const params: any[] = [];
   const entity = String(req.query.entity || '').toUpperCase();
@@ -135,6 +137,7 @@ router.get('/next-number', (req: Request, res: Response) => {
 });
 
 router.get('/:id', (req: Request, res: Response) => {
+  syncProjectExpenses();
   const row = detail(req.params.id as string);
   if (!row) { res.status(404).json({ error: 'Technology operation not found' }); return; }
   res.json(row);
@@ -225,6 +228,7 @@ router.put('/:id', (req: Request, res: Response) => {
     WHERE id = ?
   `).run(number, number === existing.to_number ? existing.seq : seqOf(number, existing.entity, existing.year),
     Number(customerId), title, date, status, notes, existing.id);
+  if (title !== existing.title) { relabelProject(existing.id); syncProjectExpenses(); }
 
   const changes = [
     number !== existing.to_number ? `renumbered from ${existing.to_number}` : '',
@@ -398,6 +402,7 @@ router.post('/:id/expenses', uploadTechnologyExpense.array('files', 50), async (
 router.put('/:id/expenses/:expenseId', async (req: Request, res: Response) => {
   const existing = db.prepare('SELECT * FROM technology_expenses WHERE id = ? AND to_id = ?').get(Number(req.params.expenseId), Number(req.params.id)) as any;
   if (!existing) { res.status(404).json({ error: 'Expense not found' }); return; }
+  if (existing.demo_invoice_id) { res.status(400).json({ error: 'This expense comes from Supplier Invoices → Project expenses — edit it there' }); return; }
   const f = expenseFields(req.body || {}, existing);
   const fx = await eurOf(f.net_amount, f.currency, f.expense_date);
   db.prepare(`
@@ -413,6 +418,7 @@ router.put('/:id/expenses/:expenseId', async (req: Request, res: Response) => {
 router.delete('/:id/expenses/:expenseId', (req: Request, res: Response) => {
   const expense = db.prepare(`${EXPENSE_SELECT} WHERE e.id = ? AND e.to_id = ?`).get(Number(req.params.expenseId), Number(req.params.id)) as any;
   if (!expense) { res.status(404).json({ error: 'Expense not found' }); return; }
+  if (expense.demo_invoice_id) { res.status(400).json({ error: 'This expense comes from Supplier Invoices → Project expenses — delete it there, or move it to another project' }); return; }
   if (expense.invoice_document_id && expense.invoice_status === 'final') {
     res.status(400).json({ error: `This expense is on invoice ${expense.invoice_number} — remove it from the invoice first` });
     return;

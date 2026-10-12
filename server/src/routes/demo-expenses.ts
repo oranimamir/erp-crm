@@ -23,8 +23,38 @@ import {
   startRun, advanceRun, currentRun, triageInvoice,
 } from '../lib/invoiceCheck.js';
 import { todayISO } from '../lib/today.js';
+import { projectOptions, projectByLabel, billedOn, syncProjectExpenses } from '../lib/projectExpenses.js';
+import { readNetSalaryWorkbook, monthEnd, type SalaryMonth, type SalaryPayment } from '../lib/netSalaryImport.js';
 
 const router = Router();
+
+// Project expenses: an invoice whose expense is on a final TI invoice can't be changed or deleted;
+// after any other change the technology operation expenses follow (lib/projectExpenses.ts)
+const LOCKED_EDIT = /^\/invoices\/(\d+)\/(category|domain|amount|vat|date|supplier|apply-check)$/;
+router.use((req: Request, res: Response, next) => {
+  if (req.method === 'GET') { next(); return; }
+  let ids: number[] = [];
+  const edit = LOCKED_EDIT.exec(req.path);
+  const del = req.method === 'DELETE' ? /^\/invoices\/(\d+)$/.exec(req.path) : null;
+  const batch = req.method === 'DELETE' ? /^\/batches\/(\d+)$/.exec(req.path) : null;
+  if (edit) ids = [Number(edit[1])];
+  else if (del) ids = [Number(del[1])];
+  else if (batch) ids = (db.prepare('SELECT id FROM demo_invoices WHERE batch_id = ?').all(Number(batch[1])) as any[]).map(r => r.id);
+  for (const id of ids) {
+    const ti = billedOn(id);
+    if (ti) {
+      res.status(400).json({ error: `This project expense is billed on ${ti} — it can't be changed or deleted any more` });
+      return;
+    }
+  }
+  res.on('finish', () => { if (res.statusCode < 400) syncProjectExpenses(); });
+  next();
+});
+
+// Project expense sub categories = technology operations
+router.get('/projects', (_req: Request, res: Response) => {
+  res.json(projectOptions());
+});
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 
 const sha256 = (buf: Buffer | Uint8Array | string) =>
@@ -1146,6 +1176,7 @@ function buildDuplicateIndex(): DupIndex {
     SELECT i.id, i.invoice_id, i.supplier, i.amount, i.issue_date, i.domain, i.pdf_filename, i.xml_filename, i.supplier_vat,
       COALESCE(i.file_hash, t.file_hash) as file_hash
     FROM demo_invoices i LEFT JOIN invoice_triage t ON t.invoice_id = i.id
+    WHERE COALESCE(i.parse_source, '') != 'salary_excel'
   `).all() as any[];
   const aliases = db.prepare('SELECT supplier_pattern, display_name FROM demo_supplier_mappings').all() as any[];
   const idx: DupIndex = { rows: [], byHash: new Map(), byNum: new Map() };
@@ -2073,7 +2104,7 @@ function archiveDemoInvoices(where: string, params: any[], req?: Request) {
   for (const r of rows) {
     archiveBuffer(Buffer.from(String(r.embedded_pdf), 'base64'), {
       section: 'Supplier invoices',
-      context: contextOf(r.supplier, `Invoice ${r.invoice_id}`, r.domain === 'sales' ? 'Sales activities' : 'Demo expenses'),
+      context: contextOf(r.supplier, `Invoice ${r.invoice_id}`, r.domain === 'sales' ? 'Sales activities' : r.domain === 'project' ? 'Project expenses' : 'Demo expenses'),
       fileName: r.pdf_filename || `${r.invoice_id || 'invoice'}.pdf`,
     }, req ? archivedBy(req) : undefined);
   }
@@ -2151,7 +2182,8 @@ router.patch('/invoices/:id/category', (req: Request, res: Response) => {
     const newDomain = domain || inv.domain;
     db.prepare('UPDATE demo_invoices SET category = ?, domain = ? WHERE id = ?').run(category, newDomain, req.params.id);
 
-    if (applyToAll) {
+    // A project is chosen per invoice, never remembered for the supplier
+    if (applyToAll && newDomain !== 'project') {
       db.prepare('UPDATE demo_invoices SET category = ?, domain = ? WHERE LOWER(supplier) = LOWER(?) AND LOWER(supplier) NOT LIKE ?')
         .run(category, newDomain, inv.supplier, '%acerta%');
       db.prepare('INSERT OR REPLACE INTO demo_supplier_mappings (supplier_pattern, domain, category) VALUES (?, ?, ?)')
@@ -2259,9 +2291,11 @@ router.get('/demo-suppliers', (req: Request, res: Response) => {
 router.get('/monthly-summary', (req: Request, res: Response) => {
   try {
     const { month } = req.query;
-    let where = '1=1';
+    let allWhere = '1=1';
     const params: any[] = [];
-    if (month) { where += ' AND month = ?'; params.push(month); }
+    if (month) { allWhere += ' AND month = ?'; params.push(month); }
+    // Company expenses only: project expenses are reimbursed through TI invoices (listed in domain_totals on their own)
+    const where = `${allWhere} AND domain != 'project'`;
 
     // Per-month totals by domain
     const byMonth = db.prepare(
@@ -2284,7 +2318,7 @@ router.get('/monthly-summary', (req: Request, res: Response) => {
     // Domain totals
     const domainTotals = db.prepare(
       `SELECT domain, SUM(COALESCE(eur_amount, amount)) as total, SUM(COALESCE(vat_eur_amount, vat_amount)) as vat_total, COUNT(*) as count
-       FROM demo_invoices WHERE ${where} GROUP BY domain`
+       FROM demo_invoices WHERE ${allWhere} GROUP BY domain`
     ).all(...params) as any[];
 
     // Available months
@@ -2519,6 +2553,192 @@ router.post('/confirm-single', async (req: Request, res: Response) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// PROJECT EXPENSES UPLOAD — files read and filed straight under a project (a
+// technology operation); the operation gets them as expenses (lib/projectExpenses.ts)
+// ═══════════════════════════════════════════════════════════════════════════════
+router.post('/project-upload', upload.array('files', 50), async (req: Request, res: Response) => {
+  const files = (req.files as Express.Multer.File[] | undefined) || [];
+  try {
+    if (!files.length) { res.status(400).json({ error: 'No files uploaded' }); return; }
+    const project = projectByLabel(req.body?.project) || projectOptions().find(p => p.to_id === Number(req.body?.to_id)) || null;
+    if (!project) { res.status(400).json({ error: 'Choose the project' }); return; }
+    const userId = (req as any).user?.userId;
+    const uploadedByName = (req as any).user?.display_name || 'Unknown';
+    const index = buildSupplierIndex();
+    const dupIndex = buildDuplicateIndex();
+    const added: { id: number; file: string; supplier: string; invoiceId: string; amount: number; warnings: string[] }[] = [];
+    const skipped: { file: string; reason: string }[] = [];
+    let batchId: number | bigint | null = null;
+    let batchTotal = 0;
+
+    for (const file of files) {
+      const name = file.originalname;
+      const lower = name.toLowerCase();
+      if (!lower.endsWith('.pdf') && !lower.endsWith('.xml')) { skipped.push({ file: name, reason: 'Only PDF or XML invoices' }); continue; }
+      const fileHash = sha256(file.buffer);
+      let parsed: any = null;
+      try {
+        if (lower.endsWith('.xml')) {
+          parsed = parseUBLInvoice(file.buffer.toString('utf-8'));
+          if (parsed) { rememberUblReading(fileHash, parsed); parsed.xmlFilename = name; parsed.pdfFilename = null; parsed.embeddedPdf = null; }
+        } else {
+          parsed = await readPdfInvoice(file.buffer, name, fileHash, index);
+          if (parsed) { parsed.pdfFilename = name; parsed.embeddedPdf = file.buffer.toString('base64'); parsed.xmlFilename = null; }
+        }
+      } catch (err: any) {
+        console.warn(`[project-upload] could not read ${name}:`, err?.message || err);
+      }
+      if (!parsed) { skipped.push({ file: name, reason: 'Could not be read' }); continue; }
+      const cand = { fileHash, invoiceId: parsed.invoiceId, supplierName: parsed.supplierName, supplierVat: parsed.supplierVat, amount: parsed.amount, issueDate: parsed.issueDate };
+      const dup = findDuplicate(dupIndex, cand);
+      if (dup && dup.kind !== 'same_amount_date') {
+        skipped.push({ file: name, reason: `Already in the system: invoice ${dup.row.invoice_id} from ${dup.row.supplier}` });
+        continue;
+      }
+      addToDuplicateIndex(dupIndex, cand);
+      const match = classifySupplier(parsed.supplierName || '', { vat: parsed.supplierVat, aiMatch: parsed.aiMatch, index });
+      const supplier = match?.displayName || parsed.supplierName || 'Unknown';
+      const issueDate = parsed.issueDate || todayISO();
+      const amount = Number(parsed.amount) || 0, vat = Number(parsed.vatAmount) || 0;
+      const currency = (parsed.currency || 'EUR').toUpperCase();
+      const fx = await computeFxFields(amount, vat, currency, issueDate);
+      if (batchId == null) {
+        batchId = db.prepare(
+          'INSERT INTO demo_upload_batches (filename, month, domain, invoice_count, total_amount, uploaded_by, uploaded_by_name, uploaded_at) VALUES (?, ?, ?, 0, 0, ?, ?, ?)'
+        ).run(files.length === 1 ? name : `${files.length} files — ${project.label}`, issueDate.substring(0, 7), 'project', userId, uploadedByName, new Date().toISOString()).lastInsertRowid;
+      }
+      const warnings: string[] = [...(parsed.parseWarnings || [])];
+      if (dup) warnings.push('possible_duplicate');
+      const r = db.prepare(
+        `INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, domain, to_id, amount, vat_amount, currency, month, line_items, embedded_pdf, pdf_filename, xml_filename, duplicate_warning, fx_rate, eur_amount, vat_eur_amount, file_hash,
+           supplier_vat, supplier_country, vat_rate, parse_source, parse_warnings)
+         VALUES (?, ?, ?, ?, ?, 'project', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        batchId, parsed.invoiceId || '', issueDate, supplier, project.label, project.to_id, amount, vat, currency, issueDate.substring(0, 7),
+        JSON.stringify(parsed.lineItems || []), parsed.embeddedPdf || null, parsed.pdfFilename || null, parsed.xmlFilename || null, dup ? 1 : 0,
+        fx.fx_rate, fx.eur_amount, fx.vat_eur_amount, fileHash,
+        normalizeVat(parsed.supplierVat), parsed.supplierCountry || null, invoiceVatRate(amount, vat, parsed.vatRate),
+        parsed.parseSource || null, warningsText(warnings),
+      );
+      batchTotal += amount;
+      added.push({ id: Number(r.lastInsertRowid), file: name, supplier, invoiceId: parsed.invoiceId || '', amount, warnings });
+    }
+    if (batchId != null) {
+      db.prepare('UPDATE demo_upload_batches SET invoice_count = ?, total_amount = ? WHERE id = ?').run(added.length, batchTotal, batchId);
+    }
+    db.saveToDisk();
+    if (added.length) {
+      notifyAdmin({
+        entity: 'Supplier Invoice', action: 'created',
+        label: `${added.length} project expense(s) — ${project.label}`,
+        performedBy: uploadedByName, performedById: userId,
+      });
+    }
+    res.json({ project: project.label, added, skipped });
+  } catch (err: any) {
+    console.error('[demo-expenses] project-upload error:', err);
+    res.status(500).json({ error: 'Failed to upload project expenses' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NET SALARIES — the Acerta "total paid by month" Excel: one Demo expenses →
+// Salaries row per salary month (supplier "Net salaries", NETSAL-YYYY-MM). A new
+// file adds only what is new: months not imported yet, and payments (e.g. late
+// or corrective ones) not yet on an imported month.
+// ═══════════════════════════════════════════════════════════════════════════════
+const NET_SALARY_SUPPLIER = 'Net salaries';
+const salaryLineKey = (l: SalaryPayment) => `${l.payment_date || ''}|${l.period_from || ''}|${Math.round(l.amount * 100)}`;
+
+function salaryPlan(months: SalaryMonth[]) {
+  return months.map(m => {
+    const row = db.prepare("SELECT id, amount, line_items FROM demo_invoices WHERE parse_source = 'salary_excel' AND month = ?").get(m.month) as any;
+    if (!row) return { ...m, status: 'new' as const, existing_id: null, new_lines: m.lines, new_total: m.total };
+    let stored: SalaryPayment[] = [];
+    try { stored = JSON.parse(row.line_items || '[]'); } catch { /* corrupt */ }
+    const have = new Map<string, number>();
+    for (const l of stored) have.set(salaryLineKey(l), (have.get(salaryLineKey(l)) || 0) + 1);
+    const newLines: SalaryPayment[] = [];
+    for (const l of m.lines) {
+      const k = salaryLineKey(l);
+      if (have.get(k)) have.set(k, have.get(k)! - 1);
+      else newLines.push(l);
+    }
+    const newTotal = Math.round(newLines.reduce((t, l) => t + l.amount, 0) * 100) / 100;
+    return { ...m, status: newLines.length ? 'more' as const : 'same' as const, existing_id: row.id as number, stored_total: row.amount, new_lines: newLines, new_total: newTotal };
+  });
+}
+
+router.post('/net-salaries/preview', upload.single('file'), async (req: Request, res: Response) => {
+  try {
+    if (!req.file) { res.status(400).json({ error: 'No file uploaded' }); return; }
+    const months = await readNetSalaryWorkbook(req.file.buffer);
+    if (!months.length) { res.status(400).json({ error: 'No net salary months found in this Excel' }); return; }
+    res.json({ months: salaryPlan(months) });
+  } catch (err: any) {
+    console.error('[demo-expenses] net salary preview error:', err);
+    res.status(400).json({ error: 'Could not read the Excel: ' + (err?.message || '') });
+  }
+});
+
+router.post('/net-salaries/import', upload.single('file'), async (req: Request, res: Response) => {
+  try {
+    if (!req.file) { res.status(400).json({ error: 'No file uploaded' }); return; }
+    let only: Set<string> | null = null;
+    try { const m = JSON.parse(req.body?.months || 'null'); if (Array.isArray(m)) only = new Set(m.map(String)); } catch { /* all */ }
+    const plan = salaryPlan(await readNetSalaryWorkbook(req.file.buffer))
+      .filter(m => m.status !== 'same' && (!only || only.has(m.month)));
+    if (!plan.length) { res.json({ added: 0, updated: 0, total: 0 }); return; }
+    const userId = (req as any).user?.userId;
+    const by = (req as any).user?.display_name || 'Unknown';
+    let batchId: number | bigint | null = null;
+    let added = 0, updated = 0, total = 0;
+    const touchedBatches = new Set<number>();
+    db.transaction(() => {
+      for (const m of plan) {
+        if (m.status === 'new') {
+          if (batchId == null) {
+            batchId = db.prepare(
+              'INSERT INTO demo_upload_batches (filename, month, domain, invoice_count, total_amount, uploaded_by, uploaded_by_name, uploaded_at, note) VALUES (?, ?, ?, 0, 0, ?, ?, ?, ?)'
+            ).run(req.file!.originalname, m.month, 'demo', userId, by, new Date().toISOString(), 'Net salaries import').lastInsertRowid;
+          }
+          db.prepare(`
+            INSERT INTO demo_invoices (batch_id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, month, line_items,
+              duplicate_warning, fx_rate, eur_amount, vat_eur_amount, vat_rate, parse_source)
+            VALUES (?, ?, ?, ?, 'Salaries', 'demo', ?, 0, 'EUR', ?, ?, 0, 1, ?, 0, 0, 'salary_excel')
+          `).run(batchId, `NETSAL-${m.month}`, monthEnd(m.month), NET_SALARY_SUPPLIER, m.total, m.month, JSON.stringify(m.lines), m.total);
+          added++; total += m.total;
+        } else {
+          const row = db.prepare('SELECT amount, line_items, batch_id FROM demo_invoices WHERE id = ?').get(m.existing_id) as any;
+          let lines: SalaryPayment[] = [];
+          try { lines = JSON.parse(row.line_items || '[]'); } catch { /* corrupt */ }
+          const amount = Math.round(((Number(row.amount) || 0) + m.new_total) * 100) / 100;
+          db.prepare('UPDATE demo_invoices SET amount = ?, eur_amount = ?, line_items = ? WHERE id = ?')
+            .run(amount, amount, JSON.stringify([...lines, ...m.new_lines]), m.existing_id);
+          if (row.batch_id) touchedBatches.add(row.batch_id);
+          updated++; total += m.new_total;
+        }
+      }
+      if (batchId != null) touchedBatches.add(Number(batchId));
+      for (const b of touchedBatches) {
+        const t = db.prepare('SELECT COUNT(*) as c, COALESCE(SUM(amount), 0) as s FROM demo_invoices WHERE batch_id = ?').get(b) as any;
+        db.prepare('UPDATE demo_upload_batches SET invoice_count = ?, total_amount = ? WHERE id = ?').run(t.c, t.s, b);
+      }
+    })();
+    db.saveToDisk();
+    notifyAdmin({
+      entity: 'Supplier Invoice', action: 'created',
+      label: `Net salaries — ${added} month(s) added${updated ? `, ${updated} with new payments` : ''} (${req.file.originalname})`,
+      performedBy: by, performedById: userId,
+    });
+    res.json({ added, updated, total: Math.round(total * 100) / 100 });
+  } catch (err: any) {
+    console.error('[demo-expenses] net salary import error:', err);
+    res.status(500).json({ error: 'Failed to import net salaries: ' + (err?.message || '') });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SUPPLIER NAME UPDATE
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2703,8 +2923,8 @@ router.get('/vat-audit-log', (_req: Request, res: Response) => {
 router.patch('/invoices/:id/domain', (req: Request, res: Response) => {
   try {
     const { domain } = req.body;
-    if (!domain || !['demo', 'sales'].includes(domain)) {
-      res.status(400).json({ error: 'domain must be "demo" or "sales"' });
+    if (!domain || !['demo', 'sales', 'project'].includes(domain)) {
+      res.status(400).json({ error: 'domain must be "demo", "sales" or "project"' });
       return;
     }
 
@@ -3111,7 +3331,7 @@ router.get('/check-duplicates', (req: Request, res: Response) => {
       SELECT i.id, i.invoice_id, i.issue_date, i.supplier, i.category, i.domain, i.amount, i.vat_amount, i.currency, i.month,
         COALESCE(i.file_hash, t.file_hash) as file_hash
       FROM demo_invoices i LEFT JOIN invoice_triage t ON t.invoice_id = i.id
-      ${scope ? 'WHERE i.domain = ?' : ''}
+      WHERE COALESCE(i.parse_source, '') != 'salary_excel'${scope ? ' AND i.domain = ?' : ''}
     `).all(...(scope ? [scope] : [])) as { id: number; invoice_id: string; issue_date: string; supplier: string; category: string; domain: string; amount: number; vat_amount: number; currency: string; month: string; file_hash: string | null; printed_invoice_id?: string | null; printed_supplier?: string | null }[];
     // Track which id-pairs we've already grouped to avoid duplicates across strategies
     const seenPairs = new Set<string>();
@@ -3447,7 +3667,7 @@ router.get('/full-check', async (req: Request, res: Response) => {
       FROM demo_invoices i
       LEFT JOIN invoice_triage t ON t.invoice_id = i.id
       LEFT JOIN invoice_check_accepted a ON a.invoice_id = i.id
-      ${scope ? 'WHERE i.domain = ?' : ''}
+      WHERE COALESCE(i.parse_source, '') != 'salary_excel'${scope ? ' AND i.domain = ?' : ''}
       ORDER BY i.issue_date DESC, i.id DESC
     `).all(...(scope ? [scope] : [])) as any[];
     const pending = new Set<string>();
@@ -3481,7 +3701,9 @@ router.get('/full-check', async (req: Request, res: Response) => {
         continue;
       }
       const triageCurrent = row.t_sig && row.t_sig === sig;
-      const x = cachedInvoiceExtraction(row.file_hash);
+      // Text readings (Haiku) made wrong suggestions — only a reading of the PDF itself (or e-invoice XML) counts
+      const cached = cachedInvoiceExtraction(row.file_hash);
+      const x = cached && cached.read_by !== 'haiku-text' ? cached : null;
 
       if (!x || x.net_amount == null) {
         if (!triageCurrent) { report.push({ ...base, status: 'not_checked' }); continue; }
@@ -3507,10 +3729,18 @@ router.get('/full-check', async (req: Request, res: Response) => {
       if (read.currency && read.currency !== (row.currency || 'EUR').toUpperCase()) diffs.push('currency');
       if (read.issue_date && read.issue_date !== row.issue_date) diffs.push('date');
       if (read.invoice_id && !sameInvoiceNumber(row.invoice_id, read.invoice_id)) diffs.push('invoice_number');
-      if (read.supplier && !sameSupplier(read.supplier, row.supplier) && !(readName && sameSupplier(readName, row.supplier))) diffs.push('supplier');
+      // Supplier: only when the invoice is clearly another known supplier (not just a name printed differently)
+      if (match?.supplierName && read.supplier && !sameSupplier(read.supplier, row.supplier) && !(readName && sameSupplier(readName, row.supplier))
+        && !(row.supplier_vat && x.supplier_vat_number && normalizeVat(row.supplier_vat) === normalizeVat(x.supplier_vat_number))) diffs.push('supplier');
       if (!x.is_invoice) chk.warnings.push('not_an_invoice');
-      // A text reading that doesn't add up waits for the PDF reading (stage 3)
-      if (x.read_by === 'haiku-text' && chk.warnings.includes('totals_mismatch')) chk.warnings.push('needs_pdf_read');
+      // A reading whose own figures don't add up is no basis for a suggestion: check by hand
+      if (diffs.length && chk.warnings.includes('totals_mismatch')) {
+        report.push({
+          ...base, status: accepted ? 'accepted' : 'unclear', ...accepted, read, diffs, warnings: chk.warnings,
+          verified_by: VERIFIED_BY[x.read_by || 'opus-pdf'], eur_net_diff: 0, eur_vat_diff: 0,
+        });
+        continue;
+      }
 
       let eurNetDiff = 0, eurVatDiff = 0;
       if (diffs.includes('net') || diffs.includes('vat') || diffs.includes('currency')) {
@@ -3551,6 +3781,7 @@ router.get('/full-check', async (req: Request, res: Response) => {
         confirmed_free: report.filter(r => r.status === 'ok' && r.verified_by === VERIFIED_BY.text).length,
         differing: differing.length,
         amount_diffs: differing.filter(r => r.diffs.includes('net') || r.diffs.includes('vat')).length,
+        unclear: count('unclear'),
         waiting: count('waiting'),
         not_read: count('not_read'),
         not_checked: count('not_checked'),

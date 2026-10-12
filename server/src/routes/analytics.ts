@@ -830,6 +830,7 @@ router.get('/demo-expenses', (req: Request, res: Response) => {
     `${year}-${String(monthEnd).padStart(2, '0')}`,
   ];
   if (domain) { where += ' AND domain = ?'; params.push(domain); }
+  else where += " AND domain != 'project'"; // project expenses are reimbursed through TI invoices
   if (category) { where += ' AND category = ?'; params.push(category); }
 
   // Monthly totals by domain
@@ -1004,7 +1005,7 @@ router.get('/export-data', (req: Request, res: Response) => {
     // ── Expense data: demo_invoices ──────────────────────────────────────
     if (type === 'expenses' || type === 'combined') {
       const domain = req.query.domain as string || '';
-      const domainWhere = domain ? `AND domain = ?` : '';
+      const domainWhere = domain ? `AND domain = ?` : `AND domain != 'project'`;
       const domainParams = domain ? [domain] : [];
 
       result.supplier_expenses = db.prepare(`

@@ -36,6 +36,7 @@ interface Expense {
   file_name: string | null;
   read_by: string | null;
   read_warning: string | null;
+  demo_invoice_id: number | null;
   invoice_document_id: number | null;
   invoice_number: string | null;
   invoice_status: 'draft' | 'final' | null;
@@ -341,7 +342,7 @@ export default function TechnologyOperationDetailPage() {
         >
           {uploading
             ? <span className="inline-flex items-center gap-2 text-gray-600"><Loader2 size={14} className="animate-spin" /> Reading {uploading} file{uploading === 1 ? '' : 's'}…</span>
-            : <>Drop supplier invoices / receipts here (PDF or images, several at once) — supplier, date, number and amounts are read automatically.</>}
+            : <>Drop supplier invoices / receipts here (PDF or images, several at once) — supplier, date, number and amounts are read automatically. Invoices uploaded in Supplier Invoices → Project Expenses under this project appear here by themselves.</>}
         </div>
 
         <div className="overflow-x-auto p-5 pt-3">
@@ -382,6 +383,10 @@ export default function TechnologyOperationDetailPage() {
                         <td className="px-2 py-2 whitespace-nowrap text-gray-700">{formatDate(e.expense_date) || dash}</td>
                         <td className="px-2 py-2 text-gray-900">
                           {e.supplier_name || dash}
+                          {e.demo_invoice_id && (
+                            <Link to="/supplier-invoices?tab=project" className="ml-1 rounded-full bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 hover:underline"
+                              title="From Supplier Invoices → Project Expenses — edit or delete it there">Project expense</Link>
+                          )}
                           {e.read_warning && (
                             <span className="ml-1 inline-flex items-center gap-0.5 text-red-600" title={e.read_warning}>
                               <AlertTriangle size={12} /> check
@@ -412,10 +417,12 @@ export default function TechnologyOperationDetailPage() {
                             <button onClick={() => preview.open({ fileName: e.file_name || 'expense', filePath: e.file_path!, subfolder: 'technology-expenses' })}
                               className="p-1.5 rounded text-gray-400 hover:text-primary-600" title="View file"><Eye size={14} /></button>
                           )}
+                          {!e.demo_invoice_id && <>
                           <button onClick={() => startEdit(e)} disabled={editingId !== null} className="p-1.5 rounded text-gray-400 hover:text-primary-600 disabled:opacity-40" title="Edit"><Pencil size={14} /></button>
                           <button onClick={() => setDeleteExpense(e)} disabled={e.invoice_status === 'final'}
                             className="p-1.5 rounded text-gray-400 hover:text-red-600 disabled:opacity-40"
                             title={e.invoice_status === 'final' ? `On invoice ${e.invoice_number}` : 'Delete'}><Trash2 size={14} /></button>
+                          </>}
                         </td>
                       </>
                     )}

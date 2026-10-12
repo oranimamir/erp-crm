@@ -7,7 +7,7 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import PdfPreview from '../components/ui/PdfPreview';
-import { Plus, Truck, Eye, Pencil, Trash2, BarChart3, Beaker, Check, X, GitMerge, Loader2 } from 'lucide-react';
+import { Plus, Truck, Eye, Pencil, Trash2, BarChart3, Beaker, Check, X, GitMerge, Loader2, FolderKanban } from 'lucide-react';
 
 const CHART_COLORS = [
   'bg-purple-500', 'bg-blue-500', 'bg-orange-400', 'bg-teal-500',
@@ -694,8 +694,63 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
   );
 }
 
+/** Suppliers of project expenses, per project (technology operation). */
+function ProjectSuppliersTab() {
+  const [rows, setRows] = useState<{ project: string; supplier: string; count: number; total: number }[] | null>(null);
+  useEffect(() => {
+    api.get('/demo-expenses/invoices', { params: { domain: 'project' } }).then(r => {
+      const map = new Map<string, { project: string; supplier: string; count: number; total: number }>();
+      for (const inv of r.data as any[]) {
+        const key = `${inv.category}|${inv.supplier}`;
+        const e = map.get(key) ?? { project: inv.category, supplier: inv.supplier, count: 0, total: 0 };
+        e.count++; e.total += Number(inv.eur_amount ?? inv.amount) || 0;
+        map.set(key, e);
+      }
+      setRows([...map.values()].sort((a, b) => a.project.localeCompare(b.project) || b.total - a.total));
+    }).catch(() => setRows([]));
+  }, []);
+  if (!rows) return <div className="flex justify-center py-12"><Loader2 className="animate-spin text-primary-600" /></div>;
+  if (rows.length === 0) {
+    return (
+      <Card className="p-8 text-center text-sm text-gray-500">
+        No project expenses yet — upload them in <Link to="/supplier-invoices?tab=project" className="text-primary-600 underline">Supplier Invoices → Project Expenses</Link>.
+      </Card>
+    );
+  }
+  const projects = [...new Set(rows.map(r => r.project))];
+  const eur = (n: number) => `€${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return (
+    <div className="space-y-4">
+      {projects.map(p => {
+        const list = rows.filter(r => r.project === p);
+        return (
+          <Card key={p} className="overflow-hidden">
+            <div className="px-4 py-3 border-b bg-gray-50 flex justify-between">
+              <h3 className="text-sm font-semibold text-gray-900">{p}</h3>
+              <span className="text-sm font-semibold tabular-nums">{eur(list.reduce((s, r) => s + r.total, 0))}</span>
+            </div>
+            <table className="w-full text-sm">
+              <tbody className="divide-y divide-gray-100">
+                {list.map(r => (
+                  <tr key={r.supplier} className="hover:bg-gray-50">
+                    <td className="px-4 py-2">
+                      <Link to={`/supplier-invoices?supplier=${encodeURIComponent(r.supplier)}&tab=project`} className="text-primary-600 hover:underline">{r.supplier}</Link>
+                    </td>
+                    <td className="px-4 py-2 text-gray-500 text-right">{r.count} invoice(s)</td>
+                    <td className="px-4 py-2 text-right tabular-nums w-40">{eur(r.total)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function SuppliersPage() {
-  const [activeTab, setActiveTab] = useState<'sales' | 'demo'>('sales');
+  const [activeTab, setActiveTab] = useState<'sales' | 'demo' | 'project'>('sales');
   const [paymentData, setPaymentData] = useState<any[]>([]);
 
   useEffect(() => {
@@ -722,9 +777,15 @@ export default function SuppliersPage() {
         >
           <span className="flex items-center gap-2"><Beaker size={16} /> Demo Expenses</span>
         </button>
+        <button
+          onClick={() => setActiveTab('project')}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === 'project' ? 'border-primary-600 text-primary-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+        >
+          <span className="flex items-center gap-2"><FolderKanban size={16} /> Project Expenses</span>
+        </button>
       </div>
 
-      <DomainSuppliersTab domain={activeTab} />
+      {activeTab === 'project' ? <ProjectSuppliersTab /> : <DomainSuppliersTab domain={activeTab} />}
 
       {/* Supplier Payments Chart (sales only) */}
       {activeTab === 'sales' && (() => {

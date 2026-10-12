@@ -193,6 +193,7 @@ router.get('/monthly-payments', (_req: Request, res: Response) => {
       const spendRows = db.prepare(`
         SELECT month, domain, SUM(COALESCE(eur_amount, amount)) as total
         FROM demo_invoices
+        WHERE domain != 'project' -- project expenses are reimbursed through TI invoices
         GROUP BY month, domain
       `).all() as any[];
       for (const r of spendRows) {

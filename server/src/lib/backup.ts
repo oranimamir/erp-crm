@@ -67,7 +67,7 @@ function addCategorizedInvoices(archive: archiver.Archiver, prefix = ''): void {
     ).all() as any[];
   } catch { /* table may not exist */ }
   for (const r of demoRows) {
-    const folder = `${prefix}${r.domain === 'sales' ? 'Sales Activities Suppliers' : 'Demo Suppliers'}`;
+    const folder = `${prefix}${r.domain === 'sales' ? 'Sales Activities Suppliers' : r.domain === 'project' ? 'Project Expenses Suppliers' : 'Demo Suppliers'}`;
     let b64 = String(r.embedded_pdf);
     const at = b64.indexOf('base64,');
     if (at >= 0) b64 = b64.slice(at + 7); // strip data-URI prefix if present
@@ -433,7 +433,7 @@ function tabContent(part: BackupPart): { folder: string; sheets: Array<{ name: s
         if (at >= 0) b64 = b64.slice(at + 7);
         const buf = Buffer.from(b64, 'base64');
         if (!buf.length) continue;
-        const folder = `Supplier Invoices/${r.domain === 'sales' ? 'Sales activities' : 'Demo expenses'}`;
+        const folder = `Supplier Invoices/${r.domain === 'sales' ? 'Sales activities' : r.domain === 'project' ? 'Project expenses' : 'Demo expenses'}`;
         let name = sanitizeName(r.pdf_filename || `${r.supplier || 'invoice'}-${r.invoice_id || ''}`);
         if (!/\.[a-z0-9]+$/i.test(name)) name += '.pdf';
         files.push({ buffer: buf, name: `${folder}/${uniqueName(used, folder, name)}` });

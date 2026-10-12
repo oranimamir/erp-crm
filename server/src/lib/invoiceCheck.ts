@@ -3,10 +3,11 @@
  *   Stage 1 (free)  — the PDF's text is searched for the stored net, VAT, total,
  *                     currency, invoice number, date and supplier. All found
  *                     and consistent → confirmed, no AI.
- *   Stage 2 (Haiku) — the rest with a text layer: Haiku reads the text, sent
- *                     through the Message Batches API (half price).
- *   Stage 3 (Sonnet)— scans without text, and text readings that don't add up:
- *                     Sonnet reads the PDF itself, also as a batch.
+ *   Stage 2 (Sonnet)— everything the text check could not confirm: Sonnet reads
+ *                     the PDF itself, through the Message Batches API (half
+ *                     price). Haiku text readings (from uploads or older checks)
+ *                     are not trusted for the check — they made wrong
+ *                     suggestions — and are read again from the PDF.
  * Readings land in invoice_extractions (shared with uploads), so nothing is
  * paid for twice. The check never changes an invoice.
  */
@@ -177,10 +178,10 @@ export function triageInvoice(text: string, row: any): TriageResult {
 export const triageJob = { running: false, total: 0, done: 0, startedAt: null as string | null, finishedAt: null as string | null };
 
 /** Stage 1 over every invoice with a stored PDF. Skips invoices already checked with the same stored figures. */
-export type Scope = 'demo' | 'sales' | null;  // null = all supplier invoices
+export type Scope = 'demo' | 'sales' | 'project' | null;  // null = all supplier invoices
 
 export function scopeOf(v: unknown): Scope {
-  return v === 'demo' || v === 'sales' ? v : null;
+  return v === 'demo' || v === 'sales' || v === 'project' ? v : null;
 }
 
 export async function runTriage(force = false, scope: Scope = null): Promise<void> {
@@ -260,9 +261,10 @@ export function stageCandidates(mode: ReadMode, scope: Scope = null): Candidate[
     if (mode === 'haiku-text') {
       wanted = r.status === 'needs_ai' && !x;
     } else {
-      // Scans, and text readings that don't add up; any PDF reading already made counts
+      // Everything the text check could not confirm; a PDF (or e-invoice XML) reading already made counts,
+      // a text reading does not
       const pdfRead = x && x.read_by !== 'haiku-text';
-      wanted = !pdfRead && ((r.status === 'no_text' && !x) || (x?.read_by === 'haiku-text' && !readingHolds(x)));
+      wanted = !pdfRead && (r.status === 'needs_ai' || r.status === 'no_text');
     }
     if (!wanted) continue;
     seen.add(r.file_hash);
@@ -388,8 +390,8 @@ export async function pollBatches(): Promise<void> {
 // ═══════════════════════════════════════════════════════════════════════════════
 // THE CHECK — one run moves through the stages by itself:
 //   text  → free text check of every PDF in scope
-//   ai_text → Haiku batch for what the text check could not confirm
-//   ai_pdf  → Sonnet batch for scans and text readings that don't add up
+//   ai_text → (older runs only) Haiku batch on the text — no longer started
+//   ai_pdf  → Sonnet batch on the PDF for what the text check could not confirm
 //   done    → the user gets the result list (or 'stopped' with a reason)
 // Kept in check_runs, so a server restart picks it up again.
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -408,7 +410,7 @@ function activeRun(): CheckRun | null {
   return r && (r.status === 'text' || r.status === 'ai_text' || r.status === 'ai_pdf') ? r : null;
 }
 
-function runScope(r: CheckRun): Scope { return r.scope === 'demo' || r.scope === 'sales' ? r.scope : null; }
+function runScope(r: CheckRun): Scope { return scopeOf(r.scope); }
 
 function setRun(id: number, status: CheckRun['status'], message?: string | null) {
   const done = status === 'done' || status === 'stopped';
@@ -460,8 +462,8 @@ export async function advanceRun(): Promise<void> {
           runTriage(false, scope).catch(() => {}).finally(() => { advanceRun().catch(() => {}); });
           return;
         }
-        if (!(await sendForRun(run, 'haiku-text'))) return;
-        setRun(run.id, 'ai_text');
+        if (!(await sendForRun(run, 'sonnet-pdf'))) return;
+        setRun(run.id, 'ai_pdf');
         continue;
       }
       if (run.status === 'ai_text') {
@@ -525,7 +527,7 @@ export function learnSupplierVats(): number {
   for (const r of rows) {
     const x = cachedInvoiceExtraction(r.file_hash);
     const vat = (x?.supplier_vat_number || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (!x || vat.length < 8 || !x.supplier_name) continue;
+    if (!x || x.read_by === 'haiku-text' || vat.length < 8 || !x.supplier_name) continue;
     const stored = supplierTokens(r.supplier || '').filter(w => w.length >= 3);
     const printed = new Set(supplierTokens(x.supplier_name));
     if (stored.length === 0 || !stored.every(w => printed.has(w))) continue;

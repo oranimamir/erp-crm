@@ -231,7 +231,7 @@ export function buildSupplierIndex(): SupplierIndex {
   // Earlier invoices: each supplier name with the domain/category it was filed under most
   const history = db.prepare(`
     SELECT supplier, domain, category, COUNT(*) as cnt, MAX(supplier_vat) as vat
-    FROM demo_invoices WHERE supplier IS NOT NULL AND supplier != '' AND supplier != 'Unknown'
+    FROM demo_invoices WHERE supplier IS NOT NULL AND supplier != '' AND supplier != 'Unknown' AND domain != 'project'
     GROUP BY supplier, domain, category ORDER BY cnt DESC
   `).all() as any[];
   const seen = new Set<string>();
