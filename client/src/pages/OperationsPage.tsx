@@ -6,7 +6,7 @@ import { useToast } from '../contexts/ToastContext';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
 import {
   Briefcase, Search, Plus, ChevronLeft, ChevronRight, FileText, Receipt,
-  FileSpreadsheet, ChevronUp, ChevronDown, Download, X, Loader2, ArrowLeftRight, Landmark, Filter, XCircle, Trash2, Pencil, Upload, RotateCcw, FileCheck2, ShoppingCart, Package,
+  FileSpreadsheet, ChevronUp, ChevronDown, Download, X, Loader2, ArrowLeftRight, Landmark, Filter, XCircle, Trash2, Pencil, Upload, RotateCcw, FileCheck2, ShoppingCart, Package, Columns3,
 } from 'lucide-react';
 import { formatDate, todayISO } from '../lib/dates';
 import { paymentTermsDays, paymentTermsMentionsBL, paymentTermsEndOfMonth, computeEstimatedPaymentDate } from '../lib/paymentTerms';
@@ -157,6 +157,24 @@ export default function OperationsPage() {
 
   // View toggle: false = MT + EUR (default), true = raw original values
   const [showRaw, setShowRaw] = useState(false);
+
+  // Optional columns (ETD / ETA hidden by default), remembered per browser
+  const [visibleCols, setVisibleCols] = useState<{ etd: boolean; eta: boolean }>(() => {
+    try { return { etd: false, eta: false, ...JSON.parse(localStorage.getItem('operations.columns') || '{}') }; }
+    catch { return { etd: false, eta: false }; }
+  });
+  const [colsOpen, setColsOpen] = useState(false);
+  const colsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const handler = (e: MouseEvent) => { if (colsRef.current && !colsRef.current.contains(e.target as Node)) setColsOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+  const toggleCol = (key: 'etd' | 'eta') => setVisibleCols(prev => {
+    const next = { ...prev, [key]: !prev[key] };
+    try { localStorage.setItem('operations.columns', JSON.stringify(next)); } catch { /* storage unavailable */ }
+    return next;
+  });
 
   // Order preview loading
   const [loadingOrders, setLoadingOrders] = useState<Set<number>>(new Set());
@@ -588,6 +606,26 @@ export default function OperationsPage() {
             <ArrowLeftRight size={15} />
             {showRaw ? 'Original' : 'MT / EUR'}
           </button>
+          <div ref={colsRef} className="relative">
+            <button
+              onClick={() => setColsOpen(o => !o)}
+              className={`flex items-center gap-2 px-4 py-2 border rounded-lg text-sm font-medium transition-colors ${visibleCols.etd || visibleCols.eta ? 'border-primary-400 bg-primary-50 text-primary-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
+              title="Show or hide columns"
+            >
+              <Columns3 size={15} />
+              Columns
+            </button>
+            {colsOpen && (
+              <div className="absolute right-0 z-20 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[160px]">
+                {([['etd', 'ETD'], ['eta', 'ETA']] as const).map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 cursor-pointer">
+                    <input type="checkbox" checked={visibleCols[key]} onChange={() => toggleCol(key)} className="rounded border-gray-300" />
+                    <span className="text-gray-700">{label}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
           <button
             onClick={async () => {
               // The export follows what's on screen: the tab, the year and the filters
@@ -842,8 +880,8 @@ export default function OperationsPage() {
                     Status <SortIcon field="status" />
                   </span>
                 </th>
-                <th className="text-left px-4 py-3 font-medium text-gray-600">ETD</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-600">ETA</th>
+                {visibleCols.etd && <th className="text-left px-4 py-3 font-medium text-gray-600">ETD</th>}
+                {visibleCols.eta && <th className="text-left px-4 py-3 font-medium text-gray-600">ETA</th>}
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Docs</th>
                 <th className="text-right px-4 py-3 font-medium text-gray-600">{showRaw ? 'Quantity' : 'Quantity (MT)'}</th>
                 <th className="text-right px-4 py-3 font-medium text-gray-600">{showRaw ? 'Invoice Total' : 'Invoice Total (EUR)'}</th>
@@ -994,6 +1032,7 @@ export default function OperationsPage() {
                       ))}
                     </select>
                   </td>
+                  {visibleCols.etd && (
                   <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                     <input
                       type="date"
@@ -1006,7 +1045,8 @@ export default function OperationsPage() {
                       }}
                       className="w-[130px] border border-gray-200 rounded px-2 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary-500"
                     />
-                  </td>
+                  </td>)}
+                  {visibleCols.eta && (
                   <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                     <input
                       type="date"
@@ -1019,7 +1059,7 @@ export default function OperationsPage() {
                       }}
                       className="w-[130px] border border-gray-200 rounded px-2 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary-500"
                     />
-                  </td>
+                  </td>)}
                   <td className="px-4 py-3">
                     <span className="flex items-center gap-1 text-gray-600">
                       <FileText size={14} />

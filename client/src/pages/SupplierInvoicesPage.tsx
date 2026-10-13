@@ -5,7 +5,7 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import { useToast } from '../contexts/ToastContext';
 import {
-  Trash2, FileSpreadsheet, Filter, X, ChevronUp, ChevronDown,
+  Trash2, FileSpreadsheet, X, ChevronUp, ChevronDown,
   Eye, AlertTriangle, Clock, ChevronLeft, Upload, Loader2,
   Pencil, Check, Plus, UserPlus, Flag, ChevronRight,
 } from 'lucide-react';
@@ -18,6 +18,7 @@ import PdfPreview from '../components/ui/PdfPreview';
 import InvoiceFullCheck, { ScopeSwitch, type CheckScope } from '../components/InvoiceFullCheck';
 import ProjectExpenseUpload, { type ProjectOption } from '../components/ProjectExpenseUpload';
 import NetSalaryImportModal from '../components/NetSalaryImportModal';
+import InvoiceFilterBar, { currentYearRange, type InvoiceFilters } from '../components/InvoiceFilterBar';
 
 const CAT_COLORS: Record<string, string> = {
   'Salaries': '#6366f1', 'Cars': '#8b5cf6', 'Overhead': '#3b82f6',
@@ -67,6 +68,7 @@ interface Summary {
   monthly_by_category: { month: string; category: string; total: number; vat_total: number }[];
   avg_by_category: { category: string; avg_total: number }[];
   months: string[]; suppliers: string[]; categories: string[];
+  supplier_counts?: Record<string, number>; years?: string[];
   total_amount: number; total_vat: number; invoice_count: number;
 }
 
@@ -272,44 +274,6 @@ function AvgBarChart({ data }: { data: { category: string; avg_total: number }[]
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MULTI-SELECT DROPDOWN
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function MultiSelect({ label, options, selected, onChange }: { label: string; options: string[]; selected: string[]; onChange: (v: string[]) => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-  const toggle = (val: string) => onChange(selected.includes(val) ? selected.filter(v => v !== val) : [...selected, val]);
-  return (
-    <div ref={ref} className="relative">
-      <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
-      <button onClick={() => setOpen(!open)}
-        className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-left min-w-[160px] flex items-center justify-between gap-2 bg-white">
-        <span className="truncate text-gray-700">{selected.length === 0 ? `All ${label}` : `${selected.length} selected`}</span>
-        <ChevronDown size={14} className={`text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-      {open && (
-        <div className="absolute z-20 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 max-h-60 overflow-y-auto min-w-[200px]">
-          {options.map(opt => (
-            <label key={opt} className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 cursor-pointer">
-              <input type="checkbox" checked={selected.includes(opt)} onChange={() => toggle(opt)} className="rounded border-gray-300" />
-              <span className="truncate text-gray-700">{opt}</span>
-            </label>
-          ))}
-          {selected.length > 0 && (
-            <button onClick={() => onChange([])} className="w-full text-left px-3 py-1.5 text-xs text-primary-600 hover:bg-primary-50 border-t border-gray-100">Clear all</button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // INVOICE VIEWER MODAL
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -462,11 +426,11 @@ export default function SupplierInvoicesPage() {
   const [search, setSearch] = useState('');
   const [filterCategories, setFilterCategories] = useState<string[]>([]);
   const [filterSuppliers, setFilterSuppliers] = useState<string[]>(initialSupplier ? [initialSupplier] : []);
-  const [filterMonth, setFilterMonth] = useState('');
-  const [filterDateFrom, setFilterDateFrom] = useState(initialSupplier ? '' : '2026-01-01');
-  const [filterDateTo, setFilterDateTo] = useState('');
+  const [filterDateFrom, setFilterDateFrom] = useState(initialSupplier ? '' : currentYearRange().from);
+  const [filterDateTo, setFilterDateTo] = useState(initialSupplier ? '' : currentYearRange().to);
+  const [filterAmountMin, setFilterAmountMin] = useState('');
+  const [filterAmountMax, setFilterAmountMax] = useState('');
   const [filterFlagged, setFilterFlagged] = useState(false);
-  const [showFilters, setShowFilters] = useState(true);
 
   // Sort
   const [sortBy, setSortBy] = useState<string>('issue_date');
@@ -562,9 +526,11 @@ export default function SupplierInvoicesPage() {
     setSearch('');
     setFilterCategories([]);
     setFilterSuppliers([]);
-    setFilterMonth('');
-    setFilterDateFrom('');
-    setFilterDateTo('');
+    setFilterDateFrom(currentYearRange().from);
+    setFilterDateTo(currentYearRange().to);
+    setFilterAmountMin('');
+    setFilterAmountMax('');
+    setFilterFlagged(false);
     setViewingInvoice(null);
     setEditingExpenseId(null);
   };
@@ -626,12 +592,13 @@ export default function SupplierInvoicesPage() {
     if (search) params.search = search;
     if (filterCategories.length > 0) params.categories = filterCategories.join(',');
     if (filterSuppliers.length > 0) params.suppliers = filterSuppliers.join('|');
-    if (filterMonth) params.month = filterMonth;
     if (filterDateFrom) params.date_from = filterDateFrom;
     if (filterDateTo) params.date_to = filterDateTo;
+    if (filterAmountMin) params.amount_min = filterAmountMin;
+    if (filterAmountMax) params.amount_max = filterAmountMax;
     if (filterFlagged) params.flagged = '1';
     return params;
-  }, [activeTab, search, filterCategories, filterSuppliers, filterMonth, filterDateFrom, filterDateTo, filterFlagged]);
+  }, [activeTab, search, filterCategories, filterSuppliers, filterDateFrom, filterDateTo, filterAmountMin, filterAmountMax, filterFlagged]);
 
   const fetchMonthlySummary = useCallback(async () => {
     try {
@@ -1205,16 +1172,39 @@ export default function SupplierInvoicesPage() {
   }, [summary]);
 
   const grandTotal = summary?.by_category.reduce((s, c) => s + c.total, 0) || 0;
-  const hasFilters = search !== '' || filterCategories.length > 0 || filterSuppliers.length > 0 || filterMonth || filterDateFrom || filterDateTo || filterFlagged;
+  const hasFilters = search !== '' || filterCategories.length > 0 || filterSuppliers.length > 0 || filterDateFrom || filterDateTo || filterAmountMin || filterAmountMax || filterFlagged;
 
   const clearFilters = () => {
     setSearch('');
     setFilterCategories([]);
     setFilterSuppliers([]);
-    setFilterMonth('');
     setFilterDateFrom('');
     setFilterDateTo('');
+    setFilterAmountMin('');
+    setFilterAmountMax('');
     setFilterFlagged(false);
+  };
+
+  const filterValue: InvoiceFilters = {
+    dateFrom: filterDateFrom, dateTo: filterDateTo, suppliers: filterSuppliers, categories: filterCategories,
+    amountMin: filterAmountMin, amountMax: filterAmountMax, flagged: filterFlagged,
+  };
+  const setFilter = (patch: Partial<InvoiceFilters>) => {
+    if (patch.dateFrom !== undefined) setFilterDateFrom(patch.dateFrom);
+    if (patch.dateTo !== undefined) setFilterDateTo(patch.dateTo);
+    if (patch.suppliers !== undefined) setFilterSuppliers(patch.suppliers);
+    if (patch.categories !== undefined) setFilterCategories(patch.categories);
+    if (patch.amountMin !== undefined) setFilterAmountMin(patch.amountMin);
+    if (patch.amountMax !== undefined) setFilterAmountMax(patch.amountMax);
+    if (patch.flagged !== undefined) setFilterFlagged(patch.flagged);
+  };
+  const invoicesNetTotal = invoices.reduce((t, inv: any) => t + (Number(inv.eur_amount ?? inv.amount) || 0), 0);
+  const addCategoryFromFilter = () => {
+    const name = newCatName.trim();
+    if (!name) return;
+    addCategory(name, newCatDomain);
+    setNewCatName('');
+    addToast(`Added "${name}" to ${newCatDomain}`, 'success');
   };
 
   // Filtered summary data for search on Summary tab
@@ -1275,16 +1265,6 @@ export default function SupplierInvoicesPage() {
             </div>
             {activeTab !== 'summary' && activeTab !== 'employees' && (
               <>
-                <button
-                  onClick={() => setShowFilters(f => !f)}
-                  className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg border transition-colors ${
-                    hasFilters ? 'bg-primary-50 border-primary-300 text-primary-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'
-                  }`}
-                >
-                  <Filter size={16} />
-                  Filters
-                  {hasFilters && <span className="w-2 h-2 rounded-full bg-primary-500" />}
-                </button>
                 {activeTab !== 'project' && <button
                   onClick={() => { setShowAddSupplier(true); setNewSupplierCategory(domainCategories[0]); }}
                   className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors"
@@ -1354,58 +1334,31 @@ export default function SupplierInvoicesPage() {
         </div>
 
         {/* Filters */}
-        {showFilters && activeTab !== 'summary' && activeTab !== 'employees' && (
-          <Card className="p-4">
-            <div className="flex flex-wrap items-end gap-4">
-              <MultiSelect label="Categories" options={allCategories} selected={filterCategories} onChange={setFilterCategories} />
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Add Category</label>
-                <div className="flex gap-1">
-                  <input type="text" value={newCatName} onChange={e => setNewCatName(e.target.value)}
-                    placeholder="New category..."
-                    className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm w-32"
-                    onKeyDown={e => { if (e.key === 'Enter' && newCatName.trim()) { addCategory(newCatName.trim(), newCatDomain); setNewCatName(''); addToast(`Added "${newCatName.trim()}" to ${newCatDomain}`, 'success'); } }}
-                  />
-                  <select value={newCatDomain} onChange={e => setNewCatDomain(e.target.value as 'demo' | 'sales')}
-                    className="border border-gray-300 rounded-lg px-1 py-1.5 text-xs w-16">
-                    <option value="demo">Demo</option>
-                    <option value="sales">Sales</option>
-                  </select>
-                  <button onClick={() => { if (newCatName.trim()) { addCategory(newCatName.trim(), newCatDomain); setNewCatName(''); addToast(`Added "${newCatName.trim()}" to ${newCatDomain}`, 'success'); } }}
-                    className="px-2 py-1.5 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700">+</button>
-                </div>
-              </div>
-              <MultiSelect label="Suppliers" options={summary?.suppliers || []} selected={filterSuppliers} onChange={setFilterSuppliers} />
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Month</label>
-                <select value={filterMonth} onChange={e => setFilterMonth(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
-                  <option value="">All Months</option>
-                  {(summary?.months || []).map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
+        {activeTab !== 'summary' && activeTab !== 'employees' && (
+          <InvoiceFilterBar
+            value={filterValue}
+            onChange={setFilter}
+            onClear={clearFilters}
+            years={summary?.years || []}
+            suppliers={summary?.suppliers || []}
+            supplierCounts={summary?.supplier_counts}
+            categories={allCategories}
+            resultCount={invoices.length}
+            resultTotal={invoicesNetTotal}
+            categoryFooter={activeTab !== 'project' && (
+              <div className="flex gap-1">
+                <input type="text" value={newCatName} onChange={e => setNewCatName(e.target.value)} placeholder="New category…"
+                  onKeyDown={e => { if (e.key === 'Enter') addCategoryFromFilter(); }}
+                  className="border border-gray-300 rounded-md px-2 py-1 text-xs flex-1 min-w-0" />
+                <select value={newCatDomain} onChange={e => setNewCatDomain(e.target.value as 'demo' | 'sales')}
+                  className="border border-gray-300 rounded-md px-1 py-1 text-xs">
+                  <option value="demo">Demo</option>
+                  <option value="sales">Sales</option>
                 </select>
+                <button onClick={addCategoryFromFilter} className="px-2 py-1 text-xs bg-primary-600 text-white rounded-md hover:bg-primary-700" title="Add category">+</button>
               </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Date From</label>
-                <input type="date" value={filterDateFrom} onChange={e => setFilterDateFrom(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Date To</label>
-                <input type="date" value={filterDateTo} onChange={e => setFilterDateTo(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Flagged</label>
-                <button onClick={() => setFilterFlagged(!filterFlagged)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border transition-colors ${filterFlagged ? 'bg-amber-50 border-amber-300 text-amber-700' : 'border-gray-300 text-gray-500 hover:bg-gray-50'}`}>
-                  <Flag size={14} className={filterFlagged ? 'fill-amber-500' : ''} />
-                  {filterFlagged ? 'Showing flagged' : 'All'}
-                </button>
-              </div>
-              {hasFilters && (
-                <button onClick={clearFilters} className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 px-2 py-1.5">
-                  <X size={14} /> Clear
-                </button>
-              )}
-            </div>
-          </Card>
+            )}
+          />
         )}
 
         {loading ? (

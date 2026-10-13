@@ -1955,16 +1955,38 @@ router.get('/data-quality', (req: Request, res: Response) => {
   }
 });
 
+/** "1250", "1.250,00", "€ 1,250.5" → 1250 / 1250.5; anything else → null. */
+function amountFromSearch(q: string): number | null {
+  let t = q.replace(/[€$£\s]|eur|usd/gi, '');
+  if (!/^-?[\d.,]+$/.test(t) || !/\d/.test(t)) return null;
+  const lastSep = Math.max(t.lastIndexOf('.'), t.lastIndexOf(','));
+  // A separator followed by 1–2 digits is the decimal one; the rest are thousands
+  if (lastSep >= 0 && t.length - lastSep - 1 <= 2) t = t.slice(0, lastSep).replace(/[.,]/g, '') + '.' + t.slice(lastSep + 1);
+  else t = t.replace(/[.,]/g, '');
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+// Within a cent of the net or total, in EUR or the invoice currency
+const AMOUNT_HIT = `(ABS(amount - ?) < 0.005 OR ABS(COALESCE(eur_amount, amount) - ?) < 0.005
+  OR ABS(amount + COALESCE(vat_amount, 0) - ?) < 0.005 OR ABS(COALESCE(eur_amount, amount) + COALESCE(vat_eur_amount, vat_amount, 0) - ?) < 0.005)`;
+
 router.get('/invoices', (req: Request, res: Response) => {
   try {
-    const { domain, categories, suppliers, month, date_from, date_to, sort_by, sort_dir, search, flagged } = req.query;
+    const { domain, categories, suppliers, month, date_from, date_to, sort_by, sort_dir, search, flagged, amount_min, amount_max } = req.query;
     let sql = 'SELECT id, invoice_id, issue_date, supplier, category, domain, amount, vat_amount, currency, fx_rate, eur_amount, vat_eur_amount, month, xml_filename, duplicate_warning, flagged, flag_comment, created_at, supplier_vat, supplier_country, vat_rate, parse_source, parse_warnings FROM demo_invoices WHERE 1=1';
     const params: any[] = [];
 
     if (search) {
-      sql += ' AND (invoice_id LIKE ? OR supplier LIKE ? OR category LIKE ?)';
+      // A number ("1250", "1.250,00", "€ 1250") also finds invoices of that amount (net or total, EUR or original)
+      const num = amountFromSearch(String(search));
+      sql += ` AND (invoice_id LIKE ? OR supplier LIKE ? OR category LIKE ?${num !== null ? ` OR ${AMOUNT_HIT}` : ''})`;
       const term = `%${search}%`;
       params.push(term, term, term);
+      if (num !== null) params.push(num, num, num, num);
+    }
+    for (const [v, op] of [[amount_min, '>='], [amount_max, '<=']] as const) {
+      const n = Number(v);
+      if (v !== undefined && v !== '' && Number.isFinite(n)) { sql += ` AND COALESCE(eur_amount, amount) ${op} ?`; params.push(n); }
     }
     if (domain) { sql += ' AND domain = ?'; params.push(domain); }
     if (categories) {
@@ -2013,7 +2035,7 @@ router.get('/invoices/:id', (req: Request, res: Response) => {
 
 router.get('/summary', (req: Request, res: Response) => {
   try {
-    const { domain, categories, suppliers, month, date_from, date_to } = req.query;
+    const { domain, categories, suppliers, month, date_from, date_to, amount_min, amount_max } = req.query;
     let where = '1=1';
     const params: any[] = [];
 
@@ -2033,12 +2055,18 @@ router.get('/summary', (req: Request, res: Response) => {
     if (month) { where += ' AND month = ?'; params.push(month); }
     if (date_from) { where += ' AND issue_date >= ?'; params.push(date_from); }
     if (date_to) { where += ' AND issue_date <= ?'; params.push(date_to); }
+    for (const [v, op] of [[amount_min, '>='], [amount_max, '<=']] as const) {
+      const n = Number(v);
+      if (v !== undefined && v !== '' && Number.isFinite(n)) { where += ` AND COALESCE(eur_amount, amount) ${op} ?`; params.push(n); }
+    }
 
     const byCategory = db.prepare(`SELECT category, SUM(COALESCE(eur_amount, amount)) as total, SUM(COALESCE(vat_eur_amount, vat_amount)) as vat_total FROM demo_invoices WHERE ${where} GROUP BY category ORDER BY total DESC`).all(...params);
     const bySupplier = db.prepare(`SELECT supplier, SUM(COALESCE(eur_amount, amount)) as total, SUM(COALESCE(vat_eur_amount, vat_amount)) as vat_total FROM demo_invoices WHERE ${where} GROUP BY supplier ORDER BY total DESC`).all(...params);
     const monthlyByCategory = db.prepare(`SELECT month, category, SUM(COALESCE(eur_amount, amount)) as total, SUM(COALESCE(vat_eur_amount, vat_amount)) as vat_total FROM demo_invoices WHERE ${where} GROUP BY month, category ORDER BY month ASC`).all(...params);
     const months = db.prepare(`SELECT DISTINCT month FROM demo_invoices WHERE ${domain ? 'domain = ?' : '1=1'} ORDER BY month ASC`).all(...(domain ? [domain] : []));
-    const allSuppliers = db.prepare(`SELECT DISTINCT supplier FROM demo_invoices WHERE ${domain ? 'domain = ?' : '1=1'} ORDER BY supplier ASC`).all(...(domain ? [domain] : []));
+    const allSuppliers = db.prepare(`SELECT supplier, COUNT(*) as n FROM demo_invoices WHERE ${domain ? 'domain = ?' : '1=1'} GROUP BY supplier ORDER BY supplier ASC`).all(...(domain ? [domain] : []));
+    // Years with invoices (by invoice date) for the period chips
+    const years = db.prepare(`SELECT DISTINCT substr(issue_date, 1, 4) as y FROM demo_invoices WHERE issue_date GLOB '[12][0-9][0-9][0-9]-*'${domain ? ' AND domain = ?' : ''} ORDER BY y ASC`).all(...(domain ? [domain] : []));
     const allCategories = db.prepare(`SELECT DISTINCT category FROM demo_invoices WHERE ${domain ? 'domain = ?' : '1=1'} ORDER BY category ASC`).all(...(domain ? [domain] : []));
     const avgByCategory = db.prepare(
       `SELECT category, AVG(monthly_total) as avg_total FROM (
@@ -2059,6 +2087,8 @@ router.get('/summary', (req: Request, res: Response) => {
       avg_by_category: avgByCategory,
       months: months.map((m: any) => m.month),
       suppliers: allSuppliers.map((s: any) => s.supplier),
+      supplier_counts: Object.fromEntries(allSuppliers.map((s: any) => [s.supplier, s.n])),
+      years: years.map((r: any) => r.y),
       categories: allCategories.map((c: any) => c.category),
       total_amount: totals?.total_amount || 0,
       total_vat: totals?.total_vat || 0,
