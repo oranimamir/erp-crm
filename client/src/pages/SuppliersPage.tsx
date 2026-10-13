@@ -75,8 +75,8 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
   const categoriesOf = (d: 'demo' | 'sales') => d === 'demo' ? demoCategories : salesCategories;
   const [newCatName, setNewCatName] = useState('');
   const [dupLoading, setDupLoading] = useState(false);
-  type DupSupplier = { name: string; count: number; invoiceIds: number[] };
-  type DupGroup = { canonical: string; suppliers: DupSupplier[]; selected: string[] };
+  type DupSupplier = { name: string; count: number; invoiceIds: number[]; vat?: string | null };
+  type DupGroup = { canonical: string; suppliers: DupSupplier[]; selected: string[]; reasons?: string[] };
   const [dupGroups, setDupGroups] = useState<DupGroup[] | null>(null);
   const [merging, setMerging] = useState<string | null>(null);
   const [previewSupplier, setPreviewSupplier] = useState<string | null>(null);
@@ -201,6 +201,7 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
       const groups: DupGroup[] = (res.data?.groups || []).map((g: any) => ({
         canonical: g.canonical,
         suppliers: g.suppliers,
+        reasons: g.reasons,
         selected: g.suppliers.map((s: any) => s.name),
       }));
       setDupGroups(groups);
@@ -219,14 +220,28 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
     if (group.selected.length < 2) { addToast('Select at least 2 suppliers to merge', 'error'); return; }
     setMerging(groupKey);
     try {
-      const res = await api.post('/demo-expenses/supplier-merge', { canonicalName: canonical, names: group.selected, domain });
-      addToast(`Merged into "${canonical}" · ${res.data?.updatedInvoices || 0} invoices renamed`, 'success');
+      // Unticked names are other companies: remembered so they are not suggested again
+      const notSame = group.suppliers.map(s => s.name).filter(n => !group.selected.includes(n));
+      const res = await api.post('/demo-expenses/supplier-merge', { canonicalName: canonical, names: group.selected, domain, notSame });
+      addToast(`Merged into "${canonical}" · ${res.data?.updatedInvoices || 0} invoices renamed · later invoices under these names go to "${canonical}" too`, 'success');
       setDupGroups(prev => (prev || []).filter(g => g.suppliers[0]?.name !== groupKey));
       fetchData();
     } catch (err: any) {
       addToast(err?.response?.data?.error || 'Failed to merge', 'error');
     } finally {
       setMerging(null);
+    }
+  };
+
+  const handleNotSame = async (groupKey: string) => {
+    const group = (dupGroups || []).find(g => g.suppliers[0]?.name === groupKey);
+    if (!group) return;
+    try {
+      await api.post('/demo-expenses/supplier-duplicates/dismiss', { names: group.suppliers.map(s => s.name) });
+      addToast('Kept apart: these suppliers will not be suggested as duplicates again', 'success');
+      setDupGroups(prev => (prev || []).filter(g => g.suppliers[0]?.name !== groupKey));
+    } catch (err: any) {
+      addToast(err?.response?.data?.error || 'Failed to save', 'error');
     }
   };
 
@@ -615,7 +630,7 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
                 <p className="text-xs text-gray-500 mt-0.5">
                   {dupGroups.length === 0
                     ? 'No similar suppliers found.'
-                    : `Found ${dupGroups.length} group${dupGroups.length === 1 ? '' : 's'} of similar names. Pick a canonical name and merge.`}
+                    : `Found ${dupGroups.length} group${dupGroups.length === 1 ? '' : 's'} of similar names. Merge them (remembered for later uploads) or mark them as not the same; unticked names are kept apart.`}
                 </p>
               </div>
               <button onClick={closeDupModal} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
@@ -629,6 +644,9 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
                   const selectedSet = new Set(g.selected);
                   return (
                     <div key={groupKey} className="border border-gray-200 rounded-lg p-4">
+                      {g.reasons && g.reasons.length > 0 && (
+                        <p className="text-xs text-gray-500 mb-2">Why: {g.reasons.join(', ')}</p>
+                      )}
                       <div className="space-y-1 mb-3">
                         {g.suppliers.map(s => {
                           const isSelected = selectedSet.has(s.name);
@@ -641,6 +659,7 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
                                 <span className={`flex-1 capitalize ${isSelected ? 'text-gray-900' : 'text-gray-400 line-through'}`}>
                                   {s.name}
                                 </span>
+                                {s.vat && <span className="text-xs text-gray-400 font-mono">{s.vat}</span>}
                                 <span className="text-xs text-gray-400">{s.count} invoice{s.count === 1 ? '' : 's'}</span>
                                 <button
                                   onClick={() => togglePreview(s.name, s.invoiceIds || [])}
@@ -675,6 +694,10 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
                             onChange={e => updateGroup(groupKey, { canonical: e.target.value })}
                             className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500" />
                         </div>
+                        <Button size="sm" variant="secondary" onClick={() => handleNotSame(groupKey)} disabled={merging === groupKey}
+                          title="These are different companies: never suggest them together again">
+                          Not the same
+                        </Button>
                         <Button size="sm" onClick={() => handleMergeGroup(groupKey)} disabled={merging === groupKey || g.selected.length < 2}>
                           {merging === groupKey ? 'Merging...' : 'Merge'}
                         </Button>

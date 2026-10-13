@@ -130,6 +130,7 @@ Record the invoice with the record_invoice tool.
 - net_amount excludes VAT, total_amount includes it. All amounts positive, also on a credit note (set is_credit_note).
 - No VAT charged (reverse charge, intra-community, export, exempt) → vat_amount 0.
 - European number format is common: "1.234,56" = 1234.56.
+- currency: the one printed with the amounts ("USD", "US$", "$", "U.S. DOLLARS" → USD). Never assume EUR because the buyer is Belgian: suppliers in China (and elsewhere in Asia) invoice almost always in USD.
 
 Domains:
 - "sales": TripleW's trading business — raw materials for customer orders, blenders/toll processing, logistics, freight, shipping, customs; often an operation number starting with SO. Categories: ${categories.sales.join(', ')}.

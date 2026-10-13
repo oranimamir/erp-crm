@@ -2562,6 +2562,9 @@ export default function SupplierInvoicesPage() {
                               </>
                             )}
                             {w.issues.includes('ai_unavailable') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Read without AI — check net & VAT against the PDF</span>}
+                            {w.issues.includes('currency_china_usd') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Chinese supplier — set to USD</span>}
+                            {w.issues.includes('currency_from_text') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Currency taken from the invoice text (not EUR)</span>}
+                            {w.issues.includes('currency_china_eur') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Chinese supplier in EUR — check the currency</span>}
                             {w.issues.includes('not_an_invoice') && <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Does not look like an invoice (quote / statement?)</span>}
                           </div>
                         );

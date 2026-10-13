@@ -7,7 +7,8 @@ import { notifyAdmin } from '../lib/notify.js';
 import { getEurRate } from '../lib/fx.js';
 import { archiveStored, archivedBy } from '../lib/archive.js';
 import { AiBudgetError } from '../lib/aiBudget.js';
-import { readSupplierInvoice, isCreditError, invoiceReaderConfigured, isPdf } from '../lib/supplierInvoiceReader.js';
+import { readSupplierInvoice, isCreditError, invoiceReaderConfigured, isPdf, pdfText } from '../lib/supplierInvoiceReader.js';
+import { decideCurrency, isChineseSupplier } from '../lib/invoiceCurrency.js';
 import { uploadTechnologyExpense } from '../middleware/upload.js';
 import { parsePDFInvoice, invoiceCategories } from './demo-expenses.js';
 import { deleteInvoiceDocument } from './invoice-documents.js';
@@ -290,8 +291,20 @@ async function eurOf(net: number, currency: string, date: string | null): Promis
 
 let creditOutUntil = 0;
 
-/** What an uploaded expense says: Claude first (cached by sha256, within the AI budget), the basic reader otherwise. */
+/** readExpenseRaw with the currency rules (Chinese suppliers invoice in USD, a code in the text counts). */
 async function readExpense(buf: Buffer, fileName: string, sha: string) {
+  const r = await readExpenseRaw(buf, fileName, sha);
+  const text = isPdf(buf) ? (await pdfText(buf)).text : '';
+  const read = r.read_by === 'ai' ? r.currency : (r.currency === 'EUR' ? null : r.currency);
+  const d = decideCurrency(read, text, isChineseSupplier({ name: r.supplier_name, country: (r as any).supplier_country, text }));
+  if (d.currency === r.currency && !d.note) return r;
+  const note = d.note === 'currency_china_eur' ? 'Chinese supplier in EUR — check the currency'
+    : d.currency !== r.currency ? `Currency set to ${d.currency}${d.note === 'currency_china_usd' ? ' (Chinese supplier)' : ' (shown on the invoice)'} — please check` : null;
+  return { ...r, currency: d.currency, read_warning: [r.read_warning, note].filter(Boolean).join(' · ') || null };
+}
+
+/** What an uploaded expense says: Claude first (cached by sha256, within the AI budget), the basic reader otherwise. */
+async function readExpenseRaw(buf: Buffer, fileName: string, sha: string) {
   let warning: string | null = null;
   if (invoiceReaderConfigured() && Date.now() >= creditOutUntil) {
     try {
@@ -305,7 +318,7 @@ async function readExpense(buf: Buffer, fileName: string, sha: string) {
           net_amount: net != null ? sign * Math.abs(net) : 0,
           vat_amount: x.vat_amount != null ? sign * Math.abs(x.vat_amount) : null,
           total_amount: x.total_amount != null ? sign * Math.abs(x.total_amount) : null,
-          read_by: 'ai', read_warning: net == null ? 'Amount not found — please check' : null,
+          read_by: 'ai', read_warning: net == null ? 'Amount not found — please check' : null, supplier_country: x.supplier_country,
         };
       }
       warning = 'Could not be read automatically — please check';

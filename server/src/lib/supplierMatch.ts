@@ -132,7 +132,7 @@ interface Candidate {
   category: string;
 }
 
-export interface SupplierIndex { candidates: Candidate[] }
+export interface SupplierIndex { candidates: Candidate[]; aliases: Map<string, string> }
 
 const LEGAL_FORMS = new Set([
   'bv', 'bvba', 'nv', 'sa', 'sarl', 'sprl', 'srl', 'ltd', 'limited', 'gmbh', 'inc', 'llc', 'spa', 'plc',
@@ -252,7 +252,17 @@ export function buildSupplierIndex(): SupplierIndex {
   for (const { pattern, category } of DEMO_SUPPLIER_MAP) {
     candidates.push({ source: 'builtin', names: [pattern], canonical: null, vat: null, domain: 'demo', category });
   }
-  return { candidates };
+
+  // Merged-away names (supplier_aliases) answer as the kept supplier, ahead of everything else
+  const aliases = new Map<string, string>();
+  const aliasCands: Candidate[] = [];
+  for (const a of db.prepare('SELECT alias_key, alias_name, canonical FROM supplier_aliases').all() as any[]) {
+    aliases.set(a.alias_key, a.canonical);
+    const ck = normalizeSupplierName(a.canonical);
+    const target = candidates.find(c => c.canonical && normalizeSupplierName(c.canonical) === ck);
+    if (target) aliasCands.push({ ...target, source: 'mapping', names: [a.alias_name], canonical: a.canonical, vat: null });
+  }
+  return { candidates: [...aliasCands, ...candidates], aliases };
 }
 
 /** Names Claude may pick from when reading an invoice (with VAT numbers where known). */
@@ -272,7 +282,26 @@ function toMatch(c: Candidate, invoiceName: string, matchedBy: SupplierMatch['ma
   return { supplierName: c.canonical || invoiceName, domain: c.domain, category: c.category, matchedBy };
 }
 
+/** matchSupplier, with any merged-away name replaced by the name kept (supplier_aliases). */
 export function matchSupplier(
+  index: SupplierIndex,
+  opts: { name: string; vat?: string | null; aiMatch?: string | null },
+): SupplierMatch | null {
+  const m = matchSupplierRaw(index, opts);
+  const aliases = index.aliases;
+  if (!aliases?.size) return m;
+  if (m) {
+    const kept = aliases.get(normalizeSupplierName(m.supplierName));
+    return kept ? { ...m, supplierName: kept } : m;
+  }
+  // No match, but the name itself was merged away
+  const kept = aliases.get(normalizeSupplierName(opts.name || ''));
+  if (!kept) return null;
+  const target = index.candidates.find(c => c.canonical === kept);
+  return target ? toMatch(target, kept, 'mapping') : null;
+}
+
+function matchSupplierRaw(
   index: SupplierIndex,
   opts: { name: string; vat?: string | null; aiMatch?: string | null },
 ): SupplierMatch | null {

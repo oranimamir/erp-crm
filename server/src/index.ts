@@ -9,6 +9,7 @@ import { fileURLToPath } from 'url';
 import db, { initializeDatabase } from './database.js';
 import { backfillEstimatedPaymentDates } from './lib/paymentTerms.js';
 import { fileAllUnfiledGenerated } from './lib/fileGenerated.js';
+import { applySupplierAliases, tidyMappingNames } from './lib/supplierAliases.js';
 import { authenticateToken } from './middleware/auth.js';
 import authRoutes from './routes/auth.js';
 import customerRoutes from './routes/customers.js';
@@ -157,6 +158,14 @@ try {
   const filedDocs = fileAllUnfiledGenerated();
   if (filedDocs > 0) { console.log(`[startup] Filed ${filedDocs} generated OC / PO document(s) under their operation`); db.saveToDisk(); }
 } catch (err: any) { console.error('[startup] filing generated documents failed:', err?.message || err); }
+
+// Supplier merges stick: names merged away are put under the kept name
+try {
+  tidyMappingNames();
+  const renamed = applySupplierAliases();
+  if (renamed > 0) console.log(`[startup] ${renamed} supplier invoice(s) put under their merged supplier name`);
+  db.saveToDisk();
+} catch (err: any) { console.error('[startup] supplier aliases failed:', err?.message || err); }
 
 try {
   const filled = backfillEstimatedPaymentDates(db);

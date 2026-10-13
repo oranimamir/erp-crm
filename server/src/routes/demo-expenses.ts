@@ -24,6 +24,8 @@ import {
 } from '../lib/invoiceCheck.js';
 import { todayISO } from '../lib/today.js';
 import { projectOptions, projectByLabel, billedOn, syncProjectExpenses } from '../lib/projectExpenses.js';
+import { recordAliases, recordNotDuplicates, notDuplicatePairs, pairKey, applySupplierAliases, aliasMap, supplierKey } from '../lib/supplierAliases.js';
+import { decideCurrency, isChineseSupplier } from '../lib/invoiceCurrency.js';
 import { readNetSalaryWorkbook, monthEnd, type SalaryMonth, type SalaryPayment } from '../lib/netSalaryImport.js';
 
 const router = Router();
@@ -47,7 +49,12 @@ router.use((req: Request, res: Response, next) => {
       return;
     }
   }
-  res.on('finish', () => { if (res.statusCode < 400) syncProjectExpenses(); });
+  res.on('finish', () => {
+    if (res.statusCode >= 400) return;
+    // A name merged away earlier (typed in, or read off a new upload) → the kept supplier
+    try { if (applySupplierAliases() > 0) db.saveToDisk(); } catch (err: any) { console.error('[supplier-aliases]', err?.message || err); }
+    syncProjectExpenses();
+  });
   next();
 });
 
@@ -1081,12 +1088,22 @@ async function readPdfInvoice(buf: Buffer, fileName: string, fileHash: string, _
       console.warn(`[invoice-reader] Claude read failed for ${fileName}, using text reader:`, err?.message || err);
     }
   }
+  // Currency: Chinese suppliers invoice in USD; a code glued to the figures in the text counts
+  const { text } = await pdfText(buf);
+  const settleCurrency = <T extends { currency: string; supplierName: string; supplierCountry?: string | null; supplierVat?: string | null; parseWarnings: string[] }>(inv: T, read: string | null): T => {
+    const chinese = isChineseSupplier({ country: inv.supplierCountry, vat: inv.supplierVat, name: inv.supplierName, text });
+    const d = decideCurrency(read, text, chinese);
+    if (d.currency !== (inv.currency || '').toUpperCase()) console.log(`[invoice-reader] ${fileName}: currency ${inv.currency || '-'} → ${d.currency} (${d.note})`);
+    return { ...inv, currency: d.currency, parseWarnings: d.note ? [...inv.parseWarnings, d.note] : inv.parseWarnings };
+  };
   if (!x) {
     // Basic reader only — make sure the user sees that
     aiProblem = aiProblem || (invoiceReaderConfigured() ? 'unreadable' : 'not_configured');
-    return { ...textResult, parseWarnings: [...textResult.parseWarnings, 'ai_unavailable'], aiProblem };
+    // The basic reader falls back to EUR: only another currency it found counts as read
+    const basic = settleCurrency(textResult, (textResult.currency || 'EUR').toUpperCase() === 'EUR' ? null : textResult.currency);
+    return { ...basic, parseWarnings: [...basic.parseWarnings, 'ai_unavailable'], aiProblem };
   }
-  const inv = fromExtraction(x, textResult);
+  const inv = settleCurrency(fromExtraction(x, textResult), x.currency);
   console.log(`[invoice-reader] ${fileName}: id="${inv.invoiceId}" supplier="${inv.supplierName}" vat_no=${inv.supplierVat || '-'} country=${inv.supplierCountry || '??'} net=${inv.amount} vat=${inv.vatAmount} ${inv.currency} warnings=${inv.parseWarnings.join(',') || '-'}`);
   return {
     ...inv,
@@ -2719,6 +2736,8 @@ router.patch('/invoices/:id/supplier', (req: Request, res: Response) => {
     if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
     db.prepare('UPDATE demo_invoices SET supplier = ? WHERE id = ?').run(supplier, req.params.id);
+    // Typing a name merged away earlier on purpose brings it back as its own supplier
+    db.prepare('DELETE FROM supplier_aliases WHERE alias_key = ?').run(supplierKey(supplier));
     db.saveToDisk();
     notifyAdmin({
       entity: 'Supplier Invoice',
@@ -2998,7 +3017,7 @@ router.post('/supplier-mappings', (req: Request, res: Response) => {
 router.patch('/supplier-mappings/:id', (req: Request, res: Response) => {
   try {
     const { category, domain } = req.body;
-    const mapping = db.prepare('SELECT id, supplier_pattern, domain, category FROM demo_supplier_mappings WHERE id = ? AND is_user_defined = 1').get(req.params.id) as any;
+    const mapping = db.prepare('SELECT id, supplier_pattern, display_name, domain, category FROM demo_supplier_mappings WHERE id = ? AND is_user_defined = 1').get(req.params.id) as any;
     if (!mapping) { res.status(404).json({ error: 'Supplier mapping not found' }); return; }
 
     const updates: string[] = [];
@@ -3017,11 +3036,13 @@ router.patch('/supplier-mappings/:id', (req: Request, res: Response) => {
     if (categoryChanged || domainChanged) {
       const newCategory = category || mapping.category;
       const newDomain = domain || mapping.domain;
-      const pattern = `%${mapping.supplier_pattern.toLowerCase()}%`;
-      const r = db.prepare(
-        'UPDATE demo_invoices SET category = ?, domain = ? WHERE LOWER(supplier) LIKE ?'
-      ).run(newCategory, newDomain, pattern);
-      cascadedInvoices = (r as any).changes || 0;
+      // The supplier's own invoices only (same name as shown / as read, spacing and legal
+      // form ignored), never every invoice whose name merely contains the pattern
+      const keys = new Set([mapping.display_name, mapping.supplier_pattern].map(n => supplierKey(n)).filter(Boolean));
+      const upd = db.prepare("UPDATE demo_invoices SET category = ?, domain = ? WHERE supplier = ? AND domain != 'project'");
+      for (const r of db.prepare("SELECT DISTINCT supplier FROM demo_invoices WHERE supplier IS NOT NULL AND supplier != ''").all() as any[]) {
+        if (keys.has(supplierKey(r.supplier))) cascadedInvoices += (upd.run(newCategory, newDomain, r.supplier) as any).changes || 0;
+      }
     }
 
     db.saveToDisk();
@@ -3046,119 +3067,104 @@ router.get('/supplier-duplicates', (req: Request, res: Response) => {
   try {
     const domain = req.query.domain as string;
     const domainFilter = (domain === 'demo' || domain === 'sales') ? domain : null;
+    const aliases = aliasMap();
 
-    // Pull names from THREE sources, deduped on lowercase name. The merge endpoint
-    // can then clean up any source that contains the duplicate.
-    type Item = { name: string; count: number; invoiceIds: number[]; key: string };
+    // Names from invoices, mappings (as shown) and the Suppliers table, one item per
+    // spelling (trimmed, case ignored); names already merged away are left out
+    type Item = { name: string; count: number; invoiceIds: number[]; key: string; tokens: string; vats: Set<string> };
     const byLower = new Map<string, Item>();
-    const addOrMerge = (rawName: string, count: number, invoiceIds: number[]) => {
-      if (!rawName) return;
-      const lower = rawName.toLowerCase();
-      const existing = byLower.get(lower);
-      if (existing) {
-        existing.count += count;
-        for (const id of invoiceIds) if (!existing.invoiceIds.includes(id)) existing.invoiceIds.push(id);
-        return;
+    const add = (rawName: string | null | undefined, count: number, invoiceIds: number[], vats: (string | null | undefined)[]) => {
+      const name = (rawName || '').trim();
+      if (!name) return;
+      const key = normalizeSupplierName(name);
+      if (!key || aliases.has(key)) return;
+      const lower = name.toLowerCase();
+      let item = byLower.get(lower);
+      if (!item) {
+        item = { name, count: 0, invoiceIds: [], key, tokens: [...new Set(supplierTokens(name))].sort().join(' '), vats: new Set() };
+        byLower.set(lower, item);
       }
-      const key = normalizeSupplierName(rawName);
-      if (!key) return;
-      byLower.set(lower, { name: rawName, count, invoiceIds: invoiceIds.slice(0, 5), key });
+      item.count += count;
+      for (const id of invoiceIds) if (item.invoiceIds.length < 5 && !item.invoiceIds.includes(id)) item.invoiceIds.push(id);
+      for (const v of vats) { const n = normalizeVat(v); if (n) item.vats.add(n); }
     };
 
-    // Source 1: demo_invoices
     {
-      let sql = "SELECT supplier as name, COUNT(*) as count, GROUP_CONCAT(id) as ids FROM demo_invoices WHERE supplier IS NOT NULL AND supplier != ''";
+      let sql = "SELECT supplier as name, COUNT(*) as count, GROUP_CONCAT(id) as ids, GROUP_CONCAT(DISTINCT supplier_vat) as vats FROM demo_invoices WHERE supplier IS NOT NULL AND supplier != '' AND domain != 'project'";
       const params: any[] = [];
       if (domainFilter) { sql += ' AND domain = ?'; params.push(domainFilter); }
       sql += ' GROUP BY supplier';
-      const rows = db.prepare(sql).all(...params) as { name: string; count: number; ids: string }[];
-      for (const r of rows) {
-        const ids = (r.ids || '').split(',').map(Number).filter(n => !isNaN(n));
-        addOrMerge(r.name, r.count, ids);
+      for (const r of db.prepare(sql).all(...params) as any[]) {
+        add(r.name, r.count, (r.ids || '').split(',').map(Number).filter((n: number) => !isNaN(n)), (r.vats || '').split(','));
       }
     }
-
-    // Source 2: demo_supplier_mappings (user-defined)
     {
-      let sql = 'SELECT display_name, supplier_pattern FROM demo_supplier_mappings WHERE is_user_defined = 1';
+      let sql = 'SELECT display_name, supplier_pattern, vat_number FROM demo_supplier_mappings WHERE is_user_defined = 1';
       const params: any[] = [];
       if (domainFilter) { sql += ' AND domain = ?'; params.push(domainFilter); }
-      const rows = db.prepare(sql).all(...params) as { display_name: string | null; supplier_pattern: string }[];
-      for (const r of rows) addOrMerge(r.display_name || r.supplier_pattern, 0, []);
+      for (const r of db.prepare(sql).all(...params) as any[]) add((r.display_name || '').trim() || r.supplier_pattern, 0, [], [r.vat_number]);
     }
-
-    // Source 3: standalone suppliers table (sales hardcoded)
     if (domainFilter === 'sales' || !domainFilter) {
-      const rows = db.prepare('SELECT name FROM suppliers').all() as { name: string }[];
-      for (const r of rows) addOrMerge(r.name, 0, []);
+      for (const r of db.prepare('SELECT name, vat_number FROM suppliers').all() as any[]) add(r.name, 0, [], [r.vat_number]);
     }
 
     const items: Item[] = [...byLower.values()];
-
-    // Union-find
+    const notDup = notDuplicatePairs();
     const parent = items.map((_, i) => i);
-    const find = (x: number): number => {
-      while (parent[x] !== x) {
-        parent[x] = parent[parent[x]];
-        x = parent[x];
-      }
-      return x;
-    };
-    const union = (a: number, b: number) => {
+    const find = (x: number): number => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+    const why = new Map<number, Set<string>>();
+    const union = (a: number, b: number, reason: string) => {
+      // "Not the same supplier" answered for this pair earlier
+      if (items[a].key !== items[b].key && notDup.has(pairKey(items[a].key, items[b].key))) return;
       const ra = find(a), rb = find(b);
+      const reasons = new Set([...(why.get(ra) || []), ...(why.get(rb) || []), reason]);
       if (ra !== rb) parent[ra] = rb;
+      why.set(rb, reasons);
+    };
+    const groupBy = (keysOf: (it: Item) => string[], reason: string) => {
+      const first = new Map<string, number>();
+      items.forEach((it, i) => {
+        for (const k of keysOf(it)) {
+          if (!k) continue;
+          if (first.has(k)) union(first.get(k)!, i, reason); else first.set(k, i);
+        }
+      });
     };
 
-    // Pass 1: exact normalized key
-    const byKey = new Map<string, number[]>();
+    // 1. Same name once legal forms / punctuation / spacing are dropped
+    groupBy(it => [it.key], 'same name');
+    // 2. Same words in another order ("Brenntag N.V." / "N.V. Brenntag")
+    groupBy(it => [it.tokens], 'same name');
+    // 3. Same VAT number: the surest sign of one company under two names
+    groupBy(it => [...it.vats], 'same VAT number');
+    // 4. One name inside the other ("Caldic" / "Caldic Benelux"), or a typo
     for (let i = 0; i < items.length; i++) {
-      if (!byKey.has(items[i].key)) byKey.set(items[i].key, []);
-      byKey.get(items[i].key)!.push(i);
-    }
-    for (const idxs of byKey.values()) {
-      for (let k = 1; k < idxs.length; k++) union(idxs[0], idxs[k]);
-    }
-
-    // Pass 2: fuzzy match between distinct keys (both ≥4 chars).
-    // Two strategies, evaluated in order:
-    //   a) Containment — one key fully contains the other (handles "caldic" vs
-    //      "caldicbenelux"). Requires the shorter key to be ≥5 chars to avoid
-    //      noise like "co" matching every supplier.
-    //   b) Levenshtein typo distance, only when lengths are close enough.
-    const uniqueKeys = [...byKey.keys()].filter(k => k.length >= 4);
-    for (let i = 0; i < uniqueKeys.length; i++) {
-      for (let j = i + 1; j < uniqueKeys.length; j++) {
-        const a = uniqueKeys[i], b = uniqueKeys[j];
+      for (let j = i + 1; j < items.length; j++) {
+        const a = items[i].key, b = items[j].key;
+        if (a === b || a.length < 4 || b.length < 4) continue;
         const shorter = a.length <= b.length ? a : b;
         const longer = a.length <= b.length ? b : a;
-        if (shorter.length >= 5 && longer.includes(shorter)) {
-          union(byKey.get(a)![0], byKey.get(b)![0]);
-          continue;
-        }
-        const maxLen = longer.length;
-        const threshold = maxLen <= 6 ? 1 : maxLen <= 12 ? 2 : 3;
+        if (shorter.length >= 5 && longer.includes(shorter)) { union(i, j, 'similar name'); continue; }
+        const threshold = longer.length <= 6 ? 1 : longer.length <= 12 ? 2 : 3;
         if (Math.abs(a.length - b.length) > threshold) continue;
-        if (levenshtein(a, b) <= threshold) {
-          union(byKey.get(a)![0], byKey.get(b)![0]);
-        }
+        if (levenshtein(a, b) <= threshold) union(i, j, 'similar name');
       }
     }
 
-    // Collect groups
-    const groupMap = new Map<number, typeof items>();
-    for (let i = 0; i < items.length; i++) {
-      const root = find(i);
-      if (!groupMap.has(root)) groupMap.set(root, []);
-      groupMap.get(root)!.push(items[i]);
-    }
-
-    const groups = [...groupMap.values()]
-      .filter(g => g.length >= 2)
-      .map(g => {
+    const groupMap = new Map<number, Item[]>();
+    items.forEach((it, i) => {
+      const r = find(i);
+      if (!groupMap.has(r)) groupMap.set(r, []);
+      groupMap.get(r)!.push(it);
+    });
+    const groups = [...groupMap.entries()]
+      .filter(([, g]) => g.length >= 2)
+      .map(([root, g]) => {
         const sorted = g.slice().sort((a, b) => b.count - a.count || b.name.length - a.name.length);
         return {
           canonical: sorted[0].name,
-          suppliers: sorted.map(x => ({ name: x.name, count: x.count, invoiceIds: x.invoiceIds })),
+          reasons: [...(why.get(root) || [])],
+          suppliers: sorted.map(x => ({ name: x.name, count: x.count, invoiceIds: x.invoiceIds, vat: [...x.vats][0] || null })),
         };
       })
       .sort((a, b) => b.suppliers.length - a.suppliers.length);
@@ -3170,9 +3176,18 @@ router.get('/supplier-duplicates', (req: Request, res: Response) => {
   }
 });
 
+// "Not the same supplier": never group these names again
+router.post('/supplier-duplicates/dismiss', (req: Request, res: Response) => {
+  const names = Array.isArray(req.body?.names) ? (req.body.names as any[]).map(n => String(n || '').trim()).filter(Boolean) : [];
+  if (names.length < 2) { res.status(400).json({ error: 'names[] (2 or more) required' }); return; }
+  recordNotDuplicates(names);
+  db.saveToDisk();
+  res.json({ success: true });
+});
+
 router.post('/supplier-merge', (req: Request, res: Response) => {
   try {
-    const { canonicalName, names, domain } = req.body as { canonicalName: string; names: string[]; domain?: string };
+    const { canonicalName, names, domain, notSame } = req.body as { canonicalName: string; names: string[]; domain?: string; notSame?: string[] };
     if (!canonicalName || !canonicalName.trim() || !Array.isArray(names) || names.length === 0) {
       res.status(400).json({ error: 'canonicalName and names[] required' });
       return;
@@ -3180,81 +3195,88 @@ router.post('/supplier-merge', (req: Request, res: Response) => {
     const canonical = canonicalName.trim();
     const trimmedNames = names.map(n => (n || '').trim()).filter(Boolean);
     const scopedDomain = (domain === 'demo' || domain === 'sales') ? domain : null;
+    // Matched on the normalized name, so "Agilent", "Agilent " and "AGILENT B.V." all go
+    const mergedKeys = new Set([...trimmedNames, canonical].map(supplierKey).filter(Boolean));
+    const isMerged = (n: string | null | undefined) => mergedKeys.has(supplierKey(n));
 
-    // 1. Rename matching invoices (scoped by domain if provided)
+    // 1. Invoices, in every domain but project expenses (one company = one supplier)
     let updatedInvoices = 0;
-    const invSql = scopedDomain
-      ? 'UPDATE demo_invoices SET supplier = ? WHERE LOWER(TRIM(supplier)) = LOWER(TRIM(?)) AND domain = ?'
-      : 'UPDATE demo_invoices SET supplier = ? WHERE LOWER(TRIM(supplier)) = LOWER(TRIM(?))';
-    const updateInv = db.prepare(invSql);
-    for (const n of trimmedNames) {
-      const r = scopedDomain ? updateInv.run(canonical, n, scopedDomain) : updateInv.run(canonical, n);
-      updatedInvoices += (r as any).changes || 0;
+    const vats = new Set<string>();
+    const upd = db.prepare("UPDATE demo_invoices SET supplier = ? WHERE supplier = ? AND domain != 'project'");
+    for (const r of db.prepare("SELECT supplier, GROUP_CONCAT(DISTINCT supplier_vat) as vats FROM demo_invoices WHERE supplier IS NOT NULL AND supplier != '' GROUP BY supplier").all() as any[]) {
+      if (!isMerged(r.supplier)) continue;
+      for (const v of String(r.vats || '').split(',')) { const n = normalizeVat(v); if (n) vats.add(n); }
+      if (r.supplier !== canonical) updatedInvoices += (upd.run(canonical, r.supplier) as any).changes || 0;
     }
 
-    // 2. Consolidate demo_supplier_mappings — gather, delete, upsert canonical
-    const lowerNames = trimmedNames.map(n => n.toLowerCase());
-    lowerNames.push(canonical.toLowerCase());
-    const placeholders = lowerNames.map(() => '?').join(',');
-    const mapSql = scopedDomain
-      ? `SELECT id, supplier_pattern, category, domain FROM demo_supplier_mappings WHERE LOWER(TRIM(supplier_pattern)) IN (${placeholders}) AND is_user_defined = 1 AND domain = ?`
-      : `SELECT id, supplier_pattern, category, domain FROM demo_supplier_mappings WHERE LOWER(TRIM(supplier_pattern)) IN (${placeholders}) AND is_user_defined = 1`;
-    const mapParams = scopedDomain ? [...lowerNames, scopedDomain] : lowerNames;
-    const existingMappings = db.prepare(mapSql).all(...mapParams) as any[];
-
-    let inheritedCategory: string | null = null;
-    let inheritedDomain: string = scopedDomain || 'demo';
-    if (existingMappings.length > 0) {
-      inheritedCategory = existingMappings[0].category;
-      inheritedDomain = existingMappings[0].domain || inheritedDomain;
-      const ids = existingMappings.map(m => m.id);
-      const idP = ids.map(() => '?').join(',');
-      db.prepare(`DELETE FROM demo_supplier_mappings WHERE id IN (${idP})`).run(...ids);
+    // 2. Mappings, found by the name they are SHOWN under as well as the name they were
+    //    read as. The old merge missed the first kind ("one physical location" shown as
+    //    "Agilent "), and that is what kept bringing merged suppliers back
+    const allMaps = db.prepare('SELECT id, supplier_pattern, display_name, category, domain, vat_number FROM demo_supplier_mappings').all() as any[];
+    const hit = allMaps.filter(m => isMerged((m.display_name || '').trim()) || isMerged(m.supplier_pattern));
+    const inScope = (m: any) => !scopedDomain || m.domain === scopedDomain;
+    const preferred = hit.find(m => inScope(m) && supplierKey((m.display_name || '').trim() || m.supplier_pattern) === supplierKey(canonical))
+      || hit.find(inScope) || hit[0];
+    let inheritedCategory: string | null = preferred?.category || null;
+    let inheritedDomain: string = preferred?.domain || scopedDomain || 'demo';
+    for (const m of hit) { const n = normalizeVat(m.vat_number); if (n) vats.add(n); }
+    if (hit.length) {
+      const idP = hit.map(() => '?').join(',');
+      db.prepare(`DELETE FROM demo_supplier_mappings WHERE id IN (${idP})`).run(...hit.map(m => m.id));
     }
 
-    // 3. Consolidate standalone suppliers table (sales only) — keep one row, delete the rest
+    // 3. Suppliers table (sales): one row under the kept name
     let consolidatedSuppliers = 0;
-    if (scopedDomain === 'sales' || (!scopedDomain && inheritedDomain === 'sales')) {
-      const supRows = db.prepare(
-        `SELECT id, name, category FROM suppliers WHERE LOWER(TRIM(name)) IN (${placeholders})`
-      ).all(...lowerNames) as any[];
-      if (supRows.length > 0) {
-        // Carry the kept row's category if we don't have one yet (DB form, e.g. 'raw_materials')
-        if (!inheritedCategory) {
-          const dbCat = supRows[0].category;
-          inheritedCategory = SALES_CAT_DB_MAP[dbCat] || dbCat;
+    const supRows = (db.prepare('SELECT id, name, category, vat_number FROM suppliers').all() as any[]).filter(s => isMerged(s.name));
+    if (supRows.length > 0) {
+      const keep = supRows.find(s => (s.name || '').trim() === canonical) || supRows[0];
+      if (!inheritedCategory) {
+        inheritedCategory = SALES_CAT_DB_MAP[keep.category] || keep.category;
+        inheritedDomain = 'sales';
+      }
+      for (const s of supRows) { const n = normalizeVat(s.vat_number); if (n) vats.add(n); }
+      db.prepare(`UPDATE suppliers SET name = ?, updated_at = datetime('now') WHERE id = ?`).run(canonical, keep.id);
+      // Orders, operations, POs… of a merged-away supplier move to the kept one
+      const refTables = (db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND sql LIKE '%REFERENCES suppliers(id)%'").all() as any[])
+        .map(t => ({ name: t.name as string, cols: [...String(t.sql).matchAll(/FOREIGN KEY \((\w+)\)\s+REFERENCES suppliers\(id\)/g)].map(m => m[1]) }));
+      for (const s of supRows) {
+        if (s.id === keep.id) continue;
+        for (const t of refTables) for (const c of t.cols) {
+          try { db.prepare(`UPDATE ${t.name} SET ${c} = ? WHERE ${c} = ?`).run(keep.id, s.id); } catch { /* unique clash — leave that row */ }
         }
-        // Find inverse SALES_CAT_DB_MAP entry for the kept row
-        const keepId = supRows[0].id;
-        // Rename kept row to canonical
-        db.prepare(`UPDATE suppliers SET name = ?, updated_at = datetime('now') WHERE id = ?`).run(canonical, keepId);
-        // Delete the rest
-        const deleteIds = supRows.slice(1).map(r => r.id);
-        if (deleteIds.length > 0) {
-          const dP = deleteIds.map(() => '?').join(',');
-          const r = db.prepare(`DELETE FROM suppliers WHERE id IN (${dP})`).run(...deleteIds);
-          consolidatedSuppliers = (r as any).changes || 0;
-        }
+        try {
+          db.prepare('DELETE FROM suppliers WHERE id = ?').run(s.id);
+          consolidatedSuppliers++;
+        } catch { /* still referenced by an order / PO: kept, its name is an alias now */ }
       }
     }
 
-    // 4. Fallback category from invoices if still unknown
+    // 4. Category from the invoices if still unknown
     if (!inheritedCategory) {
-      const sample = db.prepare(
-        'SELECT category, domain FROM demo_invoices WHERE LOWER(supplier) = LOWER(?) LIMIT 1'
-      ).get(canonical) as any;
-      if (sample) {
-        inheritedCategory = sample.category;
-        inheritedDomain = sample.domain || inheritedDomain;
-      }
+      const sample = db.prepare("SELECT category, domain FROM demo_invoices WHERE supplier = ? AND domain != 'project' GROUP BY category, domain ORDER BY COUNT(*) DESC LIMIT 1").get(canonical) as any;
+      if (sample) { inheritedCategory = sample.category; inheritedDomain = sample.domain || inheritedDomain; }
     }
 
-    // 5. Upsert canonical mapping
+    // 5. One mapping for the kept name, with a VAT number seen, so the next invoice matches on it
     if (inheritedCategory) {
       db.prepare(
-        'INSERT OR REPLACE INTO demo_supplier_mappings (supplier_pattern, domain, category, display_name, is_user_defined) VALUES (?, ?, ?, ?, 1)'
-      ).run(canonical.toLowerCase(), inheritedDomain, inheritedCategory, canonical);
+        'INSERT OR REPLACE INTO demo_supplier_mappings (supplier_pattern, domain, category, display_name, is_user_defined, vat_number) VALUES (?, ?, ?, ?, 1, ?)'
+      ).run(canonical.toLowerCase(), inheritedDomain, inheritedCategory, canonical, [...vats][0] || null);
     }
+
+    // 6. Remember the merge: every other spelling, and the names the mappings were read as
+    //    when recognisably the same company, now mean the kept supplier
+    const aliasNames = [...trimmedNames];
+    for (const m of hit) {
+      const shown = (m.display_name || '').trim();
+      if (!shown || !m.supplier_pattern) continue;
+      const shownWords = new Set(supplierTokens(shown).filter(w => w.length >= 3));
+      if (supplierTokens(m.supplier_pattern).some(w => shownWords.has(w))) aliasNames.push(m.supplier_pattern);
+    }
+    recordAliases(aliasNames, canonical);
+    // Names left unticked in the group are other companies
+    const others = Array.isArray(notSame) ? notSame.map(n => String(n || '').trim()).filter(Boolean) : [];
+    for (const o of others) recordNotDuplicates([o, canonical]);
 
     db.saveToDisk();
     notifyAdmin({
@@ -3706,6 +3728,20 @@ router.get('/full-check', async (req: Request, res: Response) => {
         currency: x.currency, amount: sign * chk.net, vat_amount: sign * chk.vat,
         total: sign * r2(chk.net + chk.vat), vat_rate: chk.vatRate,
       };
+      // Currency: a reading in EUR (or none) of a Chinese supplier, or of an invoice whose
+      // text shows another currency, is settled by the currency rules (lib/invoiceCurrency.ts)
+      let currencyNote: string | null = null;
+      if (!x.currency || x.currency.toUpperCase() === 'EUR') {
+        const meta = { country: x.supplier_country || row.supplier_country, vat: x.supplier_vat_number || row.supplier_vat };
+        const flagged = String(row.t_reasons || '').split(',').includes('currency');
+        if (flagged || isChineseSupplier({ ...meta, name: readName || row.supplier }) || isChineseSupplier({ name: row.supplier })) {
+          const text = (db.prepare('SELECT text FROM invoice_texts WHERE file_hash = ?').get(row.file_hash) as any)?.text || '';
+          const d = decideCurrency(x.currency, text, isChineseSupplier({ ...meta, name: readName || row.supplier, text }) || isChineseSupplier({ name: row.supplier }));
+          read.currency = d.currency;
+          currencyNote = d.note;
+          if (d.note) chk.warnings.push(d.note);
+        }
+      }
       const diffs: string[] = [];
       if (Math.abs(read.amount - row.amount) > 0.02) diffs.push('net');
       if (Math.abs(read.vat_amount - (row.vat_amount || 0)) > 0.02) diffs.push('vat');
@@ -3718,6 +3754,15 @@ router.get('/full-check', async (req: Request, res: Response) => {
       if (!x.is_invoice) chk.warnings.push('not_an_invoice');
       // A reading whose own figures don't add up is no basis for a suggestion: check by hand
       if (diffs.length && chk.warnings.includes('totals_mismatch')) {
+        report.push({
+          ...base, status: accepted ? 'accepted' : 'unclear', ...accepted, read, diffs, warnings: chk.warnings,
+          verified_by: VERIFIED_BY[x.read_by || 'opus-pdf'], eur_net_diff: 0, eur_vat_diff: 0,
+        });
+        continue;
+      }
+
+      // A Chinese supplier's invoice read as EUR from a scan: kept as stored, but look once
+      if (!diffs.length && currencyNote === 'currency_china_eur') {
         report.push({
           ...base, status: accepted ? 'accepted' : 'unclear', ...accepted, read, diffs, warnings: chk.warnings,
           verified_by: VERIFIED_BY[x.read_by || 'opus-pdf'], eur_net_diff: 0, eur_vat_diff: 0,

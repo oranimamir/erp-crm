@@ -1303,6 +1303,25 @@ export async function initializeDatabase() {
       pages INTEGER NOT NULL DEFAULT 1
     )
   `);
+  // Supplier merges: every merged-away name (normalized key) → the name kept, so
+  // later invoices under the old name are filed under the kept one (lib/supplierAliases.ts)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS supplier_aliases (
+      alias_key TEXT PRIMARY KEY,
+      alias_name TEXT NOT NULL,
+      canonical TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  // "Not the same supplier" — pairs of normalized names Find duplicates never groups again
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS supplier_not_duplicates (
+      key_a TEXT NOT NULL,
+      key_b TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (key_a, key_b)
+    )
+  `);
   // Free text check per invoice; `signature` = the stored figures it checked (an edit re-checks)
   db.exec(`
     CREATE TABLE IF NOT EXISTS invoice_triage (

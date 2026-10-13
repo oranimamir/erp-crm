@@ -22,6 +22,7 @@ import {
   cachedInvoiceExtraction, costUsd, isCreditError, MODELS, type ReadMode,
 } from './supplierInvoiceReader.js';
 import { supplierTokens } from './supplierMatch.js';
+import { currencyMentions, isChineseSupplier } from './invoiceCurrency.js';
 import { aiBudgetLeft } from './aiBudget.js';
 
 const sha256 = (buf: Buffer) => crypto.createHash('sha256').update(buf).digest('hex');
@@ -154,14 +155,14 @@ export function triageInvoice(text: string, row: any): TriageResult {
   }
 
   // Currency: the stored one must be the one printed
+  // (codes glued to the figures count); a Chinese supplier stored in EUR is read again
+  // unless the invoice shows EUR and no USD
   const lower = text.toLowerCase();
-  const mentions = {
-    EUR: /\beur\b|€|euro/.test(lower),
-    USD: /\busd\b|us\$|\$/.test(lower),
-    GBP: /\bgbp\b|£/.test(lower),
-  } as Record<string, boolean>;
+  const mentions = currencyMentions(text) as Record<string, boolean>;
   const cur = (row.currency || 'EUR').toUpperCase();
   if (cur === 'EUR' ? (!mentions.EUR && (mentions.USD || mentions.GBP)) : !mentions[cur]) reasons.push('currency');
+  else if (cur === 'EUR' && !(mentions.EUR && !mentions.USD)
+    && isChineseSupplier({ name: row.supplier, country: row.supplier_country, vat: row.supplier_vat, text })) reasons.push('currency');
 
   // Invoice number printed somewhere (ignoring spacing / punctuation / leading zeros)
   const compact = lower.replace(/[^a-z0-9]/g, '');
@@ -190,7 +191,7 @@ export function scopeOf(v: unknown): Scope {
 export async function runTriage(force = false, scope: Scope = null): Promise<void> {
   const rows = db.prepare(`
     SELECT i.id, i.invoice_id, i.issue_date, i.supplier, i.amount, i.vat_amount, i.currency, i.file_hash,
-      t.signature as t_sig
+      i.supplier_country, i.supplier_vat, t.signature as t_sig
     FROM demo_invoices i LEFT JOIN invoice_triage t ON t.invoice_id = i.id
     WHERE i.embedded_pdf IS NOT NULL AND i.embedded_pdf != ''${scope ? ' AND i.domain = ?' : ''}
     ORDER BY i.id
