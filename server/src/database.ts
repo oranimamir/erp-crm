@@ -2033,6 +2033,8 @@ export async function initializeDatabase() {
   // Shipping NCOs: where the goods go from and to (free text)
   try { db.exec(`ALTER TABLE non_commercial_operations ADD COLUMN ship_from TEXT`); } catch (_) { /* column may already exist */ }
   try { db.exec(`ALTER TABLE non_commercial_operations ADD COLUMN ship_to TEXT`); } catch (_) { /* column may already exist */ }
+  // Shipping NCOs: a supplier typed freely instead of picked from the list
+  try { db.exec(`ALTER TABLE non_commercial_operations ADD COLUMN supplier_text TEXT`); } catch (_) { /* column may already exist */ }
   db.exec(`
     CREATE TABLE IF NOT EXISTS nco_documents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

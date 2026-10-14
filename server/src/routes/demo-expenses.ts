@@ -3257,7 +3257,9 @@ router.post('/supplier-merge', (req: Request, res: Response) => {
 
     // 3. Suppliers table (sales): one row under the kept name
     let consolidatedSuppliers = 0;
-    const supRows = (db.prepare('SELECT * FROM suppliers').all() as any[]).filter(s => isMerged(s.name));
+    // Also a record renamed on its Details tab, found by the name it was first opened under
+    const supRows = (db.prepare('SELECT * FROM suppliers').all() as any[]).filter(s => isMerged(s.name) || (s.opened_as && isMerged(s.opened_as)));
+    let movedDocuments = 0;
     if (supRows.length > 0) {
       // The record with the most details is kept (not an empty one that merely
       // carries the kept name), and its blanks are filled from the others
@@ -3279,9 +3281,15 @@ router.post('/supplier-merge', (req: Request, res: Response) => {
         .map(t => ({ name: t.name as string, cols: [...String(t.sql).matchAll(/FOREIGN KEY \((\w+)\)\s+REFERENCES suppliers\(id\)/g)].map(m => m[1]) }));
       for (const s of supRows) {
         if (s.id === keep.id) continue;
+        // The supplier's documents always go to the kept supplier — named here, not
+        // left to the generic pass, because deleting the record would cascade them away
+        movedDocuments += (db.prepare('UPDATE supplier_documents SET supplier_id = ? WHERE supplier_id = ?').run(keep.id, s.id) as any).changes || 0;
         for (const t of refTables) for (const c of t.cols) {
+          if (t.name === 'supplier_documents') continue;
           try { db.prepare(`UPDATE ${t.name} SET ${c} = ? WHERE ${c} = ?`).run(keep.id, s.id); } catch { /* unique clash — leave that row */ }
         }
+        // Never delete a record that still holds documents
+        if (db.prepare('SELECT 1 FROM supplier_documents WHERE supplier_id = ? LIMIT 1').get(s.id)) continue;
         try {
           db.prepare('DELETE FROM suppliers WHERE id = ?').run(s.id);
           consolidatedSuppliers++;
@@ -3320,11 +3328,11 @@ router.post('/supplier-merge', (req: Request, res: Response) => {
     notifyAdmin({
       entity: 'Supplier Mapping',
       action: 'updated',
-      label: `Merged ${names.length} suppliers → "${canonical}" (${updatedInvoices} invoices renamed${consolidatedSuppliers ? `, ${consolidatedSuppliers} suppliers consolidated` : ''})`,
+      label: `Merged ${names.length} suppliers → "${canonical}" (${updatedInvoices} invoices renamed${consolidatedSuppliers ? `, ${consolidatedSuppliers} suppliers consolidated` : ''}${movedDocuments ? `, ${movedDocuments} documents moved` : ''})`,
       performedBy: (req as any).user?.display_name || 'Unknown',
       performedById: (req as any).user?.userId,
     });
-    res.json({ success: true, updatedInvoices, consolidatedSuppliers });
+    res.json({ success: true, updatedInvoices, consolidatedSuppliers, movedDocuments });
   } catch (err: any) {
     console.error('[demo-expenses] supplier-merge error:', err);
     res.status(500).json({ error: 'Failed to merge suppliers' });

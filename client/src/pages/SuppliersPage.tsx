@@ -224,7 +224,7 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
       // Unticked names are other companies: remembered so they are not suggested again
       const notSame = group.suppliers.map(s => s.name).filter(n => !group.selected.includes(n));
       const res = await api.post('/demo-expenses/supplier-merge', { canonicalName: canonical, names: group.selected, domain, notSame });
-      addToast(`Merged into "${canonical}" · ${res.data?.updatedInvoices || 0} invoices renamed · later invoices under these names go to "${canonical}" too`, 'success');
+      addToast(`Merged into "${canonical}" · ${res.data?.updatedInvoices || 0} invoices renamed${res.data?.movedDocuments ? ` · ${res.data.movedDocuments} documents moved` : ''} · later invoices under these names go to "${canonical}" too`, 'success');
       setDupGroups(prev => (prev || []).filter(g => g.suppliers[0]?.name !== groupKey));
       fetchData();
     } catch (err: any) {
@@ -269,7 +269,7 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
     setManualMerging(true);
     try {
       const res = await api.post('/demo-expenses/supplier-merge', { canonicalName: canonical, names, domain });
-      addToast(`Merged into "${canonical}" · ${res.data?.updatedInvoices || 0} invoices renamed`, 'success');
+      addToast(`Merged into "${canonical}" · ${res.data?.updatedInvoices || 0} invoices renamed${res.data?.movedDocuments ? ` · ${res.data.movedDocuments} documents moved` : ''}`, 'success');
       fetchData();
     } catch (err: any) {
       addToast(err?.response?.data?.error || 'Failed to merge', 'error');

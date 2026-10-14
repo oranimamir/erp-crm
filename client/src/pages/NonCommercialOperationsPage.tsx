@@ -64,15 +64,17 @@ function Pills<T extends string>({ value, options, onChange }: {
 }
 
 interface FormState {
-  entity: Entity; type: NcoType; customer_id: string; supplier_id: string; nco_date: string; notes: string; nco_number: string; status: string;
+  entity: Entity; type: NcoType; customer_id: string; nco_date: string; notes: string; nco_number: string; status: string;
   ship_from: string; ship_to: string;
+  /** Shipping: the supplier as shown / typed — a list name picks that supplier, anything else is kept as typed */
+  supplier_name: string;
 }
 interface NewClient { name: string; company: string; address: string; contact_person: string; email: string; phone: string; vat_number: string }
 const emptyClient = (): NewClient => ({ name: '', company: '', address: '', contact_person: '', email: '', phone: '', vat_number: '' });
 
 const today = () => todayISO();
 const emptyForm = (entity: Entity = 'BE'): FormState =>
-  ({ entity, type: 'samples', customer_id: '', supplier_id: '', nco_date: today(), notes: '', nco_number: '', status: 'requested', ship_from: '', ship_to: '' });
+  ({ entity, type: 'samples', customer_id: '', nco_date: today(), notes: '', nco_number: '', status: 'requested', ship_from: '', ship_to: '', supplier_name: '' });
 
 export default function NonCommercialOperationsPage() {
   const { addToast } = useToast();
@@ -138,21 +140,23 @@ export default function NonCommercialOperationsPage() {
     setForm({
       entity: row.entity, type: row.type,
       customer_id: row.customer_id ? String(row.customer_id) : '',
-      supplier_id: row.supplier_id ? String(row.supplier_id) : '',
       nco_date: row.nco_date || '', notes: row.notes || '', nco_number: row.nco_number, status: row.status || 'requested',
-      ship_from: row.ship_from || '', ship_to: row.ship_to || '',
+      ship_from: row.ship_from || '', ship_to: row.ship_to || '', supplier_name: row.supplier_name || '',
     });
     setNewClient(null);
     setShowForm(true);
   };
 
   async function save() {
+    const typed = form.supplier_name.trim().toLowerCase();
+    const listSupplier = suppliers.find(s => s.name.trim().toLowerCase() === typed);
     setSaving(true);
     try {
       const payload = {
         type: form.type,
         customer_id: form.type === 'samples' ? Number(form.customer_id) || null : null,
-        supplier_id: form.type === 'shipping' ? Number(form.supplier_id) || null : null,
+        supplier_id: form.type === 'shipping' ? listSupplier?.id ?? null : null,
+        supplier_text: form.type === 'shipping' && !listSupplier ? form.supplier_name.trim() : '',
         nco_date: form.nco_date,
         notes: form.notes,
         status: form.status,
@@ -209,7 +213,10 @@ export default function NonCommercialOperationsPage() {
     }
   }
 
-  const partyMissing = form.type === 'samples' ? !form.customer_id : !form.supplier_id;
+  const partyMissing = form.type === 'samples' ? !form.customer_id : !form.supplier_name.trim();
+  // From / To used before, offered while typing
+  const places = [...new Set(rows.flatMap(r => [r.ship_from, r.ship_to]).filter((p): p is string => !!p))].sort();
+  const supplierKnown = suppliers.some(s => s.name.trim().toLowerCase() === form.supplier_name.trim().toLowerCase());
   const dash = <span className="text-gray-300">—</span>;
 
   return (
@@ -375,24 +382,25 @@ export default function NonCommercialOperationsPage() {
             </div>
           ) : (
             <div className="space-y-1">
-              <label className="block text-xs font-medium text-gray-500">Supplier (raw materials, blenders or logistics)</label>
-              <select value={form.supplier_id} onChange={e => set({ supplier_id: e.target.value })} className={inputCls}>
-                <option value="">Choose the supplier…</option>
-                {SHIPPING_CATEGORIES.map(cat => (
-                  <optgroup key={cat} label={SUPPLIER_CATEGORY_LABEL[cat]}>
-                    {suppliers.filter(s => s.category === cat).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </optgroup>
-                ))}
-              </select>
+              <label className="block text-xs font-medium text-gray-500">Supplier (raw materials, blenders or logistics — or type any name)</label>
+              <input list="nco-suppliers" value={form.supplier_name} onChange={e => set({ supplier_name: e.target.value })}
+                placeholder="Choose from the list or type…" className={inputCls} />
+              <datalist id="nco-suppliers">
+                {suppliers.map(s => <option key={s.id} value={s.name}>{SUPPLIER_CATEGORY_LABEL[s.category || ''] || ''}</option>)}
+              </datalist>
+              {form.supplier_name.trim() && !supplierKnown && (
+                <p className="text-[11px] text-gray-400">Not on the Suppliers list — kept as typed.</p>
+              )}
               <div className="grid grid-cols-2 gap-3 pt-2">
                 <div className="space-y-1">
                   <label className="block text-xs font-medium text-gray-500">From</label>
-                  <input value={form.ship_from} onChange={e => set({ ship_from: e.target.value })} placeholder="e.g. Rotterdam, NL" className={inputCls} />
+                  <input list="nco-places" value={form.ship_from} onChange={e => set({ ship_from: e.target.value })} placeholder="e.g. Rotterdam, NL" className={inputCls} />
                 </div>
                 <div className="space-y-1">
                   <label className="block text-xs font-medium text-gray-500">To</label>
-                  <input value={form.ship_to} onChange={e => set({ ship_to: e.target.value })} placeholder="e.g. Antwerp, BE" className={inputCls} />
+                  <input list="nco-places" value={form.ship_to} onChange={e => set({ ship_to: e.target.value })} placeholder="e.g. Antwerp, BE" className={inputCls} />
                 </div>
+                <datalist id="nco-places">{places.map(p => <option key={p} value={p} />)}</datalist>
               </div>
             </div>
           )}
