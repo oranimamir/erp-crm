@@ -23,6 +23,8 @@ interface PurchasePo {
   po_date: string | null;
   supplier_label: string | null;
   products: string[];
+  /** Uploaded as a document rather than generated here. */
+  uploaded: boolean;
 }
 
 export default function PurchasePoPickerModal({ operationId, onClose, onCreateNew, onFiled }: {
@@ -46,7 +48,9 @@ export default function PurchasePoPickerModal({ operationId, onClose, onCreateNe
     setPreview({ id: r.id, url: null });
     try {
       const resp = await api.get(`/files/operation-docs/${r.file_path}`, { responseType: 'blob' });
-      setPreview({ id: r.id, url: URL.createObjectURL(new Blob([resp.data], { type: 'application/pdf' })) });
+      const type = String(resp.headers['content-type'] || 'application/pdf');
+      if (!/pdf|image/.test(type)) { addToast('This PO is not a PDF or image — download it from the purchase operation', 'info'); setPreview(null); return; }
+      setPreview({ id: r.id, url: URL.createObjectURL(new Blob([resp.data], { type })) });
     } catch {
       addToast('Failed to load the preview', 'error');
       setPreview(null);
@@ -105,7 +109,9 @@ export default function PurchasePoPickerModal({ operationId, onClose, onCreateNe
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-gray-900">
                   {r.po_number} <span className="font-normal text-gray-500">· {r.supplier_label || 'No supplier'}{r.po_date ? ` · ${formatDate(r.po_date)}` : ''}</span>
+                  {r.uploaded && <span className="ml-2 rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-normal text-gray-600">uploaded</span>}
                 </p>
+                {r.uploaded && <p className="truncate text-xs text-gray-400">{r.file_name}</p>}
                 {r.products.length > 0 && <p className="truncate text-xs text-gray-400">{r.products.join(', ')}</p>}
               </div>
               <button type="button" title={preview?.id === r.id ? 'Hide the preview' : 'Preview'}

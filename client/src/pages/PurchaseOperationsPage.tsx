@@ -18,7 +18,7 @@ import PurchaseOperationFormModal, { type PurchaseOperation } from '../component
 interface Row extends PurchaseOperation {
   document_count: number;
   purchase_order_id: number | null;
-  purchase_order_status: 'draft' | 'final' | null;
+  purchase_order_status: 'draft' | 'final' | 'uploaded' | null;
 }
 
 export default function PurchaseOperationsPage() {
@@ -55,7 +55,9 @@ export default function PurchaseOperationsPage() {
   }
 
   const dash = <span className="text-gray-300">—</span>;
-  const poBadge = (r: Row) => !r.purchase_order_id
+  const poBadge = (r: Row) => r.purchase_order_status === 'uploaded'
+    ? <span className="inline-block rounded-full px-2 py-0.5 text-xs font-medium bg-green-50 text-green-700">Uploaded ✓</span>
+    : !r.purchase_order_id
     ? <span className="inline-block rounded-full px-2 py-0.5 text-xs font-medium bg-amber-50 text-amber-700">To generate</span>
     : r.purchase_order_status === 'draft'
       ? <span className="inline-block rounded-full px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-600">Draft</span>

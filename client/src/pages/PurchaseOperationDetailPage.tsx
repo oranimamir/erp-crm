@@ -31,12 +31,17 @@ interface Doc {
   created_at: string;
   file_size: number | null;
   generated: boolean;
+  /** The PO uploaded as a document (filed as Purchase Order). */
+  uploaded_po: boolean;
 }
 
 interface Detail extends PurchaseOperation {
   supplier_category: string | null;
   purchase_order: { id: number; po_number: string; status: 'draft' | 'final'; file_path: string | null; file_name: string | null; has_draft: number } | null;
   documents: Doc[];
+  /** 'final' generated here, 'uploaded', 'draft' being prepared, or null. */
+  purchase_order_status: 'final' | 'uploaded' | 'draft' | null;
+  uploaded_po: Doc | null;
 }
 
 interface Category { id: number; name: string }
@@ -146,6 +151,10 @@ export default function PurchaseOperationDetailPage() {
 
   const po = op.purchase_order;
   const poFile = po?.status === 'final' && po.file_path ? { fileName: po.file_name || `${po.po_number}.pdf`, filePath: po.file_path, subfolder: 'operation-docs', label: 'Purchase order' } : null;
+  // A PO uploaded as a document counts as the PO unless one was generated here
+  const uploaded = op.purchase_order_status === 'uploaded' ? op.uploaded_po : null;
+  const uploadedFile = uploaded ? { fileName: uploaded.file_name, filePath: uploaded.file_path, subfolder: 'operation-docs', label: 'Purchase order (uploaded)' } : null;
+  const hasPo = !!po || !!uploaded;
 
   return (
     <div className="space-y-5">
@@ -169,20 +178,40 @@ export default function PurchaseOperationDetailPage() {
 
       {/* Step 1 — the purchase order */}
       <Card>
-        <div className={`p-5 ${!po ? 'bg-primary-50/50 rounded-xl ring-1 ring-primary-200' : ''}`}>
+        <div className={`p-5 ${!hasPo ? 'bg-primary-50/50 rounded-xl ring-1 ring-primary-200' : ''}`}>
           <div className="flex items-center gap-2 mb-3">
             <ShoppingCart size={16} className="text-primary-600" />
             <h2 className="font-semibold text-gray-800">Step 1 · Purchase order</h2>
-            {po && (
+            {uploaded ? (
+              <span className="ml-1 inline-block rounded-full px-2 py-0.5 text-xs font-medium bg-green-50 text-green-700">Uploaded ✓</span>
+            ) : po && (
               <span className={`ml-1 inline-block rounded-full px-2 py-0.5 text-xs font-medium ${po.status === 'draft' ? 'bg-gray-100 text-gray-600' : 'bg-green-50 text-green-700'}`}>
                 {po.status === 'draft' ? 'Draft' : `Generated ✓${po.has_draft ? ' · edits pending' : ''}`}
               </span>
             )}
           </div>
-          {!po ? (
+          {uploaded && uploadedFile ? (
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm text-gray-700">PO uploaded: <strong>{uploaded.file_name}</strong>
+                  <span className="text-gray-400"> · {formatDate(uploaded.created_at)}</span></span>
+                {previewable(uploaded.file_name) && (
+                  <Button size="sm" variant="secondary" onClick={() => preview.open(uploadedFile)}><Eye size={14} /> Preview</Button>
+                )}
+                <Button size="sm" variant="secondary" onClick={() => preview.download(uploadedFile)}><Download size={14} /> Download</Button>
+              </div>
+              <p className="text-[11px] text-gray-400">
+                {po?.status === 'draft'
+                  ? <>A PO is also being drafted here — <button type="button" className="text-primary-600 hover:underline" onClick={() => navigate(`/purchase-orders/${po.id}`)}>continue it</button>; once generated it becomes the PO.</>
+                  : <>Want the PO from this system instead? <button type="button" className="text-primary-600 hover:underline" onClick={() => navigate(`/purchase-orders/new?purchase_operation_id=${op.id}`)}>Generate one</button>.</>}
+                {' '}Filed in the documents as Purchase Order — change its category there if it isn't the PO.
+              </p>
+            </div>
+          ) : !po ? (
             <div className="space-y-3">
               <p className="text-sm text-gray-600">
                 Generate the PO first. It is numbered and filed as <strong>{op.po_number}.pdf</strong>.
+                {' '}Have the PO already? Upload it below (category Purchase Order, or a name like "PO …") and it counts as the PO.
               </p>
               <div className="flex flex-wrap items-center gap-3">
                 <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-white p-2">
@@ -273,7 +302,7 @@ export default function PurchaseOperationDetailPage() {
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium text-gray-800" title={d.file_name}>{d.file_name}</p>
                         <p className="text-xs text-gray-400">
-                          {[d.generated ? 'Generated purchase order' : d.category_name, formatDate(d.created_at), sizeOf(d.file_size)].filter(Boolean).join(' · ')}
+                          {[d.generated ? 'Generated purchase order' : d.uploaded_po ? 'Purchase order (uploaded)' : d.category_name, formatDate(d.created_at), sizeOf(d.file_size)].filter(Boolean).join(' · ')}
                         </p>
                       </div>
                     )}

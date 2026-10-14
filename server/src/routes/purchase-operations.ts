@@ -58,14 +58,67 @@ function numberTaken(number: string, exceptId?: number): boolean {
   return (!!row && row.id !== exceptId) || (!!po && po.purchase_operation_id !== exceptId);
 }
 
+/**
+ * A PO the user uploaded (not generated here): a document filed as Purchase
+ * Order other than the generated PO's own. Newest first.
+ */
+const UPLOADED_PO = `
+  SELECT d.id FROM purchase_operation_documents d
+  JOIN document_categories c ON c.id = d.category_id
+  WHERE d.purchase_operation_id = p.id AND lower(c.name) = 'purchase order'
+    AND d.id NOT IN (SELECT po.purchase_operation_document_id FROM purchase_orders po
+                     WHERE po.purchase_operation_id = p.id AND po.purchase_operation_document_id IS NOT NULL)
+  ORDER BY d.created_at DESC, d.id DESC LIMIT 1
+`;
+
 const SELECT = `
   SELECT p.*, COALESCE(s.name, p.supplier_name) AS supplier_label, s.category AS supplier_category,
     (SELECT COUNT(*) FROM purchase_operation_documents d WHERE d.purchase_operation_id = p.id) AS document_count,
     (SELECT po.id FROM purchase_orders po WHERE po.purchase_operation_id = p.id ORDER BY po.id DESC LIMIT 1) AS purchase_order_id,
-    (SELECT po.status FROM purchase_orders po WHERE po.purchase_operation_id = p.id ORDER BY po.id DESC LIMIT 1) AS purchase_order_status
+    (SELECT po.status FROM purchase_orders po WHERE po.purchase_operation_id = p.id ORDER BY po.id DESC LIMIT 1) AS generated_status,
+    (${UPLOADED_PO}) AS uploaded_po_document_id
   FROM purchase_operations p
   LEFT JOIN suppliers s ON s.id = p.supplier_id
 `;
+
+/**
+ * Where the PO stands: 'final' (generated here), 'uploaded' (the supplier's /
+ * our own PO uploaded as a document), 'draft' (being prepared here), or null.
+ */
+function withPoStatus<T extends { generated_status: string | null; uploaded_po_document_id: number | null }>(row: T) {
+  const status = row.generated_status === 'final' ? 'final'
+    : row.uploaded_po_document_id ? 'uploaded'
+    : row.generated_status === 'draft' ? 'draft' : null;
+  return { ...row, purchase_order_status: status };
+}
+
+/** A file name that reads as a purchase order: "PO 4500123.pdf", "Purchase Order …", or the operation's number. */
+export function looksLikePurchaseOrder(fileName: string, poNumber: string): boolean {
+  const stem = String(fileName || '').replace(/\.[A-Za-z0-9]+$/, '');
+  if (poNumber && stem.toLowerCase().includes(poNumber.toLowerCase())) return true;
+  return /(^|[^a-z])p\.?o([^a-z]|$)/i.test(stem) || /purchase[\s_.-]*order/i.test(stem) || /bestelbon|bestellung|ordine[\s_-]*d.?acquisto|orden[\s_-]*de[\s_-]*compra/i.test(stem);
+}
+
+function purchaseOrderCategoryId(): number | null {
+  db.prepare(`INSERT OR IGNORE INTO document_categories (name) VALUES ('Purchase Order')`).run();
+  return (db.prepare(`SELECT id FROM document_categories WHERE name = 'Purchase Order'`).get() as any)?.id ?? null;
+}
+
+/**
+ * Uploads with no category whose name reads as a PO are filed as Purchase
+ * Order — on upload, and for documents uploaded before this (on read) — so the
+ * operation knows its PO is in. Only while it has no PO filed that way yet.
+ */
+function recognizeUploadedPo(purchaseOperationId: number): void {
+  const op = db.prepare(`SELECT p.id, p.po_number, (${UPLOADED_PO}) AS uploaded FROM purchase_operations p WHERE p.id = ?`).get(purchaseOperationId) as any;
+  if (!op || op.uploaded) return;
+  const generatedDoc = (db.prepare('SELECT purchase_operation_document_id AS id FROM purchase_orders WHERE purchase_operation_id = ? AND purchase_operation_document_id IS NOT NULL').get(op.id) as any)?.id ?? null;
+  const candidates = db.prepare('SELECT id, file_name FROM purchase_operation_documents WHERE purchase_operation_id = ? AND category_id IS NULL ORDER BY created_at DESC, id DESC').all(op.id) as any[];
+  const hit = candidates.find(d => d.id !== generatedDoc && looksLikePurchaseOrder(d.file_name, op.po_number));
+  if (!hit) return;
+  const categoryId = purchaseOrderCategoryId();
+  if (categoryId) db.prepare('UPDATE purchase_operation_documents SET category_id = ? WHERE id = ?').run(categoryId, hit.id);
+}
 
 const DOCS_SELECT = `
   SELECT d.*, c.name AS category_name FROM purchase_operation_documents d
@@ -73,14 +126,19 @@ const DOCS_SELECT = `
 `;
 
 function detail(id: number | string) {
-  const row = db.prepare(`${SELECT} WHERE p.id = ?`).get(id) as any;
-  if (!row) return null;
+  if (Number(id) > 0) recognizeUploadedPo(Number(id));
+  const raw = db.prepare(`${SELECT} WHERE p.id = ?`).get(id) as any;
+  if (!raw) return null;
+  const row = withPoStatus(raw);
   const documents = db.prepare(`${DOCS_SELECT} WHERE d.purchase_operation_id = ? ORDER BY d.created_at DESC, d.id DESC`).all(row.id) as any[];
   const po = db.prepare('SELECT id, po_number, status, file_path, file_name, source_order_id, purchase_operation_document_id, draft_data IS NOT NULL AS has_draft FROM purchase_orders WHERE purchase_operation_id = ? ORDER BY id DESC LIMIT 1').get(row.id) as any;
   return {
     ...row,
     purchase_order: po || null,
-    documents: withSizes(documents).map(d => ({ ...d, generated: !!po && d.id === po.purchase_operation_document_id })),
+    uploaded_po: documents.find(d => d.id === row.uploaded_po_document_id) || null,
+    documents: withSizes(documents).map(d => ({
+      ...d, generated: !!po && d.id === po.purchase_operation_document_id, uploaded_po: d.id === row.uploaded_po_document_id,
+    })),
   };
 }
 
@@ -102,8 +160,9 @@ function supplierOf(body: any): { supplier_id: number | null; supplier_name: str
 router.get('/', (req: Request, res: Response) => {
   const search = String(req.query.search || '').trim();
   const where = search ? 'WHERE (p.po_number LIKE ?1 OR s.name LIKE ?1 OR p.supplier_name LIKE ?1 OR p.notes LIKE ?1)' : '';
-  const rows = db.prepare(`${SELECT} ${where} ORDER BY p.year DESC, p.seq DESC, p.id DESC`).all(...(search ? [`%${search}%`] : []));
-  res.json({ data: rows });
+  for (const { id } of db.prepare('SELECT id FROM purchase_operations').all() as any[]) recognizeUploadedPo(id);
+  const rows = db.prepare(`${SELECT} ${where} ORDER BY p.year DESC, p.seq DESC, p.id DESC`).all(...(search ? [`%${search}%`] : [])) as any[];
+  res.json({ data: rows.map(withPoStatus) });
 });
 
 // GET /api/purchase-operations/next-number?date= — preview only
@@ -111,9 +170,10 @@ router.get('/next-number', (req: Request, res: Response) => {
   res.json({ po_number: nextPurchaseOperationNumber(yearOf(req.query.date as string)) });
 });
 
-// GET /api/purchase-operations/for-picking — generated POs a sales operation can file a copy of
+// GET /api/purchase-operations/for-picking — POs (generated or uploaded) a sales operation can file a copy of
 router.get('/for-picking', (_req: Request, res: Response) => {
-  const rows = db.prepare(`
+  for (const { id } of db.prepare('SELECT id FROM purchase_operations').all() as any[]) recognizeUploadedPo(id);
+  const generated = db.prepare(`
     SELECT po.id, po.po_number, po.file_path, po.file_name, po.updated_at, po.data, po.purchase_operation_document_id,
       p.id AS purchase_operation_id, p.po_date, COALESCE(s.name, p.supplier_name) AS supplier_label
     FROM purchase_orders po
@@ -122,11 +182,29 @@ router.get('/for-picking', (_req: Request, res: Response) => {
     WHERE po.status = 'final' AND po.file_path IS NOT NULL AND po.purchase_operation_document_id IS NOT NULL
     ORDER BY p.year DESC, p.seq DESC, p.id DESC
   `).all() as any[];
-  res.json(rows.map(({ data, ...r }) => {
-    let lines: string[] = [];
-    try { lines = (JSON.parse(data)?.items || []).map((it: any) => it?.commercial_name || it?.reference).filter(Boolean); } catch { /* corrupt row */ }
-    return { ...r, products: lines.slice(0, 5) };
-  }));
+  // Uploaded POs (filed as Purchase Order, not the generated one)
+  const uploaded = db.prepare(`
+    SELECT d.id AS purchase_operation_document_id, d.file_path, d.file_name, d.created_at AS updated_at,
+      p.po_number, p.id AS purchase_operation_id, p.po_date, p.year, p.seq, COALESCE(s.name, p.supplier_name) AS supplier_label
+    FROM purchase_operation_documents d
+    JOIN document_categories c ON c.id = d.category_id
+    JOIN purchase_operations p ON p.id = d.purchase_operation_id
+    LEFT JOIN suppliers s ON s.id = p.supplier_id
+    WHERE lower(c.name) = 'purchase order'
+      AND d.id NOT IN (SELECT purchase_operation_document_id FROM purchase_orders WHERE purchase_operation_document_id IS NOT NULL)
+  `).all() as any[];
+  const rows = [
+    ...generated.map(({ data, ...r }) => {
+      let lines: string[] = [];
+      try { lines = (JSON.parse(data)?.items || []).map((it: any) => it?.commercial_name || it?.reference).filter(Boolean); } catch { /* corrupt row */ }
+      return { ...r, id: r.purchase_operation_document_id, uploaded: false, products: lines.slice(0, 5) };
+    }),
+    ...uploaded.map(r => ({ ...r, id: r.purchase_operation_document_id, uploaded: true, products: [] as string[] })),
+  ];
+  // Newest purchase operation first (as the list)
+  const order = new Map((db.prepare('SELECT id FROM purchase_operations ORDER BY year DESC, seq DESC, id DESC').all() as any[]).map((r, i) => [r.id, i]));
+  rows.sort((a, b) => (order.get(a.purchase_operation_id) ?? 0) - (order.get(b.purchase_operation_id) ?? 0));
+  res.json(rows);
 });
 
 router.get('/:id', (req: Request, res: Response) => {
@@ -260,6 +338,8 @@ router.post('/:id/documents', uploadPurchaseOperationDocs.array('files', 50), (r
       .run(op.id, categoryId, f.filename, f.originalname, notes);
     return Number(r.lastInsertRowid);
   });
+  // A PO among the files (no category chosen, named like one) is filed as Purchase Order
+  if (!categoryId) recognizeUploadedPo(op.id);
   notifyAdmin({
     action: 'created', entity: 'Purchase Operation Document', label: op.po_number,
     detail: files.length === 1 ? files[0].originalname : `${files.length} documents`, ...who(req),
