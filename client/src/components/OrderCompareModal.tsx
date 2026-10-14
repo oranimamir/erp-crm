@@ -8,7 +8,9 @@ import { Columns2, Loader2, RefreshCw, X } from 'lucide-react';
  * two can be checked against each other before confirming. The order shows
  * as the uploaded file when there is one, else as its recorded lines.
  */
-export default function OrderCompareModal({ orderId, title, renderPreview, onClose, left }: {
+export interface CompareChoice { id: number; label: string; filePath: string; fileName?: string; subfolder: string }
+
+export default function OrderCompareModal({ orderId, title, renderPreview, onClose, left, choices, onChoose }: {
   orderId?: number | null;
   /** "Order confirmation", "Invoice", "Purchase order" */
   title: string;
@@ -17,6 +19,9 @@ export default function OrderCompareModal({ orderId, title, renderPreview, onClo
   onClose: () => void;
   /** Show this file on the left instead of the customer's order (e.g. the Bill of Lading). */
   left?: { title: string; filePath: string; fileName?: string; subfolder: string };
+  /** Documents the left side can switch between (a picker in its header); `left` is the one shown. */
+  choices?: CompareChoice[];
+  onChoose?: (choice: CompareChoice) => void;
 }) {
   const [order, setOrder] = useState<any>(null);
   const [orderUrl, setOrderUrl] = useState<string | null>(null);
@@ -32,6 +37,8 @@ export default function OrderCompareModal({ orderId, title, renderPreview, onClo
 
   useEffect(() => {
     let cancelled = false;
+    setOrderLoading(true);
+    setOrderUrl(null);
     (async () => {
       try {
         if (left) {
@@ -100,8 +107,21 @@ export default function OrderCompareModal({ orderId, title, renderPreview, onClo
       <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-3" onClick={e => e.stopPropagation()}>
         <div className={pane}>
           <div className={head}>
-            {left ? left.title : `Customer order${order?.order_number ? ` ${order.order_number}` : ''}`}
-            {(left?.fileName || order?.file_name) && <span className="text-xs font-normal text-gray-400 truncate">{left?.fileName || order?.file_name}</span>}
+            {choices && choices.length > 0 && onChoose ? (
+              <select
+                value={choices.find(c => c.filePath === left?.filePath)?.id ?? ''}
+                onChange={e => { const c = choices.find(x => x.id === Number(e.target.value)); if (c) onChoose(c); }}
+                className="min-w-0 flex-1 rounded border border-gray-300 bg-white px-2 py-1 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                title="Choose the document to compare with"
+              >
+                {choices.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+              </select>
+            ) : (
+              <>
+                {left ? left.title : `Customer order${order?.order_number ? ` ${order.order_number}` : ''}`}
+                {(left?.fileName || order?.file_name) && <span className="text-xs font-normal text-gray-400 truncate">{left?.fileName || order?.file_name}</span>}
+              </>
+            )}
           </div>
           <div className="flex-1 min-h-0 overflow-auto bg-gray-50">
             {orderLoading ? (

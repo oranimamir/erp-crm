@@ -573,13 +573,14 @@ export default function InvoiceDocumentPage() {
           <Button variant="secondary" size="sm" onClick={handlePreview} disabled={previewing}>
             {previewing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
           </Button>
-          {!isTech && <CompareButtons
-            kinds={['order', 'oc', 'bl']}
+          <CompareButtons
+            kinds={isTech ? [] : ['order', 'oc', 'bl']}
             orderId={orderId}
             operationId={operationId}
+            ncoId={ncoId}
             title="Invoice"
             renderPreview={async () => (await api.post('/invoice-documents/preview', { data: toPayload(form, includeOrigin, layout) }, { responseType: 'blob' })).data as Blob}
-          />}
+          />
           <Button variant="secondary" size="sm" onClick={() => handleSave('draft')} disabled={saving}
             title={generated
               ? 'Keep these edits as a draft — the generated PDF stays as it is until you regenerate'

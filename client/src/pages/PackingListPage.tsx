@@ -531,6 +531,8 @@ export default function PackingListPage() {
           <CompareButtons
             kinds={['order', 'oc', 'invoice', 'bl']}
             orderId={orderId}
+            operationId={operationId}
+            ncoId={ncoId}
             title="Packing list"
             bl={billOfLading ? { number: '', file_path: billOfLading.file_path, file_name: billOfLading.file_name } : null}
             renderPreview={async () => (await api.post('/packing-lists/preview', { data: toPayload(form, layout) }, { responseType: 'blob' })).data as Blob}

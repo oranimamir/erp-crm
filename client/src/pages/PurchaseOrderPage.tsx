@@ -516,6 +516,9 @@ export default function PurchaseOrderPage() {
           <CompareButtons
             kinds={purchaseOpId ? ['order'] : ['order', 'oc']}
             orderId={orderId}
+            operationId={operationId}
+            ncoId={ncoId}
+            purchaseOperationId={purchaseOpId}
             title="Purchase order"
             renderPreview={async () => (await api.post('/purchase-orders/preview', { data: toPayload(form) }, { responseType: 'blob' })).data as Blob}
           />

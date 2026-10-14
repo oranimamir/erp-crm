@@ -461,6 +461,8 @@ export default function OrderConfirmationPage() {
           <CompareButtons
             kinds={['order']}
             orderId={orderId}
+            operationId={operationId}
+            ncoId={ncoId}
             title="Order confirmation"
             renderPreview={async () => (await api.post('/order-confirmations/preview', { data: toPayload(form) }, { responseType: 'blob' })).data as Blob}
           />

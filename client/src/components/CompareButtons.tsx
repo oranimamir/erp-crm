@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react';
 import { Columns2 } from 'lucide-react';
 import api from '../lib/api';
-import OrderCompareModal from './OrderCompareModal';
+import OrderCompareModal, { type CompareChoice } from './OrderCompareModal';
+import { sortForSending } from '../lib/operationDocs';
 
 /**
  * The "Compare with …" buttons every generator carries: the document being
  * edited side by side with the customer's order, the order confirmation, the
  * invoice or the Bill of Lading. A button whose document does not exist yet
- * (or is still a draft, so has no PDF) stays in light grey.
+ * (or is still a draft, so has no PDF) stays in light grey. "Compare with
+ * other documents" offers every PDF / image filed in the owner's documents
+ * (operation, NCO or purchase operation), switchable inside the compare view.
  */
 
 export type CompareKind = 'order' | 'oc' | 'invoice' | 'bl';
@@ -32,11 +35,16 @@ const cls = (available: boolean) => available
   ? 'inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-semibold bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 hover:border-gray-400 transition-colors'
   : 'inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-semibold bg-gray-50 text-gray-400 border border-gray-200 cursor-not-allowed';
 
-export default function CompareButtons({ kinds, orderId, operationId, title, renderPreview, bl }: {
+const previewable = (name: string) => /\.(pdf|png|jpe?g|gif|webp)$/i.test(name || '');
+
+export default function CompareButtons({ kinds, orderId, operationId, ncoId, purchaseOperationId, title, renderPreview, bl }: {
   kinds: CompareKind[];
   orderId: number | null;
   /** Lets the BL be looked up among the operation's documents when not passed in. */
   operationId?: number | null;
+  /** Owners whose documents "Compare with other documents" lists (the first one known). */
+  ncoId?: number | null;
+  purchaseOperationId?: number | null;
   /** What is being generated — "Invoice", "Packing list". */
   title: string;
   renderPreview: () => Promise<Blob>;
@@ -54,6 +62,26 @@ export default function CompareButtons({ kinds, orderId, operationId, title, ren
       .catch(() => setFoundBl(null));
   }, [operationId, bl === undefined, kinds.join(',')]);
   const [open, setOpen] = useState<CompareKind | null>(null);
+
+  // The owner's uploaded / filed documents, for "Compare with other documents"
+  const ownerUrl = operationId ? `/operations/${operationId}`
+    : ncoId ? `/non-commercial-operations/${ncoId}`
+    : purchaseOperationId ? `/purchase-operations/${purchaseOperationId}` : null;
+  const [docs, setDocs] = useState<CompareChoice[]>([]);
+  const [otherDoc, setOtherDoc] = useState<CompareChoice | null>(null);
+  useEffect(() => {
+    if (!ownerUrl) { setDocs([]); return; }
+    api.get(ownerUrl)
+      .then(({ data }) => {
+        const list = sortForSending(((data?.documents || []) as any[]).filter(d => d.file_path && previewable(d.file_name)));
+        setDocs(list.map(d => ({
+          id: d.id,
+          label: d.category_name ? `${d.file_name} — ${d.category_name}` : d.file_name,
+          filePath: d.file_path, fileName: d.file_name, subfolder: 'operation-docs',
+        })));
+      })
+      .catch(() => setDocs([]));
+  }, [ownerUrl]);
 
   useEffect(() => {
     if (!orderId) { setOc(null); setInvoice(null); return; }
@@ -100,6 +128,25 @@ export default function CompareButtons({ kinds, orderId, operationId, title, ren
           </button>
         );
       })}
+      {ownerUrl && (
+        <button
+          type="button" disabled={!docs.length} onClick={() => setOtherDoc(docs[0])} className={cls(docs.length > 0)}
+          title={docs.length ? `Pick any of the ${docs.length} document${docs.length === 1 ? '' : 's'} filed here and show it next to this document`
+            : 'No PDF or image in the documents yet'}
+        >
+          <Columns2 size={14} /> Compare with other documents
+        </button>
+      )}
+      {otherDoc && (
+        <OrderCompareModal
+          title={title}
+          left={{ title: otherDoc.label, filePath: otherDoc.filePath, fileName: otherDoc.fileName, subfolder: otherDoc.subfolder }}
+          choices={docs}
+          onChoose={setOtherDoc}
+          renderPreview={renderPreview}
+          onClose={() => setOtherDoc(null)}
+        />
+      )}
       {open && available(open) && (
         <OrderCompareModal
           key={open}
