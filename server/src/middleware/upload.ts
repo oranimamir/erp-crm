@@ -65,6 +65,17 @@ export const uploadOperationDoc = multer({
   fileFilter: operationDocFileFilter,
 });
 
+// Purchase operation documents: several at once; a file of another type is skipped (named in req.skippedFiles), not fatal
+export const uploadPurchaseOperationDocs = multer({
+  storage: createStorage('operation-docs'),
+  limits: { fileSize: 25 * 1024 * 1024, files: 50 },
+  fileFilter: (req: any, file, cb) => {
+    if (operationDocExtensions.includes(path.extname(file.originalname).toLowerCase())) { cb(null, true); return; }
+    (req.skippedFiles ||= []).push(file.originalname);
+    cb(null, false);
+  },
+});
+
 export const uploadOrder = multer({
   storage: createStorage('orders'),
   limits: { fileSize: 10 * 1024 * 1024 },

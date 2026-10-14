@@ -21,7 +21,7 @@ import { DocOwner, ownerLines, ownerLots, insertOwnerDocument } from './docOwner
  * under the owner (or, for `this`, just sets its category).
  */
 
-export type SourceType = 'library' | 'batch' | 'this' | 'other' | 'other_nco' | 'supplier';
+export type SourceType = 'library' | 'batch' | 'this' | 'other' | 'other_nco' | 'supplier' | 'purchase';
 
 export interface SourceDoc {
   source: SourceType;
@@ -141,6 +141,28 @@ export function documentSources(owner: DocOwner, category: string): SourceDoc[] 
       file_name: d.file_name, file_path: d.file_path, subfolder: 'operation-docs', date: d.created_at, suggested: false,
     });
   }
+
+  // Documents of purchase operations (the supplier's documents, any category); those of a
+  // purchase operation whose PO was filed here come first, suggested (ticked) when filed under this category
+  const linked = new Set((db.prepare(`SELECT notes FROM ${owner.table} WHERE ${owner.fk} = ? AND notes LIKE 'From purchase operation %'`).all(owner.id) as any[])
+    .map(r => norm(String(r.notes).replace(/^From purchase operation /i, ''))));
+  const purchaseDocs = db.prepare(`
+    SELECT d.id, d.file_path, d.file_name, d.created_at, dc.name AS category_name, p.po_number, COALESCE(s.name, p.supplier_name) AS supplier_label
+    FROM purchase_operation_documents d
+    JOIN purchase_operations p ON p.id = d.purchase_operation_id
+    LEFT JOIN suppliers s ON s.id = p.supplier_id
+    LEFT JOIN document_categories dc ON dc.id = d.category_id
+    ORDER BY d.created_at DESC, d.id DESC
+    LIMIT 300
+  `).all() as any[];
+  const isLinked = (d: any) => linked.has(norm(d.po_number));
+  const purchaseOut = [...purchaseDocs.filter(isLinked), ...purchaseDocs.filter(d => !isLinked(d))].map(d => ({
+    source: 'purchase' as const, id: d.id, title: d.file_name,
+    subtitle: [d.po_number, d.supplier_label, d.category_name].filter(Boolean).join(' · '),
+    file_name: d.file_name, file_path: d.file_path, subfolder: 'operation-docs', date: d.created_at,
+    suggested: isLinked(d) && !!d.category_name && norm(d.category_name) === norm(category),
+  }));
+  out.push(...purchaseOut.filter(d => d.suggested), ...purchaseOut.filter(d => !d.suggested));
   return out;
 }
 
@@ -187,6 +209,10 @@ export function fileFromSources(owner: DocOwner, categoryId: number, items: Arra
       row = db.prepare('SELECT nd.file_path, nd.file_name, n.nco_number AS number FROM nco_documents nd JOIN non_commercial_operations n ON n.id = nd.nco_id WHERE nd.id = ?').get(id);
       subfolder = 'operation-docs';
       notes = row ? `Copied from ${row.number}` : null;
+    } else if (item.source === 'purchase') {
+      row = db.prepare('SELECT d.file_path, d.file_name, p.po_number AS number FROM purchase_operation_documents d JOIN purchase_operations p ON p.id = d.purchase_operation_id WHERE d.id = ?').get(id);
+      subfolder = 'operation-docs';
+      notes = row ? `From purchase operation ${row.number}` : null;
     } else if (item.source === 'supplier') {
       row = db.prepare('SELECT sd.file_path, sd.file_name, s.name AS supplier_name FROM supplier_documents sd JOIN suppliers s ON s.id = sd.supplier_id WHERE sd.id = ?').get(id);
       subfolder = 'supplier-docs';

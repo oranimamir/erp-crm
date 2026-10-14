@@ -2348,6 +2348,41 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE technology_expenses ADD COLUMN demo_invoice_id INTEGER`); } catch (_) { /* column may already exist */ }
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_tech_expenses_demo_invoice ON technology_expenses(demo_invoice_id)`); } catch (_) {}
 
+  // Purchase operations (PO<year><nnnn>): a purchase from a supplier, its PO + the supplier's documents (routes/purchase-operations.ts)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS purchase_operations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      po_number TEXT UNIQUE NOT NULL,
+      year INTEGER NOT NULL,
+      seq INTEGER NOT NULL DEFAULT 0,
+      supplier_id INTEGER,
+      supplier_name TEXT,
+      po_date TEXT,
+      notes TEXT,
+      created_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE SET NULL
+    )
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS purchase_operation_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      purchase_operation_id INTEGER NOT NULL,
+      category_id INTEGER,
+      file_path TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (purchase_operation_id) REFERENCES purchase_operations(id) ON DELETE CASCADE,
+      FOREIGN KEY (category_id) REFERENCES document_categories(id) ON DELETE SET NULL
+    )
+  `);
+  try { db.exec(`ALTER TABLE purchase_orders ADD COLUMN purchase_operation_id INTEGER`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE purchase_orders ADD COLUMN purchase_operation_document_id INTEGER`); } catch (_) { /* column may already exist */ }
+  // The customer order a purchase operation's PO was drafted from / compared with (no FK: deleting the order keeps the PO)
+  try { db.exec(`ALTER TABLE purchase_orders ADD COLUMN source_order_id INTEGER`); } catch (_) { /* column may already exist */ }
+
   // Referential integrity is only as good as the last migration — surface any
   // violation in the logs rather than letting it rot silently as it did before.
   try {

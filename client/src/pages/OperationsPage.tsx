@@ -575,7 +575,7 @@ export default function OperationsPage() {
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-gray-900 flex items-center gap-2">
             <Briefcase size={22} className="text-primary-600" />
-            Operations
+            Sales Operations
           </h1>
           <p className="text-xs sm:text-sm text-gray-500 mt-0.5">{total} operation{total !== 1 ? 's' : ''}</p>
         </div>
@@ -642,7 +642,7 @@ export default function OperationsPage() {
               }
               const { data } = await api.get('/operations', { params });
               downloadExcel('operations',
-                ['Operation #', 'Order #', 'Country', 'Customer / Supplier', 'Status', 'ETD', 'ETA', 'Docs', 'Invoices', 'Quantity (MT)', 'Invoice Total (EUR)', 'Order Date', 'Invoice Date', 'Est. Payment Date', 'Wire Transfer Date'],
+                ['Operation #', 'Order #', 'Country', 'Customer', 'Status', 'ETD', 'ETA', 'Docs', 'Invoices', 'Quantity (MT)', 'Invoice Total (EUR)', 'Order Date', 'Invoice Date', 'Est. Payment Date', 'Wire Transfer Date'],
                 data.data.map((op: any) => [
                   op.operation_number, op.order_number || '',
                   op.country || '',
@@ -866,7 +866,7 @@ export default function OperationsPage() {
                   onClick={() => handleSort('name')}
                 >
                   <span className="flex items-center gap-1">
-                    Customer / Supplier <SortIcon field="name" />
+                    Customer <SortIcon field="name" />
                   </span>
                 </th>
                 <th className="text-left px-4 py-3 font-medium text-gray-600">Order #</th>

@@ -3,6 +3,7 @@ import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom'
 import api from '../lib/api';
 import { acceptPlaceholderOnTab } from '../lib/placeholderTab';
 import CompareButtons from '../components/CompareButtons';
+import CustomerOrderPicker, { type PickedOrder } from '../components/CustomerOrderPicker';
 import { useCompanyEntities } from '../lib/useCompanyEntities';
 import { useToast } from '../contexts/ToastContext';
 import Button from '../components/ui/Button';
@@ -57,6 +58,9 @@ interface PurchaseOrder {
   po_number: string;
   order_id: number | null;
   nco_id?: number | null;
+  /** A purchase operation's PO; `source_order_id` = the customer order it was drafted from / compared with. */
+  purchase_operation_id?: number | null;
+  source_order_id?: number | null;
   operation_id: number | null;
   supplier_id: number | null;
   file_name: string | null;
@@ -201,6 +205,8 @@ export default function PurchaseOrderPage() {
   const operationIdParam = params.get('operation_id');
   // A non-commercial operation instead of an order (?nco_id=)
   const ncoIdParam = params.get('nco_id');
+  // A purchase operation (?purchase_operation_id=, optional &order_id= to start from a customer order)
+  const purchaseOpParam = params.get('purchase_operation_id');
 
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState<PoData>(blankData());
@@ -209,6 +215,7 @@ export default function PurchaseOrderPage() {
   const [operationId, setOperationId] = useState<number | null>(operationIdParam ? Number(operationIdParam) : null);
   const [operationNumber, setOperationNumber] = useState('');
   const [ncoId, setNcoId] = useState<number | null>(ncoIdParam ? Number(ncoIdParam) : null);
+  const [purchaseOpId, setPurchaseOpId] = useState<number | null>(purchaseOpParam ? Number(purchaseOpParam) : null);
   const [entity, setEntity] = useState<string>('BE');
   const entities = useCompanyEntities();
   const [suppliers, setSuppliers] = useState<Array<{ id: number; name: string; category?: string }>>([]);
@@ -248,9 +255,11 @@ export default function PurchaseOrderPage() {
     setPurchaseOrder(record);
     // Edits saved as a draft on a generated PO pick up where they were left
     setForm(toFormData(record.draft || record.data));
-    setOrderId(record.order_id);
+    // A purchase operation's PO has no order of its own — the order it is compared with
+    setOrderId(record.purchase_operation_id ? (record.source_order_id ?? null) : record.order_id);
     setOperationId(record.operation_id);
     setNcoId(record.nco_id ?? null);
+    setPurchaseOpId(record.purchase_operation_id ?? null);
     setSupplierId(record.supplier_id ?? null);
   }, []);
 
@@ -266,13 +275,14 @@ export default function PurchaseOrderPage() {
           setSuppliers(data.suppliers || []);
           return;
         }
-        if (!orderIdParam && !ncoIdParam) {
+        if (!orderIdParam && !ncoIdParam && !purchaseOpParam) {
           addToast('No order selected', 'error');
           navigate('/operations');
           return;
         }
         const { data } = await api.get('/purchase-orders/prepare', {
-          params: ncoIdParam ? { nco_id: ncoIdParam } : { order_id: orderIdParam, operation_id: operationIdParam || undefined },
+          params: purchaseOpParam ? { purchase_operation_id: purchaseOpParam, order_id: orderIdParam || undefined }
+            : ncoIdParam ? { nco_id: ncoIdParam } : { order_id: orderIdParam, operation_id: operationIdParam || undefined },
         });
         if (cancelled) return;
         setSuppliers(data.suppliers || []);
@@ -288,6 +298,8 @@ export default function PurchaseOrderPage() {
             setOperationNumber(data.operation.operation_number);
           }
           if (data.nco) setOperationNumber(data.nco.nco_number);
+          if (data.purchase_operation) setOperationNumber(data.purchase_operation.po_number);
+          if (data.order && purchaseOpParam) setOrderId(data.order.id);
         }
       } catch (err: any) {
         if (!cancelled) {
@@ -301,7 +313,7 @@ export default function PurchaseOrderPage() {
 
     load();
     return () => { cancelled = true; };
-  }, [id, orderIdParam, ncoIdParam]);
+  }, [id, orderIdParam, ncoIdParam, purchaseOpParam]);
 
   useEffect(() => {
     if (!showEmail) return;
@@ -316,7 +328,9 @@ export default function PurchaseOrderPage() {
     if (purchaseOrder) { addToast('Already generated — edit the fields directly', 'info'); return; }
     try {
       const { data } = await api.get('/purchase-orders/prepare', {
-        params: ncoId
+        params: purchaseOpId
+          ? { purchase_operation_id: purchaseOpId, order_id: orderId || undefined, entity: nextEntity, supplier_id: supplierId || undefined }
+          : ncoId
           ? { nco_id: ncoId, entity: nextEntity, supplier_id: supplierId || undefined }
           : { order_id: orderIdParam || orderId, operation_id: operationId || undefined, entity: nextEntity, supplier_id: supplierId || undefined },
       });
@@ -327,6 +341,33 @@ export default function PurchaseOrderPage() {
       }
     } catch {
       addToast('Failed to reload the draft', 'error');
+    }
+  }
+
+  /**
+   * Purchase operation: the customer order to compare with. Choosing one also
+   * offers to copy its products, quantities and delivery (prices stay blank).
+   */
+  async function pickOrder(order: PickedOrder | null) {
+    setOrderId(order?.id ?? null);
+    if (!order || !purchaseOpId) return;
+    const hasLines = form.items.some(i => i.commercial_name.trim() || i.reference.trim());
+    if (hasLines && !window.confirm(`Replace the lines and delivery with those of order ${order.order_number}? (Prices stay blank.)\n\nCancel = only compare with it.`)) return;
+    try {
+      const { data } = await api.get('/purchase-orders/prepare', {
+        params: { purchase_operation_id: purchaseOpId, order_id: order.id, fresh: 1, entity: form.entity_code || entity, supplier_id: supplierId || undefined },
+      });
+      const fresh = toFormData(data.draft);
+      setForm(prev => ({
+        ...prev,
+        items: fresh.items,
+        delivery: fresh.delivery,
+        delivery_address: fresh.delivery_address,
+        delivery_date_text: fresh.delivery_date_text,
+      }));
+      addToast(`Lines copied from order ${order.order_number} — enter the purchase prices`, 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to read the order', 'error');
     }
   }
 
@@ -370,19 +411,21 @@ export default function PurchaseOrderPage() {
   }
 
   async function handleSave(status: 'draft' | 'final') {
-    if (!orderId && !ncoId) { addToast('No order linked', 'error'); return; }
+    if (!orderId && !ncoId && !purchaseOpId) { addToast('No order linked', 'error'); return; }
     // A draft can be saved before the supplier is known
     if (status === 'final' && !form.client_name.trim()) { addToast('Choose the supplier first', 'error'); return; }
     setSaving(true);
     try {
-      const body = { order_id: orderId, operation_id: operationId, nco_id: ncoId, supplier_id: supplierId, status, data: toPayload(form) };
+      const body = purchaseOpId
+        ? { purchase_operation_id: purchaseOpId, source_order_id: orderId, supplier_id: supplierId, status, data: toPayload(form) }
+        : { order_id: orderId, operation_id: operationId, nco_id: ncoId, supplier_id: supplierId, status, data: toPayload(form) };
       const { data } = purchaseOrder
         ? await api.put(`/purchase-orders/${purchaseOrder.id}`, body)
         : await api.post('/purchase-orders', body);
       adopt(data);
       addToast(status === 'draft'
         ? `Draft ${data.po_number} saved`
-        : `Generated ${data.file_name}${operationId || ncoId ? ' — filed under the documents' : ''}`, 'success');
+        : `Generated ${data.file_name}${operationId || ncoId || purchaseOpId ? ' — filed under the documents' : ''}`, 'success');
       if (!purchaseOrder) navigate(`/purchase-orders/${data.id}`, { replace: true });
     } catch (err: any) {
       addToast(err.response?.data?.error || (status === 'draft' ? 'Failed to save the draft' : 'Failed to generate the purchase order'), 'error');
@@ -441,7 +484,8 @@ export default function PurchaseOrderPage() {
   const isDraft = !purchaseOrder || purchaseOrder.status === 'draft';
   const generated = !!purchaseOrder && !isDraft;
 
-  const backTo = ncoId ? `/non-commercial-operations/${ncoId}` : operationId ? `/operations/${operationId}` : '/operations';
+  const backTo = purchaseOpId ? `/purchase-operations/${purchaseOpId}`
+    : ncoId ? `/non-commercial-operations/${ncoId}` : operationId ? `/operations/${operationId}` : '/operations';
 
   /** A draft (never generated) can be thrown away; its number becomes free. */
   async function handleDeleteDraft() {
@@ -460,14 +504,17 @@ export default function PurchaseOrderPage() {
     <div className="space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
         <Link to={backTo} className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
-          <ArrowLeft size={16} /> Back to {ncoId ? 'the non-commercial operation' : 'operation'}
+          <ArrowLeft size={16} /> Back to {purchaseOpId ? 'the purchase operation' : ncoId ? 'the non-commercial operation' : 'operation'}
         </Link>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="secondary" size="sm" onClick={handlePreview} disabled={previewing}>
             {previewing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
           </Button>
+          {purchaseOpId && (
+            <CustomerOrderPicker value={orderId} onChange={pickOrder} noneLabel="Compare with an order…" />
+          )}
           <CompareButtons
-            kinds={['order', 'oc']}
+            kinds={purchaseOpId ? ['order'] : ['order', 'oc']}
             orderId={orderId}
             title="Purchase order"
             renderPreview={async () => (await api.post('/purchase-orders/preview', { data: toPayload(form) }, { responseType: 'blob' })).data as Blob}
@@ -514,11 +561,19 @@ export default function PurchaseOrderPage() {
             </button>
           ))}
         </div>
-        <span className="text-xs text-gray-400">from the operation number</span>
+        <span className="text-xs text-gray-400">{purchaseOpId ? 'choose who is buying' : 'from the operation number'}</span>
       </div>
 
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Supplier Purchase Order</h1>
+        {purchaseOpId ? (
+          <p className="text-sm text-gray-500 mt-1">
+            {orderId ? 'Lines from the chosen customer order.' : 'From scratch — or pick a customer order above to copy its lines and compare.'}{' '}
+            Enter the purchase prices, then confirm to produce the PDF. It is saved as{' '}
+            <strong className="text-gray-700">{(form.po_number || operationNumber || 'purchase-order').replace(/[^A-Za-z0-9._-]+/g, '-')}.pdf</strong>
+            {' '}under the purchase operation documents.
+          </p>
+        ) : (
         <p className="text-sm text-gray-500 mt-1">
           Built from the customer's order. Enter the purchase prices, then confirm to produce the PDF. It is saved as{' '}
           <strong className="text-gray-700">
@@ -526,6 +581,7 @@ export default function PurchaseOrderPage() {
           </strong>
           {operationId && ' under the operation documents'}.
         </p>
+        )}
       </div>
 
       {purchaseOrder && isDraft && (

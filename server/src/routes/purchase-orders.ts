@@ -32,10 +32,46 @@ const router = Router();
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-/** Purchase orders are filed as `<operation number>PO.pdf`. */
-function purchaseOrderFileName(operationNumber: string | null, poNumber: string | null): string {
-  const stem = (operationNumber || poNumber || 'purchase-order').trim();
-  return `${stem.replace(/[^A-Za-z0-9._-]+/g, '-')}PO.pdf`;
+/** Purchase orders are filed as `<operation number>PO.pdf`; a purchase operation's as its number (PO20260001.pdf). */
+function purchaseOrderFileName(operationNumber: string | null, poNumber: string | null, ownNumber = false): string {
+  const stem = (operationNumber || poNumber || 'purchase-order').trim().replace(/[^A-Za-z0-9._-]+/g, '-');
+  return ownNumber ? `${stem}.pdf` : `${stem}PO.pdf`;
+}
+
+function purchaseOperationById(id: number | null | undefined): any {
+  if (!id) return null;
+  return db.prepare('SELECT * FROM purchase_operations WHERE id = ?').get(id) ?? null;
+}
+
+/** Files (or refiles) a purchase operation's PO PDF in its documents. Returns the document id. */
+function fileUnderPurchaseOperation(purchaseOperationId: number, existingDocId: number | null | undefined, storedName: string, displayName: string, notes: string): number {
+  const categoryId = purchaseOrderCategoryId();
+  const still = existingDocId
+    ? db.prepare('SELECT id FROM purchase_operation_documents WHERE id = ? AND purchase_operation_id = ?').get(existingDocId, purchaseOperationId)
+    : null;
+  if (still) {
+    db.prepare('UPDATE purchase_operation_documents SET category_id = ?, file_path = ?, file_name = ? WHERE id = ?')
+      .run(categoryId, storedName, displayName, existingDocId);
+    return Number(existingDocId);
+  }
+  const r = db.prepare('INSERT INTO purchase_operation_documents (purchase_operation_id, category_id, file_path, file_name, notes) VALUES (?, ?, ?, ?, ?)')
+    .run(purchaseOperationId, categoryId, storedName, displayName, notes);
+  return Number(r.lastInsertRowid);
+}
+
+/**
+ * Lines (purchase price left blank) and delivery details from a customer
+ * order — the sales-operation PO and a purchase operation's PO started from an order.
+ */
+function orderPrefill(order: any): Partial<PurchaseOrderData> {
+  const items = db.prepare('SELECT * FROM order_items WHERE order_id = ? ORDER BY id').all(order.id) as any[];
+  return {
+    // The selling price never reaches the supplier
+    items: prefillLines(items).map(line => ({ ...line, unit_price: null })),
+    delivery: deliveryTerms(order),
+    delivery_address: order.destination || '',
+    delivery_date_text: order.delivery_date ? formatLongDate(order.delivery_date) : '',
+  } as Partial<PurchaseOrderData>;
 }
 
 function operationNumberFor(operationId: number | null): string | null {
@@ -70,13 +106,25 @@ function supplierById(id: number | null | undefined): any {
  */
 async function renderAndFile(
   data: PurchaseOrderData,
-  opts: { operationId: number | null; ncoId?: number | null; existing?: any }
-): Promise<{ filePath: string; fileName: string; documentId: number | null; ncoDocumentId?: number | null }> {
+  opts: { operationId: number | null; ncoId?: number | null; purchaseOperationId?: number | null; existing?: any }
+): Promise<{ filePath: string; fileName: string; documentId: number | null; ncoDocumentId?: number | null; purchaseOperationDocumentId?: number | null }> {
   const pdf = await buildPurchaseOrderPdf(data);
 
   fs.mkdirSync(docsDir, { recursive: true });
   const storedName = `po-${Date.now()}-${crypto.randomBytes(6).toString('hex')}.pdf`;
   fs.writeFileSync(path.join(docsDir, storedName), pdf);
+
+  // A purchase operation's PO is filed under it, named as its number
+  if (opts.purchaseOperationId) {
+    if (opts.existing?.file_path) {
+      const old = path.join(docsDir, opts.existing.file_path);
+      if (fs.existsSync(old)) { try { fs.unlinkSync(old); } catch { /* best effort */ } }
+    }
+    const displayName = purchaseOrderFileName(data.po_number || purchaseOperationById(opts.purchaseOperationId)?.po_number || null, null, true);
+    const purchaseOperationDocumentId = fileUnderPurchaseOperation(opts.purchaseOperationId, opts.existing?.purchase_operation_document_id,
+      storedName, displayName, `Purchase order ${data.po_number || ''}`.trim());
+    return { filePath: storedName, fileName: displayName, documentId: null, purchaseOperationDocumentId };
+  }
 
   const ncoNumber = opts.ncoId ? (db.prepare('SELECT nco_number FROM non_commercial_operations WHERE id = ?').get(opts.ncoId) as any)?.nco_number : null;
   const displayName = purchaseOrderFileName(ncoNumber || operationNumberFor(opts.operationId), data.po_number ?? null);
@@ -121,9 +169,12 @@ async function renderAndFile(
   return { filePath: storedName, fileName: displayName, documentId };
 }
 
-function discardFiled(filed: { filePath: string; documentId: number | null; ncoDocumentId?: number | null }, keepDocumentId: number | null, keepNcoDocumentId: number | null = null) {
+function discardFiled(filed: { filePath: string; documentId: number | null; ncoDocumentId?: number | null; purchaseOperationDocumentId?: number | null }, keepDocumentId: number | null, keepNcoDocumentId: number | null = null, keepPurchaseDocumentId: number | null = null) {
   const orphan = path.join(docsDir, filed.filePath);
   if (fs.existsSync(orphan)) { try { fs.unlinkSync(orphan); } catch { /* best effort */ } }
+  if (filed.purchaseOperationDocumentId && filed.purchaseOperationDocumentId !== keepPurchaseDocumentId) {
+    try { db.prepare('DELETE FROM purchase_operation_documents WHERE id = ?').run(filed.purchaseOperationDocumentId); } catch { /* best effort */ }
+  }
   if (filed.ncoDocumentId && filed.ncoDocumentId !== keepNcoDocumentId) dropNcoDocumentRow(filed.ncoDocumentId);
   if (filed.documentId && filed.documentId !== keepDocumentId) {
     try { db.prepare('DELETE FROM operation_documents WHERE id = ?').run(filed.documentId); } catch { /* best effort */ }
@@ -138,6 +189,7 @@ function poNumberTaken(poNumber: string, exceptId?: number): boolean {
 // ── Prefill a draft from the customer's order ─────────────────────────────
 
 router.get('/prepare', (req: Request, res: Response) => {
+  if (req.query.purchase_operation_id) { prepareFromPurchaseOperation(req, res); return; }
   if (req.query.nco_id) { prepareFromNco(req, res); return; }
   const orderId = parseInt(String(req.query.order_id || ''), 10);
   if (!Number.isInteger(orderId)) { res.status(400).json({ error: 'order_id is required' }); return; }
@@ -157,8 +209,6 @@ router.get('/prepare', (req: Request, res: Response) => {
     ? db.prepare('SELECT id, operation_number, supplier_id, category FROM operations WHERE id = ?').get(requestedOp)
     : db.prepare('SELECT id, operation_number, supplier_id, category FROM operations WHERE order_id = ? ORDER BY id DESC LIMIT 1').get(orderId)
   ) as any;
-
-  const items = db.prepare('SELECT * FROM order_items WHERE order_id = ? ORDER BY id').all(orderId) as any[];
 
   // Same entity rule as the order confirmation: SOBE… is Belgian, SONL… Dutch
   const requested = String(req.query.entity || '').toUpperCase();
@@ -184,14 +234,10 @@ router.get('/prepare', (req: Request, res: Response) => {
     client_phone: supplier?.phone || '',
     tax_id: supplier?.vat_number || '',
     contact_email: supplier?.email || '',
-    // Products and quantities from the order; the purchase price is typed in,
-    // so the selling price never reaches the supplier.
-    items: prefillLines(items).map(line => ({ ...line, unit_price: null })),
-    // Trading goods ship straight to the customer
-    delivery: deliveryTerms(order),
-    delivery_address: order.destination || '',
+    // Products and quantities from the order, the purchase price typed in;
+    // trading goods ship straight to the customer
+    ...orderPrefill(order),
     delivery_contact: '',
-    delivery_date_text: order.delivery_date ? formatLongDate(order.delivery_date) : '',
     freight: 0,
     vat: 0,
     terms: '',
@@ -256,7 +302,64 @@ function prepareFromNco(req: Request, res: Response) {
   });
 }
 
+/**
+ * A purchase operation: numbered as the operation (PO20260001), addressed to
+ * its supplier. Started from a customer order (`order_id`) the lines and
+ * delivery come from it, prices blank; otherwise from scratch.
+ */
+function prepareFromPurchaseOperation(req: Request, res: Response) {
+  const op = purchaseOperationById(Number(req.query.purchase_operation_id));
+  if (!op) { res.status(404).json({ error: 'Purchase operation not found' }); return; }
+  const suppliers = db.prepare('SELECT id, name, category FROM suppliers ORDER BY name').all();
+  // ?fresh=1 re-drafts (another order / entity) even when a PO is already saved
+  const existing = db.prepare('SELECT * FROM purchase_orders WHERE purchase_operation_id = ? ORDER BY id DESC LIMIT 1').get(op.id) as any;
+  if (existing && !req.query.fresh) { res.json({ existing: parseRecord(existing), suppliers }); return; }
+
+  const orderId = parseInt(String(req.query.order_id || ''), 10);
+  const order = Number.isInteger(orderId) ? db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as any : null;
+  if (Number.isInteger(orderId) && !order) { res.status(404).json({ error: 'Order not found' }); return; }
+
+  const requested = String(req.query.entity || '').toUpperCase();
+  const entity: EntityCode = isEntityCode(requested) ? requested : (order ? entityFromOperationNumber(order.order_number) : 'BE');
+  // TripleW is paying here, so its own bank details stay off the document
+  const { bank_name: _bn, iban: _iban, bic: _bic, bank_address: _ba, ...issuer } = entityProfile(entity);
+  const requestedSupplier = parseInt(String(req.query.supplier_id || ''), 10);
+  const supplier = supplierById(Number.isInteger(requestedSupplier) ? requestedSupplier : op.supplier_id);
+
+  const draft: PurchaseOrderData = {
+    ...issuer,
+    entity_code: entity,
+    po_number: op.po_number,
+    po_date: todayISO(),
+    our_ref: op.po_number,
+    sq_number: '',
+    client_code: '',
+    client_name: supplier?.name || op.supplier_name || '',
+    billing_address: supplier?.address || '',
+    client_phone: supplier?.phone || '',
+    tax_id: supplier?.vat_number || '',
+    contact_email: supplier?.email || '',
+    ...(order ? orderPrefill(order) : { items: [], delivery: '', delivery_address: '', delivery_date_text: '' }),
+    delivery_contact: '',
+    freight: 0,
+    vat: 0,
+    terms: '',
+  } as PurchaseOrderData;
+
+  res.json({
+    existing: null, draft, entity, supplier_id: supplier?.id ?? null, suppliers,
+    order: order ? { id: order.id, order_number: order.order_number } : null,
+    operation: null,
+    purchase_operation: { id: op.id, po_number: op.po_number },
+  });
+}
+
 // ── List / read ───────────────────────────────────────────────────────────
+
+router.get('/by-purchase-operation/:id', (req: Request, res: Response) => {
+  const rows = db.prepare('SELECT * FROM purchase_orders WHERE purchase_operation_id = ? ORDER BY id DESC').all(Number(req.params.id)) as any[];
+  res.json(rows.map(parseRecord));
+});
 
 router.get('/by-nco/:ncoId', (req: Request, res: Response) => {
   const rows = db.prepare('SELECT * FROM purchase_orders WHERE nco_id = ? ORDER BY id DESC').all(Number(req.params.ncoId)) as any[];
@@ -294,13 +397,15 @@ router.post('/preview', async (req: Request, res: Response) => {
 // ── Create ────────────────────────────────────────────────────────────────
 
 router.post('/', async (req: Request, res: Response) => {
-  const { order_id, operation_id, supplier_id, data, nco_id } = req.body as {
+  const { order_id, operation_id, supplier_id, data, nco_id, purchase_operation_id } = req.body as {
     order_id?: number; operation_id?: number | null; supplier_id?: number | null; data?: PurchaseOrderData; nco_id?: number | null;
+    purchase_operation_id?: number | null;
   };
   // A draft is only the saved form: no PDF, nothing filed under the operation
   const isDraft = req.body?.status === 'draft';
 
   if (!data || typeof data !== 'object') { res.status(400).json({ error: 'data is required' }); return; }
+  if (purchase_operation_id) { await createForPurchaseOperation(req, res, Number(purchase_operation_id), data, supplier_id ?? null, isDraft); return; }
   if (nco_id) { await createForNco(req, res, Number(nco_id), data, supplier_id ?? null, isDraft); return; }
   if (!order_id) { res.status(400).json({ error: 'order_id is required' }); return; }
 
@@ -381,6 +486,39 @@ async function createForNco(req: Request, res: Response, ncoId: number, data: Pu
   }
 }
 
+/** Create for a purchase operation: filed under it, numbered as it; `source_order_id` = the order it was drafted from. */
+async function createForPurchaseOperation(req: Request, res: Response, purchaseOperationId: number, data: PurchaseOrderData, supplierId: number | null, isDraft: boolean) {
+  const op = purchaseOperationById(purchaseOperationId);
+  if (!op) { res.status(404).json({ error: 'Purchase operation not found' }); return; }
+  if (db.prepare('SELECT id FROM purchase_orders WHERE purchase_operation_id = ?').get(op.id)) {
+    res.status(409).json({ error: `${op.po_number} already has a purchase order — open it to edit` });
+    return;
+  }
+  const sourceOrderId = Number(req.body?.source_order_id) || null;
+  const payload: PurchaseOrderData = { ...data, po_number: (data.po_number || '').trim() || op.po_number };
+  if (poNumberTaken(payload.po_number!)) { res.status(409).json({ error: `Purchase order ${payload.po_number} already exists` }); return; }
+  let filed: Awaited<ReturnType<typeof renderAndFile>> | null = null;
+  try {
+    if (!isDraft) filed = await renderAndFile(payload, { operationId: null, purchaseOperationId: op.id });
+    const result = db.prepare(`
+      INSERT INTO purchase_orders (po_number, order_id, operation_id, supplier_id, data, file_path, file_name, document_id, created_by, status,
+        purchase_operation_id, purchase_operation_document_id, source_order_id)
+      VALUES (?, NULL, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
+    `).run(payload.po_number, supplierId ?? op.supplier_id ?? null, JSON.stringify(payload), filed?.filePath ?? null, filed?.fileName ?? null,
+      req.user?.userId ?? null, isDraft ? 'draft' : 'final', op.id, filed?.purchaseOperationDocumentId ?? null, sourceOrderId);
+    notifyAdmin({
+      action: 'created', entity: isDraft ? 'Purchase Order draft' : 'Purchase Order', label: payload.po_number!,
+      detail: `purchase operation ${op.po_number}`, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
+    });
+    res.status(201).json(parseRecord(db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(result.lastInsertRowid)));
+  } catch (err: any) {
+    if (filed) discardFiled(filed, null);
+    if (err?.message?.includes('UNIQUE')) { res.status(409).json({ error: `Purchase order ${payload.po_number} already exists` }); return; }
+    console.error('[purchase-orders] purchase operation create failed:', err?.message || err);
+    res.status(500).json({ error: 'Failed to generate the purchase order' });
+  }
+}
+
 // ── Update (regenerates the PDF and replaces the filed document) ──────────
 
 router.put('/:id', async (req: Request, res: Response) => {
@@ -397,6 +535,9 @@ router.put('/:id', async (req: Request, res: Response) => {
     // for an invoice, the recorded amount) stays as generated until regenerated.
     db.prepare(`UPDATE purchase_orders SET draft_data = ?, updated_at = datetime('now') WHERE id = ?`)
       .run(JSON.stringify(data), existing.id);
+    if (existing.purchase_operation_id && req.body?.source_order_id !== undefined) {
+      db.prepare('UPDATE purchase_orders SET source_order_id = ? WHERE id = ?').run(Number(req.body.source_order_id) || null, existing.id);
+    }
     res.json(parseRecord(db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(existing.id)));
     return;
   }
@@ -407,7 +548,8 @@ router.put('/:id', async (req: Request, res: Response) => {
   };
   let operationId = operation_id !== undefined ? operation_id : existing.operation_id;
   // Saved first without an operation (e.g. before the order had one): file it under the order's operation now
-  if (operationId == null && !existing.nco_id && existing.order_id) {
+  if (existing.purchase_operation_id) operationId = null;
+  if (operationId == null && !existing.nco_id && !existing.purchase_operation_id && existing.order_id) {
     operationId = (db.prepare('SELECT id FROM operations WHERE order_id = ? ORDER BY id DESC LIMIT 1').get(existing.order_id) as any)?.id ?? null;
   }
 
@@ -418,7 +560,12 @@ router.put('/:id', async (req: Request, res: Response) => {
 
   let filed: Awaited<ReturnType<typeof renderAndFile>> | null = null;
   try {
-    if (!isDraft) filed = await renderAndFile(payload, { operationId: existing.nco_id ? null : operationId, ncoId: existing.nco_id ?? null, existing });
+    if (!isDraft) {
+      filed = await renderAndFile(payload, {
+        operationId: existing.nco_id ? null : operationId, ncoId: existing.nco_id ?? null,
+        purchaseOperationId: existing.purchase_operation_id ?? null, existing,
+      });
+    }
 
     db.prepare(`
       UPDATE purchase_orders
@@ -430,6 +577,13 @@ router.put('/:id', async (req: Request, res: Response) => {
       JSON.stringify(payload), filed?.filePath ?? null, filed?.fileName ?? null, filed?.documentId ?? null,
       filed?.ncoDocumentId ?? (isDraft ? existing.nco_document_id ?? null : null), isDraft ? 'draft' : 'final', existing.id
     );
+    if (existing.purchase_operation_id) {
+      db.prepare('UPDATE purchase_orders SET purchase_operation_document_id = ?, source_order_id = ? WHERE id = ?').run(
+        filed?.purchaseOperationDocumentId ?? (isDraft ? existing.purchase_operation_document_id ?? null : null),
+        req.body?.source_order_id !== undefined ? (Number(req.body.source_order_id) || null) : existing.source_order_id ?? null,
+        existing.id,
+      );
+    }
 
     const row = db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(existing.id);
     notifyAdmin({
@@ -439,7 +593,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     });
     res.json(parseRecord(row));
   } catch (err: any) {
-    if (filed) discardFiled(filed, existing.document_id, existing.nco_document_id ?? null);
+    if (filed) discardFiled(filed, existing.document_id, existing.nco_document_id ?? null, existing.purchase_operation_document_id ?? null);
     if (err?.message?.includes('UNIQUE')) {
       res.status(409).json({ error: `Purchase order ${payload.po_number} already exists` });
       return;
@@ -540,11 +694,12 @@ router.post('/:id/email', async (req: Request, res: Response) => {
 /** Deletes a purchase order, its PDF and the document it filed (operation or NCO). */
 export function deletePurchaseOrderRow(row: any): void {
   if (row.file_path) {
-    const owner = ownerOf(row.operation_id, row.nco_id);
+    const owner = ownerOf(row.operation_id, row.nco_id, row.purchase_operation_id);
     archiveFile(path.join(docsDir, row.file_path), { section: owner.section, context: contextOf(owner.number, `Purchase order ${row.po_number || ''}`), fileName: row.file_name });
   }
   if (row.document_id) db.prepare('DELETE FROM operation_documents WHERE id = ?').run(row.document_id);
   if (row.nco_document_id) dropNcoDocumentRow(row.nco_document_id);
+  if (row.purchase_operation_document_id) db.prepare('DELETE FROM purchase_operation_documents WHERE id = ?').run(row.purchase_operation_document_id);
   db.prepare('DELETE FROM purchase_orders WHERE id = ?').run(row.id);
 }
 

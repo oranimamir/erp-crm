@@ -712,7 +712,8 @@ export default function OperationDetailPage() {
                   <Eye size={13} /> Preview
                 </button>
               )}
-              <DocumentGenerators orderId={operation.order_id} operationId={operation.id} refreshKey={operation.documents.length} onPreview={openPreview} onChanged={fetchOperation} />
+              <DocumentGenerators orderId={operation.order_id} operationId={operation.id} refreshKey={operation.documents.length} onPreview={openPreview} onChanged={fetchOperation}
+                importedPo={operation.documents.find(d => /^From purchase operation /i.test(d.notes || '') && /^purchase order$/i.test(d.category_name || '')) || null} />
               <button
                 onClick={() => setOrderForm({ orderId: operation.order_id! })}
                 className="flex items-center gap-1 text-xs sm:text-sm text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2 py-1"

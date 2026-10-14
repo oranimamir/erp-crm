@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FileCheck2, ShoppingCart, Receipt, Package, Eye, Trash2 } from 'lucide-react';
 import api from '../lib/api';
+import PurchasePoPickerModal from './PurchasePoPickerModal';
 
 /**
  * The four documents generated from an order — order confirmation, supplier
@@ -28,7 +29,7 @@ const btn = 'flex items-center gap-1 text-xs sm:text-sm text-primary-600 hover:t
 
 const mark = (doc: Doc | null) => (!doc ? '' : doc.status === 'draft' ? ' (draft)' : ' ✓');
 
-export default function DocumentGenerators({ orderId, operationId, ncoId, ncoType = 'samples', refreshKey, onPreview, onChanged }: {
+export default function DocumentGenerators({ orderId, operationId, ncoId, ncoType = 'samples', refreshKey, onPreview, onChanged, importedPo }: {
   orderId: number | null;
   operationId?: number | null;
   /** A non-commercial operation instead of an order: everything is drafted from its lines and filed under it. */
@@ -39,12 +40,16 @@ export default function DocumentGenerators({ orderId, operationId, ncoId, ncoTyp
   onPreview?: (item: PreviewTarget) => void;
   /** Changes when the documents may have changed (e.g. the operation's document count). */
   refreshKey?: unknown;
-  /** After a draft was deleted (a packing-list draft also had a filed PDF). */
+  /** After a draft was deleted (a packing-list draft also had a filed PDF), or a purchase operation's PO was filed. */
   onChanged?: () => void;
+  /** A purchase operation's PO already filed under this operation (sales operations). */
+  importedPo?: { file_name: string; file_path: string } | null;
 }) {
   const navigate = useNavigate();
   const [docs, setDocs] = useState<State>({ oc: null, po: null, invoice: null, pl: null });
   const [reload, setReload] = useState(0);
+  // Sales operation without its own PO: ask first whether to use a purchase operation's PO
+  const [askPurchasePo, setAskPurchasePo] = useState(false);
 
   useEffect(() => {
     if (!orderId && !ncoId) return;
@@ -120,11 +125,30 @@ export default function DocumentGenerators({ orderId, operationId, ncoId, ncoTyp
       {eye(docs.oc, 'Order confirmation')}
       {bin('oc')}
       </>}
-      <button className={btn} title={title(docs.po, 'supplier purchase order')}
-        onClick={() => navigate(docs.po ? `/purchase-orders/${docs.po.id}` : `/purchase-orders/new?${q}`)}>
-        <ShoppingCart size={13} /> Supplier PO{mark(docs.po)}
+      <button className={btn}
+        title={!docs.po && importedPo ? `${importedPo.file_name} — from a purchase operation (click to use another or create one)` : title(docs.po, 'supplier purchase order')}
+        onClick={() => {
+          if (docs.po) navigate(`/purchase-orders/${docs.po.id}`);
+          else if (operationId && !ncoId) setAskPurchasePo(true);
+          else navigate(`/purchase-orders/new?${q}`);
+        }}>
+        <ShoppingCart size={13} /> Supplier PO{docs.po ? mark(docs.po) : importedPo ? ' ✓' : ''}
       </button>
-      {eye(docs.po, 'Supplier purchase order')}
+      {docs.po ? eye(docs.po, 'Supplier purchase order') : importedPo && onPreview ? (
+        <button type="button" title={`Preview ${importedPo.file_name}`}
+          onClick={() => onPreview({ fileName: importedPo.file_name, filePath: importedPo.file_path, subfolder: 'operation-docs', label: 'Supplier purchase order' })}
+          className="-ml-1 p-1 rounded-lg text-gray-500 hover:text-gray-800 hover:bg-gray-100">
+          <Eye size={14} />
+        </button>
+      ) : null}
+      {askPurchasePo && operationId && (
+        <PurchasePoPickerModal
+          operationId={operationId}
+          onClose={() => setAskPurchasePo(false)}
+          onCreateNew={() => { setAskPurchasePo(false); navigate(`/purchase-orders/new?${q}`); }}
+          onFiled={() => { setAskPurchasePo(false); onChanged?.(); }}
+        />
+      )}
       {bin('po')}
       {!poOnly && <>
       <button className={btn} title={title(docs.invoice, 'invoice')}

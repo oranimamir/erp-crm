@@ -37,6 +37,8 @@ import OperationsPage from './pages/OperationsPage';
 import NonCommercialOperationsPage from './pages/NonCommercialOperationsPage';
 import TechnologyOperationsPage from './pages/TechnologyOperationsPage';
 import TechnologyOperationDetailPage from './pages/TechnologyOperationDetailPage';
+import PurchaseOperationsPage from './pages/PurchaseOperationsPage';
+import PurchaseOperationDetailPage from './pages/PurchaseOperationDetailPage';
 import OperationDetailPage from './pages/OperationDetailPage';
 import OperationFormPage from './pages/OperationFormPage';
 import AnalyticsPage from './pages/AnalyticsPage';
@@ -93,6 +95,8 @@ export default function App() {
               <Route path="/non-commercial-operations/:id" element={<NcoDetailPage />} />
               <Route path="/technology-operations" element={<TechnologyOperationsPage />} />
               <Route path="/technology-operations/:id" element={<TechnologyOperationDetailPage />} />
+              <Route path="/purchase-operations" element={<PurchaseOperationsPage />} />
+              <Route path="/purchase-operations/:id" element={<PurchaseOperationDetailPage />} />
               <Route path="/operations/new" element={<OperationFormPage />} />
               <Route path="/operations/:id" element={<OperationDetailPage />} />
               <Route path="/analytics" element={<AnalyticsPage />} />

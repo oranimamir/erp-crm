@@ -11,11 +11,11 @@ import { DOC_ACCEPT } from '../lib/operationDocs';
 /**
  * A shipping document tile's "Choose": the documents already in the app that
  * could fill this category (library, batch COAs, this operation's
- * uncategorized files, the same category on other operations), the best fits
+ * uncategorized files, the same category on other operations, purchase operations' documents), the best fits
  * ticked. Or upload a file from the computer instead.
  */
 
-type SourceType = 'library' | 'batch' | 'this' | 'other';
+type SourceType = 'library' | 'batch' | 'this' | 'other' | 'purchase';
 interface SourceDoc {
   source: SourceType; id: number; title: string; subtitle: string;
   file_name: string; file_path: string; subfolder: string; date: string | null; suggested: boolean;
@@ -26,8 +26,9 @@ const SOURCE_LABEL: Record<SourceType, string> = {
   batch: 'Batch documents (Inventory → Batches)',
   this: 'On this operation, no category yet',
   other: 'Used on other operations',
+  purchase: 'From purchase operations (supplier documents)',
 };
-const SOURCES: SourceType[] = ['library', 'batch', 'this', 'other'];
+const SOURCES: SourceType[] = ['library', 'purchase', 'batch', 'this', 'other'];
 const keyOf = (d: { source: SourceType; id: number }) => `${d.source}:${d.id}`;
 
 export default function ChooseDocumentModal({ category, owner, onClose, onFiled, onUpload, onPreview }: {

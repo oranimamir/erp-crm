@@ -86,7 +86,11 @@ export function archiveFile(abs: string, meta: ArchiveMeta, by?: ArchiveBy | nul
 }
 
 /** Section + number of the operation / NCO a document belonged to ("Operations", "SOBE20260125"). */
-export function ownerOf(operationId?: number | null, ncoId?: number | null): { section: string; number: string } {
+export function ownerOf(operationId?: number | null, ncoId?: number | null, purchaseOperationId?: number | null): { section: string; number: string } {
+  if (purchaseOperationId) {
+    const p = db.prepare('SELECT po_number FROM purchase_operations WHERE id = ?').get(purchaseOperationId) as any;
+    return { section: 'Purchase operations', number: p?.po_number || '' };
+  }
   if (ncoId) {
     const n = db.prepare('SELECT nco_number FROM non_commercial_operations WHERE id = ?').get(ncoId) as any;
     return { section: 'Non-commercial operations', number: n?.nco_number || '' };
