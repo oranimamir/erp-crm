@@ -40,11 +40,22 @@ const STATUS_LABEL: Record<string, string> = {
 };
 const isStatus = (v: unknown): v is string => NCO_STATUSES.includes(v as any);
 
+/** A shipping end's name as it is now (a renamed supplier / entity shows its new name); typed text as typed. */
+const endLabel = (end: 'from' | 'to') => `CASE n.ship_${end}_kind
+      WHEN 'supplier' THEN COALESCE(s_${end}.name, n.ship_${end})
+      WHEN 'entity' THEN COALESCE(e_${end}.company_name || ' (' || e_${end}.code || ')', n.ship_${end})
+      ELSE n.ship_${end} END`;
+
 const SELECT = `
-  SELECT n.*, c.name AS customer_name, COALESCE(s.name, n.supplier_text) AS supplier_name, s.category AS supplier_category
+  SELECT n.*, c.name AS customer_name, COALESCE(s.name, n.supplier_text) AS supplier_name, s.category AS supplier_category,
+    ${endLabel('from')} AS ship_from_label, ${endLabel('to')} AS ship_to_label
   FROM non_commercial_operations n
   LEFT JOIN customers c ON c.id = n.customer_id
   LEFT JOIN suppliers s ON s.id = n.supplier_id
+  LEFT JOIN suppliers s_from ON n.ship_from_kind = 'supplier' AND s_from.id = CAST(n.ship_from_ref AS INTEGER)
+  LEFT JOIN suppliers s_to ON n.ship_to_kind = 'supplier' AND s_to.id = CAST(n.ship_to_ref AS INTEGER)
+  LEFT JOIN company_entities e_from ON n.ship_from_kind = 'entity' AND e_from.code = n.ship_from_ref
+  LEFT JOIN company_entities e_to ON n.ship_to_kind = 'entity' AND e_to.code = n.ship_to_ref
 `;
 
 function yearOf(date: string | null | undefined): number {
@@ -58,9 +69,6 @@ function nextSeq(entity: string, year: number): number {
 }
 
 const numberFor = (entity: string, year: number, seq: number) => `NCO${entity}${year}${String(seq).padStart(3, '0')}`;
-
-/** A shipping NCO's From / To place: free text, blank = none. */
-const place = (v: unknown): string | null => String(v ?? '').trim().slice(0, 300) || null;
 
 const validDate = (v: unknown) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
 
@@ -77,31 +85,53 @@ function seqOf(number: string, entity: string, year: number): number {
   return m ? Number(m[1]) : 0;
 }
 
+/** One end of a shipping NCO: a supplier from the list, a TripleW entity, or a name typed freely. */
+interface ShipEnd { kind: 'supplier' | 'entity' | 'text' | null; ref: string | null; label: string | null }
+const NO_END: ShipEnd = { kind: null, ref: null, label: null };
+
+function shipEnd(kind: unknown, ref: unknown, text: unknown, side: string): ShipEnd | { error: string } {
+  if (kind === 'supplier') {
+    const supplier = db.prepare('SELECT id, name, category FROM suppliers WHERE id = ?').get(Number(ref)) as any;
+    if (!supplier) return { error: `${side}: choose a supplier from the list` };
+    if (!SHIPPING_SUPPLIER_CATEGORIES.includes(supplier.category)) {
+      return { error: `${side}: raw-material, blender or logistics suppliers only (or type a name)` };
+    }
+    return { kind, ref: String(supplier.id), label: supplier.name };
+  }
+  if (kind === 'entity') {
+    const entity = db.prepare('SELECT code, company_name FROM company_entities WHERE code = ?').get(String(ref ?? '')) as any;
+    if (!entity) return { error: `${side}: unknown TripleW entity` };
+    return { kind, ref: entity.code, label: `${entity.company_name} (${entity.code})` };
+  }
+  const label = String(text ?? '').trim().slice(0, 300);
+  return label ? { kind: 'text', ref: null, label } : NO_END;
+}
+
+type Party = { customer_id: number | null; supplier_id: number | null; supplier_text: string | null; from: ShipEnd; to: ShipEnd };
+
+/** ship_from, ship_to, supplier_text, ship_from_kind, ship_from_ref, ship_to_kind, ship_to_ref — in the INSERT / UPDATE order */
+const endValues = (p: Party) => [p.from.label, p.to.label, p.supplier_text, p.from.kind, p.from.ref, p.to.kind, p.to.ref];
+
 /**
- * The party the type asks for: a customer for samples; for shipping a
- * raw-material / blender / logistics supplier from the list, or a name typed
- * freely (`supplier_text`, not on the Suppliers list). Returns an error
- * message, or what to store.
+ * The parties the type asks for: a customer for samples; for shipping a From
+ * and a To, each a raw-material / blender / logistics supplier, a TripleW
+ * entity (BE / NL) or a typed name. The supplier on a From / To (From first)
+ * is the NCO's supplier — the supplier PO is addressed to it.
  */
-function partyFor(type: NcoType, customerId: unknown, supplierId: unknown, supplierText: unknown):
-  { error: string } | { customer_id: number | null; supplier_id: number | null; supplier_text: string | null } {
+function partyFor(type: NcoType, customerId: unknown, from: [unknown, unknown, unknown], to: [unknown, unknown, unknown]):
+  { error: string } | Party {
   if (type === 'samples') {
     const id = Number(customerId);
     if (!id || !db.prepare('SELECT id FROM customers WHERE id = ?').get(id)) return { error: 'Choose the customer the samples go to' };
-    return { customer_id: id, supplier_id: null, supplier_text: null };
+    return { customer_id: id, supplier_id: null, supplier_text: null, from: NO_END, to: NO_END };
   }
-  const id = Number(supplierId);
-  if (!id) {
-    const text = String(supplierText ?? '').trim().slice(0, 200);
-    if (!text) return { error: 'Choose or type the supplier' };
-    return { customer_id: null, supplier_id: null, supplier_text: text };
-  }
-  const supplier = db.prepare('SELECT id, category FROM suppliers WHERE id = ?').get(id) as any;
-  if (!supplier) return { error: 'Choose or type the supplier' };
-  if (!SHIPPING_SUPPLIER_CATEGORIES.includes(supplier.category)) {
-    return { error: 'Shipping NCOs are with raw-material, blender or logistics suppliers only (or type a name)' };
-  }
-  return { customer_id: null, supplier_id: id, supplier_text: null };
+  const f = shipEnd(...from, 'From');
+  if ('error' in f) return f;
+  const t = shipEnd(...to, 'To');
+  if ('error' in t) return t;
+  if (!f.kind || !t.kind) return { error: 'Choose where the shipment goes from and to' };
+  const supplierEnd = [f, t].find(e => e.kind === 'supplier');
+  return { customer_id: null, supplier_id: supplierEnd ? Number(supplierEnd.ref) : null, supplier_text: null, from: f, to: t };
 }
 
 const who = (req: Request) => ({ performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
@@ -218,16 +248,15 @@ router.delete('/:id/documents/:docId', (req: Request, res: Response) => {
 
 // POST /api/non-commercial-operations — the next number in the series, unless one is typed (nco_number)
 router.post('/', (req: Request, res: Response) => {
-  const { entity, type, customer_id, supplier_id, nco_date, notes, items } = req.body || {};
-  const shipFrom = place(req.body?.ship_from);
-  const shipTo = place(req.body?.ship_to);
+  const { entity, type, customer_id, nco_date, notes, items } = req.body || {};
   const typed = String(req.body?.nco_number ?? '').trim();
   const status = req.body?.status === undefined || req.body?.status === '' ? 'requested' : req.body.status;
   if (!isStatus(status)) { res.status(400).json({ error: 'Unknown status' }); return; }
   if (!isEntityCode(entity)) { res.status(400).json({ error: 'Choose BE or NL' }); return; }
   if (!TYPES.includes(type)) { res.status(400).json({ error: 'Choose Samples or Shipping' }); return; }
   if (nco_date && !validDate(nco_date)) { res.status(400).json({ error: 'Invalid date' }); return; }
-  const party = partyFor(type, customer_id, supplier_id, req.body?.supplier_text);
+  const b = req.body || {};
+  const party = partyFor(type, customer_id, [b.ship_from_kind, b.ship_from_ref, b.ship_from], [b.ship_to_kind, b.ship_to_ref, b.ship_to]);
   if ('error' in party) { res.status(400).json({ error: party.error }); return; }
 
   const date = nco_date || todayISO();
@@ -236,10 +265,10 @@ router.post('/', (req: Request, res: Response) => {
     const error = customNumberError(typed);
     if (error) { res.status(400).json({ error }); return; }
     const result = db.prepare(`
-      INSERT INTO non_commercial_operations (nco_number, entity, year, seq, type, customer_id, supplier_id, nco_date, notes, created_by, items, status, ship_from, ship_to, supplier_text)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO non_commercial_operations (nco_number, entity, year, seq, type, customer_id, supplier_id, nco_date, notes, created_by, items, status, ship_from, ship_to, supplier_text, ship_from_kind, ship_from_ref, ship_to_kind, ship_to_ref)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(typed, entity, year, seqOf(typed, entity, year), type, party.customer_id, party.supplier_id, date,
-      String(notes ?? '').trim() || null, req.user?.userId ?? null, JSON.stringify(normalizeNcoLines(items)), status, shipFrom, shipTo, party.supplier_text);
+      String(notes ?? '').trim() || null, req.user?.userId ?? null, JSON.stringify(normalizeNcoLines(items)), status, ...endValues(party));
     notifyAdmin({ action: 'created', entity: 'Non-Commercial Operation', label: typed, detail: TYPE_LABEL[type as NcoType], ...who(req) });
     res.status(201).json(detail(Number(result.lastInsertRowid)));
     return;
@@ -250,10 +279,10 @@ router.post('/', (req: Request, res: Response) => {
     const number = numberFor(entity, year, seq);
     try {
       const result = db.prepare(`
-        INSERT INTO non_commercial_operations (nco_number, entity, year, seq, type, customer_id, supplier_id, nco_date, notes, created_by, items, status, ship_from, ship_to, supplier_text)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO non_commercial_operations (nco_number, entity, year, seq, type, customer_id, supplier_id, nco_date, notes, created_by, items, status, ship_from, ship_to, supplier_text, ship_from_kind, ship_from_ref, ship_to_kind, ship_to_ref)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(number, entity, year, seq, type, party.customer_id, party.supplier_id, date, String(notes ?? '').trim() || null,
-        req.user?.userId ?? null, JSON.stringify(normalizeNcoLines(items)), status, shipFrom, shipTo, party.supplier_text);
+        req.user?.userId ?? null, JSON.stringify(normalizeNcoLines(items)), status, ...endValues(party));
       const row = detail(Number(result.lastInsertRowid));
       notifyAdmin({ action: 'created', entity: 'Non-Commercial Operation', label: number, detail: TYPE_LABEL[type as NcoType], ...who(req) });
       res.status(201).json(row);
@@ -275,20 +304,17 @@ router.put('/:id', (req: Request, res: Response) => {
   if (body.nco_date !== undefined && body.nco_date !== '' && body.nco_date !== null && !validDate(body.nco_date)) {
     res.status(400).json({ error: 'Invalid date' }); return;
   }
-  const party = partyFor(
-    type,
-    body.customer_id === undefined ? existing.customer_id : body.customer_id,
-    body.supplier_id === undefined ? existing.supplier_id : body.supplier_id,
-    body.supplier_text === undefined ? existing.supplier_text : body.supplier_text,
-  );
+  // An end left out keeps its stored value
+  const end = (side: 'from' | 'to'): [unknown, unknown, unknown] => (body[`ship_${side}_kind`] === undefined
+    ? [existing[`ship_${side}_kind`], existing[`ship_${side}_ref`], existing[`ship_${side}`]]
+    : [body[`ship_${side}_kind`], body[`ship_${side}_ref`], body[`ship_${side}`]]);
+  const party = partyFor(type, body.customer_id === undefined ? existing.customer_id : body.customer_id, end('from'), end('to'));
   if ('error' in party) { res.status(400).json({ error: party.error }); return; }
   const date = body.nco_date === undefined ? existing.nco_date : (body.nco_date || null);
   const notes = body.notes === undefined ? existing.notes : (String(body.notes ?? '').trim() || null);
   const items = body.items === undefined ? existing.items : JSON.stringify(normalizeNcoLines(body.items));
   const status = body.status === undefined || body.status === '' ? existing.status : body.status;
   if (!isStatus(status)) { res.status(400).json({ error: 'Unknown status' }); return; }
-  const shipFrom = body.ship_from === undefined ? existing.ship_from : place(body.ship_from);
-  const shipTo = body.ship_to === undefined ? existing.ship_to : place(body.ship_to);
   let number = existing.nco_number as string;
   if (body.nco_number !== undefined && String(body.nco_number).trim() && String(body.nco_number).trim() !== existing.nco_number) {
     number = String(body.nco_number).trim();
@@ -299,15 +325,16 @@ router.put('/:id', (req: Request, res: Response) => {
   db.prepare(`
     UPDATE non_commercial_operations
     SET nco_number = ?, seq = ?, type = ?, customer_id = ?, supplier_id = ?, nco_date = ?, notes = ?, items = ?, status = ?,
-        ship_from = ?, ship_to = ?, supplier_text = ?, updated_at = datetime('now')
+        ship_from = ?, ship_to = ?, supplier_text = ?, ship_from_kind = ?, ship_from_ref = ?, ship_to_kind = ?, ship_to_ref = ?,
+        updated_at = datetime('now')
     WHERE id = ?
   `).run(number, number === existing.nco_number ? existing.seq : seqOf(number, existing.entity, existing.year),
-    type, party.customer_id, party.supplier_id, date, notes, items, status, shipFrom, shipTo, party.supplier_text, existing.id);
+    type, party.customer_id, party.supplier_id, date, notes, items, status, ...endValues(party), existing.id);
   const changes = [
     number !== existing.nco_number ? `renumbered from ${existing.nco_number}` : '',
     status !== existing.status ? `status: ${STATUS_LABEL[existing.status] || existing.status} → ${STATUS_LABEL[status]}` : '',
-    (shipFrom || '') !== (existing.ship_from || '') ? `from: ${shipFrom || '—'}` : '',
-    (shipTo || '') !== (existing.ship_to || '') ? `to: ${shipTo || '—'}` : '',
+    (party.from.label || '') !== (existing.ship_from || '') ? `from: ${party.from.label || '—'}` : '',
+    (party.to.label || '') !== (existing.ship_to || '') ? `to: ${party.to.label || '—'}` : '',
   ].filter(Boolean);
   notifyAdmin({
     action: 'updated', entity: 'Non-Commercial Operation', label: number,

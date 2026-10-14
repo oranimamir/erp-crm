@@ -2035,6 +2035,11 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE non_commercial_operations ADD COLUMN ship_to TEXT`); } catch (_) { /* column may already exist */ }
   // Shipping NCOs: a supplier typed freely instead of picked from the list
   try { db.exec(`ALTER TABLE non_commercial_operations ADD COLUMN supplier_text TEXT`); } catch (_) { /* column may already exist */ }
+  // Shipping NCOs: what each end is — 'supplier' (ref = supplier id), 'entity' (ref = TripleW entity code) or
+  // 'text' (typed); ship_from / ship_to hold the name
+  for (const col of ['ship_from_kind', 'ship_from_ref', 'ship_to_kind', 'ship_to_ref']) {
+    try { db.exec(`ALTER TABLE non_commercial_operations ADD COLUMN ${col} TEXT`); } catch (_) { /* column may already exist */ }
+  }
   db.exec(`
     CREATE TABLE IF NOT EXISTS nco_documents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -35,7 +35,20 @@ interface Nco {
   status: string;
   ship_from: string | null;
   ship_to: string | null;
+  ship_from_kind: EndKind | null;
+  ship_from_ref: string | null;
+  ship_to_kind: EndKind | null;
+  ship_to_ref: string | null;
+  /** The end's current name (a renamed supplier / entity shows its new name) */
+  ship_from_label: string | null;
+  ship_to_label: string | null;
 }
+
+type EndKind = 'supplier' | 'entity' | 'text';
+interface EntityOption { code: string; company_name: string }
+/** A shipping end in the window: `pick` is '' | 'entity:BE' | 'supplier:12' | 'text' (then `text` is the typed name). */
+interface EndForm { pick: string; text: string }
+const emptyEnd = (): EndForm => ({ pick: '', text: '' });
 
 interface Party { id: number; name: string; category?: string }
 
@@ -65,16 +78,61 @@ function Pills<T extends string>({ value, options, onChange }: {
 
 interface FormState {
   entity: Entity; type: NcoType; customer_id: string; nco_date: string; notes: string; nco_number: string; status: string;
-  ship_from: string; ship_to: string;
-  /** Shipping: the supplier as shown / typed — a list name picks that supplier, anything else is kept as typed */
-  supplier_name: string;
+  /** Shipping: each end a TripleW entity, a supplier from the list, or a typed name */
+  from: EndForm; to: EndForm;
 }
 interface NewClient { name: string; company: string; address: string; contact_person: string; email: string; phone: string; vat_number: string }
 const emptyClient = (): NewClient => ({ name: '', company: '', address: '', contact_person: '', email: '', phone: '', vat_number: '' });
 
 const today = () => todayISO();
 const emptyForm = (entity: Entity = 'BE'): FormState =>
-  ({ entity, type: 'samples', customer_id: '', nco_date: today(), notes: '', nco_number: '', status: 'requested', ship_from: '', ship_to: '', supplier_name: '' });
+  ({ entity, type: 'samples', customer_id: '', nco_date: today(), notes: '', nco_number: '', status: 'requested', from: emptyEnd(), to: emptyEnd() });
+
+/** A stored end back into the window; an NCO from before From / To starts with its supplier as From. */
+function endOf(row: Nco, side: 'from' | 'to'): EndForm {
+  const kind = row[`ship_${side}_kind`];
+  const ref = row[`ship_${side}_ref`];
+  const text = row[`ship_${side}`] || '';
+  if ((kind === 'supplier' || kind === 'entity') && ref) return { pick: `${kind}:${ref}`, text: '' };
+  if (text) return { pick: 'text', text };
+  if (side === 'from' && !row.ship_to_kind && row.supplier_id) return { pick: `supplier:${row.supplier_id}`, text: '' };
+  return emptyEnd();
+}
+
+/** What the server takes for an end. */
+function endPayload(side: 'from' | 'to', end: EndForm) {
+  const [kind, ref] = end.pick.split(':');
+  if (kind === 'supplier' || kind === 'entity') return { [`ship_${side}_kind`]: kind, [`ship_${side}_ref`]: ref, [`ship_${side}`]: '' };
+  return { [`ship_${side}_kind`]: end.text.trim() ? 'text' : '', [`ship_${side}_ref`]: '', [`ship_${side}`]: end.text.trim() };
+}
+
+const endSet = (end: EndForm) => (end.pick === 'text' ? !!end.text.trim() : !!end.pick);
+
+/** From / To: a TripleW entity, a supplier from the list, or any name typed. */
+function EndPicker({ label, value, onChange, entities, suppliers }: {
+  label: string; value: EndForm; onChange: (v: EndForm) => void; entities: EntityOption[]; suppliers: Party[];
+}) {
+  return (
+    <div className="space-y-1">
+      <label className="block text-xs font-medium text-gray-500">{label}</label>
+      <select value={value.pick} onChange={e => onChange({ pick: e.target.value, text: e.target.value === 'text' ? value.text : '' })} className={inputCls}>
+        <option value="">Choose…</option>
+        <optgroup label="TripleW">
+          {entities.map(e => <option key={e.code} value={`entity:${e.code}`}>{e.company_name} ({e.code})</option>)}
+        </optgroup>
+        {SHIPPING_CATEGORIES.map(cat => (
+          <optgroup key={cat} label={`Suppliers — ${SUPPLIER_CATEGORY_LABEL[cat]}`}>
+            {suppliers.filter(s => s.category === cat).map(s => <option key={s.id} value={`supplier:${s.id}`}>{s.name}</option>)}
+          </optgroup>
+        ))}
+        <option value="text">Other — type a name…</option>
+      </select>
+      {value.pick === 'text' && (
+        <input value={value.text} onChange={e => onChange({ pick: 'text', text: e.target.value })} placeholder="Name (and place)" className={inputCls} autoFocus />
+      )}
+    </div>
+  );
+}
 
 export default function NonCommercialOperationsPage() {
   const { addToast } = useToast();
@@ -86,6 +144,7 @@ export default function NonCommercialOperationsPage() {
   const [loading, setLoading] = useState(true);
   const [customers, setCustomers] = useState<Party[]>([]);
   const [suppliers, setSuppliers] = useState<Party[]>([]);
+  const [entities, setEntities] = useState<EntityOption[]>([]);
 
   const [editing, setEditing] = useState<Nco | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -111,6 +170,7 @@ export default function NonCommercialOperationsPage() {
     api.get('/customers', { params: { limit: 10000 } })
       .then(res => setCustomers((res.data.data || []).sort((a: Party, b: Party) => a.name.localeCompare(b.name))))
       .catch(() => {});
+    api.get('/company-entities').then(res => setEntities(res.data || [])).catch(() => {});
     api.get('/suppliers', { params: { limit: 10000 } })
       .then(res => setSuppliers((res.data.data || [])
         .filter((s: Party) => SHIPPING_CATEGORIES.includes(s.category || ''))
@@ -141,28 +201,24 @@ export default function NonCommercialOperationsPage() {
       entity: row.entity, type: row.type,
       customer_id: row.customer_id ? String(row.customer_id) : '',
       nco_date: row.nco_date || '', notes: row.notes || '', nco_number: row.nco_number, status: row.status || 'requested',
-      ship_from: row.ship_from || '', ship_to: row.ship_to || '', supplier_name: row.supplier_name || '',
+      from: endOf(row, 'from'), to: endOf(row, 'to'),
     });
     setNewClient(null);
     setShowForm(true);
   };
 
   async function save() {
-    const typed = form.supplier_name.trim().toLowerCase();
-    const listSupplier = suppliers.find(s => s.name.trim().toLowerCase() === typed);
     setSaving(true);
     try {
       const payload = {
         type: form.type,
         customer_id: form.type === 'samples' ? Number(form.customer_id) || null : null,
-        supplier_id: form.type === 'shipping' ? listSupplier?.id ?? null : null,
-        supplier_text: form.type === 'shipping' && !listSupplier ? form.supplier_name.trim() : '',
         nco_date: form.nco_date,
         notes: form.notes,
         status: form.status,
         // From / To belong to shipping; switching to samples clears them
-        ship_from: form.type === 'shipping' ? form.ship_from : '',
-        ship_to: form.type === 'shipping' ? form.ship_to : '',
+        ...endPayload('from', form.type === 'shipping' ? form.from : emptyEnd()),
+        ...endPayload('to', form.type === 'shipping' ? form.to : emptyEnd()),
         // Blank = the next number in the series
         ...(form.nco_number.trim() ? { nco_number: form.nco_number.trim() } : {}),
       };
@@ -213,10 +269,7 @@ export default function NonCommercialOperationsPage() {
     }
   }
 
-  const partyMissing = form.type === 'samples' ? !form.customer_id : !form.supplier_name.trim();
-  // From / To used before, offered while typing
-  const places = [...new Set(rows.flatMap(r => [r.ship_from, r.ship_to]).filter((p): p is string => !!p))].sort();
-  const supplierKnown = suppliers.some(s => s.name.trim().toLowerCase() === form.supplier_name.trim().toLowerCase());
+  const partyMissing = form.type === 'samples' ? !form.customer_id : !endSet(form.from) || !endSet(form.to);
   const dash = <span className="text-gray-300">—</span>;
 
   return (
@@ -269,19 +322,16 @@ export default function NonCommercialOperationsPage() {
                       }`}>{TYPE_LABEL[r.type]}</span>
                     </td>
                     <td className="px-4 py-2.5 text-gray-900">
-                      {r.type === 'samples' ? (r.customer_name || dash) : (
-                        r.supplier_name ? (
-                          <>
-                            {r.supplier_name}
-                            {r.supplier_category && (
-                              <span className="ml-1.5 text-xs text-gray-400">{SUPPLIER_CATEGORY_LABEL[r.supplier_category] || r.supplier_category}</span>
-                            )}
-                          </>
-                        ) : dash
-                      )}
-                      {r.type === 'shipping' && (r.ship_from || r.ship_to) && (
-                        <span className="block text-xs text-gray-500">{r.ship_from || '?'} → {r.ship_to || '?'}</span>
-                      )}
+                      {r.type === 'samples' ? (r.customer_name || dash) : (r.ship_from_label || r.ship_to_label) ? (
+                        <>{r.ship_from_label || '?'} <span className="text-gray-400">→</span> {r.ship_to_label || '?'}</>
+                      ) : r.supplier_name ? (
+                        <>
+                          {r.supplier_name}
+                          {r.supplier_category && (
+                            <span className="ml-1.5 text-xs text-gray-400">{SUPPLIER_CATEGORY_LABEL[r.supplier_category] || r.supplier_category}</span>
+                          )}
+                        </>
+                      ) : dash}
                     </td>
                     <td className="px-4 py-2.5 whitespace-nowrap">
                       <NcoStatusSelect ncoId={r.id} status={r.status}
@@ -381,27 +431,9 @@ export default function NonCommercialOperationsPage() {
               )}
             </div>
           ) : (
-            <div className="space-y-1">
-              <label className="block text-xs font-medium text-gray-500">Supplier (raw materials, blenders or logistics — or type any name)</label>
-              <input list="nco-suppliers" value={form.supplier_name} onChange={e => set({ supplier_name: e.target.value })}
-                placeholder="Choose from the list or type…" className={inputCls} />
-              <datalist id="nco-suppliers">
-                {suppliers.map(s => <option key={s.id} value={s.name}>{SUPPLIER_CATEGORY_LABEL[s.category || ''] || ''}</option>)}
-              </datalist>
-              {form.supplier_name.trim() && !supplierKnown && (
-                <p className="text-[11px] text-gray-400">Not on the Suppliers list — kept as typed.</p>
-              )}
-              <div className="grid grid-cols-2 gap-3 pt-2">
-                <div className="space-y-1">
-                  <label className="block text-xs font-medium text-gray-500">From</label>
-                  <input list="nco-places" value={form.ship_from} onChange={e => set({ ship_from: e.target.value })} placeholder="e.g. Rotterdam, NL" className={inputCls} />
-                </div>
-                <div className="space-y-1">
-                  <label className="block text-xs font-medium text-gray-500">To</label>
-                  <input list="nco-places" value={form.ship_to} onChange={e => set({ ship_to: e.target.value })} placeholder="e.g. Antwerp, BE" className={inputCls} />
-                </div>
-                <datalist id="nco-places">{places.map(p => <option key={p} value={p} />)}</datalist>
-              </div>
+            <div className="grid grid-cols-2 gap-3">
+              <EndPicker label="From" value={form.from} onChange={v => set({ from: v })} entities={entities} suppliers={suppliers} />
+              <EndPicker label="To" value={form.to} onChange={v => set({ to: v })} entities={entities} suppliers={suppliers} />
             </div>
           )}
 
