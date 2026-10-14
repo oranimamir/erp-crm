@@ -24,7 +24,7 @@ import {
 } from '../lib/invoiceCheck.js';
 import { todayISO } from '../lib/today.js';
 import { projectOptions, projectByLabel, billedOn, syncProjectExpenses } from '../lib/projectExpenses.js';
-import { recordAliases, recordNotDuplicates, notDuplicatePairs, pairKey, applySupplierAliases, aliasMap, supplierKey, SUPPLIER_DETAIL_FIELDS, detailCount } from '../lib/supplierAliases.js';
+import { recordAliases, recordNotDuplicates, notDuplicatePairs, pairKey, applySupplierAliases, aliasMap, supplierKey, pickKeptSupplier, combineSupplierRecords } from '../lib/supplierAliases.js';
 import { decideCurrency, isChineseSupplier } from '../lib/invoiceCurrency.js';
 import { readNetSalaryWorkbook, monthEnd, type SalaryMonth, type SalaryPayment } from '../lib/netSalaryImport.js';
 
@@ -3262,39 +3262,18 @@ router.post('/supplier-merge', (req: Request, res: Response) => {
     let movedDocuments = 0;
     if (supRows.length > 0) {
       // The record with the most details is kept (not an empty one that merely
-      // carries the kept name), and its blanks are filled from the others
-      const exact = (s: any) => ((s.name || '').trim() === canonical ? 1 : 0);
-      const keep = [...supRows].sort((a, b) => detailCount(b) - detailCount(a) || exact(b) - exact(a) || a.id - b.id)[0];
-      for (const f of SUPPLIER_DETAIL_FIELDS) {
-        if (typeof keep[f] === 'string' && keep[f].trim()) continue;
-        const donor = supRows.find(s => s.id !== keep.id && typeof s[f] === 'string' && s[f].trim());
-        if (donor) db.prepare(`UPDATE suppliers SET ${f} = ? WHERE id = ?`).run(donor[f], keep.id);
-      }
+      // carries the kept name), its blanks filled from the others
+      const keep = pickKeptSupplier(supRows, canonical);
       if (!inheritedCategory) {
         inheritedCategory = SALES_CAT_DB_MAP[keep.category] || keep.category;
         inheritedDomain = 'sales';
       }
       for (const s of supRows) { const n = normalizeVat(s.vat_number); if (n) vats.add(n); }
       db.prepare(`UPDATE suppliers SET name = ?, updated_at = datetime('now') WHERE id = ?`).run(canonical, keep.id);
-      // Orders, operations, POs… of a merged-away supplier move to the kept one
-      const refTables = (db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND sql LIKE '%REFERENCES suppliers(id)%'").all() as any[])
-        .map(t => ({ name: t.name as string, cols: [...String(t.sql).matchAll(/FOREIGN KEY \((\w+)\)\s+REFERENCES suppliers\(id\)/g)].map(m => m[1]) }));
-      for (const s of supRows) {
-        if (s.id === keep.id) continue;
-        // The supplier's documents always go to the kept supplier — named here, not
-        // left to the generic pass, because deleting the record would cascade them away
-        movedDocuments += (db.prepare('UPDATE supplier_documents SET supplier_id = ? WHERE supplier_id = ?').run(keep.id, s.id) as any).changes || 0;
-        for (const t of refTables) for (const c of t.cols) {
-          if (t.name === 'supplier_documents') continue;
-          try { db.prepare(`UPDATE ${t.name} SET ${c} = ? WHERE ${c} = ?`).run(keep.id, s.id); } catch { /* unique clash — leave that row */ }
-        }
-        // Never delete a record that still holds documents
-        if (db.prepare('SELECT 1 FROM supplier_documents WHERE supplier_id = ? LIMIT 1').get(s.id)) continue;
-        try {
-          db.prepare('DELETE FROM suppliers WHERE id = ?').run(s.id);
-          consolidatedSuppliers++;
-        } catch { /* still referenced by an order / PO: kept, its name is an alias now */ }
-      }
+      // Documents, orders, operations, POs… of a merged-away supplier move to the kept one
+      const combined = combineSupplierRecords(supRows, keep);
+      movedDocuments = combined.movedDocuments;
+      consolidatedSuppliers = combined.removed;
     }
 
     // 4. Category from the invoices if still unknown

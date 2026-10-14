@@ -22,6 +22,91 @@ export function detailCount(s: any): number {
   return SUPPLIER_DETAIL_FIELDS.filter(k => typeof s?.[k] === 'string' && s[k].trim()).length;
 }
 
+const docCount = (supplierId: number): number =>
+  Number((db.prepare('SELECT COUNT(*) AS n FROM supplier_documents WHERE supplier_id = ?').get(supplierId) as any)?.n) || 0;
+
+/** The record to keep among duplicates: most details, then most documents, then `preferName`, then the oldest. */
+export function pickKeptSupplier(rows: any[], preferName?: string): any {
+  const exact = (s: any) => (preferName && (s.name || '').trim().toLowerCase() === preferName.trim().toLowerCase() ? 1 : 0);
+  return [...rows].sort((a, b) => detailCount(b) - detailCount(a) || docCount(b.id) - docCount(a.id) || exact(b) - exact(a) || a.id - b.id)[0];
+}
+
+/**
+ * Folds duplicate `suppliers` records into `keep`: its blank details filled
+ * from the others, then their documents, orders, operations, POs… (every
+ * column referencing suppliers(id), and NCO From / To ends) moved to it, and
+ * the emptied records removed. Documents are moved first and a record still
+ * holding any is never deleted — deleting it would cascade them away.
+ */
+export function combineSupplierRecords(rows: any[], keep: any): { movedDocuments: number; removed: number } {
+  let movedDocuments = 0;
+  let removed = 0;
+  for (const f of SUPPLIER_DETAIL_FIELDS) {
+    if (typeof keep[f] === 'string' && keep[f].trim()) continue;
+    const donor = rows.find(s => s.id !== keep.id && typeof s[f] === 'string' && s[f].trim());
+    if (donor) db.prepare(`UPDATE suppliers SET ${f} = ? WHERE id = ?`).run(donor[f], keep.id);
+  }
+  const refTables = (db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND sql LIKE '%REFERENCES suppliers%'").all() as any[])
+    .map(t => ({ name: t.name as string, cols: [...String(t.sql).matchAll(/FOREIGN KEY \((\w+)\)\s+REFERENCES suppliers\s*\(id\)/g)].map(m => m[1]) }));
+  for (const s of rows) {
+    if (s.id === keep.id) continue;
+    movedDocuments += (db.prepare('UPDATE supplier_documents SET supplier_id = ? WHERE supplier_id = ?').run(keep.id, s.id) as any).changes || 0;
+    for (const t of refTables) for (const c of t.cols) {
+      if (t.name === 'supplier_documents') continue;
+      try { db.prepare(`UPDATE ${t.name} SET ${c} = ? WHERE ${c} = ?`).run(keep.id, s.id); } catch { /* unique clash — leave that row */ }
+    }
+    for (const side of ['from', 'to']) {
+      try {
+        db.prepare(`UPDATE non_commercial_operations SET ship_${side}_ref = ? WHERE ship_${side}_kind = 'supplier' AND ship_${side}_ref = ?`)
+          .run(String(keep.id), String(s.id));
+      } catch { /* table / columns not there yet */ }
+    }
+    if (docCount(s.id)) continue;
+    try {
+      db.prepare('DELETE FROM suppliers WHERE id = ?').run(s.id);
+      removed++;
+    } catch { /* still referenced: kept */ }
+  }
+  return { movedDocuments, removed };
+}
+
+/** Aliases keyed by an older normalization (dotted forms like "S.r.l.") are re-keyed from their name (startup). */
+export function rekeyAliases() {
+  for (const a of db.prepare('SELECT alias_key, alias_name, canonical FROM supplier_aliases').all() as any[]) {
+    const k = supplierKey(a.alias_name);
+    if (!k || k === a.alias_key) continue;
+    db.prepare('DELETE FROM supplier_aliases WHERE alias_key = ?').run(a.alias_key);
+    if (k !== supplierKey(a.canonical)) {
+      db.prepare('INSERT OR IGNORE INTO supplier_aliases (alias_key, alias_name, canonical) VALUES (?, ?, ?)').run(k, a.alias_name, a.canonical);
+    }
+  }
+}
+
+/**
+ * Several `suppliers` records for one company (same name once case, spacing,
+ * punctuation and legal forms are ignored) split its details from its
+ * documents — opening it showed one and not the other. Each such group is
+ * folded into one record (at startup).
+ */
+export function consolidateDuplicateSuppliers(): { groups: number; movedDocuments: number } {
+  const groups = new Map<string, any[]>();
+  for (const s of db.prepare('SELECT * FROM suppliers').all() as any[]) {
+    const k = supplierKey(s.name);
+    if (!k) continue;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k)!.push(s);
+  }
+  let combined = 0;
+  let movedDocuments = 0;
+  for (const rows of groups.values()) {
+    if (rows.length < 2) continue;
+    const r = combineSupplierRecords(rows, pickKeptSupplier(rows));
+    combined++;
+    movedDocuments += r.movedDocuments;
+  }
+  return { groups: combined, movedDocuments };
+}
+
 export const supplierKey = (name: string | null | undefined): string => normalizeSupplierName((name || '').trim());
 
 /** alias key → the name kept */

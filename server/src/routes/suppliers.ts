@@ -8,7 +8,7 @@ import crypto from 'crypto';
 import JSZip from 'jszip';
 import { uploadSupplierDoc, BLOCKED_EXTENSIONS } from '../middleware/upload.js';
 import { uploadsBase } from '../lib/productDocs.js';
-import { supplierKey, aliasMap, detailCount } from '../lib/supplierAliases.js';
+import { supplierKey, aliasMap, pickKeptSupplier, combineSupplierRecords } from '../lib/supplierAliases.js';
 
 const router = Router();
 
@@ -92,9 +92,10 @@ router.post('/resolve', (req: Request, res: Response) => {
     .filter(s => (s.name || '').trim().toLowerCase() === name.toLowerCase()
       || keys.has(supplierKey(s.name)) || (s.opened_as && keys.has(supplierKey(s.opened_as))));
   if (hits.length) {
-    const exact = (s: any) => ((s.name || '').trim().toLowerCase() === name.toLowerCase() ? 1 : 0);
-    hits.sort((a, b) => detailCount(b) - detailCount(a) || exact(b) - exact(a) || a.id - b.id);
-    res.json(hits[0]);
+    // Several records for this supplier split its details from its documents — fold them into one
+    const keep = pickKeptSupplier(hits, name);
+    if (hits.length > 1) combineSupplierRecords(hits, keep);
+    res.json(db.prepare('SELECT * FROM suppliers WHERE id = ?').get(keep.id));
     return;
   }
 

@@ -144,8 +144,8 @@ export function supplierTokens(s: string): string[] {
   const words = (s || '')
     .normalize('NFD').replace(/[̀-ͯ]/g, '')
     .toLowerCase()
-    // join dotted abbreviations first so "B.V." → "bv", "N.V." → "nv"
-    .replace(/\b([a-z])\.([a-z])\.?(?![a-z])/g, '$1$2')
+    // join dotted abbreviations first so "B.V." → "bv", "S.r.l." → "srl", "S.p.A." → "spa"
+    .replace(/\b(?:[a-z]\.)+[a-z]\.?(?![a-z])/g, m => m.replace(/\./g, ''))
     .replace(/[^a-z0-9]+/g, ' ')
     .split(' ')
     .filter(Boolean);

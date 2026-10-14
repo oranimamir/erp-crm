@@ -9,7 +9,7 @@ import { fileURLToPath } from 'url';
 import db, { initializeDatabase } from './database.js';
 import { backfillEstimatedPaymentDates } from './lib/paymentTerms.js';
 import { fileAllUnfiledGenerated } from './lib/fileGenerated.js';
-import { applySupplierAliases, tidyMappingNames } from './lib/supplierAliases.js';
+import { applySupplierAliases, consolidateDuplicateSuppliers, rekeyAliases, tidyMappingNames } from './lib/supplierAliases.js';
 import { authenticateToken } from './middleware/auth.js';
 import authRoutes from './routes/auth.js';
 import customerRoutes from './routes/customers.js';
@@ -161,9 +161,12 @@ try {
 
 // Supplier merges stick: names merged away are put under the kept name
 try {
+  rekeyAliases();
   tidyMappingNames();
   const renamed = applySupplierAliases();
   if (renamed > 0) console.log(`[startup] ${renamed} supplier invoice(s) put under their merged supplier name`);
+  const dup = consolidateDuplicateSuppliers();
+  if (dup.groups > 0) console.log(`[startup] Combined ${dup.groups} duplicated supplier record(s), ${dup.movedDocuments} document(s) moved`);
   db.saveToDisk();
 } catch (err: any) { console.error('[startup] supplier aliases failed:', err?.message || err); }
 
