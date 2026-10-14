@@ -48,6 +48,7 @@ function DomainSuppliersTab({ domain }: { domain: 'demo' | 'sales' }) {
 
   /** Opens the supplier's Summary | Details page, creating its record on first open. */
   const openSupplier = async (row: SupplierRow) => {
+    if (row.source === 'suppliers-table' && row.id) { navigate(`/suppliers/${row.id}`); return; }
     try {
       const { data } = await api.post('/suppliers/resolve', { name: row.name, category: row.category });
       navigate(`/suppliers/${data.id}`);

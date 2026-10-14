@@ -1616,6 +1616,9 @@ export async function initializeDatabase() {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN vat_number TEXT`); } catch (_) {}
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN contact_person TEXT`); } catch (_) {}
   }
+  // The name a supplier record was first opened under from the Suppliers list,
+  // so it is still found there after being renamed on its Details tab
+  try { db.exec(`ALTER TABLE suppliers ADD COLUMN opened_as TEXT`); } catch (_) {}
   // What the AI read off a document, so a document is only ever read once
   db.exec(`
     CREATE TABLE IF NOT EXISTS party_extractions (
@@ -2027,6 +2030,9 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE non_commercial_operations ADD COLUMN items TEXT`); } catch (_) { /* column may already exist */ }
   // Where the NCO stands (routes/non-commercial-operations.ts NCO_STATUSES)
   try { db.exec(`ALTER TABLE non_commercial_operations ADD COLUMN status TEXT NOT NULL DEFAULT 'requested'`); } catch (_) { /* column may already exist */ }
+  // Shipping NCOs: where the goods go from and to (free text)
+  try { db.exec(`ALTER TABLE non_commercial_operations ADD COLUMN ship_from TEXT`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE non_commercial_operations ADD COLUMN ship_to TEXT`); } catch (_) { /* column may already exist */ }
   db.exec(`
     CREATE TABLE IF NOT EXISTS nco_documents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

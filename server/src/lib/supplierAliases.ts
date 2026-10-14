@@ -14,6 +14,14 @@
 import db from '../database.js';
 import { normalizeSupplierName } from './supplierMatch.js';
 
+/** The details a `suppliers` record carries for documents (purchase orders). */
+export const SUPPLIER_DETAIL_FIELDS = ['email', 'phone', 'address', 'vat_number', 'contact_person', 'notes'] as const;
+
+/** How many of a supplier record's details are filled in — the fuller record wins. */
+export function detailCount(s: any): number {
+  return SUPPLIER_DETAIL_FIELDS.filter(k => typeof s?.[k] === 'string' && s[k].trim()).length;
+}
+
 export const supplierKey = (name: string | null | undefined): string => normalizeSupplierName((name || '').trim());
 
 /** alias key → the name kept */

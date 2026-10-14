@@ -18,7 +18,7 @@ import { todayISO } from '../lib/today.js';
 
 /**
  * Non-commercial operations (NCO): samples sent to a customer, or shipping with
- * a raw-material supplier / blender. Numbered NCO + entity + year + a 3-digit
+ * a raw-material supplier / blender / logistics supplier (from → to). Numbered NCO + entity + year + a 3-digit
  * running number per entity and year (NCOBE2026001). Kept in their own table,
  * so they never reach revenue, the dashboard, analytics or working capital.
  */
@@ -28,7 +28,7 @@ const router = Router();
 type NcoType = 'samples' | 'shipping';
 const TYPES: NcoType[] = ['samples', 'shipping'];
 /** Shipping NCOs are with these supplier categories only. */
-const SHIPPING_SUPPLIER_CATEGORIES = ['raw_materials', 'blenders'];
+const SHIPPING_SUPPLIER_CATEGORIES = ['raw_materials', 'blenders', 'logistics'];
 const TYPE_LABEL: Record<NcoType, string> = { samples: 'Samples', shipping: 'Shipping' };
 /** Where an NCO stands — client lib/ncoStatus.ts has the labels. */
 export const NCO_STATUSES = [
@@ -59,6 +59,9 @@ function nextSeq(entity: string, year: number): number {
 
 const numberFor = (entity: string, year: number, seq: number) => `NCO${entity}${year}${String(seq).padStart(3, '0')}`;
 
+/** A shipping NCO's From / To place: free text, blank = none. */
+const place = (v: unknown): string | null => String(v ?? '').trim().slice(0, 300) || null;
+
 const validDate = (v: unknown) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
 
 /** A number typed by the user instead of the series: letters, digits and - _ . / only. */
@@ -87,9 +90,9 @@ function partyFor(type: NcoType, customerId: unknown, supplierId: unknown):
   }
   const id = Number(supplierId);
   const supplier = id ? db.prepare('SELECT id, category FROM suppliers WHERE id = ?').get(id) as any : null;
-  if (!supplier) return { error: 'Choose the supplier (raw materials or blenders)' };
+  if (!supplier) return { error: 'Choose the supplier (raw materials, blenders or logistics)' };
   if (!SHIPPING_SUPPLIER_CATEGORIES.includes(supplier.category)) {
-    return { error: 'Shipping NCOs are with raw-material suppliers or blenders only' };
+    return { error: 'Shipping NCOs are with raw-material, blender or logistics suppliers only' };
   }
   return { customer_id: null, supplier_id: id };
 }
@@ -209,6 +212,8 @@ router.delete('/:id/documents/:docId', (req: Request, res: Response) => {
 // POST /api/non-commercial-operations — the next number in the series, unless one is typed (nco_number)
 router.post('/', (req: Request, res: Response) => {
   const { entity, type, customer_id, supplier_id, nco_date, notes, items } = req.body || {};
+  const shipFrom = place(req.body?.ship_from);
+  const shipTo = place(req.body?.ship_to);
   const typed = String(req.body?.nco_number ?? '').trim();
   const status = req.body?.status === undefined || req.body?.status === '' ? 'requested' : req.body.status;
   if (!isStatus(status)) { res.status(400).json({ error: 'Unknown status' }); return; }
@@ -224,10 +229,10 @@ router.post('/', (req: Request, res: Response) => {
     const error = customNumberError(typed);
     if (error) { res.status(400).json({ error }); return; }
     const result = db.prepare(`
-      INSERT INTO non_commercial_operations (nco_number, entity, year, seq, type, customer_id, supplier_id, nco_date, notes, created_by, items, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO non_commercial_operations (nco_number, entity, year, seq, type, customer_id, supplier_id, nco_date, notes, created_by, items, status, ship_from, ship_to)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(typed, entity, year, seqOf(typed, entity, year), type, party.customer_id, party.supplier_id, date,
-      String(notes ?? '').trim() || null, req.user?.userId ?? null, JSON.stringify(normalizeNcoLines(items)), status);
+      String(notes ?? '').trim() || null, req.user?.userId ?? null, JSON.stringify(normalizeNcoLines(items)), status, shipFrom, shipTo);
     notifyAdmin({ action: 'created', entity: 'Non-Commercial Operation', label: typed, detail: TYPE_LABEL[type as NcoType], ...who(req) });
     res.status(201).json(detail(Number(result.lastInsertRowid)));
     return;
@@ -238,10 +243,10 @@ router.post('/', (req: Request, res: Response) => {
     const number = numberFor(entity, year, seq);
     try {
       const result = db.prepare(`
-        INSERT INTO non_commercial_operations (nco_number, entity, year, seq, type, customer_id, supplier_id, nco_date, notes, created_by, items, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO non_commercial_operations (nco_number, entity, year, seq, type, customer_id, supplier_id, nco_date, notes, created_by, items, status, ship_from, ship_to)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(number, entity, year, seq, type, party.customer_id, party.supplier_id, date, String(notes ?? '').trim() || null,
-        req.user?.userId ?? null, JSON.stringify(normalizeNcoLines(items)), status);
+        req.user?.userId ?? null, JSON.stringify(normalizeNcoLines(items)), status, shipFrom, shipTo);
       const row = detail(Number(result.lastInsertRowid));
       notifyAdmin({ action: 'created', entity: 'Non-Commercial Operation', label: number, detail: TYPE_LABEL[type as NcoType], ...who(req) });
       res.status(201).json(row);
@@ -274,6 +279,8 @@ router.put('/:id', (req: Request, res: Response) => {
   const items = body.items === undefined ? existing.items : JSON.stringify(normalizeNcoLines(body.items));
   const status = body.status === undefined || body.status === '' ? existing.status : body.status;
   if (!isStatus(status)) { res.status(400).json({ error: 'Unknown status' }); return; }
+  const shipFrom = body.ship_from === undefined ? existing.ship_from : place(body.ship_from);
+  const shipTo = body.ship_to === undefined ? existing.ship_to : place(body.ship_to);
   let number = existing.nco_number as string;
   if (body.nco_number !== undefined && String(body.nco_number).trim() && String(body.nco_number).trim() !== existing.nco_number) {
     number = String(body.nco_number).trim();
@@ -283,13 +290,16 @@ router.put('/:id', (req: Request, res: Response) => {
 
   db.prepare(`
     UPDATE non_commercial_operations
-    SET nco_number = ?, seq = ?, type = ?, customer_id = ?, supplier_id = ?, nco_date = ?, notes = ?, items = ?, status = ?, updated_at = datetime('now')
+    SET nco_number = ?, seq = ?, type = ?, customer_id = ?, supplier_id = ?, nco_date = ?, notes = ?, items = ?, status = ?,
+        ship_from = ?, ship_to = ?, updated_at = datetime('now')
     WHERE id = ?
   `).run(number, number === existing.nco_number ? existing.seq : seqOf(number, existing.entity, existing.year),
-    type, party.customer_id, party.supplier_id, date, notes, items, status, existing.id);
+    type, party.customer_id, party.supplier_id, date, notes, items, status, shipFrom, shipTo, existing.id);
   const changes = [
     number !== existing.nco_number ? `renumbered from ${existing.nco_number}` : '',
     status !== existing.status ? `status: ${STATUS_LABEL[existing.status] || existing.status} → ${STATUS_LABEL[status]}` : '',
+    (shipFrom || '') !== (existing.ship_from || '') ? `from: ${shipFrom || '—'}` : '',
+    (shipTo || '') !== (existing.ship_to || '') ? `to: ${shipTo || '—'}` : '',
   ].filter(Boolean);
   notifyAdmin({
     action: 'updated', entity: 'Non-Commercial Operation', label: number,

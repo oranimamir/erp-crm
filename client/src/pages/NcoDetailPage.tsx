@@ -37,6 +37,7 @@ interface Nco {
   id: number; nco_number: string; entity: string; type: 'samples' | 'shipping';
   customer_id: number | null; supplier_id: number | null; customer_name: string | null; supplier_name: string | null;
   nco_date: string | null; notes: string | null; status?: string; items: any[]; documents: NcoDoc[];
+  ship_from?: string | null; ship_to?: string | null;
 }
 interface Category { id: number; name: string }
 
@@ -238,6 +239,9 @@ export default function NcoDetailPage() {
                 {isSamples ? 'To ' : 'With '}
                 <span className="font-medium">{(isSamples ? nco.customer_name : nco.supplier_name) || '—'}</span>
               </span>
+              {!isSamples && (nco.ship_from || nco.ship_to) && (
+                <span className="text-gray-700">· From <span className="font-medium">{nco.ship_from || '—'}</span> to <span className="font-medium">{nco.ship_to || '—'}</span></span>
+              )}
               {nco.nco_date && <span className="text-gray-400">· {formatDate(nco.nco_date)}</span>}
             </div>
             {nco.notes && <p className="mt-3 text-sm text-gray-600 bg-gray-50 rounded-lg px-3 py-2 max-w-2xl whitespace-pre-wrap">{nco.notes}</p>}

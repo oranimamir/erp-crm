@@ -154,12 +154,12 @@ router.get('/batches', (_req: Request, res: Response) => {
 });
 
 router.post('/batches', (req: Request, res: Response) => {
-  const { batch_number, product, category, is_finished } = req.body;
+  const { batch_number, product, category, is_finished, notes } = req.body;
   if (!batch_number) { res.status(400).json({ error: 'batch_number is required' }); return; }
   try {
     const result = db.prepare(
-      `INSERT INTO batches (batch_number, product, category, is_finished) VALUES (?, ?, ?, ?)`
-    ).run(batch_number, product || null, category || null, is_finished ? 1 : 0);
+      `INSERT INTO batches (batch_number, product, category, is_finished, notes) VALUES (?, ?, ?, ?, ?)`
+    ).run(batch_number, product || null, category || null, is_finished ? 1 : 0, notes?.trim() || null);
     const batch = db.prepare('SELECT * FROM batches WHERE id = ?').get(result.lastInsertRowid) as any;
     res.status(201).json({ ...batch, documents: [] });
   } catch (err: any) {
@@ -174,15 +174,16 @@ router.post('/batches', (req: Request, res: Response) => {
 router.put('/batches/:id', (req: Request, res: Response) => {
   const existing = db.prepare('SELECT * FROM batches WHERE id = ?').get(req.params.id) as any;
   if (!existing) { res.status(404).json({ error: 'Batch not found' }); return; }
-  const { batch_number, product, category, is_finished } = req.body;
+  const { batch_number, product, category, is_finished, notes } = req.body;
   try {
     db.prepare(
-      `UPDATE batches SET batch_number=?, product=?, category=?, is_finished=? WHERE id=?`
+      `UPDATE batches SET batch_number=?, product=?, category=?, is_finished=?, notes=? WHERE id=?`
     ).run(
       batch_number || existing.batch_number,
       product !== undefined ? (product || null) : existing.product,
       category !== undefined ? (category || null) : existing.category,
       is_finished !== undefined ? (is_finished ? 1 : 0) : existing.is_finished,
+      notes !== undefined ? (notes?.trim() || null) : existing.notes,
       req.params.id
     );
     const batch = db.prepare('SELECT * FROM batches WHERE id = ?').get(req.params.id) as any;

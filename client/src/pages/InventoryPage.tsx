@@ -1187,8 +1187,9 @@ function BatchesTab() {
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<any>(null);
   const [deleteId, setDeleteId] = useState<number | null>(null);
-  const [form, setForm] = useState({ batch_number: '', product: '', category: '' });
+  const [form, setForm] = useState({ batch_number: '', product: '', category: '', notes: '' });
   const [saving, setSaving] = useState(false);
+  const [productNames, setProductNames] = useState<string[]>([]);
   // Document management
   const [addingDocBatchId, setAddingDocBatchId] = useState<number | null>(null);
   const [docName, setDocName] = useState('');
@@ -1202,17 +1203,22 @@ function BatchesTab() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchBatches(); }, []);
+  useEffect(() => {
+    fetchBatches();
+    api.get('/products', { params: { limit: 10000 } })
+      .then(res => setProductNames((res.data.data || []).map((p: any) => p.name).filter(Boolean)))
+      .catch(() => {});
+  }, []);
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ batch_number: '', product: '', category: '' });
+    setForm({ batch_number: '', product: '', category: '', notes: '' });
     setShowModal(true);
   };
 
   const openEdit = (batch: any) => {
     setEditing(batch);
-    setForm({ batch_number: batch.batch_number || '', product: batch.product || '', category: batch.category || '' });
+    setForm({ batch_number: batch.batch_number || '', product: batch.product || '', category: batch.category || '', notes: batch.notes || '' });
     setShowModal(true);
   };
 
@@ -1311,6 +1317,7 @@ function BatchesTab() {
             <th className="text-left px-3 sm:px-4 py-3 font-medium text-gray-600">Product</th>
             <th className="text-left px-3 sm:px-4 py-3 font-medium text-gray-600 w-36 sm:w-44 hidden sm:table-cell">Category</th>
             <th className="text-left px-3 sm:px-4 py-3 font-medium text-gray-600 hidden md:table-cell">Documents</th>
+            <th className="text-left px-3 sm:px-4 py-3 font-medium text-gray-600 hidden lg:table-cell">Comment</th>
             <th className="text-right px-3 sm:px-4 py-3 font-medium text-gray-600 w-24 sm:w-28">Actions</th>
           </tr>
         </thead>
@@ -1413,6 +1420,9 @@ function BatchesTab() {
                   )}
                 </div>
               </td>
+              <td className="px-3 sm:px-4 py-3 hidden lg:table-cell text-xs text-gray-600 whitespace-pre-line max-w-xs">
+                {batch.notes || <span className="text-gray-400">—</span>}
+              </td>
               <td className="px-3 sm:px-4 py-3">
                 <div className="flex items-center justify-end gap-1">
                   <button
@@ -1481,7 +1491,20 @@ function BatchesTab() {
       <Modal open={showModal} onClose={() => setShowModal(false)} title={editing ? 'Edit Batch' : 'New Batch'} size="md">
         <div className="space-y-4">
           <Input label="Batch Number *" value={form.batch_number} onChange={e => setForm({ ...form, batch_number: e.target.value })} placeholder="e.g. B-2024-001" />
-          <Input label="Product" value={form.product} onChange={e => setForm({ ...form, product: e.target.value })} placeholder="e.g. Naturlac LF60" />
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-gray-700">Product</label>
+            <select
+              value={form.product}
+              onChange={e => setForm({ ...form, product: e.target.value })}
+              className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+            >
+              <option value="">— select a product —</option>
+              {form.product && !productNames.includes(form.product) && (
+                <option value={form.product}>{form.product} (not in Products)</option>
+              )}
+              {productNames.map(name => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </div>
           <div className="space-y-1">
             <label className="block text-sm font-medium text-gray-700">Category</label>
             <select
@@ -1494,6 +1517,16 @@ function BatchesTab() {
               <option value="Ingredient">Ingredient</option>
               <option value="Other">Other</option>
             </select>
+          </div>
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-gray-700">Comment</label>
+            <textarea
+              value={form.notes}
+              onChange={e => setForm({ ...form, notes: e.target.value })}
+              rows={3}
+              placeholder="Anything worth knowing about this batch"
+              className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+            />
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="secondary" onClick={() => setShowModal(false)}>Cancel</Button>

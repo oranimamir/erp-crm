@@ -24,7 +24,7 @@ import {
 } from '../lib/invoiceCheck.js';
 import { todayISO } from '../lib/today.js';
 import { projectOptions, projectByLabel, billedOn, syncProjectExpenses } from '../lib/projectExpenses.js';
-import { recordAliases, recordNotDuplicates, notDuplicatePairs, pairKey, applySupplierAliases, aliasMap, supplierKey } from '../lib/supplierAliases.js';
+import { recordAliases, recordNotDuplicates, notDuplicatePairs, pairKey, applySupplierAliases, aliasMap, supplierKey, SUPPLIER_DETAIL_FIELDS, detailCount } from '../lib/supplierAliases.js';
 import { decideCurrency, isChineseSupplier } from '../lib/invoiceCurrency.js';
 import { readNetSalaryWorkbook, monthEnd, type SalaryMonth, type SalaryPayment } from '../lib/netSalaryImport.js';
 
@@ -3257,9 +3257,17 @@ router.post('/supplier-merge', (req: Request, res: Response) => {
 
     // 3. Suppliers table (sales): one row under the kept name
     let consolidatedSuppliers = 0;
-    const supRows = (db.prepare('SELECT id, name, category, vat_number FROM suppliers').all() as any[]).filter(s => isMerged(s.name));
+    const supRows = (db.prepare('SELECT * FROM suppliers').all() as any[]).filter(s => isMerged(s.name));
     if (supRows.length > 0) {
-      const keep = supRows.find(s => (s.name || '').trim() === canonical) || supRows[0];
+      // The record with the most details is kept (not an empty one that merely
+      // carries the kept name), and its blanks are filled from the others
+      const exact = (s: any) => ((s.name || '').trim() === canonical ? 1 : 0);
+      const keep = [...supRows].sort((a, b) => detailCount(b) - detailCount(a) || exact(b) - exact(a) || a.id - b.id)[0];
+      for (const f of SUPPLIER_DETAIL_FIELDS) {
+        if (typeof keep[f] === 'string' && keep[f].trim()) continue;
+        const donor = supRows.find(s => s.id !== keep.id && typeof s[f] === 'string' && s[f].trim());
+        if (donor) db.prepare(`UPDATE suppliers SET ${f} = ? WHERE id = ?`).run(donor[f], keep.id);
+      }
       if (!inheritedCategory) {
         inheritedCategory = SALES_CAT_DB_MAP[keep.category] || keep.category;
         inheritedDomain = 'sales';

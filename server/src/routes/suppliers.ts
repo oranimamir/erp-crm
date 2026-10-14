@@ -8,6 +8,7 @@ import crypto from 'crypto';
 import JSZip from 'jszip';
 import { uploadSupplierDoc, BLOCKED_EXTENSIONS } from '../middleware/upload.js';
 import { uploadsBase } from '../lib/productDocs.js';
+import { supplierKey, aliasMap, detailCount } from '../lib/supplierAliases.js';
 
 const router = Router();
 
@@ -80,15 +81,29 @@ router.post('/resolve', (req: Request, res: Response) => {
   const name = String(req.body?.name || '').trim();
   if (!name) { res.status(400).json({ error: 'Name is required' }); return; }
 
-  const existing = db.prepare('SELECT * FROM suppliers WHERE LOWER(TRIM(name)) = LOWER(?)').get(name) as any;
-  if (existing) { res.json(existing); return; }
+  // Matched loosely — spacing, case, punctuation and legal forms ignored, a
+  // merged-away name followed to the kept one, and the name the record was first
+  // opened under still counts after a rename on the Details tab. An exact-name
+  // lookup used to create a fresh empty record after a rename, so the details
+  // seemed to vanish on the next open from the list.
+  const key = supplierKey(name);
+  const keys = new Set([key, supplierKey(aliasMap().get(key) || '')].filter(Boolean));
+  const hits = (db.prepare('SELECT * FROM suppliers').all() as any[])
+    .filter(s => (s.name || '').trim().toLowerCase() === name.toLowerCase()
+      || keys.has(supplierKey(s.name)) || (s.opened_as && keys.has(supplierKey(s.opened_as))));
+  if (hits.length) {
+    const exact = (s: any) => ((s.name || '').trim().toLowerCase() === name.toLowerCase() ? 1 : 0);
+    hits.sort((a, b) => detailCount(b) - detailCount(a) || exact(b) - exact(a) || a.id - b.id);
+    res.json(hits[0]);
+    return;
+  }
 
   const hint = String(req.body?.category || '').toLowerCase();
   const category = /blend/.test(hint) ? 'blenders'
     : /logist/.test(hint) ? 'logistics'
     : /ship|freight/.test(hint) ? 'shipping'
     : 'raw_materials';
-  const result = db.prepare('INSERT INTO suppliers (name, category) VALUES (?, ?)').run(name, category);
+  const result = db.prepare('INSERT INTO suppliers (name, category, opened_as) VALUES (?, ?, ?)').run(name, category, name);
   const supplier = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(result.lastInsertRowid) as any;
   notifyAdmin({ action: 'created', entity: 'Supplier', label: supplier.name, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
   res.status(201).json(supplier);

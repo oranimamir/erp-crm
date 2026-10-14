@@ -13,7 +13,7 @@ import { NCO_STATUSES } from '../lib/ncoStatus';
 
 /**
  * Non-commercial operations: samples sent to customers, and shipping with
- * raw-material suppliers / blenders. Numbered NCO<entity><year><nnn> by the
+ * raw-material suppliers / blenders / logistics suppliers (from → to). Numbered NCO<entity><year><nnn> by the
  * server; never counted as sales.
  */
 
@@ -33,13 +33,15 @@ interface Nco {
   nco_date: string | null;
   notes: string | null;
   status: string;
+  ship_from: string | null;
+  ship_to: string | null;
 }
 
 interface Party { id: number; name: string; category?: string }
 
 const TYPE_LABEL: Record<NcoType, string> = { samples: 'Samples', shipping: 'Shipping' };
-const SUPPLIER_CATEGORY_LABEL: Record<string, string> = { raw_materials: 'Raw materials', blenders: 'Blenders' };
-const SHIPPING_CATEGORIES = ['raw_materials', 'blenders'];
+const SUPPLIER_CATEGORY_LABEL: Record<string, string> = { raw_materials: 'Raw materials', blenders: 'Blenders', logistics: 'Logistics' };
+const SHIPPING_CATEGORIES = ['raw_materials', 'blenders', 'logistics'];
 
 const inputCls =
   'block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500';
@@ -61,13 +63,16 @@ function Pills<T extends string>({ value, options, onChange }: {
   );
 }
 
-interface FormState { entity: Entity; type: NcoType; customer_id: string; supplier_id: string; nco_date: string; notes: string; nco_number: string; status: string }
+interface FormState {
+  entity: Entity; type: NcoType; customer_id: string; supplier_id: string; nco_date: string; notes: string; nco_number: string; status: string;
+  ship_from: string; ship_to: string;
+}
 interface NewClient { name: string; company: string; address: string; contact_person: string; email: string; phone: string; vat_number: string }
 const emptyClient = (): NewClient => ({ name: '', company: '', address: '', contact_person: '', email: '', phone: '', vat_number: '' });
 
 const today = () => todayISO();
 const emptyForm = (entity: Entity = 'BE'): FormState =>
-  ({ entity, type: 'samples', customer_id: '', supplier_id: '', nco_date: today(), notes: '', nco_number: '', status: 'requested' });
+  ({ entity, type: 'samples', customer_id: '', supplier_id: '', nco_date: today(), notes: '', nco_number: '', status: 'requested', ship_from: '', ship_to: '' });
 
 export default function NonCommercialOperationsPage() {
   const { addToast } = useToast();
@@ -135,6 +140,7 @@ export default function NonCommercialOperationsPage() {
       customer_id: row.customer_id ? String(row.customer_id) : '',
       supplier_id: row.supplier_id ? String(row.supplier_id) : '',
       nco_date: row.nco_date || '', notes: row.notes || '', nco_number: row.nco_number, status: row.status || 'requested',
+      ship_from: row.ship_from || '', ship_to: row.ship_to || '',
     });
     setNewClient(null);
     setShowForm(true);
@@ -150,6 +156,9 @@ export default function NonCommercialOperationsPage() {
         nco_date: form.nco_date,
         notes: form.notes,
         status: form.status,
+        // From / To belong to shipping; switching to samples clears them
+        ship_from: form.type === 'shipping' ? form.ship_from : '',
+        ship_to: form.type === 'shipping' ? form.ship_to : '',
         // Blank = the next number in the series
         ...(form.nco_number.trim() ? { nco_number: form.nco_number.trim() } : {}),
       };
@@ -263,6 +272,9 @@ export default function NonCommercialOperationsPage() {
                           </>
                         ) : dash
                       )}
+                      {r.type === 'shipping' && (r.ship_from || r.ship_to) && (
+                        <span className="block text-xs text-gray-500">{r.ship_from || '?'} → {r.ship_to || '?'}</span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5 whitespace-nowrap">
                       <NcoStatusSelect ncoId={r.id} status={r.status}
@@ -363,7 +375,7 @@ export default function NonCommercialOperationsPage() {
             </div>
           ) : (
             <div className="space-y-1">
-              <label className="block text-xs font-medium text-gray-500">Supplier (raw materials or blenders)</label>
+              <label className="block text-xs font-medium text-gray-500">Supplier (raw materials, blenders or logistics)</label>
               <select value={form.supplier_id} onChange={e => set({ supplier_id: e.target.value })} className={inputCls}>
                 <option value="">Choose the supplier…</option>
                 {SHIPPING_CATEGORIES.map(cat => (
@@ -372,6 +384,16 @@ export default function NonCommercialOperationsPage() {
                   </optgroup>
                 ))}
               </select>
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <div className="space-y-1">
+                  <label className="block text-xs font-medium text-gray-500">From</label>
+                  <input value={form.ship_from} onChange={e => set({ ship_from: e.target.value })} placeholder="e.g. Rotterdam, NL" className={inputCls} />
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-xs font-medium text-gray-500">To</label>
+                  <input value={form.ship_to} onChange={e => set({ ship_to: e.target.value })} placeholder="e.g. Antwerp, BE" className={inputCls} />
+                </div>
+              </div>
             </div>
           )}
 
@@ -383,7 +405,7 @@ export default function NonCommercialOperationsPage() {
           <div className="space-y-1">
             <label className="block text-xs font-medium text-gray-500">Notes</label>
             <textarea rows={3} value={form.notes} onChange={e => set({ notes: e.target.value })} className={inputCls}
-              placeholder={form.type === 'samples' ? 'What samples, how much…' : 'What is shipped, from / to…'} />
+              placeholder={form.type === 'samples' ? 'What samples, how much…' : 'What is shipped…'} />
           </div>
 
           <div className="flex justify-end gap-2 pt-1">

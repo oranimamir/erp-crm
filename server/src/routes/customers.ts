@@ -214,7 +214,11 @@ router.put('/:id/profiles/:profileId', (req: Request, res: Response) => {
   if (!existing) { res.status(404).json({ error: 'Profile not found' }); return; }
 
   const name = req.body?.name !== undefined ? String(req.body.name).trim() || existing.name : existing.name;
-  const data = req.body?.data && typeof req.body.data === 'object' ? req.body.data : JSON.parse(existing.data);
+  let stored: any = {};
+  try { stored = JSON.parse(existing.data) || {}; } catch { /* corrupt row: start over */ }
+  // Parts the Details screen never sends (packing-list / sample-invoice formats
+  // saved from their own pages) are kept, not wiped by a Details save
+  const data = req.body?.data && typeof req.body.data === 'object' ? { ...stored, ...req.body.data } : stored;
 
   // A hand-edited or stale layout must never reach the renderer malformed
   if (data.invoice_layout) data.invoice_layout = normalizeLayout(data.invoice_layout);
