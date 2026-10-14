@@ -57,6 +57,11 @@ export function authenticateToken(req: Request, res: Response, next: NextFunctio
     res.status(401).json({ error: 'Invalid or expired token' });
     return;
   }
+  // A login challenge (password checked, code not yet) is never a session
+  if ((decoded as any).purpose) {
+    res.status(401).json({ error: 'Invalid or expired token' });
+    return;
+  }
 
   // The token only proves who the caller was when it was issued. A deleted
   // user must lose access at once, and a role change must apply at once, so
@@ -73,4 +78,23 @@ export function authenticateToken(req: Request, res: Response, next: NextFunctio
 
 export function generateToken(payload: AuthPayload): string {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '24h', algorithm: 'HS256' });
+}
+
+/**
+ * Proof that the password was right, handed out by /login and required by
+ * /verify-otp and /resend-otp. Without it the code step could be reached with
+ * a bare user id, leaving the 6-digit code as the only factor.
+ */
+export function generateOtpChallenge(userId: number): string {
+  return jwt.sign({ purpose: 'otp', otp_user: userId }, JWT_SECRET, { expiresIn: '15m', algorithm: 'HS256' });
+}
+
+export function otpChallengeValid(challenge: unknown, userId: unknown): boolean {
+  if (typeof challenge !== 'string' || !challenge) return false;
+  try {
+    const d = jwt.verify(challenge, JWT_SECRET, { algorithms: ['HS256'] }) as any;
+    return d?.purpose === 'otp' && Number(d.otp_user) === Number(userId);
+  } catch {
+    return false;
+  }
 }

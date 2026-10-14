@@ -2012,7 +2012,7 @@ router.get('/invoices', (req: Request, res: Response) => {
       total: '(COALESCE(eur_amount, amount) + COALESCE(vat_eur_amount, vat_amount))',
       month: 'month', created_at: 'created_at',
     };
-    const sortCol = sortExprs[sort_by as string] || 'issue_date';
+    const sortCol = (Object.hasOwn(sortExprs, sort_by as string) && sortExprs[sort_by as string]) || 'issue_date';
     const sortDirection = (sort_dir as string)?.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
     sql += ` ORDER BY ${sortCol} ${sortDirection}`;
 

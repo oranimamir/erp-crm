@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 
@@ -42,9 +42,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [token]);
 
+  // Proof from /login that the password was right; the code step needs it
+  const otpChallenge = useRef('');
+
   const login = async (username: string, password: string): Promise<{ step: 'done' } | { step: 'otp'; userId: number }> => {
     const res = await api.post('/auth/login', { username, password });
     if (res.data.step === 'otp') {
+      otpChallenge.current = res.data.challenge || '';
       return { step: 'otp', userId: res.data.user_id };
     }
     localStorage.setItem('token', res.data.token);
@@ -55,7 +59,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const verifyOtp = async (userId: number, code: string): Promise<void> => {
-    const res = await api.post('/auth/verify-otp', { user_id: userId, code });
+    const res = await api.post('/auth/verify-otp', { user_id: userId, code, challenge: otpChallenge.current });
+    otpChallenge.current = '';
     localStorage.setItem('token', res.data.token);
     localStorage.setItem('user', JSON.stringify(res.data.user));
     setToken(res.data.token);
@@ -63,7 +68,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const resendOtp = async (userId: number): Promise<void> => {
-    await api.post('/auth/resend-otp', { user_id: userId });
+    await api.post('/auth/resend-otp', { user_id: userId, challenge: otpChallenge.current });
   };
 
   const logout = () => {

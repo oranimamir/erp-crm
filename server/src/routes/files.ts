@@ -16,7 +16,7 @@ function serveFile(subfolder: string) {
   return (req: Request, res: Response) => {
     const filename = req.params.filename as string;
     // Allowlist: only timestamps, hex chars, dots, hyphens — no traversal possible
-    if (!/^[a-zA-Z0-9._-]+$/.test(filename)) {
+    if (!/^[a-zA-Z0-9_-][a-zA-Z0-9._-]*$/.test(filename)) {
       res.status(400).json({ error: 'Invalid filename' });
       return;
     }

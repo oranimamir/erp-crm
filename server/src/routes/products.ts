@@ -14,7 +14,10 @@ const labelOf = (p: { name: string; sku: string | null }) => (p.sku ? `${p.name}
 // GET / — list with pagination and search
 router.get('/', (req, res) => {
   const { page = '1', limit = '20', search = '', category = '' } = req.query as Record<string, string>;
-  const offset = (parseInt(page) - 1) * parseInt(limit);
+  // Junk paging values (limit=abc, page=-5) fall back instead of failing the query
+  const pageNo = Math.max(1, parseInt(page) || 1);
+  const limitNo = Math.min(10000, Math.max(1, parseInt(limit) || 20));
+  const offset = (pageNo - 1) * limitNo;
 
   let where = '1=1';
   const params: any[] = [];
@@ -29,9 +32,9 @@ router.get('/', (req, res) => {
   }
 
   const total = (db.prepare(`SELECT COUNT(*) as count FROM products WHERE ${where}`).get(...params) as any).count;
-  const data = db.prepare(`SELECT * FROM products WHERE ${where} ORDER BY name ASC LIMIT ? OFFSET ?`).all(...params, parseInt(limit), offset);
+  const data = db.prepare(`SELECT * FROM products WHERE ${where} ORDER BY name ASC LIMIT ? OFFSET ?`).all(...params, limitNo, offset);
 
-  res.json({ data, total, page: parseInt(page), totalPages: Math.ceil(total / parseInt(limit)) });
+  res.json({ data, total, page: pageNo, totalPages: Math.ceil(total / limitNo) });
 });
 
 // POST / — create

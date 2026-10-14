@@ -82,7 +82,7 @@ router.get('/', async (req: Request, res: Response) => {
     invoice_date:       'inv_dates.latest_invoice_date',
     wire_transfer_date: 'wt_dates.latest_wt_date',
   };
-  const sortBy = sortByMap[(req.query.sort_by as string)] || sortByMap.order_date;
+  const sortBy = (Object.hasOwn(sortByMap, req.query.sort_by as string) && sortByMap[req.query.sort_by as string]) || sortByMap.order_date;
   const offset = (page - 1) * limit;
 
   const tab = (req.query.tab as string) || 'active';

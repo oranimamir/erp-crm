@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import db from '../database.js';
-import { authenticateToken, generateToken } from '../middleware/auth.js';
+import { authenticateToken, generateToken, generateOtpChallenge, otpChallengeValid } from '../middleware/auth.js';
 import { sendOtpEmail, notifyAdmin } from '../lib/notify.js';
 
 const router = Router();
@@ -14,6 +14,13 @@ const DUMMY_HASH = bcrypt.hashSync(crypto.randomBytes(16).toString('hex'), 10);
 // Wrong codes allowed per user before every outstanding code is burned — the
 // per-IP limiter alone can be sidestepped by spreading guesses across IPs
 const MAX_OTP_ATTEMPTS = 5;
+// Wrong codes allowed per user over this window across ALL codes, so asking
+// for a new code doesn't hand out a fresh set of guesses
+const OTP_WINDOW = '-30 minutes';
+const MAX_OTP_ATTEMPTS_WINDOW = 10;
+
+const recentWrongCodes = (userId: unknown): number =>
+  Number((db.prepare(`SELECT COALESCE(SUM(attempts), 0) AS n FROM login_otps WHERE user_id = ? AND created_at > datetime('now', '${OTP_WINDOW}')`).get(userId) as any)?.n) || 0;
 
 router.post('/login', async (req: Request, res: Response) => {
   const { username, password } = req.body;
@@ -45,13 +52,22 @@ router.post('/login', async (req: Request, res: Response) => {
     res.status(503).json({ error: 'Failed to send login code. Please contact an administrator.' });
     return;
   }
-  res.json({ step: 'otp', user_id: user.id });
+  res.json({ step: 'otp', user_id: user.id, challenge: generateOtpChallenge(user.id) });
 });
 
 router.post('/verify-otp', (req: Request, res: Response) => {
-  const { user_id, code } = req.body;
+  const { user_id, code, challenge } = req.body;
   if (!user_id || !code) {
     res.status(400).json({ error: 'user_id and code are required' });
+    return;
+  }
+  if (!otpChallengeValid(challenge, user_id)) {
+    res.status(401).json({ error: 'Your sign-in expired — enter your username and password again' });
+    return;
+  }
+  if (recentWrongCodes(user_id) >= MAX_OTP_ATTEMPTS_WINDOW) {
+    db.prepare('UPDATE login_otps SET used = 1 WHERE user_id = ? AND used = 0').run(user_id);
+    res.status(429).json({ error: 'Too many wrong codes. Please wait 30 minutes and sign in again.' });
     return;
   }
 
@@ -125,7 +141,7 @@ router.get('/invite-info', (req: Request, res: Response) => {
 router.post('/accept-invite', (req: Request, res: Response) => {
   const { token, username, password, display_name } = req.body;
 
-  if (!token || !username || !password) {
+  if (typeof token !== 'string' || typeof username !== 'string' || !token || !username.trim() || !password) {
     res.status(400).json({ error: 'Token, username, and password are required' });
     return;
   }
@@ -187,9 +203,18 @@ router.post('/accept-invite', (req: Request, res: Response) => {
 });
 
 router.post('/resend-otp', async (req: Request, res: Response) => {
-  const { user_id } = req.body;
+  const { user_id, challenge } = req.body;
   if (!user_id) {
     res.status(400).json({ error: 'user_id is required' });
+    return;
+  }
+  // Only after the password was given — otherwise anyone could mail codes to any user
+  if (!otpChallengeValid(challenge, user_id)) {
+    res.status(401).json({ error: 'Your sign-in expired — enter your username and password again' });
+    return;
+  }
+  if (recentWrongCodes(user_id) >= MAX_OTP_ATTEMPTS_WINDOW) {
+    res.status(429).json({ error: 'Too many wrong codes. Please wait 30 minutes and sign in again.' });
     return;
   }
 

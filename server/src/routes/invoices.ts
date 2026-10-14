@@ -50,7 +50,7 @@ router.get('/', (req: Request, res: Response) => {
   };
   const sortBy = (req.query.sort_by as string) || 'date';
   const sortDir = (req.query.sort_dir as string) === 'asc' ? 'ASC' : 'DESC';
-  const orderBy = `${sortFieldMap[sortBy] || sortFieldMap.date} ${sortDir}`;
+  const orderBy = `${Object.hasOwn(sortFieldMap, sortBy) ? sortFieldMap[sortBy] : sortFieldMap.date} ${sortDir}`;
 
   const conditions: string[] = [];
   const params: any[] = [];

@@ -311,6 +311,12 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
     return;
   }
   // Safe user-facing multer/upload errors
+  // A field sent as an object / array where text or a number belongs — the
+  // database refuses to store it; tell the caller instead of a 500
+  if (err.message?.includes('tried to bind a value of an unknown type')) {
+    res.status(400).json({ error: 'Invalid value in the request' });
+    return;
+  }
   if (err.message?.includes('Only PDF') || err.message?.includes('files are allowed') || err.message?.includes('are not allowed')) {
     res.status(400).json({ error: err.message });
     return;

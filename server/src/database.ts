@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import { normalizeLayout } from './lib/invoiceLayout.js';
 import { layoutSeedFor } from './lib/invoiceLayoutSeeds.js';
 
@@ -941,14 +942,16 @@ export async function initializeDatabase() {
   `);
   try { db.exec(`ALTER TABLE warehouse_stock_uploads ADD COLUMN source TEXT DEFAULT 'manual'`); } catch (_) {}
 
-  // Seed admin user if not exists
-  const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');
-  if (!adminExists) {
-    const hash = bcrypt.hashSync('admin123', 10);
+  // First start only: an admin to sign in with. Never re-created once users
+  // exist — deleting or renaming "admin" used to bring back admin/admin123 on
+  // the next restart. The password is random and shown once in the log.
+  const anyUser = db.prepare('SELECT id FROM users LIMIT 1').get();
+  if (!anyUser) {
+    const password = crypto.randomBytes(12).toString('base64url');
     db.prepare('INSERT INTO users (username, password_hash, display_name, role) VALUES (?, ?, ?, ?)').run(
-      'admin', hash, 'Administrator', 'admin'
+      'admin', bcrypt.hashSync(password, 10), 'Administrator', 'admin'
     );
-    console.warn('⚠️  Default admin created (admin/admin123) — change this password immediately via Settings.');
+    console.warn(`⚠️  First admin created: admin / ${password} — set its email (needed for the login code) and change the password.`);
   }
 
   // Login OTP table for 2FA

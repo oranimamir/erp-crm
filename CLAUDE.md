@@ -29,7 +29,10 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - Operation statuses: pre-ordered, ordered, in production, shipped, in clearance, delivered, completed (`VALID_STATUSES` in `routes/operations.ts`, same lists on the Operations, operation and New Operation pages)
 
 ## Security
-- No public sign-up: accounts come from admin create or invite only; login is password + emailed OTP (5 wrong codes burn it; compare dates with `datetime(expires_at)`)
+- No public sign-up: accounts come from admin create or invite only; login is password + emailed OTP (5 wrong codes burn it; 10 wrong per user in 30 min locks the code step; compare dates with `datetime(expires_at)`). `/login` returns a 15-min signed `challenge` (`generateOtpChallenge`, purpose 'otp' — never accepted as a session); `/verify-otp` and `/resend-otp` require it, so the code step can't be reached without the password
+- A first admin is seeded only when there are no users (random password in the log) — never re-created
+- `uncaughtException` / `unhandledRejection` are logged, not fatal (`lib/asyncErrors.ts`); binding an object/array to SQL → 400; sort / paging query values are allowlisted (`Object.hasOwn`) or clamped
+- `server/package.json` `overrides.qs` pins the patched qs under Express 4
 - 401 means "session gone" (client logs out) — use 400 for a wrong password/code inside a valid session
 - Any file name taken from a request must match `^[a-zA-Z0-9._-]+$` before it is stored, served or unlinked
 - `/api/files` renders only PDF/images inline; other types download. CSP set in `index.ts` helmet — new external hosts must be added there

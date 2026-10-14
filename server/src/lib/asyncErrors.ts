@@ -24,3 +24,10 @@ Layer.prototype.handle_request = function handle(req: any, res: any, next: (err?
 process.on('unhandledRejection', (reason: any) => {
   console.error('[unhandledRejection]', reason?.stack || reason?.message || reason);
 });
+
+// A synchronous throw in a timer / stream / upload callback used to end the
+// process: everyone's session and the last unsaved writes gone. Log it and keep
+// serving — the database lives in memory, so its state is still consistent.
+process.on('uncaughtException', (err: any) => {
+  console.error('[uncaughtException]', err?.stack || err?.message || err);
+});

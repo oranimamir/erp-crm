@@ -45,5 +45,8 @@
     "@types/pdfkit": "^0.13.9",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
+  },
+  "overrides": {
+    "qs": "^6.16.0"
   }
 }
