@@ -188,6 +188,7 @@ export default function OperationDetailPage() {
   const [showLibrary, setShowLibrary] = useState(false);
   const [showPurchaseDocs, setShowPurchaseDocs] = useState(false);
   const checklistSuggest = useChecklistSuggest({ kind: 'operation', id: Number(id) }, () => fetchOperation());
+  checklistSuggest.docsRef.current = operation?.documents || [];
   const [editDoc, setEditDoc] = useState<OperationDoc | null>(null);
   const [compareDocId, setCompareDocId] = useState<number | null>(null);
   const [textDocId, setTextDocId] = useState<number | null>(null);
@@ -386,8 +387,8 @@ export default function OperationDetailPage() {
   }
 
   /** Uploads one queued file; the new document's id, or null. */
-  async function uploadOne(pending: PendingUpload): Promise<number | null> {
-    if (!pending.categoryId) {
+  async function uploadOne(pending: PendingUpload, categoryId: string): Promise<number | null> {
+    if (!categoryId) {
       updatePending(pending.id, { status: 'error', error: 'Category required' });
       return null;
     }
@@ -395,7 +396,7 @@ export default function OperationDetailPage() {
     try {
       const fd = new FormData();
       fd.append('file', pending.file);
-      fd.append('category_id', pending.categoryId);
+      fd.append('category_id', categoryId);
       if (pending.notes) fd.append('notes', pending.notes);
       const { data } = await api.post(`/operations/${id}/documents`, fd, {
         onUploadProgress: (evt) => {
@@ -415,24 +416,32 @@ export default function OperationDetailPage() {
     const toUpload = pendingUploads.filter(p => p.status === 'pending' || p.status === 'error');
     if (toUpload.length === 0) return;
     setUploadingAll(true);
-    const ids = await Promise.all(toUpload.map(uploadOne));
+    // Files headed for an unticked shipping-documents box: ask first
+    const target = await checklistSuggest.confirmUploads(
+      toUpload.map(p => ({ ref: p.id, name: p.file.name, categoryId: Number(p.categoryId) || null })),
+      categories, operation?.documents || [],
+    );
+    const declined = new Set(toUpload.filter(p => String(target.get(p.id) ?? '') !== p.categoryId).map(p => p.id));
+    const ids = await Promise.all(toUpload.map(p => uploadOne(p, String(target.get(p.id) ?? ''))));
     setUploadingAll(false);
     await fetchOperation();
     setPendingUploads(prev => prev.filter(p => p.status !== 'done'));
-    checklistSuggest.check(ids.filter((x): x is number => !!x));
+    // Not asked again about a file the user just said no to
+    checklistSuggest.check(ids.filter((x, i): x is number => !!x && !declined.has(toUpload[i].id)));
   }
 
   /** One file straight into a category — the shipping-documents checklist. */
   async function uploadToCategory(file: File, categoryId: number) {
     try {
+      const target = (await checklistSuggest.confirmUploads([{ ref: 0, name: file.name, categoryId }], categories, operation?.documents || [])).get(0) ?? null;
       const fd = new FormData();
       fd.append('file', file);
-      fd.append('category_id', String(categoryId));
+      if (target) fd.append('category_id', String(target));
       const { data } = await api.post(`/operations/${id}/documents`, fd);
       await fetchOperation();
       addToast('Document uploaded', 'success');
-      // A General document tile upload may well be a checklist document
-      if (data?.id) checklistSuggest.check([data.id]);
+      // A General document tile upload may well be a checklist document (not when the user just said no)
+      if (data?.id && target === categoryId) checklistSuggest.check([data.id]);
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Upload failed', 'error');
     }

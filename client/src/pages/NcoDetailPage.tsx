@@ -135,6 +135,7 @@ export default function NcoDetailPage() {
   const [declarations, setDeclarations] = useState<OperationDeclaration[]>([]);
   const [renaming, setRenaming] = useState<string | null>(null);
   const checklistSuggest = useChecklistSuggest({ kind: 'nco', id: Number(id) }, () => load());
+  checklistSuggest.docsRef.current = nco?.documents || [];
   const [editingParty, setEditingParty] = useState(false);
   const [partyForm, setPartyForm] = useState<{ from: EndForm; to: EndForm; customer_id: string }>({ from: emptyEnd(), to: emptyEnd(), customer_id: '' });
   const [savingParty, setSavingParty] = useState(false);
@@ -206,12 +207,17 @@ export default function NcoDetailPage() {
     setUploading(true);
     const ids: number[] = [];
     try {
-      for (const file of list) {
+      // Files headed for an unticked shipping-documents box: ask first
+      const chosenCategory = Number(uploadCategory) || null;
+      const target = await checklistSuggest.confirmUploads(list.map((f, i) => ({ ref: i, name: f.name, categoryId: chosenCategory })), categories, nco?.documents || []);
+      for (const [i, file] of list.entries()) {
         const fd = new FormData();
         fd.append('file', file);
-        if (uploadCategory) fd.append('category_id', uploadCategory);
+        const categoryId = target.get(i) ?? null;
+        if (categoryId) fd.append('category_id', String(categoryId));
         const { data } = await api.post(`/non-commercial-operations/${id}/documents`, fd);
-        if (data?.id) ids.push(data.id);
+        // Not asked again about a file the user just said no to
+        if (data?.id && categoryId === chosenCategory) ids.push(data.id);
       }
       addToast(`${list.length} document${list.length === 1 ? '' : 's'} uploaded`, 'success');
       load();
@@ -226,13 +232,14 @@ export default function NcoDetailPage() {
   /** One file into a category (shipping document tiles). */
   async function uploadToCategory(file: File, categoryId: number) {
     try {
+      const target = (await checklistSuggest.confirmUploads([{ ref: 0, name: file.name, categoryId }], categories, nco?.documents || [])).get(0) ?? null;
       const fd = new FormData();
       fd.append('file', file);
-      fd.append('category_id', String(categoryId));
+      if (target) fd.append('category_id', String(target));
       const { data } = await api.post(`/non-commercial-operations/${id}/documents`, fd);
       await load();
       addToast('Document uploaded', 'success');
-      if (data?.id) checklistSuggest.check([data.id]);
+      if (data?.id && target === categoryId) checklistSuggest.check([data.id]);
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Upload failed', 'error');
     }
