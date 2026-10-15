@@ -15,6 +15,7 @@ import DocumentGenerators from '../components/DocumentGenerators';
 import RequiredDocuments, { type OperationDeclaration } from '../components/RequiredDocuments';
 import AddFromLibraryModal from '../components/AddFromLibraryModal';
 import PurchaseDocumentPickerModal from '../components/PurchaseDocumentPickerModal';
+import { useChecklistSuggest } from '../components/ChecklistSuggestModal';
 import OperationDocumentEditModal from '../components/OperationDocumentEditModal';
 import DocumentCompareModal from '../components/DocumentCompareModal';
 import DocxTextEditModal from '../components/DocxTextEditModal';
@@ -186,6 +187,7 @@ export default function OperationDetailPage() {
   const [showAddCat, setShowAddCat] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
   const [showPurchaseDocs, setShowPurchaseDocs] = useState(false);
+  const checklistSuggest = useChecklistSuggest({ kind: 'operation', id: Number(id) }, () => fetchOperation());
   const [editDoc, setEditDoc] = useState<OperationDoc | null>(null);
   const [compareDocId, setCompareDocId] = useState<number | null>(null);
   const [textDocId, setTextDocId] = useState<number | null>(null);
@@ -383,10 +385,11 @@ export default function OperationDetailPage() {
     setPendingUploads(prev => prev.filter(p => p.id !== uid));
   }
 
-  async function uploadOne(pending: PendingUpload): Promise<void> {
+  /** Uploads one queued file; the new document's id, or null. */
+  async function uploadOne(pending: PendingUpload): Promise<number | null> {
     if (!pending.categoryId) {
       updatePending(pending.id, { status: 'error', error: 'Category required' });
-      return;
+      return null;
     }
     updatePending(pending.id, { status: 'uploading', progress: 0 });
     try {
@@ -394,15 +397,17 @@ export default function OperationDetailPage() {
       fd.append('file', pending.file);
       fd.append('category_id', pending.categoryId);
       if (pending.notes) fd.append('notes', pending.notes);
-      await api.post(`/operations/${id}/documents`, fd, {
+      const { data } = await api.post(`/operations/${id}/documents`, fd, {
         onUploadProgress: (evt) => {
           const pct = evt.total ? Math.round((evt.loaded / evt.total) * 100) : 0;
           updatePending(pending.id, { progress: pct });
         },
       });
       updatePending(pending.id, { status: 'done', progress: 100 });
+      return data?.id ?? null;
     } catch (err: any) {
       updatePending(pending.id, { status: 'error', error: err.response?.data?.error || 'Upload failed' });
+      return null;
     }
   }
 
@@ -410,10 +415,11 @@ export default function OperationDetailPage() {
     const toUpload = pendingUploads.filter(p => p.status === 'pending' || p.status === 'error');
     if (toUpload.length === 0) return;
     setUploadingAll(true);
-    await Promise.all(toUpload.map(uploadOne));
+    const ids = await Promise.all(toUpload.map(uploadOne));
     setUploadingAll(false);
     await fetchOperation();
     setPendingUploads(prev => prev.filter(p => p.status !== 'done'));
+    checklistSuggest.check(ids.filter((x): x is number => !!x));
   }
 
   /** One file straight into a category — the shipping-documents checklist. */
@@ -422,9 +428,11 @@ export default function OperationDetailPage() {
       const fd = new FormData();
       fd.append('file', file);
       fd.append('category_id', String(categoryId));
-      await api.post(`/operations/${id}/documents`, fd);
+      const { data } = await api.post(`/operations/${id}/documents`, fd);
       await fetchOperation();
       addToast('Document uploaded', 'success');
+      // A General document tile upload may well be a checklist document
+      if (data?.id) checklistSuggest.check([data.id]);
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Upload failed', 'error');
     }
@@ -1130,6 +1138,8 @@ export default function OperationDetailPage() {
           existingNames={operation.documents.map(d => d.file_name)}
           onAdded={fetchOperation}
         />
+
+        {checklistSuggest.modal}
 
         <PurchaseDocumentPickerModal
           open={showPurchaseDocs}

@@ -7,6 +7,7 @@ import {
 import api from '../lib/api';
 import { formatDate } from '../lib/dates';
 import NcoStatusSelect from '../components/NcoStatusSelect';
+import { useChecklistSuggest } from '../components/ChecklistSuggestModal';
 import { useToast } from '../contexts/ToastContext';
 import { useFilePreview } from '../lib/useFilePreview';
 import Button from '../components/ui/Button';
@@ -133,6 +134,7 @@ export default function NcoDetailPage() {
   const [textDocId, setTextDocId] = useState<number | null>(null);
   const [declarations, setDeclarations] = useState<OperationDeclaration[]>([]);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const checklistSuggest = useChecklistSuggest({ kind: 'nco', id: Number(id) }, () => load());
   const [editingParty, setEditingParty] = useState(false);
   const [partyForm, setPartyForm] = useState<{ from: EndForm; to: EndForm; customer_id: string }>({ from: emptyEnd(), to: emptyEnd(), customer_id: '' });
   const [savingParty, setSavingParty] = useState(false);
@@ -202,15 +204,18 @@ export default function NcoDetailPage() {
     const list = Array.from(files);
     if (!list.length) return;
     setUploading(true);
+    const ids: number[] = [];
     try {
       for (const file of list) {
         const fd = new FormData();
         fd.append('file', file);
         if (uploadCategory) fd.append('category_id', uploadCategory);
-        await api.post(`/non-commercial-operations/${id}/documents`, fd);
+        const { data } = await api.post(`/non-commercial-operations/${id}/documents`, fd);
+        if (data?.id) ids.push(data.id);
       }
       addToast(`${list.length} document${list.length === 1 ? '' : 's'} uploaded`, 'success');
       load();
+      checklistSuggest.check(ids);
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Upload failed', 'error');
     } finally {
@@ -224,9 +229,10 @@ export default function NcoDetailPage() {
       const fd = new FormData();
       fd.append('file', file);
       fd.append('category_id', String(categoryId));
-      await api.post(`/non-commercial-operations/${id}/documents`, fd);
+      const { data } = await api.post(`/non-commercial-operations/${id}/documents`, fd);
       await load();
       addToast('Document uploaded', 'success');
+      if (data?.id) checklistSuggest.check([data.id]);
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Upload failed', 'error');
     }
@@ -296,6 +302,7 @@ export default function NcoDetailPage() {
 
   return (
     <div className="space-y-5">
+      {checklistSuggest.modal}
       <Link to="/non-commercial-operations" className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
         <ArrowLeft size={16} /> Non-Commercial Operations
       </Link>

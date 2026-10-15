@@ -9,13 +9,15 @@ import { uploadOperationDoc } from '../middleware/upload.js';
 import { categoryIdByName, uploadsBase } from './productDocs.js';
 import { readDocxParagraphs, writeDocxParagraphs } from './docxText.js';
 import { documentSources, fileFromSources, purchaseSources } from './documentSources.js';
+import { checklistGuesses } from './checklistGuess.js';
 import { OwnerKind, getOwner, ownerDocument, isGeneratedDocument } from './docOwner.js';
 
 /**
  * The document routes operations and non-commercial operations share, mounted
  * on each router (`/api/operations/:id/…`, `/api/non-commercial-operations/:id/…`):
  *  - GET  /:id/document-sources?category=     documents in the app that could fill a category
- *  - GET  /:id/purchase-sources               purchase operations with documents, likely ones first
+ *  - POST /:id/documents/checklist-guesses    { ids } → the unticked checklist box each document looks like
+ *  - GET  /:id/purchase-sources              purchase operations with documents, likely ones first
  *  - POST /:id/documents/from-system          { category, items: [{ source, id }] } | { per_document: true, items: [{ source, id, category_id }] }
  *  - PUT  /:id/documents/:docId               multipart: file_name, category_id, notes, optional new file
  *  - GET/PUT /:id/documents/:docId/text       the text of a Word document (declarations)
@@ -36,6 +38,14 @@ export function mountOwnerDocumentRoutes(router: Router, kind: OwnerKind): void 
     const owner = ownerOf(req);
     if (!owner) { notFound(res); return; }
     res.json({ data: documentSources(owner, category) });
+  });
+
+  // { ids } → which unticked shipping-documents box each of these documents looks like
+  router.post('/:id/documents/checklist-guesses', async (req: Request, res: Response) => {
+    const owner = ownerOf(req);
+    if (!owner) { notFound(res); return; }
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.slice(0, 100) : [];
+    res.json({ data: await checklistGuesses(owner, ids) });
   });
 
   router.get('/:id/purchase-sources', (req: Request, res: Response) => {
