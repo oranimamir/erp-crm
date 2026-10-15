@@ -8,14 +8,15 @@ import { notifyAdmin } from './notify.js';
 import { uploadOperationDoc } from '../middleware/upload.js';
 import { categoryIdByName, uploadsBase } from './productDocs.js';
 import { readDocxParagraphs, writeDocxParagraphs } from './docxText.js';
-import { documentSources, fileFromSources } from './documentSources.js';
+import { documentSources, fileFromSources, purchaseSources } from './documentSources.js';
 import { OwnerKind, getOwner, ownerDocument, isGeneratedDocument } from './docOwner.js';
 
 /**
  * The document routes operations and non-commercial operations share, mounted
  * on each router (`/api/operations/:id/…`, `/api/non-commercial-operations/:id/…`):
  *  - GET  /:id/document-sources?category=     documents in the app that could fill a category
- *  - POST /:id/documents/from-system          { category, items: [{ source, id }] }
+ *  - GET  /:id/purchase-sources               purchase operations with documents, likely ones first
+ *  - POST /:id/documents/from-system          { category, items: [{ source, id }] } | { per_document: true, items: [{ source, id, category_id }] }
  *  - PUT  /:id/documents/:docId               multipart: file_name, category_id, notes, optional new file
  *  - GET/PUT /:id/documents/:docId/text       the text of a Word document (declarations)
  */
@@ -37,19 +38,38 @@ export function mountOwnerDocumentRoutes(router: Router, kind: OwnerKind): void 
     res.json({ data: documentSources(owner, category) });
   });
 
+  router.get('/:id/purchase-sources', (req: Request, res: Response) => {
+    const owner = ownerOf(req);
+    if (!owner) { notFound(res); return; }
+    res.json({ data: purchaseSources(owner) });
+  });
+
+  // { category, items: [{ source, id }] } — or { per_document: true, items: [{ source, id, category_id }] },
+  // each filed under its own category (null = none)
   router.post('/:id/documents/from-system', (req: Request, res: Response) => {
     const owner = ownerOf(req);
     if (!owner) { notFound(res); return; }
+    const perDocument = req.body?.per_document === true;
     const category = String(req.body?.category || '').trim();
-    const items = Array.isArray(req.body?.items) ? req.body.items : [];
-    if (!category || !items.length) { res.status(400).json({ error: 'Choose at least one document' }); return; }
-    const categoryId = categoryIdByName(category);
-    if (!categoryId) { res.status(400).json({ error: 'Unknown category' }); return; }
+    const raw = Array.isArray(req.body?.items) ? req.body.items : [];
+    if ((!perDocument && !category) || !raw.length) { res.status(400).json({ error: 'Choose at least one document' }); return; }
+    let categoryId: number | null = null;
+    if (!perDocument) {
+      categoryId = categoryIdByName(category);
+      if (!categoryId) { res.status(400).json({ error: 'Unknown category' }); return; }
+    }
+    const known = new Set((db.prepare('SELECT id FROM document_categories').all() as any[]).map(r => r.id));
+    const items = raw.map((it: any) => {
+      const item = { source: it?.source, id: Number(it?.id) };
+      if (!perDocument) return item;
+      const cat = Number(it?.category_id) || null;
+      return { ...item, category_id: cat && known.has(cat) ? cat : null };
+    });
     const result = fileFromSources(owner, categoryId, items);
     if (result.added) {
       notifyAdmin({
         action: 'updated', entity: ENTITY[kind], label: kind === 'operation' ? `Operation ${owner.number}` : owner.number,
-        detail: `${result.added} document(s) filed as ${category}`, ...who(req),
+        detail: perDocument ? `${result.added} document(s) added from the system` : `${result.added} document(s) filed as ${category}`, ...who(req),
       });
     }
     res.json(result);

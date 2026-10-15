@@ -178,15 +178,55 @@ function copyIn(subfolder: string, filePath: string): string | null {
   return stored;
 }
 
-/** Files the chosen sources under the owner in `categoryId`. */
-export function fileFromSources(owner: DocOwner, categoryId: number, items: Array<{ source: SourceType; id: number }>): { added: number; missing: string[] } {
+export interface PurchaseSource {
+  id: number; po_number: string; po_date: string | null; supplier_label: string | null;
+  document_count: number; suggested: boolean; reason: string | null;
+}
+
+/**
+ * Purchase operations with documents, for "From purchase operation" on an
+ * owner's documents list. Suggested first: its documents already used here,
+ * its PO made from this operation's order, or its notes naming this number.
+ */
+export function purchaseSources(owner: DocOwner): PurchaseSource[] {
+  const linked = new Set((db.prepare(`SELECT notes FROM ${owner.table} WHERE ${owner.fk} = ? AND notes LIKE 'From purchase operation %'`).all(owner.id) as any[])
+    .map(r => norm(String(r.notes).replace(/^From purchase operation /i, ''))));
+  const rows = db.prepare(`
+    SELECT p.id, p.po_number, p.po_date, p.notes, COALESCE(s.name, p.supplier_name) AS supplier_label,
+      (SELECT COUNT(*) FROM purchase_operation_documents d WHERE d.purchase_operation_id = p.id) AS document_count,
+      EXISTS (SELECT 1 FROM purchase_orders po WHERE po.purchase_operation_id = p.id AND po.source_order_id = ?) AS from_order
+    FROM purchase_operations p
+    LEFT JOIN suppliers s ON s.id = p.supplier_id
+    ORDER BY p.year DESC, p.seq DESC, p.id DESC
+  `).all(owner.orderId ?? -1) as any[];
+  const number = norm(owner.number);
+  const out = rows.filter(r => r.document_count > 0).map(r => {
+    const reason = linked.has(norm(r.po_number)) ? 'Already used on this operation'
+      : r.from_order ? "PO made from this operation's order"
+      : number && norm(r.notes).includes(number) ? `Notes mention ${owner.number}`
+      : null;
+    return {
+      id: r.id, po_number: r.po_number, po_date: r.po_date ?? null, supplier_label: r.supplier_label ?? null,
+      document_count: r.document_count, suggested: !!reason, reason,
+    };
+  });
+  return [...out.filter(r => r.suggested), ...out.filter(r => !r.suggested)];
+}
+
+/**
+ * Files the chosen sources under the owner in `categoryId`; an item carrying
+ * its own `category_id` (a number, or null for none) is filed under that.
+ */
+export function fileFromSources(owner: DocOwner, categoryId: number | null, items: Array<{ source: SourceType; id: number; category_id?: number | null }>): { added: number; missing: string[] } {
   let added = 0;
   const missing: string[] = [];
   for (const item of items) {
     const id = Number(item?.id);
     if (!Number.isInteger(id)) continue;
+    const itemCategory = item.category_id === undefined ? categoryId : (Number(item.category_id) || null);
     if (item.source === 'this') {
-      const r = db.prepare(`UPDATE ${owner.table} SET category_id = ? WHERE id = ? AND ${owner.fk} = ?`).run(categoryId, id, owner.id);
+      if (itemCategory === null) continue;
+      const r = db.prepare(`UPDATE ${owner.table} SET category_id = ? WHERE id = ? AND ${owner.fk} = ?`).run(itemCategory, id, owner.id);
       if (r.changes) added++;
       continue;
     }
@@ -221,7 +261,7 @@ export function fileFromSources(owner: DocOwner, categoryId: number, items: Arra
     if (!row) continue;
     const stored = copyIn(subfolder, row.file_path);
     if (!stored) { missing.push(row.file_name); continue; }
-    insertOwnerDocument(owner, categoryId, stored, row.file_name, notes);
+    insertOwnerDocument(owner, itemCategory, stored, row.file_name, notes);
     added++;
   }
   return { added, missing };

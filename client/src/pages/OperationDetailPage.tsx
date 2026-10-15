@@ -14,6 +14,7 @@ import FilePreviewModal from '../components/ui/FilePreviewModal';
 import DocumentGenerators from '../components/DocumentGenerators';
 import RequiredDocuments, { type OperationDeclaration } from '../components/RequiredDocuments';
 import AddFromLibraryModal from '../components/AddFromLibraryModal';
+import PurchaseDocumentPickerModal from '../components/PurchaseDocumentPickerModal';
 import OperationDocumentEditModal from '../components/OperationDocumentEditModal';
 import DocumentCompareModal from '../components/DocumentCompareModal';
 import DocxTextEditModal from '../components/DocxTextEditModal';
@@ -184,6 +185,7 @@ export default function OperationDetailPage() {
   const [addingCat, setAddingCat] = useState(false);
   const [showAddCat, setShowAddCat] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
+  const [showPurchaseDocs, setShowPurchaseDocs] = useState(false);
   const [editDoc, setEditDoc] = useState<OperationDoc | null>(null);
   const [compareDocId, setCompareDocId] = useState<number | null>(null);
   const [textDocId, setTextDocId] = useState<number | null>(null);
@@ -1094,6 +1096,14 @@ export default function OperationDetailPage() {
             </button>
             <button
               type="button"
+              onClick={() => setShowPurchaseDocs(true)}
+              title="Copy documents of a purchase operation (PO) into this operation"
+              className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 border border-primary-200 bg-primary-50 rounded-lg px-2 py-1"
+            >
+              <ShoppingCart size={12} /> From purchase operation
+            </button>
+            <button
+              type="button"
               onClick={() => setShowAddCat(v => !v)}
               className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2 py-1"
             >
@@ -1119,6 +1129,16 @@ export default function OperationDetailPage() {
           owner={{ kind: 'operation', id: operation.id }}
           existingNames={operation.documents.map(d => d.file_name)}
           onAdded={fetchOperation}
+        />
+
+        <PurchaseDocumentPickerModal
+          open={showPurchaseDocs}
+          owner={{ kind: 'operation', id: operation.id }}
+          categories={categories}
+          existing={operation.documents}
+          onClose={() => setShowPurchaseDocs(false)}
+          onFiled={fetchOperation}
+          onPreview={openPreview}
         />
 
         {showAddCat && (
