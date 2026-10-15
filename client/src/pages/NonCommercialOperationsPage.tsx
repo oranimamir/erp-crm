@@ -305,7 +305,7 @@ export default function NonCommercialOperationsPage() {
                   <th className="px-4 py-3">NCO #</th>
                   <th className="px-4 py-3">Date</th>
                   <th className="px-4 py-3">Type</th>
-                  <th className="px-4 py-3">Customer / Supplier</th>
+                  <th className="px-4 py-3">From / To</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Notes</th>
                   <th className="px-4 py-3" />

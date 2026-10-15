@@ -37,6 +37,9 @@ interface Nco {
   id: number; nco_number: string; entity: string; type: 'samples' | 'shipping';
   customer_id: number | null; supplier_id: number | null; customer_name: string | null; supplier_name: string | null;
   nco_date: string | null; notes: string | null; status?: string; items: any[]; documents: NcoDoc[];
+  ship_from?: string | null; ship_to?: string | null;
+  ship_from_kind?: string | null; ship_from_ref?: string | null;
+  ship_to_kind?: string | null; ship_to_ref?: string | null;
   ship_from_label?: string | null; ship_to_label?: string | null;
 }
 interface Category { id: number; name: string }
@@ -45,6 +48,53 @@ const UNITS = ['KG', 'G', 'MT', 'L', 'ML', 'PCS', 'LBS'];
 const CURRENCIES = ['EUR', 'USD', 'GBP'];
 
 const cell = 'w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500';
+
+type EndForm = { pick: string; text: string };
+const emptyEnd = (): EndForm => ({ pick: '', text: '' });
+const SHIPPING_CATEGORIES = ['raw_materials', 'blenders', 'logistics'];
+const SUPPLIER_CAT_LABEL: Record<string, string> = { raw_materials: 'Raw materials', blenders: 'Blenders', logistics: 'Logistics' };
+
+function endOf(nco: Nco, side: 'from' | 'to'): EndForm {
+  const kind = nco[`ship_${side}_kind` as keyof Nco] as string | null;
+  const ref  = nco[`ship_${side}_ref`  as keyof Nco] as string | null;
+  const text = (nco[`ship_${side}` as keyof Nco] as string | null) || '';
+  if ((kind === 'supplier' || kind === 'entity') && ref) return { pick: `${kind}:${ref}`, text: '' };
+  if (text) return { pick: 'text', text };
+  return emptyEnd();
+}
+
+function endPayload(side: 'from' | 'to', end: EndForm) {
+  const [kind, ref] = end.pick.split(':');
+  if (kind === 'supplier' || kind === 'entity') return { [`ship_${side}_kind`]: kind, [`ship_${side}_ref`]: ref, [`ship_${side}`]: '' };
+  return { [`ship_${side}_kind`]: end.text.trim() ? 'text' : '', [`ship_${side}_ref`]: '', [`ship_${side}`]: end.text.trim() };
+}
+
+function EndPicker({ label, value, onChange, entities, suppliers }: {
+  label: string; value: EndForm; onChange: (v: EndForm) => void;
+  entities: Array<{ code: string; company_name: string }>;
+  suppliers: Array<{ id: number; name: string; category?: string }>;
+}) {
+  return (
+    <div className="space-y-1 min-w-[180px]">
+      <label className="block text-xs font-medium text-gray-500">{label}</label>
+      <select value={value.pick} onChange={e => onChange({ pick: e.target.value, text: e.target.value === 'text' ? value.text : '' })} className={cell}>
+        <option value="">Choose…</option>
+        <optgroup label="TripleW">
+          {entities.map(e => <option key={e.code} value={`entity:${e.code}`}>{e.company_name} ({e.code})</option>)}
+        </optgroup>
+        {SHIPPING_CATEGORIES.map(cat => (
+          <optgroup key={cat} label={`Suppliers — ${SUPPLIER_CAT_LABEL[cat]}`}>
+            {suppliers.filter(s => s.category === cat).map(s => <option key={s.id} value={`supplier:${s.id}`}>{s.name}</option>)}
+          </optgroup>
+        ))}
+        <option value="text">Other — type a name…</option>
+      </select>
+      {value.pick === 'text' && (
+        <input value={value.text} onChange={e => onChange({ pick: 'text', text: e.target.value })} placeholder="Name (and place)" className={cell} autoFocus />
+      )}
+    </div>
+  );
+}
 
 const blankLine = (): NcoLine => ({ product: '', reference: '', quantity: '', quantity_unit: 'KG', unit_price: '', currency: 'EUR', hs_code: '', lots: '' });
 const toForm = (l: any): NcoLine => ({
@@ -83,6 +133,12 @@ export default function NcoDetailPage() {
   const [textDocId, setTextDocId] = useState<number | null>(null);
   const [declarations, setDeclarations] = useState<OperationDeclaration[]>([]);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [editingParty, setEditingParty] = useState(false);
+  const [partyForm, setPartyForm] = useState<{ from: EndForm; to: EndForm; customer_id: string }>({ from: emptyEnd(), to: emptyEnd(), customer_id: '' });
+  const [savingParty, setSavingParty] = useState(false);
+  const [entities, setEntities] = useState<Array<{ code: string; company_name: string }>>([]);
+  const [shipSuppliers, setShipSuppliers] = useState<Array<{ id: number; name: string; category?: string }>>([]);
+  const [customers, setCustomers] = useState<Array<{ id: number; name: string }>>([]);
 
   const load = useCallback(async () => {
     try {
@@ -101,6 +157,15 @@ export default function NcoDetailPage() {
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
     api.get('/products', { params: { limit: 10000 } }).then(r => setProducts(r.data.data || [])).catch(() => {});
+    api.get('/company-entities').then(r => setEntities(r.data || [])).catch(() => {});
+    api.get('/customers', { params: { limit: 10000 } })
+      .then(r => setCustomers((r.data.data || []).sort((a: any, b: any) => a.name.localeCompare(b.name))))
+      .catch(() => {});
+    api.get('/suppliers', { params: { limit: 10000 } })
+      .then(r => setShipSuppliers((r.data.data || [])
+        .filter((s: any) => SHIPPING_CATEGORIES.includes(s.category || ''))
+        .sort((a: any, b: any) => a.name.localeCompare(b.name))))
+      .catch(() => {});
     api.get('/operations/categories').then(r => {
       setCategories(r.data);
       const invoice = (r.data as Category[]).find(c => c.name === 'Invoice');
@@ -182,6 +247,32 @@ export default function NcoDetailPage() {
     }
   }
 
+  function openEditParty() {
+    if (!nco) return;
+    setPartyForm(nco.type === 'shipping'
+      ? { from: endOf(nco, 'from'), to: endOf(nco, 'to'), customer_id: '' }
+      : { from: emptyEnd(), to: emptyEnd(), customer_id: String(nco.customer_id || '') });
+    setEditingParty(true);
+  }
+
+  async function saveParty() {
+    if (!nco) return;
+    setSavingParty(true);
+    try {
+      const payload = nco.type === 'shipping'
+        ? { ...endPayload('from', partyForm.from), ...endPayload('to', partyForm.to) }
+        : { customer_id: partyForm.customer_id ? Number(partyForm.customer_id) : null };
+      const { data } = await api.put(`/non-commercial-operations/${id}`, payload);
+      setNco(data);
+      setEditingParty(false);
+      addToast('Saved', 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to save', 'error');
+    } finally {
+      setSavingParty(false);
+    }
+  }
+
   async function deleteDoc(doc: NcoDoc) {
     if (!confirm(`Delete ${doc.file_name}? A generated document is deleted with it.`)) return;
     try {
@@ -235,15 +326,43 @@ export default function NcoDetailPage() {
               </span>
               <span className="rounded-full px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-600">{nco.entity}</span>
               <NcoStatusSelect ncoId={nco.id} status={nco.status} onSaved={next => setNco(prev => (prev ? { ...prev, status: next } : prev))} />
-              {!isSamples && (nco.ship_from_label || nco.ship_to_label) ? (
-                <span className="text-gray-700">
-                  From <span className="font-medium">{nco.ship_from_label || '—'}</span> to <span className="font-medium">{nco.ship_to_label || '—'}</span>
-                </span>
+              {editingParty ? (
+                <div className="flex flex-wrap items-end gap-3">
+                  {isSamples ? (
+                    <div className="min-w-[220px]">
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Customer</label>
+                      <select value={partyForm.customer_id} onChange={e => setPartyForm(f => ({ ...f, customer_id: e.target.value }))} className={cell}>
+                        <option value="">Choose…</option>
+                        {customers.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+                      </select>
+                    </div>
+                  ) : (
+                    <>
+                      <EndPicker label="From" value={partyForm.from} onChange={v => setPartyForm(f => ({ ...f, from: v }))} entities={entities} suppliers={shipSuppliers} />
+                      <EndPicker label="To" value={partyForm.to} onChange={v => setPartyForm(f => ({ ...f, to: v }))} entities={entities} suppliers={shipSuppliers} />
+                    </>
+                  )}
+                  <div className="flex gap-1">
+                    <button type="button" onClick={saveParty} disabled={savingParty} className="p-1.5 rounded-lg text-green-600 hover:bg-green-50">
+                      {savingParty ? <Loader2 size={18} className="animate-spin" /> : <Check size={18} />}
+                    </button>
+                    <button type="button" onClick={() => setEditingParty(false)} className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100"><X size={18} /></button>
+                  </div>
+                </div>
               ) : (
-                <span className="text-gray-700">
-                  {isSamples ? 'To ' : 'With '}
-                  <span className="font-medium">{(isSamples ? nco.customer_name : nco.supplier_name) || '—'}</span>
-                </span>
+                <div className="flex items-center gap-1">
+                  {!isSamples && (nco.ship_from_label || nco.ship_to_label) ? (
+                    <span className="text-gray-700">
+                      From <span className="font-medium">{nco.ship_from_label || '—'}</span> to <span className="font-medium">{nco.ship_to_label || '—'}</span>
+                    </span>
+                  ) : (
+                    <span className="text-gray-700">
+                      {isSamples ? 'To ' : 'With '}
+                      <span className="font-medium">{(isSamples ? nco.customer_name : nco.supplier_name) || '—'}</span>
+                    </span>
+                  )}
+                  <button type="button" onClick={openEditParty} title="Edit" className="p-0.5 rounded text-gray-300 hover:text-primary-600 hover:bg-gray-100"><Pencil size={13} /></button>
+                </div>
               )}
               {nco.nco_date && <span className="text-gray-400">· {formatDate(nco.nco_date)}</span>}
             </div>
