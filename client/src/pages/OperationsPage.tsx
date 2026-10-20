@@ -5,7 +5,7 @@ import ShipOperationModal from '../components/ShipOperationModal';
 import { useToast } from '../contexts/ToastContext';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
 import {
-  Briefcase, Search, Plus, ChevronLeft, ChevronRight, FileText, Receipt,
+  Briefcase, Search, Plus, FileText, Receipt,
   FileSpreadsheet, ChevronUp, ChevronDown, Download, X, Loader2, ArrowLeftRight, Landmark, Filter, XCircle, Trash2, Pencil, Upload, RotateCcw, FileCheck2, ShoppingCart, Package, Columns3,
 } from 'lucide-react';
 import { formatDate, todayISO } from '../lib/dates';
@@ -125,8 +125,6 @@ export default function OperationsPage() {
   const [operations, setOperations] = useState<Operation[]>([]);
   const [total, setTotal] = useState(0);
   const [tabTotals, setTabTotals] = useState<{ quantity_mt: number; invoice_eur: number; order_eur: number } | null>(null);
-  const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<SortField>('order_date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -147,7 +145,6 @@ export default function OperationsPage() {
     setFilterStatus('');
     setFilterDateFrom('');
     setFilterDateTo('');
-    setPage(1);
   };
 
   // Preview modal
@@ -339,7 +336,6 @@ export default function OperationsPage() {
       setSortBy(field);
       setSortDir('desc');
     }
-    setPage(1);
   };
 
   const SortIcon = ({ field }: { field: SortField }) => {
@@ -392,7 +388,7 @@ export default function OperationsPage() {
   const fetchOperations = useCallback(async () => {
     setLoading(true);
     try {
-      const params: any = { page, limit: 20, sort_by: sortBy, sort_dir: sortDir, tab: activeTab };
+      const params: any = { page: 1, limit: 10000, sort_by: sortBy, sort_dir: sortDir, tab: activeTab };
       if (activeTab === 'completed' && completedYear) params.year = completedYear;
       if (entityFilter) params.entity = entityFilter;
       if (search) params.search = search;
@@ -406,16 +402,14 @@ export default function OperationsPage() {
       const { data } = await api.get('/operations', { params });
       setOperations(data.data);
       setTotal(data.total);
-      setTotalPages(data.totalPages);
       setTabTotals(data.totals ?? null);
     } catch {
       addToast('Failed to load operations', 'error');
     } finally {
       setLoading(false);
     }
-  }, [page, search, sortBy, sortDir, activeTab, completedYear, entityFilter, filterCustomer, filterStatus, filterDateField, filterDateFrom, filterDateTo]);
+  }, [search, sortBy, sortDir, activeTab, completedYear, entityFilter, filterCustomer, filterStatus, filterDateField, filterDateFrom, filterDateTo]);
 
-  useEffect(() => { setPage(1); }, [activeTab, completedYear, entityFilter]);
   useEffect(() => { fetchOperations(); }, [fetchOperations]);
 
   // Load distinct completion years when the Completed tab is active
@@ -586,7 +580,7 @@ export default function OperationsPage() {
               className="pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
               placeholder="Search operations..."
               value={search}
-              onChange={e => { setSearch(e.target.value); setPage(1); }}
+              onChange={e => { setSearch(e.target.value) }}
             />
           </div>
           <button
@@ -716,7 +710,7 @@ export default function OperationsPage() {
               className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 w-44"
               placeholder="Search client..."
               value={filterCustomer}
-              onChange={e => { setFilterCustomer(e.target.value); setPage(1); }}
+              onChange={e => { setFilterCustomer(e.target.value) }}
             />
           </div>
           <div className="flex flex-col gap-1">
@@ -724,7 +718,7 @@ export default function OperationsPage() {
             <select
               className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 w-40"
               value={filterStatus}
-              onChange={e => { setFilterStatus(e.target.value); setPage(1); }}
+              onChange={e => { setFilterStatus(e.target.value) }}
             >
               <option value="">All statuses</option>
               {STATUS_OPTIONS.map(s => (
@@ -750,7 +744,7 @@ export default function OperationsPage() {
               type="date"
               className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
               value={filterDateFrom}
-              onChange={e => { setFilterDateFrom(e.target.value); setPage(1); }}
+              onChange={e => { setFilterDateFrom(e.target.value) }}
             />
           </div>
           <div className="flex flex-col gap-1">
@@ -759,7 +753,7 @@ export default function OperationsPage() {
               type="date"
               className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
               value={filterDateTo}
-              onChange={e => { setFilterDateTo(e.target.value); setPage(1); }}
+              onChange={e => { setFilterDateTo(e.target.value) }}
             />
           </div>
           {hasActiveFilters && (
@@ -1232,30 +1226,6 @@ export default function OperationsPage() {
               </span>
             </div>
           )}
-        </div>
-      )}
-
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between">
-          <p className="text-sm text-gray-600">
-            Showing {(page - 1) * 20 + 1}–{Math.min(page * 20, total)} of {total}
-          </p>
-          <div className="flex gap-2">
-            <button
-              onClick={() => setPage(p => Math.max(1, p - 1))}
-              disabled={page === 1}
-              className="p-2 rounded-lg border border-gray-300 disabled:opacity-40 hover:bg-gray-50"
-            >
-              <ChevronLeft size={16} />
-            </button>
-            <button
-              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-              disabled={page === totalPages}
-              className="p-2 rounded-lg border border-gray-300 disabled:opacity-40 hover:bg-gray-50"
-            >
-              <ChevronRight size={16} />
-            </button>
-          </div>
         </div>
       )}
 
