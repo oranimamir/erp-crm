@@ -179,22 +179,32 @@ function Section({ icon, title, children, action }: {
   );
 }
 
-/** A count that is computed unless typed; the reset hands it back to the calculation. */
+/**
+ * A count that is filled with the calculation and can be typed over (to match
+ * the BL); the reset hands it back to the calculation. While the field has
+ * focus it shows what is typed, so it can be emptied and retyped.
+ */
 function CountField({ label, value, computed, onChange, decimals }: {
   label: string; value: string; computed: number; onChange: (v: string) => void; decimals?: boolean;
 }) {
+  const [typing, setTyping] = useState<string | null>(null);
+  const edited = value !== '' && Number(value) !== computed;
   return (
     <div className="space-y-1">
       <label className="flex items-center justify-between text-xs font-medium text-gray-500">
         {label}
         {value !== '' && (
-          <button type="button" onClick={() => onChange('')} title={`Reset to ${computed}`}
+          <button type="button" onClick={() => { setTyping(null); onChange(''); }} title={`Reset to ${computed}`}
             className="text-gray-400 hover:text-primary-600"><RotateCcw size={11} /></button>
         )}
       </label>
-      <input type="number" min={0} step={decimals ? 'any' : undefined} value={value} placeholder={String(computed)}
-        onChange={e => onChange(e.target.value)}
-        className={`${inputCls} ${value === '' ? '' : 'border-amber-300 bg-amber-50'}`} />
+      <input type="number" min={0} step={decimals ? 'any' : undefined}
+        value={typing ?? (value !== '' ? value : String(computed))}
+        onFocus={e => setTyping(e.target.value)}
+        onBlur={() => setTyping(null)}
+        onChange={e => { setTyping(e.target.value); onChange(e.target.value); }}
+        title={edited ? `Calculated: ${computed}` : 'Calculated — type to change it'}
+        className={`${inputCls} ${edited ? 'border-amber-300 bg-amber-50' : ''}`} />
     </div>
   );
 }
