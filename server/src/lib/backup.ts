@@ -514,3 +514,56 @@ export async function writeBackupPart(part: BackupPart, stamp: string): Promise<
     }
   })];
 }
+
+// ── Download: the parts an admin ticks, in one ZIP ──────────────────────────
+
+/** One ticked part; `files` = also its documents / PDFs (tabs only — else just the Excel). */
+export interface BackupPick { part: BackupPart; files: boolean }
+
+/** Parts whose files can be left out, keeping only the Excel of their records. */
+export const BACKUP_PARTS_WITH_FILES: BackupPart[] = [
+  'suppliers', 'customer_invoices', 'supplier_invoices', 'orders', 'operations', 'ncos', 'inventory',
+];
+
+/**
+ * Streams one ZIP holding the chosen parts, each in its own folder: the
+ * database file, the uploads tree, invoices by category, and per tab an Excel
+ * of its records with (optionally) its files. Operations are never split here.
+ */
+export async function createCustomArchive(output: NodeJS.WritableStream, picks: BackupPick[]): Promise<void> {
+  const archive = archiver('zip', { zlib: { level: 6 } });
+  const done = new Promise<void>((resolve, reject) => {
+    archive.on('error', reject);
+    output.on('error', reject);
+    output.on('close', resolve);
+    output.on('finish', resolve);
+  });
+  archive.pipe(output);
+
+  for (const { part, files } of picks) {
+    if (part === 'database') {
+      try { (db as any).saveToDisk?.(); } catch { /* the file on disk is still the last save */ }
+      if (fs.existsSync(dbPath)) archive.file(dbPath, { name: 'Database/erp.db' });
+    } else if (part === 'documents') {
+      if (fs.existsSync(uploadsBase)) archive.directory(uploadsBase, 'All uploaded documents');
+    } else if (part === 'invoices') {
+      addCategorizedInvoices(archive, 'Invoices by Category/');
+    } else if (part === 'operations') {
+      const rows = operationRows();
+      archive.append(await operationsOverview(rows), { name: 'Operations/Operations overview.xlsx' });
+      if (files) for (const f of operationFiles(rows).flat()) archive.file(f.full, { name: f.name });
+    } else if (BACKUP_TABS.includes(part)) {
+      const content = tabContent(part);
+      archive.append(await tabWorkbook(content.sheets), { name: `${content.folder}/${content.folder}.xlsx` });
+      if (files) {
+        for (const f of content.files) {
+          if (f.buffer) archive.append(f.buffer, { name: f.name });
+          else if (f.full) archive.file(f.full, { name: f.name });
+        }
+      }
+    }
+  }
+
+  archive.finalize();
+  return done;
+}

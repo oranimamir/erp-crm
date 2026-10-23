@@ -1,7 +1,10 @@
 import { Router, Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
-import { createBackupArchive, createCategorizedInvoiceArchive, listBackups, getBackupsDir } from '../lib/backup.js';
+import {
+  createBackupArchive, createCategorizedInvoiceArchive, createCustomArchive, listBackups, getBackupsDir,
+  BACKUP_PARTS_WITH_FILES, type BackupPart, type BackupPick,
+} from '../lib/backup.js';
 import { buildCronExpr, startBackupScheduler, BackupSchedule } from '../lib/backup-scheduler.js';
 import db from '../database.js';
 import {
@@ -26,6 +29,41 @@ router.get('/', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('[Backup] Download error:', err);
     if (!res.headersSent) res.status(500).json({ error: 'Failed to create backup' });
+  }
+});
+
+// GET /api/backup/parts — what can be ticked for a custom download
+router.get('/parts', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const whole: BackupPart[] = ['database', 'documents', 'invoices'];
+  res.json([...whole, ...BACKUP_TABS].map(key => ({
+    key, label: BACKUP_PART_LABELS[key], hint: BACKUP_PART_HINTS[key],
+    tab: BACKUP_TABS.includes(key), has_files: BACKUP_PARTS_WITH_FILES.includes(key),
+  })));
+});
+
+// POST /api/backup/custom {parts: [{part, files}]} — stream a ZIP of just the ticked parts
+router.post('/custom', async (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const raw = Array.isArray(req.body?.parts) ? req.body.parts : [];
+  const seen = new Set<string>();
+  const picks: BackupPick[] = [];
+  for (const p of raw) {
+    const part = typeof p?.part === 'string' ? p.part : '';
+    if (!Object.hasOwn(BACKUP_PART_LABELS, part) || seen.has(part)) continue;
+    seen.add(part);
+    picks.push({ part: part as BackupPart, files: p.files !== false });
+  }
+  if (!picks.length) { res.status(400).json({ error: 'Choose at least one part to download' }); return; }
+  try {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="erp-backup-custom-${timestamp}.zip"`);
+    await createCustomArchive(res, picks);
+  } catch (err) {
+    console.error('[Backup] Custom download error:', err);
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to create backup' });
+    else res.end();
   }
 });
 
