@@ -296,6 +296,105 @@ const ORDER_TONS_SQL = `
     END
   ), 0) FROM order_items oi WHERE oi.order_id = op.order_id`;
 
+// Why "Expected" and the Open Operations card's "Not yet invoiced" differ: every
+// item counted in one and not the other (same queries as /stats and /open-totals),
+// and the items in both whose amount differs.
+router.get('/expected-reconcile', async (_req: Request, res: Response) => {
+  const invoices = db.prepare(`
+    SELECT i.id, i.invoice_number, i.amount, UPPER(COALESCE(i.currency, 'USD')) as currency,
+      c.name as customer_name, op.id as operation_id, op.operation_number
+    FROM invoices i
+    LEFT JOIN customers c ON i.customer_id = c.id
+    LEFT JOIN operations op ON op.id = i.operation_id
+    WHERE i.type = 'customer' AND i.status IN ('sent', 'overdue')
+      AND i.due_date IS NULL AND op.estimated_payment_date IS NULL
+  `).all() as any[];
+  const orders = db.prepare(`
+    SELECT o.id, o.order_number, o.total_amount as amount, UPPER(COALESCE(oi_cur.currency, 'USD')) as currency,
+      c.name as customer_name
+    FROM orders o
+    LEFT JOIN customers c ON o.customer_id = c.id
+    LEFT JOIN (SELECT UPPER(COALESCE(currency, 'USD')) as currency, order_id FROM order_items GROUP BY order_id) oi_cur ON oi_cur.order_id = o.id
+    WHERE o.type = 'customer' AND o.status NOT IN ('completed', 'cancelled')
+      AND o.total_amount > 0
+      AND NOT EXISTS (SELECT 1 FROM invoices i JOIN operations op ON i.operation_id = op.id WHERE op.order_id = o.id)
+  `).all() as any[];
+  const ops = db.prepare(`
+    SELECT op.id, op.operation_number, op.status, op.order_id,
+      o.order_number, o.type as order_type, o.status as order_status, o.total_amount as amount,
+      (SELECT UPPER(COALESCE(oi.currency, 'USD')) FROM order_items oi WHERE oi.order_id = op.order_id ORDER BY oi.id LIMIT 1) as currency,
+      COALESCE(c.name, oc.name) as customer_name,
+      (SELECT COUNT(*) FROM invoices i WHERE i.operation_id = op.id) as invoice_count
+    FROM operations op
+    LEFT JOIN orders o ON op.order_id = o.id
+    LEFT JOIN customers c ON op.customer_id = c.id
+    LEFT JOIN customers oc ON o.customer_id = oc.id
+    WHERE op.status != 'delivered'
+  `).all() as any[];
+  const uninvoiced = ops.filter(o => !o.invoice_count);
+  const opsOfOrder = db.prepare(`SELECT id, operation_number, status FROM operations WHERE order_id = ?`);
+
+  const all = [...invoices, ...orders, ...uninvoiced];
+  const currencies = [...new Set(all.map(r => (r.currency || 'USD').toUpperCase()).filter(c => c !== 'EUR'))];
+  const rates: Record<string, number> = {};
+  await Promise.all(currencies.map(async c => { rates[c] = await getEurRate(c, 'latest'); }));
+  const eur = (r: any) => (Number(r.amount) || 0) * ((r.currency || 'USD').toUpperCase() === 'EUR' ? 1 : (rates[(r.currency || 'USD').toUpperCase()] ?? 1));
+
+  type Item = { side: 'expected' | 'open_ops'; kind: string; label: string; customer_name: string | null;
+    operation_id: number | null; operation_number: string | null; amount: number; currency: string; eur: number; reason: string };
+  const items: Item[] = [];
+
+  // Expected only: sent invoices with no payment date
+  for (const i of invoices) {
+    items.push({ side: 'expected', kind: 'invoice', label: `Invoice ${i.invoice_number || '#' + i.id}`, customer_name: i.customer_name,
+      operation_id: i.operation_id, operation_number: i.operation_number, amount: i.amount, currency: i.currency, eur: eur(i),
+      reason: 'Sent invoice with no due date and no estimated payment date — counted in Expected only (the operation already has an invoice, so it is not "not yet invoiced")' });
+  }
+
+  // Orders vs operations, matched by order
+  const openByOrder = new Map<number, any[]>();
+  for (const op of uninvoiced) if (op.order_id) openByOrder.set(op.order_id, [...(openByOrder.get(op.order_id) || []), op]);
+  const matchedOps = new Set<number>();
+  for (const o of orders) {
+    const open = openByOrder.get(o.id) || [];
+    if (open.length) {
+      for (const op of open) matchedOps.add(op.id);
+      const opsEur = open.reduce((s, op) => s + eur(op), 0);
+      const diff = eur(o) - opsEur;
+      if (Math.abs(diff) >= 0.5) {
+        items.push({ side: 'expected', kind: 'order_diff', label: `Order ${o.order_number || '#' + o.id}`, customer_name: o.customer_name,
+          operation_id: open[0].id, operation_number: open.map(op => op.operation_number).join(', '), amount: o.amount, currency: o.currency, eur: diff,
+          reason: open.length > 1 ? `In both, but the order is on ${open.length} open operations, so the operations card counts it ${open.length} times`
+            : `In both, but the amounts differ (currency read as ${o.currency} vs ${open[0].currency || 'USD'})` });
+      }
+      continue;
+    }
+    const linked = opsOfOrder.all(o.id) as any[];
+    items.push({ side: 'expected', kind: 'order', label: `Order ${o.order_number || '#' + o.id}`, customer_name: o.customer_name,
+      operation_id: linked[0]?.id ?? null, operation_number: linked.map(l => l.operation_number).join(', ') || null,
+      amount: o.amount, currency: o.currency, eur: eur(o),
+      reason: !linked.length ? 'Open customer order with no operation — Expected counts orders, the operations card counts operations'
+        : linked.every(l => l.status === 'delivered') ? 'Its operation is marked delivered, which the operations card does not count as open (the order itself is still open)'
+        : 'Its operation is not counted as open and uninvoiced on the operations card' });
+  }
+
+  // Operations card only
+  for (const op of uninvoiced) {
+    if (matchedOps.has(op.id) || !(Number(op.amount) > 0)) continue;
+    items.push({ side: 'open_ops', kind: 'operation', label: `Operation ${op.operation_number}`, customer_name: op.customer_name,
+      operation_id: op.id, operation_number: op.operation_number, amount: op.amount, currency: op.currency || 'USD', eur: eur(op),
+      reason: !op.order_id ? 'No order linked'
+        : op.order_type !== 'customer' ? `Its order ${op.order_number || ''} is a ${op.order_type || 'non-customer'} order — Expected counts customer orders only`
+        : ['completed', 'cancelled'].includes(op.order_status) ? `Its order ${op.order_number || ''} is marked ${op.order_status} — Expected leaves those out`
+        : `Its order ${op.order_number || ''} has an invoice on another operation — Expected leaves the order out` });
+  }
+
+  const expected_eur = invoices.reduce((s, i) => s + eur(i), 0) + orders.reduce((s, o) => s + eur(o), 0);
+  const open_ops_eur = uninvoiced.reduce((s, op) => s + eur(op), 0);
+  items.sort((a, b) => Math.abs(b.eur) - Math.abs(a.eur));
+  res.json({ expected_eur, open_ops_eur, gap_eur: expected_eur - open_ops_eur, items });
+});
+
 // Totals for the Open Operations and Pending Invoices cards
 router.get('/open-totals', async (_req: Request, res: Response) => {
   try {

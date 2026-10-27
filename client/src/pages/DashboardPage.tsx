@@ -60,6 +60,17 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [activeInfo, setActiveInfo] = useState<string | null>(null);
   const [breakdown, setBreakdown] = useState<null | 'paid' | 'pending' | 'expected' | 'total'>(null);
+  // Expected vs the Open Operations card's "Not yet invoiced": what is in one and not the other
+  const [reconcile, setReconcile] = useState<null | 'loading' | {
+    expected_eur: number; open_ops_eur: number; gap_eur: number;
+    items: Array<{ side: 'expected' | 'open_ops'; label: string; customer_name: string | null; operation_id: number | null;
+      operation_number: string | null; amount: number; currency: string; eur: number; reason: string }>;
+  }>(null);
+  const eur2 = (n: number) => `€${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const openReconcile = () => {
+    setReconcile('loading');
+    api.get('/dashboard/expected-reconcile').then(r => setReconcile(r.data)).catch(() => setReconcile(null));
+  };
   const [openTotals, setOpenTotals] = useState<{
     operations: { count: number; tons: number; uninvoiced_count: number; uninvoiced_eur: number };
     invoices: { count: number; open_eur: number; overdue_eur: number; tons: number };
@@ -792,10 +803,69 @@ export default function DashboardPage() {
                   Total = received YTD + pending (with due date) + expected (no due date), per customer.
                 </p>
               )}
+              {breakdown === 'expected' && (
+                <div className="px-5 py-2.5 border-t border-gray-100">
+                  <button type="button" onClick={() => { setBreakdown(null); openReconcile(); }}
+                    className="text-xs text-primary-600 hover:underline">
+                    Compare with &ldquo;Not yet invoiced&rdquo; on Open Operations →
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         );
       })()}
+
+      {reconcile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setReconcile(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl mx-4 flex flex-col max-h-[85vh]" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-gray-100 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="font-semibold text-gray-900">Expected vs. Not yet invoiced</h2>
+                {reconcile !== 'loading' && (
+                  <p className="text-sm text-gray-500 mt-0.5">
+                    Expected {eur2(reconcile.expected_eur)} − Not yet invoiced {eur2(reconcile.open_ops_eur)} ={' '}
+                    <strong className="text-gray-900">{eur2(reconcile.gap_eur)}</strong>
+                  </p>
+                )}
+              </div>
+              <button onClick={() => setReconcile(null)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><X size={18} /></button>
+            </div>
+            {reconcile === 'loading' ? (
+              <p className="px-5 py-10 text-center text-sm text-gray-400">Comparing…</p>
+            ) : reconcile.items.length === 0 ? (
+              <p className="px-5 py-10 text-center text-sm text-gray-400">Both figures count the same items.</p>
+            ) : (
+              <div className="overflow-y-auto divide-y divide-gray-100">
+                {reconcile.items.map((it, i) => (
+                  <div key={i} className="px-5 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-900">
+                          {it.label}
+                          {it.customer_name && <span className="text-gray-500 font-normal"> · {it.customer_name}</span>}
+                        </p>
+                        {it.operation_number && (
+                          it.operation_id
+                            ? <Link to={`/operations/${it.operation_id}`} onClick={() => setReconcile(null)} className="text-xs text-primary-600 hover:underline">{it.operation_number}</Link>
+                            : <span className="text-xs text-gray-500">{it.operation_number}</span>
+                        )}
+                        <p className="text-xs text-gray-500 mt-1">{it.reason}</p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className={`text-sm font-bold tabular-nums ${it.side === 'expected' ? 'text-blue-600' : 'text-amber-600'}`}>
+                          {it.side === 'expected' ? '+' : '−'}{eur2(Math.abs(it.eur))}
+                        </p>
+                        <p className="text-[10px] text-gray-400">{it.side === 'expected' ? 'in Expected only' : 'in Not yet invoiced only'}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Tonnage breakdown-by-customer modal (opened from the Tons Sold card) */}
       {tonsBreakdownOpen && (() => {

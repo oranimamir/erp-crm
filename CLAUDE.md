@@ -193,6 +193,7 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 
 ## Dashboard
 - Monthly Cash Flow: paid out = sales-activity supplier invoices only (`paid_out_sales`); working capital shows only as planned amounts from the current month onward, never in past months
+- Expected card breakdown → "Compare with Not yet invoiced" (`GET /api/dashboard/expected-reconcile`, same queries as `/stats` and `/open-totals`): every item in one figure and not the other with the reason (sent invoice with no due date, order with no operation, operation delivered, order completed…), matched by order; items sum to the gap
 - Demo Expenses chart: Salaries / Cars checkboxes (`/dashboard/demo-expenses-monthly` returns their share per month; choice kept in localStorage)
 
 ## Analytics
