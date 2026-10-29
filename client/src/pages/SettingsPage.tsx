@@ -27,6 +27,13 @@ interface StorageInfo {
   row_counts: Record<string, number | null>;
   uploads_file_count: number;
   uploads_total_bytes: number;
+  /** Where the disk space goes, biggest first */
+  disk?: {
+    items: Array<{ label: string; bytes: number; files: number; hint?: string }>;
+    total_bytes: number;
+    root: string | null;
+    backups_inside_uploads: boolean;
+  };
 }
 
 const DAYS_OF_WEEK = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -262,6 +269,37 @@ export default function SettingsPage() {
                     <p className="text-sm font-semibold text-gray-900">{fmtSize(storage.uploads_total_bytes)}</p>
                   </div>
                 </div>
+
+                {/* Disk usage, biggest first */}
+                {storage.disk && storage.disk.items.length > 0 && (
+                  <div className="border-t border-gray-100 pt-4">
+                    <p className="text-xs font-medium text-gray-500 mb-2">
+                      Disk usage — {fmtSize(storage.disk.total_bytes)} in all{storage.disk.root ? <> on <code className="text-[11px]">{storage.disk.root}</code></> : ''}
+                    </p>
+                    {storage.disk.backups_inside_uploads && (
+                      <p className="flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mb-2">
+                        <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                        The backups folder is inside the uploads folder, so each backup also packs the backups before it. Point BACKUPS_PATH outside UPLOADS_PATH.
+                      </p>
+                    )}
+                    <div className="space-y-1.5">
+                      {storage.disk.items.map(item => (
+                        <div key={item.label} title={item.hint}>
+                          <div className="flex items-center justify-between gap-3 text-xs">
+                            <span className="text-gray-700 truncate">{item.label}
+                              <span className="text-gray-400"> · {item.files.toLocaleString()} file{item.files === 1 ? '' : 's'}</span>
+                            </span>
+                            <span className="font-semibold text-gray-900 tabular-nums shrink-0">{fmtSize(item.bytes)}</span>
+                          </div>
+                          <div className="h-1.5 rounded-full bg-gray-100 mt-0.5">
+                            <div className="h-1.5 rounded-full bg-primary-500" style={{ width: `${Math.max(1, Math.round((item.bytes / (storage.disk!.total_bytes || 1)) * 100))}%` }} />
+                          </div>
+                          {item.hint && <p className="text-[11px] text-gray-400 mt-0.5">{item.hint}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Row counts */}
                 <div className="border-t border-gray-100 pt-4">
