@@ -13,6 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { todayISO } from '../lib/today.js';
+import { sendPaymentReceivedEmail } from '../lib/paymentEmail.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
@@ -520,6 +521,25 @@ router.post('/:id/wire-transfers', uploadWireTransfer.single('file'), async (req
       label: invoice.invoice_number,
       performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
       detail: 'Paid via wire transfer upload' });
+
+    // Money in: announce it to the people chosen in User Management → Payments
+    if (invoice.type === 'customer') {
+      const info = db.prepare(`
+        SELECT c.name AS customer_name, op.id AS operation_id, op.operation_number
+        FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id LEFT JOIN operations op ON op.id = i.operation_id
+        WHERE i.id = ?
+      `).get(invoice.id) as any;
+      void sendPaymentReceivedEmail({
+        customerName: info?.customer_name || null,
+        invoiceNumber: invoice.invoice_number,
+        operationNumber: info?.operation_number || null,
+        operationId: info?.operation_id || null,
+        amount, currency: wireCurrency, eurAmount: eur_amount,
+        paymentDate: payment_date, bankReference: bank_reference,
+        recordedBy: req.user?.display_name || null,
+        wireFilePath: file_path, wireFileName: file_name,
+      });
+    }
 
     const transfer = db.prepare('SELECT * FROM wire_transfers WHERE id = ?').get(result.lastInsertRowid);
     res.status(201).json(transfer);

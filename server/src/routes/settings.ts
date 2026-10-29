@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
 import { getAiMonthlyLimit, setAiMonthlyLimit, aiSpentThisMonth } from '../lib/aiBudget.js';
+import { todayISO } from '../lib/today.js';
+import { getPaymentNotifySettings, setPaymentNotifySettings, normalizePaymentNotify, sendPaymentReceivedEmail } from '../lib/paymentEmail.js';
 import { getOperationNotifySettings, setOperationNotifySettings, normalizeOperationNotify, getNotificationMutes, normalizeMutes, setMutesForRecipient } from '../lib/notify.js';
 
 /**
@@ -89,6 +91,34 @@ router.put('/operation-notifications', (req: Request, res: Response) => {
   if (value.enabled && !value.recipients.length) { res.status(400).json({ error: 'Add at least one recipient' }); return; }
   setOperationNotifySettings(value);
   res.json({ ...value, email_configured: !!process.env.RESEND_API_KEY });
+});
+
+// GET /api/settings/payment-notifications — who is emailed when a customer wire transfer is uploaded (admin)
+router.get('/payment-notifications', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  res.json({ ...getPaymentNotifySettings(), email_configured: !!process.env.RESEND_API_KEY });
+});
+
+// PUT /api/settings/payment-notifications {recipients: ['user:<id>' | 'email:<addr>']} — admin only
+router.put('/payment-notifications', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const raw = Array.isArray(req.body?.recipients) ? req.body.recipients : [];
+  const invalid = raw.map((r: any) => String(r ?? '')).filter((r: string) => r.startsWith('email:') && !EMAIL_RE.test(r.slice(6)));
+  if (invalid.length) { res.status(400).json({ error: `Invalid email address: ${invalid.map((r: string) => r.slice(6)).join(', ')}` }); return; }
+  const value = normalizePaymentNotify(req.body);
+  setPaymentNotifySettings(value);
+  res.json({ ...value, email_configured: !!process.env.RESEND_API_KEY });
+});
+
+// POST /api/settings/payment-notifications/test — a sample payment email to the saved recipients
+router.post('/payment-notifications/test', async (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const result = await sendPaymentReceivedEmail({
+    customerName: 'Test Customer (sample)', invoiceNumber: 'TEST-0001', operationNumber: null, operationId: null,
+    amount: 12345.67, currency: 'USD', eurAmount: 11400, paymentDate: todayISO(),
+    bankReference: 'This is a test email', recordedBy: req.user?.display_name || null, wireFilePath: null, wireFileName: null,
+  });
+  res.status(result.ok ? 200 : 400).json(result.ok ? result : { ...result, error: result.message });
 });
 
 // GET /api/settings/notification-rules — who is not told about whose changes (admin only)

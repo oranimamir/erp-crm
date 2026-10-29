@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import db from '../database.js';
 import { removeMutesForUser } from '../lib/notify.js';
+import { removePaymentRecipientUser } from '../lib/paymentEmail.js';
 
 const router = Router();
 
@@ -139,6 +140,7 @@ router.delete('/:id', requireAdmin, (req: Request, res: Response) => {
   }
   removeMutesForUser(userId);
   removeBackupRecipientUser(userId);
+  removePaymentRecipientUser(userId);
   res.json({ message: 'User deleted' });
 });
 

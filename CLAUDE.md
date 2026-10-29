@@ -48,6 +48,7 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - `POST /invoices/:id/wire-transfers` — upload + mark invoice paid; fetches FX on upload date, stores `fx_rate` + `eur_amount`
 - `DELETE /invoices/:id/wire-transfers/:transferId` — reverts invoice to `sent`
 - No approval workflow; no confirmation modals (inline drag-drop IS the confirm)
+- Payment received email (`lib/paymentEmail.ts`): every wire transfer uploaded on a CUSTOMER invoice emails the recipients chosen in User Management → Payments (`components/PaymentRecipients.tsx`, admin; `app_settings.payment_notifications` = `{recipients: ['user:<id>' | 'email:<addr>']}`, `GET/PUT /api/settings/payment-notifications`, `POST …/test` sends a sample; deleted users dropped). Bold, cheerful "Hip hip hooray — we got paid!" (random headline + sign-off), customer / invoice / operation / amount + EUR / date / bank ref / who recorded it, wire PDF attached (≤ 10 MB), link to the operation (`APP_URL`). Sent after the response (`void`), never throws, never blocks the upload
 
 ## Operations
 - `operations.category`: 'blending' | 'trading' (required for new operations)
