@@ -56,6 +56,7 @@ import cron from 'node-cron';
 import { markOverdueInvoices } from './lib/overdue.js';
 import { checkEmailForStockUpdates } from './lib/email-stock.js';
 import { startBackupScheduler, buildCronExpr } from './lib/backup-scheduler.js';
+import { pruneBackups } from './lib/backup.js';
 import { startBackupEmailScheduler } from './lib/backupEmail.js';
 import { getEurRate } from './lib/fx.js';
 
@@ -208,6 +209,11 @@ try {
   const schedRow = db.prepare("SELECT value FROM app_settings WHERE key = 'backup_schedule'").get() as any;
   const sched = schedRow ? JSON.parse(schedRow.value) : { frequency: 'weekly', day: 0, hour: 2, minute: 0 };
   startBackupScheduler(buildCronExpr(sched));
+  // Older saved backups beyond the number to keep are removed at startup too (they fill the volume)
+  try {
+    const gone = pruneBackups();
+    if (gone.length) console.log(`[Backup] Removed ${gone.length} older saved backup(s): ${gone.join(', ')}`);
+  } catch (err) { console.warn('[Backup] prune at startup failed:', err); }
 }
 
 // The weekly backup by email — Monday 06:00 Brussels time unless an admin changed it

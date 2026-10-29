@@ -13,8 +13,8 @@ const dbPath      = process.env.DB_PATH      || path.join(__dirname, '..', '..',
 const uploadsBase = process.env.UPLOADS_PATH  || path.join(__dirname, '..', '..', 'uploads');
 const backupsDir  = process.env.BACKUPS_PATH  || path.join(__dirname, '..', '..', 'backups');
 
-/** How many scheduled backups stay on the server (Settings → Backup), 1–10; 4 by default. */
-const DEFAULT_KEEP = 4;
+/** How many scheduled backups stay on the server (Settings → Backup), 1–10; only the last one by default. */
+const DEFAULT_KEEP = 1;
 
 export function getBackupKeep(): number {
   try {

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Settings, Lock, Monitor, Sun, Moon, Download, DatabaseBackup, Clock, HardDrive, CheckCircle, AlertTriangle, Trash2 } from 'lucide-react';
+import { Settings, Lock, Monitor, Sun, Moon, Download, DatabaseBackup, Clock, HardDrive, CheckCircle, AlertTriangle, Trash2, User, Mail, Sparkles } from 'lucide-react';
 import BackupDownloadPicker from '../components/BackupDownloadPicker';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
@@ -36,16 +36,29 @@ interface StorageInfo {
   };
 }
 
+/** Settings sub-tabs; all but Account are admin only. `?tab=` in the URL picks one. */
+type SettingsTab = 'account' | 'emails' | 'ai' | 'backup' | 'storage';
+const SETTINGS_TABS: { id: SettingsTab; label: string; hint: string; icon: typeof Settings; admin: boolean }[] = [
+  { id: 'account', label: 'Account', hint: 'Your password and how the app looks', icon: User, admin: false },
+  { id: 'emails', label: 'Emails', hint: 'Default recipients for documents and who hears about operation changes', icon: Mail, admin: true },
+  { id: 'ai', label: 'AI reading', hint: 'The monthly spending limit for AI document reading', icon: Sparkles, admin: true },
+  { id: 'backup', label: 'Backup', hint: 'Download backups, the automatic schedule and the saved backups', icon: DatabaseBackup, admin: true },
+  { id: 'storage', label: 'Storage', hint: 'Where the data is kept and what fills the disk', icon: HardDrive, admin: true },
+];
+
 const DAYS_OF_WEEK = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 export default function SettingsPage() {
   const { addToast } = useToast();
   const { theme, toggleTheme } = useTheme();
   const { user } = useAuth();
+  const [params, setParams] = useSearchParams();
+  const tabs = SETTINGS_TABS.filter(t => !t.admin || user?.role === 'admin');
+  const tab: SettingsTab = tabs.find(t => t.id === params.get('tab'))?.id ?? 'account';
   const [savedBackups, setSavedBackups] = useState<SavedBackup[]>([]);
   const [downloadingFile, setDownloadingFile] = useState<string | null>(null);
   const [deletingFile, setDeletingFile] = useState<string | null>(null);
-  const [keepBackups, setKeepBackups] = useState(4);
+  const [keepBackups, setKeepBackups] = useState(1);
 
   // Backup schedule
   const [schedule, setSchedule] = useState<BackupSchedule>({ frequency: 'weekly', day: 0, hour: 2, minute: 0 });
@@ -159,15 +172,40 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
           <Settings size={24} className="text-primary-600" />
           Settings
         </h1>
-        <p className="text-sm text-gray-500 mt-0.5">Manage your account and preferences</p>
+        <p className="text-sm text-gray-500 mt-0.5">{SETTINGS_TABS.find(t => t.id === tab)?.hint}</p>
       </div>
 
+      <div className="flex flex-col md:flex-row gap-6">
+        {tabs.length > 1 && (
+          <nav className="md:w-52 shrink-0">
+            {/* Tabs across the top on a phone, a side menu from tablet width */}
+            <div className="flex md:flex-col gap-1 overflow-x-auto md:overflow-visible -mx-4 px-4 md:mx-0 md:px-0 md:sticky md:top-4">
+              {tabs.map(t => {
+                const Icon = t.icon;
+                const on = t.id === tab;
+                return (
+                  <button key={t.id} type="button" onClick={() => setParams(t.id === 'account' ? {} : { tab: t.id })}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${on
+                      ? 'bg-primary-50 text-primary-700'
+                      : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'}`}>
+                    <Icon size={16} className={on ? 'text-primary-600' : 'text-gray-400'} />
+                    {t.label}
+                  </button>
+                );
+              })}
+            </div>
+          </nav>
+        )}
+
+        <div className="flex-1 min-w-0 max-w-2xl">
+          {tab === 'account' && (
+            <div className="space-y-6">
       {/* Change Password */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
         <div className="px-6 py-4 border-b border-gray-200">
@@ -223,136 +261,100 @@ export default function SettingsPage() {
         </form>
       </div>
 
-      {/* Storage & Persistence — admin only */}
-      {user?.role === 'admin' && (
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
-              <HardDrive size={16} className="text-gray-500" />
-              Storage &amp; Persistence
-            </h2>
+      {/* Appearance */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+            <Monitor size={16} className="text-gray-500" />
+            Appearance
+          </h2>
+        </div>
+        <div className="px-6 py-5">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-900">Theme</p>
+              <p className="text-sm text-gray-500 mt-0.5">Choose between light and dark mode</p>
+            </div>
+            <button
+              onClick={toggleTheme}
+              className={`relative inline-flex items-center gap-3 px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                theme === 'dark'
+                  ? 'bg-gray-800 border-gray-600 text-gray-100 hover:bg-gray-700'
+                  : 'bg-gray-100 border-gray-300 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              {theme === 'dark' ? (
+                <>
+                  <Moon size={16} className="text-primary-400" />
+                  Dark mode
+                </>
+              ) : (
+                <>
+                  <Sun size={16} className="text-amber-500" />
+                  Light mode
+                </>
+              )}
+            </button>
           </div>
-          <div className="px-6 py-5">
-            {storageError ? (
-              <p className="text-sm text-gray-500">Storage status is unavailable.</p>
-            ) : !storage ? (
-              <p className="text-sm text-gray-400">Loading storage status…</p>
-            ) : (
-              <div className="space-y-4">
-                {/* Persistence verdict */}
-                {storage.looks_ephemeral ? (
-                  <div className="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3">
-                    <AlertTriangle size={18} className="text-amber-500 shrink-0 mt-0.5" />
-                    <div>
-                      <p className="text-sm font-semibold text-amber-800">Ephemeral storage — data is at risk</p>
-                      <p className="text-xs text-amber-700 mt-0.5">
-                        The database is being written inside the app directory, which is wiped on every redeploy.
-                        Mount a persistent volume and set <code>DB_PATH</code>, <code>UPLOADS_PATH</code> and <code>BACKUPS_PATH</code> to it.
-                      </p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex items-start gap-2 rounded-lg bg-green-50 border border-green-200 px-4 py-3">
-                    <CheckCircle size={18} className="text-green-600 shrink-0 mt-0.5" />
-                    <div>
-                      <p className="text-sm font-semibold text-green-800">Persistent storage — data survives redeploys</p>
-                      <p className="text-xs text-green-700 mt-0.5">
-                        The database and uploaded files are stored on a persistent volume.
-                      </p>
-                    </div>
-                  </div>
-                )}
 
-                {/* Paths */}
-                <div className="grid grid-cols-1 gap-2 text-sm">
-                  {([
-                    ['Database', storage.db_path, storage.db_path_from_env],
-                    ['Uploads', storage.uploads_path, storage.uploads_path_from_env],
-                    ['Backups', storage.backups_path, storage.backups_path_from_env],
-                  ] as [string, string, boolean][]).map(([label, p, fromEnv]) => (
-                    <div key={label} className="flex items-center justify-between gap-3">
-                      <span className="text-gray-500 shrink-0 w-20">{label}</span>
-                      <code className="text-xs text-gray-700 truncate flex-1 text-right">{p}</code>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 ${fromEnv ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                        {fromEnv ? 'from env' : 'default'}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-
-                {/* DB + uploads stats */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 border-t border-gray-100 pt-4">
-                  <div>
-                    <p className="text-xs text-gray-500">DB size</p>
-                    <p className="text-sm font-semibold text-gray-900">{fmtSize(storage.db_file_size)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">DB updated</p>
-                    <p className="text-sm font-semibold text-gray-900">{storage.db_file_modified ? formatDate(storage.db_file_modified) : '—'}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Uploaded files</p>
-                    <p className="text-sm font-semibold text-gray-900">{storage.uploads_file_count.toLocaleString()}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Uploads size</p>
-                    <p className="text-sm font-semibold text-gray-900">{fmtSize(storage.uploads_total_bytes)}</p>
-                  </div>
-                </div>
-
-                {/* Disk usage, biggest first */}
-                {storage.disk && storage.disk.items.length > 0 && (
-                  <div className="border-t border-gray-100 pt-4">
-                    <p className="text-xs font-medium text-gray-500 mb-2">
-                      Disk usage — {fmtSize(storage.disk.total_bytes)} in all{storage.disk.root ? <> on <code className="text-[11px]">{storage.disk.root}</code></> : ''}
-                    </p>
-                    {storage.disk.backups_inside_uploads && (
-                      <p className="flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mb-2">
-                        <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-                        The backups folder is inside the uploads folder, so each backup also packs the backups before it. Point BACKUPS_PATH outside UPLOADS_PATH.
-                      </p>
-                    )}
-                    <div className="space-y-1.5">
-                      {storage.disk.items.map(item => (
-                        <div key={item.label} title={item.hint}>
-                          <div className="flex items-center justify-between gap-3 text-xs">
-                            <span className="text-gray-700 truncate">{item.label}
-                              <span className="text-gray-400"> · {item.files.toLocaleString()} file{item.files === 1 ? '' : 's'}</span>
-                            </span>
-                            <span className="font-semibold text-gray-900 tabular-nums shrink-0">{fmtSize(item.bytes)}</span>
-                          </div>
-                          <div className="h-1.5 rounded-full bg-gray-100 mt-0.5">
-                            <div className="h-1.5 rounded-full bg-primary-500" style={{ width: `${Math.max(1, Math.round((item.bytes / (storage.disk!.total_bytes || 1)) * 100))}%` }} />
-                          </div>
-                          {item.hint && <p className="text-[11px] text-gray-400 mt-0.5">{item.hint}</p>}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Row counts */}
-                <div className="border-t border-gray-100 pt-4">
-                  <p className="text-xs font-medium text-gray-500 mb-2">Records</p>
-                  <div className="flex flex-wrap gap-2">
-                    {(['operations', 'invoices', 'orders', 'customers', 'suppliers', 'wire_transfers'] as const).map(t => (
-                      <span key={t} className="text-xs bg-gray-100 text-gray-700 rounded-md px-2 py-1">
-                        {t.replace('_', ' ')}: <span className="font-semibold">{storage.row_counts[t] ?? '—'}</span>
-                      </span>
-                    ))}
-                  </div>
-                </div>
+          {/* Mode cards */}
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <button
+              onClick={() => theme === 'dark' && toggleTheme()}
+              className={`p-4 rounded-lg border-2 text-left transition-all ${
+                theme === 'light'
+                  ? 'border-primary-500 bg-primary-50'
+                  : 'border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <Sun size={16} className={theme === 'light' ? 'text-primary-600' : 'text-gray-400'} />
+                <span className={`text-sm font-medium ${theme === 'light' ? 'text-primary-700' : 'text-gray-700'}`}>Light</span>
+                {theme === 'light' && <span className="ml-auto text-xs text-primary-600 font-medium">Active</span>}
               </div>
-            )}
+              <div className="rounded border border-gray-200 bg-white h-12 flex items-center px-2 gap-1">
+                <div className="w-2 h-2 rounded-full bg-gray-200" />
+                <div className="flex-1 h-1.5 bg-gray-100 rounded" />
+              </div>
+            </button>
+            <button
+              onClick={() => theme === 'light' && toggleTheme()}
+              className={`p-4 rounded-lg border-2 text-left transition-all ${
+                theme === 'dark'
+                  ? 'border-primary-500 bg-primary-50'
+                  : 'border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <Moon size={16} className={theme === 'dark' ? 'text-primary-600' : 'text-gray-400'} />
+                <span className={`text-sm font-medium ${theme === 'dark' ? 'text-primary-700' : 'text-gray-700'}`}>Dark</span>
+                {theme === 'dark' && <span className="ml-auto text-xs text-primary-600 font-medium">Active</span>}
+              </div>
+              <div className="rounded border border-gray-600 bg-gray-800 h-12 flex items-center px-2 gap-1">
+                <div className="w-2 h-2 rounded-full bg-gray-600" />
+                <div className="flex-1 h-1.5 bg-gray-700 rounded" />
+              </div>
+            </button>
           </div>
         </div>
-      )}
-
+      </div>
+            </div>
+          )}
+          {tab === 'emails' && (
+            <div className="space-y-6">
       {/* Default recipients for emailed invoices and packing lists — admin only */}
       {user?.role === 'admin' && <DocumentEmailSettings />}
       {user?.role === 'admin' && <OperationNotifySettings />}
-      {user?.role === 'admin' && <AiSpendingSettings />}
 
+            </div>
+          )}
+          {tab === 'ai' && (
+            <div className="space-y-6">
+      <AiSpendingSettings />
+            </div>
+          )}
+          {tab === 'backup' && (
+            <div className="space-y-6">
       {/* Backup — admin only */}
       {user?.role === 'admin' && (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
@@ -371,7 +373,7 @@ export default function SettingsPage() {
                 <Clock size={14} className="text-gray-400" />
                 Automatic backup schedule
               </p>
-              <p className="text-sm text-gray-500 mb-3">The last {keepBackups} backup{keepBackups === 1 ? ' is' : 's are'} kept on the server — change it under Saved backups below.</p>
+              <p className="text-sm text-gray-500 mb-3">{keepBackups === 1 ? 'Only the last backup is' : `The last ${keepBackups} backups are`} kept on the server — change it under Saved backups below.</p>
               <div className="flex flex-wrap items-end gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">Frequency</label>
@@ -499,81 +501,137 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* Appearance */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
-        <div className="px-6 py-4 border-b border-gray-200">
-          <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
-            <Monitor size={16} className="text-gray-500" />
-            Appearance
-          </h2>
-        </div>
-        <div className="px-6 py-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-900">Theme</p>
-              <p className="text-sm text-gray-500 mt-0.5">Choose between light and dark mode</p>
             </div>
-            <button
-              onClick={toggleTheme}
-              className={`relative inline-flex items-center gap-3 px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${
-                theme === 'dark'
-                  ? 'bg-gray-800 border-gray-600 text-gray-100 hover:bg-gray-700'
-                  : 'bg-gray-100 border-gray-300 text-gray-700 hover:bg-gray-200'
-              }`}
-            >
-              {theme === 'dark' ? (
-                <>
-                  <Moon size={16} className="text-primary-400" />
-                  Dark mode
-                </>
-              ) : (
-                <>
-                  <Sun size={16} className="text-amber-500" />
-                  Light mode
-                </>
-              )}
-            </button>
+          )}
+          {tab === 'storage' && (
+            <div className="space-y-6">
+      {/* Storage & Persistence — admin only */}
+      {user?.role === 'admin' && (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+              <HardDrive size={16} className="text-gray-500" />
+              Storage &amp; Persistence
+            </h2>
           </div>
+          <div className="px-6 py-5">
+            {storageError ? (
+              <p className="text-sm text-gray-500">Storage status is unavailable.</p>
+            ) : !storage ? (
+              <p className="text-sm text-gray-400">Loading storage status…</p>
+            ) : (
+              <div className="space-y-4">
+                {/* Persistence verdict */}
+                {storage.looks_ephemeral ? (
+                  <div className="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3">
+                    <AlertTriangle size={18} className="text-amber-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-semibold text-amber-800">Ephemeral storage — data is at risk</p>
+                      <p className="text-xs text-amber-700 mt-0.5">
+                        The database is being written inside the app directory, which is wiped on every redeploy.
+                        Mount a persistent volume and set <code>DB_PATH</code>, <code>UPLOADS_PATH</code> and <code>BACKUPS_PATH</code> to it.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-start gap-2 rounded-lg bg-green-50 border border-green-200 px-4 py-3">
+                    <CheckCircle size={18} className="text-green-600 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-semibold text-green-800">Persistent storage — data survives redeploys</p>
+                      <p className="text-xs text-green-700 mt-0.5">
+                        The database and uploaded files are stored on a persistent volume.
+                      </p>
+                    </div>
+                  </div>
+                )}
 
-          {/* Mode cards */}
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            <button
-              onClick={() => theme === 'dark' && toggleTheme()}
-              className={`p-4 rounded-lg border-2 text-left transition-all ${
-                theme === 'light'
-                  ? 'border-primary-500 bg-primary-50'
-                  : 'border-gray-200 hover:border-gray-300'
-              }`}
-            >
-              <div className="flex items-center gap-2 mb-2">
-                <Sun size={16} className={theme === 'light' ? 'text-primary-600' : 'text-gray-400'} />
-                <span className={`text-sm font-medium ${theme === 'light' ? 'text-primary-700' : 'text-gray-700'}`}>Light</span>
-                {theme === 'light' && <span className="ml-auto text-xs text-primary-600 font-medium">Active</span>}
+                {/* Paths */}
+                <div className="grid grid-cols-1 gap-2 text-sm">
+                  {([
+                    ['Database', storage.db_path, storage.db_path_from_env],
+                    ['Uploads', storage.uploads_path, storage.uploads_path_from_env],
+                    ['Backups', storage.backups_path, storage.backups_path_from_env],
+                  ] as [string, string, boolean][]).map(([label, p, fromEnv]) => (
+                    <div key={label} className="flex items-center justify-between gap-3">
+                      <span className="text-gray-500 shrink-0 w-20">{label}</span>
+                      <code className="text-xs text-gray-700 truncate flex-1 text-right">{p}</code>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 ${fromEnv ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                        {fromEnv ? 'from env' : 'default'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* DB + uploads stats */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 border-t border-gray-100 pt-4">
+                  <div>
+                    <p className="text-xs text-gray-500">DB size</p>
+                    <p className="text-sm font-semibold text-gray-900">{fmtSize(storage.db_file_size)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">DB updated</p>
+                    <p className="text-sm font-semibold text-gray-900">{storage.db_file_modified ? formatDate(storage.db_file_modified) : '—'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">Uploaded files</p>
+                    <p className="text-sm font-semibold text-gray-900">{storage.uploads_file_count.toLocaleString()}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">Uploads size</p>
+                    <p className="text-sm font-semibold text-gray-900">{fmtSize(storage.uploads_total_bytes)}</p>
+                  </div>
+                </div>
+
+                {/* Disk usage, biggest first */}
+                {storage.disk && storage.disk.items.length > 0 && (
+                  <div className="border-t border-gray-100 pt-4">
+                    <p className="text-xs font-medium text-gray-500 mb-2">
+                      Disk usage — {fmtSize(storage.disk.total_bytes)} in all{storage.disk.root ? <> on <code className="text-[11px]">{storage.disk.root}</code></> : ''}
+                    </p>
+                    {storage.disk.backups_inside_uploads && (
+                      <p className="flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mb-2">
+                        <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                        The backups folder is inside the uploads folder, so each backup also packs the backups before it. Point BACKUPS_PATH outside UPLOADS_PATH.
+                      </p>
+                    )}
+                    <div className="space-y-1.5">
+                      {storage.disk.items.map(item => (
+                        <div key={item.label} title={item.hint}>
+                          <div className="flex items-center justify-between gap-3 text-xs">
+                            <span className="text-gray-700 truncate">{item.label}
+                              <span className="text-gray-400"> · {item.files.toLocaleString()} file{item.files === 1 ? '' : 's'}</span>
+                            </span>
+                            <span className="font-semibold text-gray-900 tabular-nums shrink-0">{fmtSize(item.bytes)}</span>
+                          </div>
+                          <div className="h-1.5 rounded-full bg-gray-100 mt-0.5">
+                            <div className="h-1.5 rounded-full bg-primary-500" style={{ width: `${Math.max(1, Math.round((item.bytes / (storage.disk!.total_bytes || 1)) * 100))}%` }} />
+                          </div>
+                          {item.hint && <p className="text-[11px] text-gray-400 mt-0.5">{item.hint}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Row counts */}
+                <div className="border-t border-gray-100 pt-4">
+                  <p className="text-xs font-medium text-gray-500 mb-2">Records</p>
+                  <div className="flex flex-wrap gap-2">
+                    {(['operations', 'invoices', 'orders', 'customers', 'suppliers', 'wire_transfers'] as const).map(t => (
+                      <span key={t} className="text-xs bg-gray-100 text-gray-700 rounded-md px-2 py-1">
+                        {t.replace('_', ' ')}: <span className="font-semibold">{storage.row_counts[t] ?? '—'}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
               </div>
-              <div className="rounded border border-gray-200 bg-white h-12 flex items-center px-2 gap-1">
-                <div className="w-2 h-2 rounded-full bg-gray-200" />
-                <div className="flex-1 h-1.5 bg-gray-100 rounded" />
-              </div>
-            </button>
-            <button
-              onClick={() => theme === 'light' && toggleTheme()}
-              className={`p-4 rounded-lg border-2 text-left transition-all ${
-                theme === 'dark'
-                  ? 'border-primary-500 bg-primary-50'
-                  : 'border-gray-200 hover:border-gray-300'
-              }`}
-            >
-              <div className="flex items-center gap-2 mb-2">
-                <Moon size={16} className={theme === 'dark' ? 'text-primary-600' : 'text-gray-400'} />
-                <span className={`text-sm font-medium ${theme === 'dark' ? 'text-primary-700' : 'text-gray-700'}`}>Dark</span>
-                {theme === 'dark' && <span className="ml-auto text-xs text-primary-600 font-medium">Active</span>}
-              </div>
-              <div className="rounded border border-gray-600 bg-gray-800 h-12 flex items-center px-2 gap-1">
-                <div className="w-2 h-2 rounded-full bg-gray-600" />
-                <div className="flex-1 h-1.5 bg-gray-700 rounded" />
-              </div>
-            </button>
+            )}
           </div>
+        </div>
+      )}
+
+            </div>
+          )}
         </div>
       </div>
     </div>

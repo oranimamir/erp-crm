@@ -203,8 +203,8 @@ export default function NotificationRules({ data, onChange, onToggleNotify, sele
                 Receive change notifications
               </label>
             ) : (
-              <Link to="/settings" className="inline-flex items-center gap-1 text-xs text-primary-600 hover:underline">
-                Managed in Settings → Operation change emails <ExternalLink size={12} />
+              <Link to="/settings?tab=emails" className="inline-flex items-center gap-1 text-xs text-primary-600 hover:underline">
+                Managed in Settings → Emails → Operation change emails <ExternalLink size={12} />
               </Link>
             )}
           </div>

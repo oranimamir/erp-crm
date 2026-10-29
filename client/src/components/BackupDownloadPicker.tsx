@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Download, Loader2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Download, Loader2 } from 'lucide-react';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 
@@ -37,6 +37,7 @@ export default function BackupDownloadPicker() {
   const [parts, setParts] = useState<PartOption[]>([]);
   const [picks, setPicks] = useState<Picks>(loadPicks);
   const [busy, setBusy] = useState<'full' | 'custom' | null>(null);
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     api.get('/backup/parts').then(r => setParts(r.data || [])).catch(() => {});
@@ -130,13 +131,15 @@ export default function BackupDownloadPicker() {
       </div>
 
       <div className="border-t border-gray-100 pt-4">
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
-          <div>
-            <p className="text-sm font-medium text-gray-900">Choose what to download</p>
-            <p className="text-sm text-gray-500 mt-0.5">
-              Tick the parts you want — each goes in its own folder of one ZIP. Untick <em>With files</em> to get just the Excel of a tab.
-            </p>
-          </div>
+        <button type="button" onClick={() => setOpen(v => !v)} className="w-full flex items-start gap-2 text-left">
+          {open ? <ChevronDown size={16} className="text-gray-400 mt-0.5 shrink-0" /> : <ChevronRight size={16} className="text-gray-400 mt-0.5 shrink-0" />}
+          <span>
+            <span className="block text-sm font-medium text-gray-900">Choose what to download{chosen.length ? ` (${chosen.length} ticked)` : ''}</span>
+            <span className="block text-sm text-gray-500 mt-0.5">Only some tabs or parts, each in its own folder of one ZIP — with or without their files.</span>
+          </span>
+        </button>
+        {open && <>
+        <div className="flex flex-wrap items-center justify-end gap-2 mt-3 mb-1">
           <div className="flex gap-2 text-xs">
             <button type="button" onClick={() => allTabs(true)} className="px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50">All tabs</button>
             <button type="button" onClick={() => allTabs(false)} className="px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50">All tabs, Excel only</button>
@@ -166,6 +169,7 @@ export default function BackupDownloadPicker() {
             {busy === 'custom' ? 'Preparing...' : chosen.length ? `Download selected (${chosen.length})` : 'Download selected'}
           </button>
         </div>
+        </>}
       </div>
     </div>
   );
