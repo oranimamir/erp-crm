@@ -2418,6 +2418,15 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE purchase_orders ADD COLUMN purchase_operation_document_id INTEGER`); } catch (_) { /* column may already exist */ }
   // The customer order a purchase operation's PO was drafted from / compared with (no FK: deleting the order keeps the PO)
   try { db.exec(`ALTER TABLE purchase_orders ADD COLUMN source_order_id INTEGER`); } catch (_) { /* column may already exist */ }
+  // Supplier PO approval (lib/poApproval.ts): who needs it, admins' signatures, and each PO's approval state
+  try { db.exec(`ALTER TABLE users ADD COLUMN po_requires_approval INTEGER NOT NULL DEFAULT 0`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE users ADD COLUMN signature_file TEXT`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE purchase_orders ADD COLUMN approval_status TEXT`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE purchase_orders ADD COLUMN approval_requested_by INTEGER`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE purchase_orders ADD COLUMN approval_requested_at TEXT`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE purchase_orders ADD COLUMN approved_by INTEGER`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE purchase_orders ADD COLUMN approved_at TEXT`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE purchase_orders ADD COLUMN approval_note TEXT`); } catch (_) { /* column may already exist */ }
 
   // Referential integrity is only as good as the last migration — surface any
   // violation in the logs rather than letting it rot silently as it did before.

@@ -17,13 +17,15 @@ import { Plus, Users, Pencil, Trash2, UserPlus, Mail, Clock, XCircle, Copy, Bell
 import { formatDate } from '../lib/dates';
 import BackupRecipients from '../components/BackupRecipients';
 import PaymentRecipients from '../components/PaymentRecipients';
+import PoApprovalSettings from '../components/PoApprovalSettings';
 import NotificationRules, { scopeOf, scopeLabel, type NotificationRulesData, type Mute } from '../components/NotificationRules';
 
-type TabId = 'users' | 'notifications' | 'payments' | 'backups';
+type TabId = 'users' | 'notifications' | 'payments' | 'po-approvals' | 'backups';
 const TABS: { id: TabId; label: string }[] = [
   { id: 'users', label: 'Users' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'payments', label: 'Payments' },
+  { id: 'po-approvals', label: 'PO approvals' },
   { id: 'backups', label: 'Backups' },
 ];
 
@@ -222,6 +224,7 @@ export default function AdminUsersPage() {
 
       {activeTab === 'backups' && <BackupRecipients />}
       {activeTab === 'payments' && <PaymentRecipients />}
+      {activeTab === 'po-approvals' && <PoApprovalSettings />}
 
       {activeTab === 'notifications' && (
         rules ? (

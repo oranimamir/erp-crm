@@ -15,6 +15,7 @@
  */
 import fs from 'fs';
 import { normalizePlLayout, type PackingListLayout, type PlColumnKey } from './packingListLayout.js';
+import { signaturesDir } from './poApproval.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import {
@@ -115,6 +116,8 @@ export interface DocLine {
 export interface DocumentData {
   /** Order confirmation number, or invoice number when kind is 'invoice'. */
   doc_number?: string | null;
+  /** Supplier PO: the admin who generated / approved it (set by the server, never by the form) */
+  signature?: { name: string; date?: string | null; file?: string | null } | null;
   // Issuer — entity constants, supplied from app settings
   company_name?: string | null;
   company_address1?: string | null;
@@ -472,10 +475,27 @@ export async function buildDocumentPdf(kind: DocumentKind, data: DocumentData): 
   y = drawNotes(doc, data, y);
   y = drawOriginBlock(doc, data, y);
   drawFooterBlocks(doc, layout, data, y + 16);
+  if (kind === 'purchase_order' && data.signature?.name) drawSignature(doc, data.signature, Math.max(doc.y, y) + 18);
   stampPageNumbers(doc);
 
   doc.end();
   return done;
+}
+
+/** "Approved for TripleW": the admin's signature image (when uploaded), name and date. */
+function drawSignature(doc: any, sig: { name: string; date?: string | null; file?: string | null }, top: number) {
+  const file = sig.file && /^[a-zA-Z0-9._-]+$/.test(sig.file) ? path.join(signaturesDir, sig.file) : null;
+  const hasImage = !!file && fs.existsSync(file);
+  let y = ensureRoom(doc, top, (hasImage ? 60 : 0) + 48);
+  doc.font('Helvetica-Bold').fontSize(BODY).fillColor(GREEN_TITLE).text('Approved for TripleW', L, y, { width: W, lineBreak: false });
+  y += BODY * 1.5;
+  if (hasImage) {
+    try { doc.image(file!, L, y, { fit: [170, 56] }); y += 60; } catch { /* unreadable image: name only */ }
+  }
+  doc.font('Helvetica-Bold').fontSize(BODY).fillColor(BLACK).text(sig.name, L, y, { width: W, lineBreak: false });
+  y += BODY * 1.35;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(sig.date || ''));
+  if (m) doc.font('Helvetica').fontSize(BODY - 1).fillColor(BLACK).text(`Date: ${m[3]}/${m[2]}/${m[1]}`, L, y, { width: W, lineBreak: false });
 }
 
 // ── Order-confirmation compatibility layer ────────────────────────────────

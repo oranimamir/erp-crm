@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { Resend } from 'resend';
 import db from '../database.js';
+import { needsPoApproval, poSignatureFor, requestPoApproval, notifyPoRequester } from '../lib/poApproval.js';
 import { archiveStored, archiveFile, archiveBuffer, archivedBy, ownerOf, contextOf } from '../lib/archive.js';
 import { notifyAdmin } from '../lib/notify.js';
 import { entityFromOperationNumber, entityProfile, isEntityCode, type EntityCode } from '../lib/companyEntity.js';
@@ -375,11 +376,104 @@ router.get('/by-order/:orderId', (req: Request, res: Response) => {
   res.json(rows.map(parseRecord));
 });
 
+// ── Approval (lib/poApproval.ts) ──────────────────────────────────────────
+
+/**
+ * Generating ("status" not draft) by a user whose POs need approval saves the PO
+ * unsent instead and asks the admins; generating by an admin signs it (and
+ * approves a pending request). The form never sets the signature itself.
+ */
+function approvalGate(req: Request, res: Response): { isDraft: boolean } {
+  const wantsFinal = req.body?.status !== 'draft';
+  const approvalNeeded = wantsFinal && needsPoApproval(req.user);
+  const isDraft = !wantsFinal || approvalNeeded;
+  if (req.body?.data && typeof req.body.data === 'object') {
+    const { signature: _ignored, ...clean } = req.body.data;
+    const signature = isDraft ? null : poSignatureFor(req.user);
+    req.body.data = signature ? { ...clean, signature } : clean;
+  }
+  const json = res.json.bind(res);
+  res.json = ((body: any) => {
+    if (res.statusCode < 300 && body?.id) {
+      if (approvalNeeded) {
+        requestPoApproval(body.id, req.user);
+        notifyAdmin({ action: 'status changed', entity: 'Purchase Order', label: body.po_number || '', detail: 'Waiting for an admin to approve',
+          performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
+        body = { ...body, approval_status: 'pending', approval_requested: true };
+      } else if (!isDraft && req.user?.role === 'admin') {
+        db.prepare(`UPDATE purchase_orders SET approved_by = ?, approved_at = datetime('now'),
+          approval_status = CASE WHEN approval_status IN ('pending', 'rejected') THEN 'approved' ELSE approval_status END WHERE id = ?`)
+          .run(req.user.userId, body.id);
+        body = { ...body, ...withApproval(db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(body.id)) };
+      }
+    }
+    return json(body);
+  }) as any;
+  return { isDraft };
+}
+
+/** The approval fields with names, for the PO page. */
+function withApproval(row: any) {
+  if (!row) return row;
+  const name = (id: number | null) => (id ? (db.prepare('SELECT COALESCE(display_name, username) AS n FROM users WHERE id = ?').get(id) as any)?.n ?? null : null);
+  return { ...parseRecord(row), requested_by_name: name(row.approval_requested_by), approved_by_name: name(row.approved_by) };
+}
+
+// GET /approvals/pending — supplier POs waiting for an admin (admin only)
+router.get('/approvals/pending', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const rows = db.prepare(`SELECT p.id, p.po_number, p.data, p.approval_requested_at, COALESCE(u.display_name, u.username) AS requested_by_name
+    FROM purchase_orders p LEFT JOIN users u ON u.id = p.approval_requested_by
+    WHERE p.approval_status = 'pending' ORDER BY p.approval_requested_at DESC`).all() as any[];
+  res.json(rows.map(r => {
+    let supplier = '';
+    try { supplier = JSON.parse(r.draft_data || r.data || '{}').client_name || ''; } catch { /* none */ }
+    const { data: _d, ...rest } = r;
+    return { ...rest, supplier };
+  }));
+});
+
+// GET /approvals/me — whether my supplier POs need an admin's approval
+router.get('/approvals/me', (req: Request, res: Response) => {
+  res.json({ needs_approval: needsPoApproval(req.user), is_admin: req.user?.role === 'admin' });
+});
+
+// POST /:id/approve — an admin generates the waiting PO (with their signature)
+router.post('/:id/approve', async (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const existing = db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(Number(req.params.id)) as any;
+  if (!existing) { res.status(404).json({ error: 'Purchase order not found' }); return; }
+  if (existing.approval_status !== 'pending') { res.status(400).json({ error: 'This purchase order is not waiting for approval' }); return; }
+  const record = parseRecord(existing);
+  req.body = {
+    data: record.draft || record.data, status: 'final', supplier_id: existing.supplier_id,
+    ...(existing.purchase_operation_id ? { source_order_id: existing.source_order_id } : {}),
+  };
+  const requester = existing.approval_requested_by;
+  await updatePurchaseOrder(req, res);
+  if (res.statusCode < 300) notifyPoRequester(existing.id, requester, true, null, req.user?.display_name || 'An admin');
+});
+
+// POST /:id/reject {note} — sent back to whoever asked, with the reason
+router.post('/:id/reject', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const existing = db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(Number(req.params.id)) as any;
+  if (!existing) { res.status(404).json({ error: 'Purchase order not found' }); return; }
+  if (existing.approval_status !== 'pending') { res.status(400).json({ error: 'This purchase order is not waiting for approval' }); return; }
+  const note = String(req.body?.note ?? '').trim().slice(0, 1000) || null;
+  db.prepare(`UPDATE purchase_orders SET approval_status = 'rejected', approval_note = ?, approved_by = ?, approved_at = datetime('now') WHERE id = ?`)
+    .run(note, req.user.userId, existing.id);
+  notifyPoRequester(existing.id, existing.approval_requested_by, false, note, req.user?.display_name || 'An admin');
+  notifyAdmin({ action: 'status changed', entity: 'Purchase Order', label: existing.po_number, detail: `Not approved${note ? `: ${note}` : ''}`,
+    performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
+  res.json(withApproval(db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(existing.id)));
+});
+
 router.get('/:id', (req: Request, res: Response) => {
   const row = db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(Number(req.params.id));
   if (!row) { res.status(404).json({ error: 'Purchase order not found' }); return; }
   const suppliers = db.prepare('SELECT id, name, category FROM suppliers ORDER BY name').all();
-  res.json({ ...parseRecord(row), suppliers });
+  res.json({ ...withApproval(row), suppliers });
 });
 
 // ── Live preview (nothing is persisted) ───────────────────────────────────
@@ -399,14 +493,14 @@ router.post('/preview', async (req: Request, res: Response) => {
 // ── Create ────────────────────────────────────────────────────────────────
 
 router.post('/', async (req: Request, res: Response) => {
-  const { order_id, operation_id, supplier_id, data, nco_id, purchase_operation_id } = req.body as {
-    order_id?: number; operation_id?: number | null; supplier_id?: number | null; data?: PurchaseOrderData; nco_id?: number | null;
+  const { order_id, operation_id, supplier_id, nco_id, purchase_operation_id } = req.body as {
+    order_id?: number; operation_id?: number | null; supplier_id?: number | null; nco_id?: number | null;
     purchase_operation_id?: number | null;
   };
   // A draft is only the saved form: no PDF, nothing filed under the operation
-  const isDraft = req.body?.status === 'draft';
-
-  if (!data || typeof data !== 'object') { res.status(400).json({ error: 'data is required' }); return; }
+  if (!req.body?.data || typeof req.body.data !== 'object') { res.status(400).json({ error: 'data is required' }); return; }
+  const { isDraft } = approvalGate(req, res);
+  const data = req.body.data as PurchaseOrderData;
   if (purchase_operation_id) { await createForPurchaseOperation(req, res, Number(purchase_operation_id), data, supplier_id ?? null, isDraft); return; }
   if (nco_id) { await createForNco(req, res, Number(nco_id), data, supplier_id ?? null, isDraft); return; }
   if (!order_id) { res.status(400).json({ error: 'order_id is required' }); return; }
@@ -523,14 +617,15 @@ async function createForPurchaseOperation(req: Request, res: Response, purchaseO
 
 // ── Update (regenerates the PDF and replaces the filed document) ──────────
 
-router.put('/:id', async (req: Request, res: Response) => {
+router.put('/:id', (req: Request, res: Response) => updatePurchaseOrder(req, res));
+
+async function updatePurchaseOrder(req: Request, res: Response) {
   const existing = db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(Number(req.params.id)) as any;
   if (!existing) { res.status(404).json({ error: 'Purchase order not found' }); return; }
 
-  const { data, operation_id, supplier_id } = req.body as { data?: PurchaseOrderData; operation_id?: number | null; supplier_id?: number | null };
-  if (!data || typeof data !== 'object') { res.status(400).json({ error: 'data is required' }); return; }
-
-  const isDraft = req.body?.status === 'draft';
+  if (!req.body?.data || typeof req.body.data !== 'object') { res.status(400).json({ error: 'data is required' }); return; }
+  const { isDraft } = approvalGate(req, res);
+  const { data, operation_id, supplier_id } = req.body as { data: PurchaseOrderData; operation_id?: number | null; supplier_id?: number | null };
   const wasDraft = existing.status === 'draft';
   if (isDraft && !wasDraft) {
     // Already generated: keep the edits as a pending draft. The filed PDF (and,
@@ -603,7 +698,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     console.error('[purchase-orders] update failed:', err?.message || err);
     res.status(500).json({ error: 'Failed to regenerate the purchase order' });
   }
-});
+}
 
 // ── Download ──────────────────────────────────────────────────────────────
 

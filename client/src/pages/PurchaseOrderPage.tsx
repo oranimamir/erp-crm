@@ -9,9 +9,9 @@ import { useToast } from '../contexts/ToastContext';
 import Button from '../components/ui/Button';
 import {
   ArrowLeft, Plus, Trash2, Loader2, Eye, X, FileDown, Mail,
-  CheckCircle, FileText, RefreshCw, Building2, Package, Truck, AlertTriangle, Save,
+  CheckCircle, FileText, RefreshCw, Building2, Package, Truck, AlertTriangle, Save, XCircle, Send, Clock,
 } from 'lucide-react';
-import { todayISO } from '../lib/dates';
+import { todayISO, formatDate } from '../lib/dates';
 
 // Supplier purchase order for a trading operation — the order confirmation's
 // form, addressed to the supplier, with purchase prices typed in by hand.
@@ -71,6 +71,13 @@ interface PurchaseOrder {
   data: Partial<PoData>;
   /** Edits saved as a draft on top of the generated document. */
   draft?: Partial<PoData> | null;
+  /** Admin approval (User Management → PO approvals): null = not asked */
+  approval_status?: 'pending' | 'approved' | 'rejected' | null;
+  approval_note?: string | null;
+  approval_requested_at?: string | null;
+  approved_at?: string | null;
+  requested_by_name?: string | null;
+  approved_by_name?: string | null;
 }
 
 /** Supplier categories, the trading ones (listed by default) first. */
@@ -252,6 +259,11 @@ export default function PurchaseOrderPage() {
       items: prev.items.length === 1 ? prev.items : prev.items.filter((_, i) => i !== index),
     }));
 
+  // Whether my "Confirm & generate" goes to an admin first, and whether I am one
+  const [approvalMe, setApprovalMe] = useState<{ needs_approval: boolean; is_admin: boolean }>({ needs_approval: false, is_admin: false });
+  const [approving, setApproving] = useState(false);
+  useEffect(() => { api.get('/purchase-orders/approvals/me').then(r => setApprovalMe(r.data)).catch(() => {}); }, []);
+
   const adopt = useCallback((record: PurchaseOrder) => {
     setPurchaseOrder(record);
     // Edits saved as a draft on a generated PO pick up where they were left
@@ -429,12 +441,44 @@ export default function PurchaseOrderPage() {
       adopt(data);
       addToast(status === 'draft'
         ? `Draft ${data.po_number} saved`
-        : `Generated ${data.file_name}${operationId || ncoId || purchaseOpId ? ' — filed under the documents' : ''}`, 'success');
+        : data.approval_requested
+          ? `${data.po_number} sent to an admin for approval — it is generated once approved`
+          : `Generated ${data.file_name}${operationId || ncoId || purchaseOpId ? ' — filed under the documents' : ''}`, 'success');
       if (!purchaseOrder) navigate(`/purchase-orders/${data.id}`, { replace: true });
     } catch (err: any) {
       addToast(err.response?.data?.error || (status === 'draft' ? 'Failed to save the draft' : 'Failed to generate the purchase order'), 'error');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleApprove() {
+    if (!purchaseOrder) return;
+    setApproving(true);
+    try {
+      const { data } = await api.post(`/purchase-orders/${purchaseOrder.id}/approve`);
+      adopt(data);
+      addToast(`${data.po_number} approved — generated with your signature and filed`, 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to approve', 'error');
+    } finally {
+      setApproving(false);
+    }
+  }
+
+  async function handleReject() {
+    if (!purchaseOrder) return;
+    const note = prompt(`Why is ${purchaseOrder.po_number} not approved? (sent to ${purchaseOrder.requested_by_name || 'the requester'})`, '');
+    if (note === null) return;
+    setApproving(true);
+    try {
+      const { data } = await api.post(`/purchase-orders/${purchaseOrder.id}/reject`, { note });
+      adopt(data);
+      addToast(`${data.po_number} sent back${note.trim() ? ' with your note' : ''}`, 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to reject', 'error');
+    } finally {
+      setApproving(false);
     }
   }
 
@@ -532,10 +576,25 @@ export default function PurchaseOrderPage() {
               : 'Keep this purchase order as a draft — nothing is generated or filed yet'}>
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save draft
           </Button>
-          <Button size="sm" onClick={() => handleSave('final')} disabled={saving}>
-            {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
-            {generated ? 'Confirm & regenerate' : 'Confirm & generate'}
-          </Button>
+          {approvalMe.is_admin && purchaseOrder?.approval_status === 'pending' ? (
+            <>
+              <Button size="sm" onClick={handleApprove} disabled={approving || saving}
+                title="Generate this purchase order with your signature and file it">
+                {approving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />} Approve &amp; generate
+              </Button>
+              <Button variant="secondary" size="sm" onClick={handleReject} disabled={approving || saving}>
+                <XCircle size={14} /> Reject
+              </Button>
+            </>
+          ) : (
+            <Button size="sm" onClick={() => handleSave('final')} disabled={saving || (approvalMe.needs_approval && purchaseOrder?.approval_status === 'pending')}
+              title={approvalMe.needs_approval ? 'An admin checks it, then it is generated with their signature' : undefined}>
+              {saving ? <Loader2 size={14} className="animate-spin" /> : approvalMe.needs_approval ? <Send size={14} /> : <CheckCircle size={14} />}
+              {approvalMe.needs_approval
+                ? (purchaseOrder?.approval_status === 'pending' ? 'Waiting for approval' : 'Send for approval')
+                : generated ? 'Confirm & regenerate' : 'Confirm & generate'}
+            </Button>
+          )}
           <Button variant="secondary" size="sm" onClick={handleDownload} disabled={!generated}>
             <FileDown size={14} /> Download PDF
           </Button>
@@ -591,7 +650,36 @@ export default function PurchaseOrderPage() {
         )}
       </div>
 
-      {purchaseOrder && isDraft && (
+      {purchaseOrder?.approval_status === 'pending' && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm">
+          <Clock size={16} className="text-blue-600 flex-shrink-0" />
+          <span className="text-blue-800">
+            <strong>Waiting for an admin's approval</strong>
+            {purchaseOrder.requested_by_name ? ` — asked by ${purchaseOrder.requested_by_name}` : ''}
+            {purchaseOrder.approval_requested_at ? ` on ${formatDate(purchaseOrder.approval_requested_at.slice(0, 10))}` : ''}.
+            {approvalMe.is_admin ? ' Check it, then Approve & generate (your signature is added) or Reject.' : ' It is generated, signed and filed once approved.'}
+          </span>
+        </div>
+      )}
+      {purchaseOrder?.approval_status === 'rejected' && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm">
+          <XCircle size={16} className="text-red-600 flex-shrink-0" />
+          <span className="text-red-800">
+            <strong>Not approved</strong>{purchaseOrder.approved_by_name ? ` by ${purchaseOrder.approved_by_name}` : ''}
+            {purchaseOrder.approval_note ? <>: “{purchaseOrder.approval_note}”</> : '.'} Change it and send it for approval again.
+          </span>
+        </div>
+      )}
+      {purchaseOrder?.approval_status === 'approved' && generated && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm">
+          <CheckCircle size={16} className="text-green-600 flex-shrink-0" />
+          <span className="text-green-800">
+            Approved{purchaseOrder.approved_by_name ? ` by ${purchaseOrder.approved_by_name}` : ''}{purchaseOrder.approved_at ? ` on ${formatDate(purchaseOrder.approved_at.slice(0, 10))}` : ''} — signed on the PDF.
+          </span>
+        </div>
+      )}
+
+      {purchaseOrder && isDraft && purchaseOrder.approval_status !== 'pending' && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
           <Save size={16} className="text-amber-600 flex-shrink-0" />
           <span className="text-amber-800">

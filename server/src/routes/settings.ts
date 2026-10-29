@@ -2,6 +2,12 @@ import { Router, Request, Response } from 'express';
 import db from '../database.js';
 import { getAiMonthlyLimit, setAiMonthlyLimit, aiSpentThisMonth } from '../lib/aiBudget.js';
 import { todayISO } from '../lib/today.js';
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
+import multer from 'multer';
+import { signaturesDir, signatureFileOf } from '../lib/poApproval.js';
+import { archiveStored, archivedBy } from '../lib/archive.js';
 import { getPaymentNotifySettings, setPaymentNotifySettings, normalizePaymentNotify, sendPaymentReceivedEmail } from '../lib/paymentEmail.js';
 import { getOperationNotifySettings, setOperationNotifySettings, normalizeOperationNotify, getNotificationMutes, normalizeMutes, setMutesForRecipient } from '../lib/notify.js';
 
@@ -119,6 +125,73 @@ router.post('/payment-notifications/test', async (req: Request, res: Response) =
     bankReference: 'This is a test email', recordedBy: req.user?.display_name || null, wireFilePath: null, wireFileName: null,
   });
   res.status(result.ok ? 200 : 400).json(result.ok ? result : { ...result, error: result.message });
+});
+
+// ── Supplier PO approval: who needs it, and the admins' signatures ─────────
+
+const signatureUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (/\.(png|jpe?g|webp)$/i.test(file.originalname)) cb(null, true);
+    else cb(new Error('Upload the signature as a PNG, JPG or WebP image'));
+  },
+});
+
+// GET /api/settings/po-approvals — every user: whether their supplier POs need approval, whether an admin has a signature
+router.get('/po-approvals', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const users = db.prepare(`SELECT id, username, display_name, email, role, po_requires_approval FROM users ORDER BY role DESC, COALESCE(display_name, username)`).all() as any[];
+  res.json(users.map(u => ({ ...u, po_requires_approval: !!u.po_requires_approval, has_signature: !!signatureFileOf(u.id) })));
+});
+
+// PUT /api/settings/po-approvals/:userId {requires} — admins never need approval
+router.put('/po-approvals/:userId', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const user = db.prepare('SELECT id, role FROM users WHERE id = ?').get(req.params.userId) as any;
+  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+  if (user.role === 'admin') { res.status(400).json({ error: 'Admins approve purchase orders themselves' }); return; }
+  db.prepare('UPDATE users SET po_requires_approval = ? WHERE id = ?').run(req.body?.requires ? 1 : 0, user.id);
+  res.json({ id: user.id, po_requires_approval: !!req.body?.requires });
+});
+
+// POST /api/settings/po-approvals/:userId/signature — multipart `file` (an admin's signature image)
+router.post('/po-approvals/:userId/signature', signatureUpload.single('file'), (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const user = db.prepare('SELECT id, role, signature_file, COALESCE(display_name, username) AS name FROM users WHERE id = ?').get(req.params.userId) as any;
+  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+  if (user.role !== 'admin') { res.status(400).json({ error: 'Only admins sign purchase orders' }); return; }
+  if (!req.file) { res.status(400).json({ error: 'Choose the signature image' }); return; }
+  fs.mkdirSync(signaturesDir, { recursive: true });
+  const ext = path.extname(req.file.originalname).toLowerCase().replace('.jpeg', '.jpg');
+  const stored = `signature-${user.id}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`;
+  fs.writeFileSync(path.join(signaturesDir, stored), req.file.buffer);
+  db.prepare('UPDATE users SET signature_file = ? WHERE id = ?').run(stored, user.id);
+  if (user.signature_file) {
+    archiveStored('signatures', user.signature_file, { section: 'Users', context: `Signature of ${user.name}`, fileName: user.signature_file, reason: 'replaced' }, archivedBy(req));
+  }
+  res.json({ id: user.id, has_signature: true });
+});
+
+// DELETE /api/settings/po-approvals/:userId/signature
+router.delete('/po-approvals/:userId/signature', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const user = db.prepare('SELECT id, signature_file, COALESCE(display_name, username) AS name FROM users WHERE id = ?').get(req.params.userId) as any;
+  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+  if (user.signature_file) {
+    archiveStored('signatures', user.signature_file, { section: 'Users', context: `Signature of ${user.name}`, fileName: user.signature_file, reason: 'deleted' }, archivedBy(req));
+  }
+  db.prepare('UPDATE users SET signature_file = NULL WHERE id = ?').run(user.id);
+  res.json({ id: user.id, has_signature: false });
+});
+
+// GET /api/settings/po-approvals/:userId/signature — the image (admins only)
+router.get('/po-approvals/:userId/signature', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const file = signatureFileOf(Number(req.params.userId));
+  if (!file) { res.status(404).json({ error: 'No signature' }); return; }
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path.join(signaturesDir, file));
 });
 
 // GET /api/settings/notification-rules — who is not told about whose changes (admin only)
