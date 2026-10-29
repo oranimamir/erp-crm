@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import {
   createBackupArchive, createCategorizedInvoiceArchive, createCustomArchive, listBackups, getBackupsDir,
+  getBackupKeep, setBackupKeep, pruneBackups,
   BACKUP_PARTS_WITH_FILES, type BackupPart, type BackupPick,
 } from '../lib/backup.js';
 import { buildCronExpr, startBackupScheduler, BackupSchedule } from '../lib/backup-scheduler.js';
@@ -92,6 +93,39 @@ router.get('/list', (req: Request, res: Response) => {
     return;
   }
   res.json(listBackups());
+});
+
+// GET /api/backup/keep — how many scheduled backups stay on the server
+router.get('/keep', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  res.json({ keep: getBackupKeep() });
+});
+
+// PUT /api/backup/keep {keep: 1–10} — older backups beyond it are deleted now
+router.put('/keep', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const keep = Number(req.body?.keep);
+  if (!Number.isInteger(keep) || keep < 1 || keep > 10) { res.status(400).json({ error: 'Keep between 1 and 10 backups' }); return; }
+  setBackupKeep(keep);
+  const deleted = pruneBackups(keep);
+  res.json({ keep, deleted, backups: listBackups() });
+});
+
+// DELETE /api/backup/saved/:filename — delete one saved backup for good (frees disk space)
+router.delete('/saved/:filename', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const filename = req.params.filename as string;
+  if (!/^erp-backup-[\dT-]+\.zip$/.test(filename)) { res.status(400).json({ error: 'Invalid filename' }); return; }
+  const filepath = path.join(getBackupsDir(), filename);
+  if (!fs.existsSync(filepath)) { res.status(404).json({ error: 'Backup not found' }); return; }
+  try {
+    fs.unlinkSync(filepath);
+  } catch (err: any) {
+    res.status(500).json({ error: `Could not delete the backup: ${err?.message || err}` });
+    return;
+  }
+  console.log(`[Backup] ${req.user?.display_name || 'An admin'} deleted ${filename}`);
+  res.json({ deleted: filename, backups: listBackups() });
 });
 
 // GET /api/backup/download/:filename — download a saved weekly backup

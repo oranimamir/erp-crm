@@ -111,10 +111,10 @@ function diskBreakdown(info: ReturnType<typeof getStorageInfo>) {
 
   const nestedSkip = new Set([dbFile, uploads, backups]);
   const copies = sizeOf(dataDir, nestedSkip);
-  if (copies.files) items.push({ label: 'Database safety copies', ...copies, hint: 'Earlier copies of the database kept in case the main file is damaged' });
+  if (copies.files) items.push({ label: 'Database safety copies', ...copies, hint: 'Earlier copies of the database kept in case the main file is damaged (how many: Railway variable DB_BACKUP_RETENTION, default 1)' });
 
   const backupSize = sizeOf(backups, new Set());
-  items.push({ label: 'Saved backups', ...backupSize, hint: 'The scheduled backups (the last 4 are kept); each is a ZIP of the database and every uploaded file' });
+  items.push({ label: 'Saved backups', ...backupSize, hint: 'The scheduled backups (Settings → Backup → Saved backups: delete them or keep fewer); each is a ZIP of the database and every uploaded file' });
 
   const uploadsSkip = new Set([backups, dbFile]);
   let entries: string[] = [];

@@ -13,7 +13,33 @@ const dbPath      = process.env.DB_PATH      || path.join(__dirname, '..', '..',
 const uploadsBase = process.env.UPLOADS_PATH  || path.join(__dirname, '..', '..', 'uploads');
 const backupsDir  = process.env.BACKUPS_PATH  || path.join(__dirname, '..', '..', 'backups');
 
-const MAX_BACKUPS = 4; // keep ~1 month of weekly backups
+/** How many scheduled backups stay on the server (Settings → Backup), 1–10; 4 by default. */
+const DEFAULT_KEEP = 4;
+
+export function getBackupKeep(): number {
+  try {
+    const row = db.prepare("SELECT value FROM app_settings WHERE key = 'backup_keep'").get() as any;
+    const n = Number(row ? JSON.parse(row.value) : DEFAULT_KEEP);
+    return Number.isInteger(n) && n >= 1 && n <= 10 ? n : DEFAULT_KEEP;
+  } catch {
+    return DEFAULT_KEEP;
+  }
+}
+
+export function setBackupKeep(n: number): void {
+  db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('backup_keep', ?, datetime('now'))").run(JSON.stringify(n));
+}
+
+/** Deletes all but the newest `keep` scheduled backups; returns the names deleted. */
+export function pruneBackups(keep = getBackupKeep()): string[] {
+  if (!fs.existsSync(backupsDir)) return [];
+  const files = fs.readdirSync(backupsDir)
+    .filter(f => f.startsWith('erp-backup-') && f.endsWith('.zip'))
+    .sort(); // ISO timestamps sort lexicographically = chronologically
+  const gone = files.slice(0, Math.max(0, files.length - keep));
+  for (const f of gone) { try { fs.unlinkSync(path.join(backupsDir, f)); } catch { /* left for next time */ } }
+  return gone;
+}
 
 export function getBackupsDir() { return backupsDir; }
 
@@ -144,16 +170,10 @@ export async function runScheduledBackup(): Promise<string> {
   const output = fs.createWriteStream(outputPath);
   await createBackupArchive(output);
 
-  // Prune: keep only the most recent MAX_BACKUPS files
-  const files = fs.readdirSync(backupsDir)
-    .filter(f => f.startsWith('erp-backup-') && f.endsWith('.zip'))
-    .sort(); // ISO timestamps sort lexicographically = chronologically
+  const keep = getBackupKeep();
+  pruneBackups(keep);
 
-  for (const f of files.slice(0, Math.max(0, files.length - MAX_BACKUPS))) {
-    fs.unlinkSync(path.join(backupsDir, f));
-  }
-
-  console.log(`[Backup] Saved ${filename} — kept last ${MAX_BACKUPS} weekly backups`);
+  console.log(`[Backup] Saved ${filename} — kept the last ${keep} backup(s)`);
   return filename;
 }
 

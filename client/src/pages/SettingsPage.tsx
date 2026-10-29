@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Settings, Lock, Monitor, Sun, Moon, Download, DatabaseBackup, Clock, HardDrive, CheckCircle, AlertTriangle } from 'lucide-react';
+import { Settings, Lock, Monitor, Sun, Moon, Download, DatabaseBackup, Clock, HardDrive, CheckCircle, AlertTriangle, Trash2 } from 'lucide-react';
 import BackupDownloadPicker from '../components/BackupDownloadPicker';
 import { Link } from 'react-router-dom';
 import api from '../lib/api';
@@ -44,6 +44,8 @@ export default function SettingsPage() {
   const { user } = useAuth();
   const [savedBackups, setSavedBackups] = useState<SavedBackup[]>([]);
   const [downloadingFile, setDownloadingFile] = useState<string | null>(null);
+  const [deletingFile, setDeletingFile] = useState<string | null>(null);
+  const [keepBackups, setKeepBackups] = useState(4);
 
   // Backup schedule
   const [schedule, setSchedule] = useState<BackupSchedule>({ frequency: 'weekly', day: 0, hour: 2, minute: 0 });
@@ -56,6 +58,7 @@ export default function SettingsPage() {
   useEffect(() => {
     if (user?.role === 'admin') {
       api.get('/backup/list').then(r => setSavedBackups(r.data)).catch(() => {});
+      api.get('/backup/keep').then(r => setKeepBackups(r.data.keep)).catch(() => {});
       api.get('/backup/schedule').then(r => setSchedule(r.data)).catch(() => {});
       api.get('/health/storage').then(r => setStorage(r.data)).catch(() => setStorageError(true));
     }
@@ -66,6 +69,33 @@ export default function SettingsPage() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [saving, setSaving] = useState(false);
 
+
+  const handleDeleteSaved = async (b: SavedBackup) => {
+    if (!confirm(`Delete the backup of ${formatDate(b.created_at)} (${fmtSize(b.size)}) for good? It frees the disk space and can't be undone.`)) return;
+    setDeletingFile(b.filename);
+    try {
+      const { data } = await api.delete(`/backup/saved/${b.filename}`);
+      setSavedBackups(data.backups);
+      addToast(`Backup deleted — ${fmtSize(b.size)} freed`, 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to delete the backup', 'error');
+    } finally {
+      setDeletingFile(null);
+    }
+  };
+
+  const handleKeepChange = async (keep: number) => {
+    const extra = savedBackups.length - keep;
+    if (extra > 0 && !confirm(`Keep only the newest ${keep}? The ${extra} older backup${extra === 1 ? '' : 's'} will be deleted now.`)) return;
+    try {
+      const { data } = await api.put('/backup/keep', { keep });
+      setKeepBackups(data.keep);
+      setSavedBackups(data.backups);
+      addToast(data.deleted.length ? `Keeping ${keep} — ${data.deleted.length} older backup${data.deleted.length === 1 ? '' : 's'} deleted` : `Keeping the last ${keep} backup${keep === 1 ? '' : 's'}`, 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to save the setting', 'error');
+    }
+  };
 
   const handleDownloadSaved = async (filename: string) => {
     setDownloadingFile(filename);
@@ -341,7 +371,7 @@ export default function SettingsPage() {
                 <Clock size={14} className="text-gray-400" />
                 Automatic backup schedule
               </p>
-              <p className="text-sm text-gray-500 mb-3">Last 4 backups are kept automatically.</p>
+              <p className="text-sm text-gray-500 mb-3">The last {keepBackups} backup{keepBackups === 1 ? ' is' : 's are'} kept on the server — change it under Saved backups below.</p>
               <div className="flex flex-wrap items-end gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">Frequency</label>
@@ -415,9 +445,21 @@ export default function SettingsPage() {
 
             {/* Saved auto-backups */}
             <div className="border-t border-gray-100 pt-4">
-              <p className="text-sm font-medium text-gray-900 mb-0.5">Saved backups</p>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-0.5">
+                <p className="text-sm font-medium text-gray-900">Saved backups</p>
+                <label className="flex items-center gap-2 text-xs text-gray-600">
+                  Keep the last
+                  <select value={keepBackups} onChange={e => handleKeepChange(Number(e.target.value))}
+                    className="border border-gray-300 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-primary-500">
+                    {[1, 2, 3, 4, 5, 6, 8, 10].map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                  backup{keepBackups === 1 ? '' : 's'}
+                </label>
+              </div>
               <p className="text-sm text-gray-500 mb-3">
-                Automatically saved according to your schedule above.
+                Automatically saved according to your schedule above, on the server's disk
+                {savedBackups.length > 0 && <> — {fmtSize(savedBackups.reduce((sum, b) => sum + b.size, 0))} in all</>}.
+                Older ones are deleted as new ones are made.
               </p>
               {savedBackups.length === 0 ? (
                 <p className="text-xs text-gray-400 italic">No automatic backups saved yet — the first one will run according to your schedule above.</p>
@@ -429,14 +471,25 @@ export default function SettingsPage() {
                         <p className="text-sm font-medium text-gray-800">{formatDate(b.created_at)}</p>
                         <p className="text-xs text-gray-400">{fmtSize(b.size)}</p>
                       </div>
-                      <button
-                        onClick={() => handleDownloadSaved(b.filename)}
-                        disabled={downloadingFile === b.filename}
-                        className="flex items-center gap-1.5 text-xs text-primary-600 hover:text-primary-800 font-medium disabled:opacity-50"
-                      >
-                        <Download size={13} />
-                        {downloadingFile === b.filename ? 'Downloading...' : 'Download'}
-                      </button>
+                      <div className="flex items-center gap-4">
+                        <button
+                          onClick={() => handleDownloadSaved(b.filename)}
+                          disabled={downloadingFile === b.filename}
+                          className="flex items-center gap-1.5 text-xs text-primary-600 hover:text-primary-800 font-medium disabled:opacity-50"
+                        >
+                          <Download size={13} />
+                          {downloadingFile === b.filename ? 'Downloading...' : 'Download'}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteSaved(b)}
+                          disabled={deletingFile === b.filename}
+                          className="flex items-center gap-1.5 text-xs text-red-600 hover:text-red-800 font-medium disabled:opacity-50"
+                          title="Delete this backup for good to free disk space"
+                        >
+                          <Trash2 size={13} />
+                          {deletingFile === b.filename ? 'Deleting...' : 'Delete'}
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
