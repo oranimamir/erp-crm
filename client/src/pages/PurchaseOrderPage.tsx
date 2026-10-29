@@ -92,9 +92,9 @@ const FORM_KEYS = [
   'freight', 'vat', 'terms',
 ] as const;
 
-const emptyLine = (n: number): PoLine => ({
+const emptyLine = (n: number, unit = 'KG'): PoLine => ({
   line: n, reference: '', commercial_name: '', packaging: '',
-  quantity: '', quantity_unit: 'KG', unit_price: '', currency: 'EUR',
+  quantity: '', quantity_unit: unit, unit_price: '', currency: 'EUR',
   hs_code: '', description: '',
 });
 
@@ -120,7 +120,8 @@ function toFormData(raw: any): PoData {
     commercial_name: item?.commercial_name ?? '',
     packaging: item?.packaging ?? '',
     quantity: item?.quantity == null ? '' : String(item.quantity),
-    quantity_unit: item?.quantity_unit || 'KG',
+    // '' is kept: a purchase operation's PO starts with the unit blank
+    quantity_unit: item?.quantity_unit == null ? 'KG' : String(item.quantity_unit),
     unit_price: item?.unit_price == null ? '' : String(item.unit_price),
     currency: item?.currency || 'EUR',
     hs_code: item?.hs_code ?? '',
@@ -243,7 +244,7 @@ export default function PurchaseOrderPage() {
     setForm(prev => ({ ...prev, items: prev.items.map((it, i) => (i === index ? { ...it, ...patch } : it)) }));
 
   const addItem = () =>
-    setForm(prev => ({ ...prev, items: [...prev.items, emptyLine(prev.items.length + 1)] }));
+    setForm(prev => ({ ...prev, items: [...prev.items, emptyLine(prev.items.length + 1, purchaseOpId ? '' : 'KG')] }));
 
   const removeItem = (index: number) =>
     setForm(prev => ({
@@ -290,7 +291,10 @@ export default function PurchaseOrderPage() {
           adopt(data.existing);
           addToast('A purchase order already exists for this order — opening it for editing', 'info');
         } else {
-          setForm(toFormData(data.draft));
+          const draftForm = toFormData(data.draft);
+          // A purchase operation's PO starts with the unit blank, the empty first line included
+          if (data.purchase_operation && !(data.draft?.items || []).length) draftForm.items = draftForm.items.map(it => ({ ...it, quantity_unit: '' }));
+          setForm(draftForm);
           setEntity(data.entity);
           setSupplierId(data.supplier_id ?? null);
           if (data.operation) {
@@ -716,6 +720,7 @@ export default function PurchaseOrderPage() {
                     <div className="space-y-1">
                       <label className="block text-xs font-medium text-gray-500">Unit</label>
                       <select value={item.quantity_unit} onChange={e => setItem(index, { quantity_unit: e.target.value })} className={inputCls}>
+                        <option value="">—</option>
                         {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
                       </select>
                     </div>

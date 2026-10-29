@@ -294,6 +294,8 @@ function prepareFromNco(req: Request, res: Response) {
     vat: 0,
     terms: '',
   } as PurchaseOrderData;
+  // The unit is the supplier's to agree, like the price: left blank to fill in
+  draft.items = (draft.items || []).map(line => ({ ...line, quantity_unit: '' }));
 
   res.json({
     existing: null, draft, entity, supplier_id: supplier?.id ?? null, suppliers,
