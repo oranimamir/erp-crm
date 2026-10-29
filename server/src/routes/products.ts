@@ -1,7 +1,7 @@
 import { Router, Request } from 'express';
 import db from '../database.js';
 import { notifyAdmin } from '../lib/notify.js';
-import { removeProductDocumentFiles } from '../lib/productDocs.js';
+import { removeProductDocumentFiles, listProductDocs } from '../lib/productDocs.js';
 import multer from 'multer';
 import { readWorkbookPairs, previewSkus } from '../lib/skuImport.js';
 
@@ -105,6 +105,24 @@ router.post('/skus', (req, res) => {
 });
 
 // PUT /:id — update
+// GET /:id/overview — the product page: the product, its library documents, the general
+// documents (linked to no product), and its batches (by product name) with their documents
+router.get('/:id/overview', (req, res) => {
+  const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id) as any;
+  if (!product) return res.status(404).json({ error: 'Product not found' });
+  const documents = listProductDocs('WHERE d.id IN (SELECT document_id FROM product_document_products WHERE product_id = ?)', [product.id]);
+  const general = listProductDocs('WHERE d.id NOT IN (SELECT document_id FROM product_document_products)');
+  let batches: any[] = [];
+  try {
+    batches = db.prepare(`SELECT id, batch_number, category, is_finished, notes, created_at FROM batches
+      WHERE LOWER(TRIM(product)) = LOWER(TRIM(?)) ORDER BY is_finished, batch_number`).all(product.name) as any[];
+    const docs = batches.length ? db.prepare(`SELECT id, batch_id, document_type, document_name, file_path, file_name, created_at
+      FROM batch_documents WHERE batch_id IN (${batches.map(() => '?').join(',')}) ORDER BY created_at`).all(...batches.map(b => b.id)) as any[] : [];
+    batches = batches.map(b => ({ ...b, documents: docs.filter(d => d.batch_id === b.id) }));
+  } catch { /* no batches table */ }
+  res.json({ product, documents, general, batches });
+});
+
 router.put('/:id', (req, res) => {
   const { id } = req.params;
   const { name, sku, category, notes } = req.body;

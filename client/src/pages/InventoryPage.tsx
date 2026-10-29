@@ -1,4 +1,4 @@
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
@@ -12,7 +12,7 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
-import { Plus, Warehouse, Pencil, Trash2, PackagePlus, FileSpreadsheet, Package, Box, Upload, Mail, RefreshCw, ChevronRight, ChevronDown, Tag, Download, Loader2, CheckCircle2, ArchiveRestore, AlertTriangle, X } from 'lucide-react';
+import { Plus, Warehouse, Pencil, Trash2, PackagePlus, FileSpreadsheet, Package, Box, Upload, Mail, RefreshCw, ChevronRight, ChevronDown, Tag, Download, Loader2, CheckCircle2, ArchiveRestore, AlertTriangle, X, ChevronUp, ChevronsUpDown } from 'lucide-react';
 import SkuImportModal from '../components/SkuImportModal';
 import { downloadExcel } from '../lib/exportExcel';
 import { formatDate } from '../lib/dates';
@@ -184,7 +184,7 @@ function InventoryTab() {
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Product</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">SKU</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Product code</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Category</th>
                   <th className="text-right px-4 py-3 font-medium text-gray-600">Qty</th>
                   <th className="text-right px-4 py-3 font-medium text-gray-600">Min Stock</th>
@@ -315,6 +315,7 @@ const emptyProductForm = { name: '', sku: '', category: 'Circulac', notes: '' };
 
 function ProductsTab() {
   const { addToast } = useToast();
+  const navigate = useNavigate();
   const [items, setItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -397,8 +398,8 @@ function ProductsTab() {
   return (
     <div className="space-y-4">
       <div className="flex justify-end gap-2">
-        <Button variant="secondary" onClick={() => setImportingSkus(true)} title="Fill in the SKUs from an Excel list (commercial name + reference)">
-          <FileSpreadsheet size={16} /> Import SKUs
+        <Button variant="secondary" onClick={() => setImportingSkus(true)} title="Fill in the product codes from an Excel list (commercial name + reference)">
+          <FileSpreadsheet size={16} /> Import product codes
         </Button>
         <Button onClick={openCreate}><Plus size={16} /> Add Product</Button>
       </div>
@@ -447,12 +448,13 @@ function ProductsTab() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {items.map(item => (
-                  <tr key={item.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 font-medium text-gray-900">{item.name}</td>
+                  <tr key={item.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => navigate(`/inventory/products/${item.id}`)}
+                    title="Open the product — its documents, batches and COAs">
+                    <td className="px-4 py-3 font-medium text-primary-700">{item.name}</td>
                     <td className="px-4 py-3 text-gray-600 font-mono text-xs">
                       {item.sku || (
-                        <button type="button" onClick={() => openEdit(item)} title="Fill in the SKU"
-                          className="font-sans px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 hover:bg-amber-200">SKU missing</button>
+                        <button type="button" onClick={e => { e.stopPropagation(); openEdit(item); }} title="Fill in the product code"
+                          className="font-sans px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 hover:bg-amber-200">Code missing</button>
                       )}
                     </td>
                     <td className="px-4 py-3">
@@ -461,7 +463,7 @@ function ProductsTab() {
                       </Badge>
                     </td>
                     <td className="px-4 py-3 text-gray-500 max-w-[250px] truncate">{item.notes || '-'}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1">
                         <button onClick={() => openEdit(item)} className="p-1.5 text-gray-400 hover:text-primary-600 rounded"><Pencil size={16} /></button>
                         <button onClick={() => setDeleteId(item.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded"><Trash2 size={16} /></button>
@@ -480,7 +482,7 @@ function ProductsTab() {
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <Input label="Name *" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
-            <Input label="SKU" value={form.sku} onChange={e => setForm({ ...form, sku: e.target.value })} placeholder="Fill in when known" />
+            <Input label="Product code" value={form.sku} onChange={e => setForm({ ...form, sku: e.target.value })} placeholder="Fill in when known" />
           </div>
           <Select label="Category" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} options={categoryOptions} />
           <div className="space-y-1">
@@ -1350,6 +1352,29 @@ function WarehouseStockTab() {
 
 // ─── Batches Tab ──────────────────────────────────────────────────────────────
 
+const BATCH_CATEGORIES = ['TripleW Product', 'Ingredient', 'Sample', 'Other'] as const;
+type BatchSortKey = 'batch_number' | 'product' | 'category' | 'documents' | 'notes' | 'created_at';
+
+const fieldCls = 'block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500';
+
+/** Pill buttons, as on the New NCO window. */
+function ChoicePills<T extends string>({ value, options, onChange }: {
+  value: T; options: ReadonlyArray<readonly [T, string]>; onChange: (v: T) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {options.map(([code, label]) => (
+        <button key={label} type="button" onClick={() => onChange(code)}
+          className={`px-3 py-1 text-xs font-medium rounded-full border transition-colors ${
+            value === code ? 'bg-primary-600 text-white border-primary-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+          }`}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function BatchesTab() {
   const { addToast } = useToast();
   const [batches, setBatches] = useState<any[]>([]);
@@ -1357,7 +1382,17 @@ function BatchesTab() {
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<any>(null);
   const [deleteId, setDeleteId] = useState<number | null>(null);
-  const [form, setForm] = useState({ batch_number: '', product: '', category: '', notes: '' });
+  const [form, setForm] = useState({ batch_number: '', product: '', category: '', notes: '', is_finished: false });
+  // New batch window: a COA to attach on create, and a product added on the spot
+  const [coaFile, setCoaFile] = useState<File | null>(null);
+  const [newProduct, setNewProduct] = useState<{ name: string; sku: string } | null>(null);
+  const [savingProduct, setSavingProduct] = useState(false);
+  // Search, filters and sorting of the list
+  const [search, setSearch] = useState('');
+  const [catFilter, setCatFilter] = useState('');
+  const [coaFilter, setCoaFilter] = useState<'' | 'with' | 'without'>('');
+  const [sort, setSort] = useState<{ key: BatchSortKey; dir: 'asc' | 'desc' }>({ key: 'batch_number', dir: 'asc' });
+  const toggleSort = (key: BatchSortKey) => setSort(prev => ({ key, dir: prev.key === key && prev.dir === 'asc' ? 'desc' : 'asc' }));
   const [saving, setSaving] = useState(false);
   const [productNames, setProductNames] = useState<string[]>([]);
   // Document management
@@ -1382,13 +1417,17 @@ function BatchesTab() {
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ batch_number: '', product: '', category: '', notes: '' });
+    setForm({ batch_number: '', product: '', category: '', notes: '', is_finished: false });
+    setCoaFile(null);
+    setNewProduct(null);
     setShowModal(true);
   };
 
   const openEdit = (batch: any) => {
     setEditing(batch);
-    setForm({ batch_number: batch.batch_number || '', product: batch.product || '', category: batch.category || '', notes: batch.notes || '' });
+    setForm({ batch_number: batch.batch_number || '', product: batch.product || '', category: batch.category || '', notes: batch.notes || '', is_finished: !!batch.is_finished });
+    setCoaFile(null);
+    setNewProduct(null);
     setShowModal(true);
   };
 
@@ -1400,14 +1439,43 @@ function BatchesTab() {
         await api.put(`/inventory/batches/${editing.id}`, form);
         addToast('Batch updated', 'success');
       } else {
-        await api.post('/inventory/batches', form);
-        addToast('Batch created', 'success');
+        const { data } = await api.post('/inventory/batches', form);
+        if (coaFile) {
+          const fd = new FormData();
+          fd.append('file', coaFile);
+          fd.append('document_type', 'coa');
+          fd.append('document_name', 'COA');
+          try {
+            await api.post(`/inventory/batches/${data.id}/documents`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+          } catch (err: any) {
+            addToast(`Batch created, but the COA didn't upload: ${err.response?.data?.error || 'try again from the list'}`, 'error');
+          }
+        }
+        addToast(`Batch ${data.batch_number} created`, 'success');
+        if (form.is_finished !== (batchTab === 'finished')) setBatchTab(form.is_finished ? 'finished' : 'ongoing');
       }
       setShowModal(false);
       fetchBatches();
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Failed to save', 'error');
     } finally { setSaving(false); }
+  };
+
+  /** A product typed in the window is added to Products and chosen for the batch. */
+  const addProduct = async () => {
+    if (!newProduct?.name.trim()) return;
+    setSavingProduct(true);
+    try {
+      const { data } = await api.post('/products', { name: newProduct.name.trim(), sku: newProduct.sku.trim() || null });
+      setProductNames(prev => [...prev, data.name].sort((a, b) => a.localeCompare(b)));
+      setForm(f => ({ ...f, product: data.name }));
+      setNewProduct(null);
+      addToast(`${data.name} added to Products`, 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Could not add the product', 'error');
+    } finally {
+      setSavingProduct(false);
+    }
   };
 
   const handleDelete = async () => {
@@ -1476,18 +1544,42 @@ function BatchesTab() {
 
   const ongoingBatches = batches.filter(b => !b.is_finished);
   const finishedBatches = batches.filter(b => b.is_finished);
-  const visibleBatches = batchTab === 'ongoing' ? ongoingBatches : finishedBatches;
+  const term = search.trim().toLowerCase();
+  const hasCoa = (b: any) => (b.documents || []).some((d: any) => d.document_type === 'coa');
+  const visibleBatches = (batchTab === 'ongoing' ? ongoingBatches : finishedBatches)
+    .filter(b => !term || [b.batch_number, b.product, b.category, b.notes, ...(b.documents || []).map((d: any) => d.document_name || d.file_name)]
+      .some(v => String(v || '').toLowerCase().includes(term)))
+    .filter(b => !catFilter || (catFilter === '__none' ? !b.category : b.category === catFilter))
+    .filter(b => !coaFilter || (coaFilter === 'with' ? hasCoa(b) : !hasCoa(b)))
+    .sort((a, b) => {
+      const val = (x: any): string | number => sort.key === 'documents' ? (x.documents || []).length : String(x[sort.key] || '').toLowerCase();
+      const x = val(a), y = val(b);
+      if (x === '' && y !== '') return 1;
+      if (y === '' && x !== '') return -1;
+      const c = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true });
+      return sort.dir === 'asc' ? c : -c;
+    });
+  const filtersOn = !!(term || catFilter || coaFilter);
+
+  const SortTh = ({ k, label, className = '' }: { k: BatchSortKey; label: string; className?: string }) => (
+    <th className={`text-left px-3 sm:px-4 py-3 font-medium text-gray-600 ${className}`}>
+      <button type="button" onClick={() => toggleSort(k)} className="inline-flex items-center gap-1 hover:text-gray-900">
+        {label}
+        {sort.key === k ? (sort.dir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />) : <ChevronsUpDown size={12} className="text-gray-300" />}
+      </button>
+    </th>
+  );
 
   const renderBatchTable = (items: any[], isFinished: boolean) => (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-gray-100 bg-gray-50">
-            <th className="text-left px-3 sm:px-4 py-3 font-medium text-gray-600 w-32 sm:w-40">Batch #</th>
-            <th className="text-left px-3 sm:px-4 py-3 font-medium text-gray-600">Product</th>
-            <th className="text-left px-3 sm:px-4 py-3 font-medium text-gray-600 w-36 sm:w-44 hidden sm:table-cell">Category</th>
-            <th className="text-left px-3 sm:px-4 py-3 font-medium text-gray-600 hidden md:table-cell">Documents</th>
-            <th className="text-left px-3 sm:px-4 py-3 font-medium text-gray-600 hidden lg:table-cell">Comment</th>
+            <SortTh k="batch_number" label="Batch #" className="w-32 sm:w-40" />
+            <SortTh k="product" label="Product" />
+            <SortTh k="category" label="Category" className="w-36 sm:w-44 hidden sm:table-cell" />
+            <SortTh k="documents" label="Documents" className="hidden md:table-cell" />
+            <SortTh k="notes" label="Comment" className="hidden lg:table-cell" />
             <th className="text-right px-3 sm:px-4 py-3 font-medium text-gray-600 w-24 sm:w-28">Actions</th>
           </tr>
         </thead>
@@ -1513,9 +1605,8 @@ function BatchesTab() {
                   className="text-sm border border-gray-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 text-gray-700"
                 >
                   <option value="">— select —</option>
-                  <option value="TripleW Product">TripleW Product</option>
-                  <option value="Ingredient">Ingredient</option>
-                  <option value="Other">Other</option>
+                  {BATCH_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  {batch.category && !(BATCH_CATEGORIES as readonly string[]).includes(batch.category) && <option value={batch.category}>{batch.category}</option>}
                 </select>
               </td>
               <td className="px-3 sm:px-4 py-3 hidden md:table-cell">
@@ -1637,6 +1728,28 @@ function BatchesTab() {
         <Button onClick={openCreate}><Plus size={16} /> Add Batch</Button>
       </div>
 
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex-1 min-w-[200px] max-w-sm">
+          <SearchBar value={search} onChange={v => setSearch(v)} placeholder="Search batch, product, comment, document…" />
+        </div>
+        <select value={catFilter} onChange={e => setCatFilter(e.target.value)}
+          className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500">
+          <option value="">All categories</option>
+          {BATCH_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+          <option value="__none">No category</option>
+        </select>
+        <select value={coaFilter} onChange={e => setCoaFilter(e.target.value as any)}
+          className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500">
+          <option value="">With or without COA</option>
+          <option value="with">With a COA</option>
+          <option value="without">Without a COA</option>
+        </select>
+        {filtersOn && (
+          <button onClick={() => { setSearch(''); setCatFilter(''); setCoaFilter(''); }} className="text-sm text-gray-500 hover:text-gray-700">Clear</button>
+        )}
+        <span className="text-sm text-gray-500 ml-auto">{visibleBatches.length} batch{visibleBatches.length === 1 ? '' : 'es'}</span>
+      </div>
+
       {loading ? (
         <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" /></div>
       ) : batches.length === 0 ? (
@@ -1652,55 +1765,96 @@ function BatchesTab() {
         <Card>
           {visibleBatches.length === 0 ? (
             <p className="px-4 py-12 text-center text-sm text-gray-400">
-              {batchTab === 'ongoing' ? 'No ongoing batches' : 'No finished batches'}
+              {filtersOn ? 'No batches match the search / filters' : batchTab === 'ongoing' ? 'No ongoing batches' : 'No finished batches'}
             </p>
           ) : renderBatchTable(visibleBatches, batchTab === 'finished')}
         </Card>
       )}
 
-      <Modal open={showModal} onClose={() => setShowModal(false)} title={editing ? 'Edit Batch' : 'New Batch'} size="md">
+      <Modal open={showModal} onClose={() => !saving && setShowModal(false)} title={editing ? `Edit batch ${editing.batch_number}` : 'New batch'} size="md">
         <div className="space-y-4">
-          <Input label="Batch Number *" value={form.batch_number} onChange={e => setForm({ ...form, batch_number: e.target.value })} placeholder="e.g. B-2024-001" />
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="block text-xs font-medium text-gray-500">Batch number</label>
+              <input value={form.batch_number} onChange={e => setForm({ ...form, batch_number: e.target.value })}
+                placeholder="e.g. B-2026-001" autoFocus={!editing} className={`${fieldCls} font-semibold`} />
+              <p className="text-[11px] text-gray-400">The lot number as printed on the goods and the COA.</p>
+            </div>
+            <div className="space-y-1">
+              <label className="block text-xs font-medium text-gray-500">Status</label>
+              <ChoicePills value={form.is_finished ? 'finished' : 'ongoing'} onChange={v => setForm({ ...form, is_finished: v === 'finished' })}
+                options={[['ongoing', 'Ongoing'], ['finished', 'Finished']] as const} />
+            </div>
+          </div>
+
           <div className="space-y-1">
-            <label className="block text-sm font-medium text-gray-700">Product</label>
-            <select
-              value={form.product}
-              onChange={e => setForm({ ...form, product: e.target.value })}
-              className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-            >
-              <option value="">— select a product —</option>
-              {form.product && !productNames.includes(form.product) && (
-                <option value={form.product}>{form.product} (not in Products)</option>
+            <label className="block text-xs font-medium text-gray-500">Category</label>
+            <ChoicePills value={form.category} onChange={v => setForm({ ...form, category: v })}
+              options={BATCH_CATEGORIES.map(c => [c, c] as const)} />
+          </div>
+
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-medium text-gray-500">Product</label>
+              {!newProduct && (
+                <button type="button" onClick={() => setNewProduct({ name: '', sku: '' })}
+                  className="inline-flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700">
+                  <PackagePlus size={12} /> New product
+                </button>
               )}
-              {productNames.map(name => <option key={name} value={name}>{name}</option>)}
-            </select>
+            </div>
+            {!newProduct ? (
+              <select value={form.product} onChange={e => setForm({ ...form, product: e.target.value })} className={fieldCls}>
+                <option value="">Choose the product…</option>
+                {form.product && !productNames.includes(form.product) && (
+                  <option value={form.product}>{form.product} (not in Products)</option>
+                )}
+                {productNames.map(name => <option key={name} value={name}>{name}</option>)}
+              </select>
+            ) : (
+              <div className="space-y-2 rounded-lg border border-primary-200 bg-primary-50/40 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-gray-700">New product</span>
+                  <button type="button" onClick={() => setNewProduct(null)} className="text-gray-400 hover:text-gray-600" title="Cancel"><X size={14} /></button>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input value={newProduct.name} onChange={e => setNewProduct({ ...newProduct, name: e.target.value })} placeholder="Name *" className={fieldCls} autoFocus />
+                  <input value={newProduct.sku} onChange={e => setNewProduct({ ...newProduct, sku: e.target.value })} placeholder="Product code" className={fieldCls} />
+                </div>
+                <div className="flex justify-end">
+                  <Button size="sm" onClick={addProduct} disabled={savingProduct || !newProduct.name.trim()}>
+                    {savingProduct ? <Loader2 size={14} className="animate-spin" /> : <PackagePlus size={14} />} Add product
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
+
+          {!editing && (
+            <div className="space-y-1">
+              <label className="block text-xs font-medium text-gray-500">COA (optional)</label>
+              <label className="flex items-center gap-2 rounded-lg border border-dashed border-gray-300 px-3 py-2 text-sm text-gray-600 cursor-pointer hover:bg-gray-50">
+                <Upload size={14} className="text-gray-400" />
+                <span className="truncate">{coaFile ? coaFile.name : 'Choose the certificate of analysis…'}</span>
+                {coaFile && <button type="button" onClick={e => { e.preventDefault(); setCoaFile(null); }} className="ml-auto text-gray-400 hover:text-gray-600"><X size={14} /></button>}
+                <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx"
+                  onChange={e => { setCoaFile(e.target.files?.[0] || null); e.target.value = ''; }} />
+              </label>
+              <p className="text-[11px] text-gray-400">More documents can be added from the list afterwards.</p>
+            </div>
+          )}
+
           <div className="space-y-1">
-            <label className="block text-sm font-medium text-gray-700">Category</label>
-            <select
-              value={form.category}
-              onChange={e => setForm({ ...form, category: e.target.value })}
-              className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-            >
-              <option value="">— select —</option>
-              <option value="TripleW Product">TripleW Product</option>
-              <option value="Ingredient">Ingredient</option>
-              <option value="Other">Other</option>
-            </select>
+            <label className="block text-xs font-medium text-gray-500">Comment</label>
+            <textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={3}
+              placeholder="Anything worth knowing about this batch" className={fieldCls} />
           </div>
-          <div className="space-y-1">
-            <label className="block text-sm font-medium text-gray-700">Comment</label>
-            <textarea
-              value={form.notes}
-              onChange={e => setForm({ ...form, notes: e.target.value })}
-              rows={3}
-              placeholder="Anything worth knowing about this batch"
-              className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-            />
-          </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="secondary" onClick={() => setShowModal(false)}>Cancel</Button>
-            <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving...' : editing ? 'Update' : 'Create'}</Button>
+
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="secondary" onClick={() => setShowModal(false)} disabled={saving}>Cancel</Button>
+            <Button onClick={handleSave} disabled={saving || !form.batch_number.trim() || !!newProduct}>
+              {saving && <Loader2 size={14} className="animate-spin" />} {editing ? 'Save' : 'Create'}
+            </Button>
           </div>
         </div>
       </Modal>

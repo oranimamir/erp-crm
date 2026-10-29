@@ -18,8 +18,8 @@ interface Row {
 }
 
 const LABEL: Record<Status, string> = {
-  set: 'SKU missing — will be filled', change: 'Different SKU — will be replaced', same: 'Already correct',
-  not_found: 'Not in the catalogue', conflict: 'SKU used by another product',
+  set: 'Code missing — will be filled', change: 'Different code — will be replaced', same: 'Already correct',
+  not_found: 'Not in the catalogue', conflict: 'Code used by another product',
 };
 
 export default function SkuImportModal({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => void }) {
@@ -61,12 +61,12 @@ export default function SkuImportModal({ open, onClose, onSaved }: { open: boole
     try {
       const updates = [...picked].map(i => ({ product_id: rows[i].product!.id, sku: rows[i].sku }));
       const { data } = await api.post('/products/skus', { updates });
-      addToast(`${data.updated} SKU${data.updated === 1 ? '' : 's'} saved`, 'success');
+      addToast(`${data.updated} product code${data.updated === 1 ? '' : 's'} saved`, 'success');
       if (data.skipped?.length) addToast(`Skipped: ${data.skipped.join('; ')}`, 'error');
       onSaved();
       close();
     } catch (err: any) {
-      addToast(err.response?.data?.error || 'Failed to save the SKUs', 'error');
+      addToast(err.response?.data?.error || 'Failed to save the product codes', 'error');
     } finally {
       setSaving(false);
     }
@@ -108,7 +108,7 @@ export default function SkuImportModal({ open, onClose, onSaved }: { open: boole
   };
 
   return (
-    <Modal open={open} onClose={close} title="Import SKUs from Excel" size="lg">
+    <Modal open={open} onClose={close} title="Import product codes from Excel" size="lg">
       <div className="space-y-4">
         <input ref={fileRef} type="file" accept=".xlsx" className="hidden"
           onChange={e => { read(e.target.files?.[0]); e.target.value = ''; }} />
@@ -119,7 +119,7 @@ export default function SkuImportModal({ open, onClose, onSaved }: { open: boole
           {fileName && <span className="flex items-center gap-1 text-sm text-gray-600"><FileSpreadsheet size={14} /> {fileName}</span>}
         </div>
         <p className="text-xs text-gray-500">
-          Reads every commercial name with its reference next to it (e.g. the packaging list's "Products and codes" sheet) and matches it to the catalogue by name. Only SKUs are changed.
+          Reads every commercial name with its reference next to it (e.g. the packaging list's "Products and codes" sheet) and matches it to the catalogue by name. Only product codes are changed.
         </p>
 
         {rows && (
@@ -131,9 +131,9 @@ export default function SkuImportModal({ open, onClose, onSaved }: { open: boole
             {unfilled.length > 0 && (
               <section className="space-y-1">
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-amber-700">
-                  Still without a SKU — not in this file <span className="font-normal text-amber-600">({unfilled.length})</span>
+                  Still without a product code — not in this file <span className="font-normal text-amber-600">({unfilled.length})</span>
                 </h3>
-                <p className="text-xs text-gray-500">These catalogue products have no row in the Excel (or under a different name). Add their reference to the file, or type the SKU on the product.</p>
+                <p className="text-xs text-gray-500">These catalogue products have no row in the Excel (or under a different name). Add their reference to the file, or type the product code on the product.</p>
                 <div className="rounded-lg border border-amber-200 bg-amber-50/40 px-3 py-2 text-sm text-gray-700">
                   {unfilled.map(u => u.name).join(' · ')}
                 </div>
@@ -148,11 +148,11 @@ export default function SkuImportModal({ open, onClose, onSaved }: { open: boole
         )}
 
         <div className="flex items-center justify-between gap-2 pt-1">
-          <span className="text-xs text-gray-500">{rows ? `${picked.size} SKU${picked.size === 1 ? '' : 's'} to save` : ''}</span>
+          <span className="text-xs text-gray-500">{rows ? `${picked.size} product code${picked.size === 1 ? '' : 's'} to save` : ''}</span>
           <div className="flex gap-2">
             <Button variant="secondary" onClick={close}>Cancel</Button>
             <Button onClick={save} disabled={saving || !rows || picked.size === 0}>
-              {saving && <Loader2 size={14} className="animate-spin" />} Save {picked.size || ''} SKU{picked.size === 1 ? '' : 's'}
+              {saving && <Loader2 size={14} className="animate-spin" />} Save {picked.size || ''} product code{picked.size === 1 ? '' : 's'}
             </Button>
           </div>
         </div>

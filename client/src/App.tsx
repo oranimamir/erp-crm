@@ -45,6 +45,7 @@ import AnalyticsPage from './pages/AnalyticsPage';
 import SettingsPage from './pages/SettingsPage';
 import SupplierInvoicesPage from './pages/SupplierInvoicesPage';
 import WorkingCapitalPage from './pages/WorkingCapitalPage';
+import ProductDetailPage from './pages/ProductDetailPage';
 
 export default function App() {
   return (
@@ -88,6 +89,7 @@ export default function App() {
               <Route path="/shipments/:id" element={<ShipmentDetailPage />} />
               <Route path="/shipments/:id/edit" element={<ShipmentFormPage />} />
               <Route path="/inventory" element={<InventoryPage />} />
+              <Route path="/inventory/products/:id" element={<ProductDetailPage />} />
               <Route path="/production" element={<ProductionPage />} />
               <Route path="/products" element={<Navigate to="/inventory" replace />} />
               <Route path="/operations" element={<OperationsPage />} />

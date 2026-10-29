@@ -18,11 +18,11 @@ export const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..'
 export const productDocsDir = path.join(uploadsBase, 'product-docs');
 const operationDocsDir = path.join(uploadsBase, 'operation-docs');
 
-export type ProductDocKind = 'msds' | 'pds' | 'declaration' | 'coa';
-export const PRODUCT_DOC_KINDS: ProductDocKind[] = ['msds', 'pds', 'declaration', 'coa'];
-export const KIND_LABEL: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Product Specification Sheet', declaration: 'Declaration', coa: 'COA' };
+export type ProductDocKind = 'msds' | 'pds' | 'declaration' | 'coa' | 'other';
+export const PRODUCT_DOC_KINDS: ProductDocKind[] = ['msds', 'pds', 'declaration', 'coa', 'other'];
+export const KIND_LABEL: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Product Specification Sheet', declaration: 'Declaration', coa: 'COA', other: 'Other document' };
 /** The operation document category each kind is filed under. */
-export const KIND_CATEGORY: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Product Specification Sheet', declaration: 'Declaration', coa: 'COA' };
+export const KIND_CATEGORY: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Product Specification Sheet', declaration: 'Declaration', coa: 'COA', other: 'General document' };
 
 export interface LinkedProduct { id: number; name: string; sku: string | null }
 

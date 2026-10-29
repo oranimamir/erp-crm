@@ -2078,7 +2078,7 @@ export async function initializeDatabase() {
   const productDocumentsSql = (table: string) => `
     CREATE TABLE ${table} (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      kind TEXT NOT NULL CHECK (kind IN ('msds', 'pds', 'declaration', 'coa')),
+      kind TEXT NOT NULL CHECK (kind IN ('msds', 'pds', 'declaration', 'coa', 'other')),
       title TEXT,
       doc_code TEXT,
       file_path TEXT NOT NULL,
@@ -2154,6 +2154,34 @@ export async function initializeDatabase() {
         console.log("[db] product_documents kind can be 'coa'");
       } catch (err: any) {
         console.error(`[db] Failed to add the COA kind: ${err?.message || err}`);
+        try { db.exec(`ROLLBACK`, true); } catch { /* not in a transaction */ }
+      }
+      db.exec(`PRAGMA foreign_keys = ON`, true);
+    }
+  } catch (_) { /* ignore */ }
+
+  // …and 'other' (Inventory → Documents → Other, the product page's "Other" category), the same way
+  try {
+    const docsSql = (db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='product_documents'").get() as any)?.sql as string | undefined;
+    if (docsSql && !docsSql.includes("'other'")) {
+      const cols = (db.prepare(`PRAGMA table_info(product_documents)`).all() as any[]).map(c => c.name).join(', ');
+      const createNew = docsSql
+        .replace(/CHECK\s*\(\s*kind\s+IN\s*\(([^)]*)\)\s*\)/i, (_m, list) => `CHECK (kind IN (${list}, 'other'))`)
+        .replace(/CREATE TABLE\s+(IF NOT EXISTS\s+)?["`]?product_documents["`]?/i, 'CREATE TABLE product_documents_new');
+      db.exec(`PRAGMA foreign_keys = OFF`, true);
+      try {
+        db.exec(`
+          BEGIN;
+          ${createNew};
+          INSERT INTO product_documents_new (${cols}) SELECT ${cols} FROM product_documents;
+          DROP TABLE product_documents;
+          ALTER TABLE product_documents_new RENAME TO product_documents;
+          COMMIT;
+        `, true);
+        db.saveToDisk();
+        console.log("[db] product_documents kind can be 'other'");
+      } catch (err: any) {
+        console.error(`[db] Failed to add the Other kind: ${err?.message || err}`);
         try { db.exec(`ROLLBACK`, true); } catch { /* not in a transaction */ }
       }
       db.exec(`PRAGMA foreign_keys = ON`, true);

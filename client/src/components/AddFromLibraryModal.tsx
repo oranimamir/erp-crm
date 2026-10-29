@@ -20,8 +20,8 @@ import { docTitle, type ProductDoc, type ProductDocKind } from './ProductDocumen
 
 interface SuggestLine { description: string; product: { id: number; name: string } | null; documents: ProductDoc[] }
 
-const KINDS: ProductDocKind[] = ['msds', 'pds', 'declaration', 'coa'];
-const SECTION_TITLE: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Product Specification Sheet', declaration: 'Declarations', coa: 'COA' };
+const KINDS: ProductDocKind[] = ['msds', 'pds', 'declaration', 'coa', 'other'];
+const SECTION_TITLE: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Product Specification Sheet', declaration: 'Declarations', coa: 'COA', other: 'Other documents' };
 
 /**
  * The most specific document of a kind for one product: fewest products
@@ -81,7 +81,7 @@ export default function AddFromLibraryModal({ open, onClose, owner, existingName
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [queries, setQueries] = useState<Record<ProductDocKind, string>>({ msds: '', pds: '', declaration: '', coa: '' });
+  const [queries, setQueries] = useState<Record<ProductDocKind, string>>({ msds: '', pds: '', declaration: '', coa: '', other: '' });
 
   const have = useMemo(() => new Set(existingNames.map(n => n.toLowerCase())), [existingNames]);
   const suggested = useMemo(() => suggestionsOf(lines, coaByLot), [lines, coaByLot]);
@@ -90,7 +90,7 @@ export default function AddFromLibraryModal({ open, onClose, owner, existingName
   useEffect(() => {
     if (!open) return;
     setLoading(true);
-    setQueries({ msds: '', pds: '', declaration: '', coa: '' });
+    setQueries({ msds: '', pds: '', declaration: '', coa: '', other: '' });
     Promise.all([
       api.get('/product-documents/suggest', { params: ownerParams(owner) }),
       api.get('/product-documents'),

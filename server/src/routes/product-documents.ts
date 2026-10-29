@@ -90,7 +90,7 @@ router.post('/', uploadProductDoc.single('file'), (req: Request, res: Response) 
   const kind = req.body?.kind;
   if (!isKind(kind)) {
     unlinkProductFile(req.file.filename);
-    res.status(400).json({ error: 'Choose MSDS, Product Specification Sheet or Declaration' });
+    res.status(400).json({ error: 'Choose MSDS, Product Specification Sheet, Declaration, COA or Other' });
     return;
   }
   const parsed = parseLibraryFileName(req.file.originalname);

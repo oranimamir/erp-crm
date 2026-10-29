@@ -18,10 +18,10 @@ import DocxTextEditModal from './DocxTextEditModal';
  * page → Add from library).
  */
 
-export type ProductDocKind = 'msds' | 'pds' | 'declaration' | 'coa';
-export const KINDS: ProductDocKind[] = ['msds', 'pds', 'declaration', 'coa'];
-export const KIND_LABEL: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Product Specification Sheet', declaration: 'Declaration', coa: 'COA' };
-export const KIND_SHORT: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Spec sheet', declaration: 'Declaration', coa: 'COA' };
+export type ProductDocKind = 'msds' | 'pds' | 'declaration' | 'coa' | 'other';
+export const KINDS: ProductDocKind[] = ['msds', 'pds', 'declaration', 'coa', 'other'];
+export const KIND_LABEL: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Product Specification Sheet', declaration: 'Declaration', coa: 'COA', other: 'Other' };
+export const KIND_SHORT: Record<ProductDocKind, string> = { msds: 'MSDS', pds: 'Spec sheet', declaration: 'Declaration', coa: 'COA', other: 'Other' };
 
 interface Product { id: number; name: string; sku: string | null }
 export interface ProductDoc {
