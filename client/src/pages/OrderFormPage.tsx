@@ -194,18 +194,22 @@ export default function OrderFormPage({ embedded, orderId, operationNumber, oper
           setExistingFileName(o.file_name || o.file_path);
         }
       })
+      .then(() => setLoadedOrder(true))
       .catch(() => { addToast('Failed to load order', 'error'); if (embedded) onCancel?.(); else navigate('/orders'); })
       .finally(() => setLoading(false));
   }, [id]);
 
-  // The order dropped on the operation page is read as soon as the form opens
+  // The order dropped on the operation page is read as soon as the form opens —
+  // for an updated order, only once the current one has loaded, so loading it
+  // can't overwrite what was read off the new document
   const scannedInitial = useRef(false);
+  const [loadedOrder, setLoadedOrder] = useState(!id);
   useEffect(() => {
-    if (!initialFile || scannedInitial.current) return;
+    if (!initialFile || scannedInitial.current || !loadedOrder) return;
     scannedInitial.current = true;
     handleScanFile(initialFile);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialFile]);
+  }, [initialFile, loadedOrder]);
 
   // ── Field helpers ────────────────────────────────────────────────────
   const updateField = (field: string, value: string) =>
@@ -246,11 +250,28 @@ export default function OrderFormPage({ embedded, orderId, operationNumber, oper
       const res  = await api.post('/orders/scan', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       const data = res.data;
 
-      // Auto-fill header fields (only if not already filled)
+      // Kept even when it couldn't be read — it still replaces the attached file
+      if (data.scan_file_path) setScanFilePath(data.scan_file_path);
+      if (data.scan_file_name) setScanFileName(data.scan_file_name);
+      if (data.scan_error) {
+        addToast(`${data.scan_error}. The file is attached — check the fields below and update them by hand.`, 'info');
+        return;
+      }
+
+      // An updated order keeps its customer / supplier: a different one read off
+      // the document is only pointed out, never switched silently
+      const readParty = data.type === 'customer' && data.customer_id ? { type: 'customer', id: String(data.customer_id) }
+        : data.type === 'supplier' && data.supplier_id ? { type: 'supplier', id: String(data.supplier_id) } : null;
+      const keepParty = isEditing || !!party;
+      const current = form.type === 'customer' ? form.customer_id : form.supplier_id;
+      const switchParty = !!readParty && (!keepParty || !current);
+      const partyNote = readParty && !switchParty && (readParty.type !== form.type || readParty.id !== current)
+        ? ` The document names ${data.customer_or_supplier_name || 'another party'} — the order's ${form.type} was kept.` : '';
       setForm(prev => ({
         ...prev,
-        // The operation is fixed when the order is added from it
-        operation_number: operationId ? prev.operation_number : (data.operation_number || prev.operation_number),
+        // The operation is fixed when the order is added from it, and an order
+        // being edited stays on its operation
+        operation_number: operationId || (isEditing && prev.operation_number) ? prev.operation_number : (data.operation_number || prev.operation_number),
         order_number:  data.order_number  || prev.order_number,
         order_date:    data.order_date    || prev.order_date,
         inco_terms:    data.inco_terms    || prev.inco_terms,
@@ -259,8 +280,8 @@ export default function OrderFormPage({ embedded, orderId, operationNumber, oper
         delivery_date: data.delivery_date || prev.delivery_date,
         payment_terms: data.payment_terms || prev.payment_terms,
         notes:         data.notes         || prev.notes,
-        ...(data.type === 'customer' && data.customer_id ? { type: 'customer', customer_id: String(data.customer_id) } : {}),
-        ...(data.type === 'supplier' && data.supplier_id ? { type: 'supplier', supplier_id: String(data.supplier_id) } : {}),
+        ...(switchParty && readParty!.type === 'customer' ? { type: 'customer', customer_id: readParty!.id } : {}),
+        ...(switchParty && readParty!.type === 'supplier' ? { type: 'supplier', supplier_id: readParty!.id } : {}),
       }));
 
       if (data.items?.length > 0) {
@@ -276,13 +297,10 @@ export default function OrderFormPage({ embedded, orderId, operationNumber, oper
         })));
       }
 
-      if (data.scan_file_path) setScanFilePath(data.scan_file_path);
-      if (data.scan_file_name) setScanFileName(data.scan_file_name);
-
-      if (data.customer_or_supplier_name && !data.customer_id && !data.supplier_id) {
+      if (data.customer_or_supplier_name && !data.customer_id && !data.supplier_id && !keepParty) {
         addToast(`Customer/Supplier "${data.customer_or_supplier_name}" not found in your list. Please select manually.`, 'error');
       } else {
-        addToast('Order scanned — please review and confirm all fields', 'success');
+        addToast(`${isEditing ? 'Updated order read' : 'Order scanned'} — please review and confirm all fields.${partyNote}`, 'success');
       }
     } catch (err: any) {
       const detail = err.response?.data?.error || '';
@@ -412,7 +430,9 @@ export default function OrderFormPage({ embedded, orderId, operationNumber, oper
           {!scanning && scanFilePath && (
             <div className="flex items-center gap-2 mt-2 text-sm text-emerald-600">
               <Paperclip size={14} className="shrink-0" />
-              <span>File ready: <span className="font-medium">{scanFileName}</span></span>
+              <span>File ready: <span className="font-medium">{scanFileName}</span>
+                {existingFileName && <span className="text-xs text-gray-500"> — replaces {existingFileName} (kept in the Archive) when you save</span>}
+              </span>
             </div>
           )}
         </Card>
@@ -535,14 +555,17 @@ export default function OrderFormPage({ embedded, orderId, operationNumber, oper
           </div>
 
           <div className="space-y-4">
-            {items.map((item, index) => (
+            {items.map((item, index) => {
+              // A saved line names its product; show it chosen rather than "please confirm"
+              const pid = item.productId || String(products.find((p: any) => p.name === item.description)?.id ?? '');
+              return (
               <div key={index} className="p-4 bg-gray-50 rounded-lg border border-gray-200 space-y-3">
                 <div className="grid grid-cols-2 gap-3">
                   {/* TripleW catalog product */}
                   <div className="space-y-1">
                     <Label>TripleW Product *</Label>
                     <select
-                      value={item.productId}
+                      value={pid}
                       onChange={e => selectProduct(index, e.target.value)}
                       className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
                     >
@@ -551,7 +574,7 @@ export default function OrderFormPage({ embedded, orderId, operationNumber, oper
                         <option key={p.id} value={String(p.id)}>{p.name}{p.sku ? ` (${p.sku})` : ''}</option>
                       ))}
                     </select>
-                    {!item.productId && item.description && (
+                    {!pid && item.description && (
                       <p className="text-xs text-amber-600">Scanned: "{item.description}" — please confirm above</p>
                     )}
                   </div>
@@ -626,7 +649,8 @@ export default function OrderFormPage({ embedded, orderId, operationNumber, oper
                   </button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="mt-4 pt-4 border-t border-gray-200 flex items-center justify-end gap-4">

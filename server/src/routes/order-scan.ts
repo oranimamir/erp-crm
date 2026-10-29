@@ -131,16 +131,36 @@ function fuzzyMatchProduct(name: string): { product_id?: number; description: st
   return { description: name };
 }
 
-router.post('/', upload.single('file'), async (req: Request, res: Response) => {
+// Saves the uploaded order under uploads/orders; null when it could not be written.
+function saveOrderFile(file: Express.Multer.File): string | null {
   try {
-    if (!process.env.ANTHROPIC_API_KEY) {
-      res.status(501).json({ error: 'Order scanning is not configured (missing API key)' });
-      return;
-    }
-    if (!req.file) {
-      res.status(400).json({ error: 'No file uploaded' });
-      return;
-    }
+    const ordersDir = path.join(uploadsBase, 'orders');
+    fs.mkdirSync(ordersDir, { recursive: true });
+    const fileExt = path.extname(file.originalname).toLowerCase();
+    const savedFilename = `order-${Date.now()}${fileExt}`;
+    fs.writeFileSync(path.join(ordersDir, savedFilename), file.buffer);
+    return savedFilename;
+  } catch {
+    return null;
+  }
+}
+
+// The file is kept even when it can't be read (no API key, no credit, an AI
+// error): the answer then carries `scan_error` and no fields, so an updated
+// order can still replace the attached one and be filled in by hand.
+router.post('/', upload.single('file'), async (req: Request, res: Response) => {
+  if (!req.file) {
+    res.status(400).json({ error: 'No file uploaded' });
+    return;
+  }
+  const scan_file_path = saveOrderFile(req.file);
+  const scan_file_name = scan_file_path ? req.file.originalname : null;
+  if (!scan_file_path) {
+    res.status(500).json({ error: 'Could not save the order file' });
+    return;
+  }
+  try {
+    if (!process.env.ANTHROPIC_API_KEY) throw new Error('NO_API_KEY');
 
     const extracted = await extractWithClaude(req.file);
     const entityMatch = fuzzyMatchEntity(extracted.customer_or_supplier_name || '');
@@ -156,19 +176,6 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
           packaging: item.packaging || null,
         }))
       : [];
-
-    // Save the uploaded file to disk so it can be downloaded later
-    let scan_file_path: string | null = null;
-    let scan_file_name: string | null = null;
-    try {
-      const ordersDir = path.join(uploadsBase, 'orders');
-      fs.mkdirSync(ordersDir, { recursive: true });
-      const fileExt = path.extname(req.file.originalname).toLowerCase();
-      const savedFilename = `order-${Date.now()}${fileExt}`;
-      fs.writeFileSync(path.join(ordersDir, savedFilename), req.file.buffer);
-      scan_file_path = savedFilename;
-      scan_file_name = req.file.originalname;
-    } catch { /* file save is best-effort */ }
 
     res.json({
       operation_number:         extracted.operation_number          || null,
@@ -190,12 +197,16 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
       items,
     });
   } catch (err: any) {
-    if (err.message === 'NO_API_KEY') {
-      res.status(501).json({ error: 'Order scanning is not configured' });
-      return;
-    }
-    console.error('Order scan error:', err.message || err);
-    res.status(500).json({ error: `Failed to scan order: ${err.message || 'Unknown error'}` });
+    const msg = String(err?.message || err || 'Unknown error');
+    if (msg !== 'NO_API_KEY') console.error('Order scan error:', msg);
+    res.json({
+      scan_file_path,
+      scan_file_name,
+      items: [],
+      scan_error: msg === 'NO_API_KEY' ? 'Order reading is not configured (no API key)'
+        : /credit balance/i.test(msg) ? 'AI reading unavailable: Anthropic API credits depleted'
+        : `Could not read the order automatically (${msg})`,
+    });
   }
 });
 

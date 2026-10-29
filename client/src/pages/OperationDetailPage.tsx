@@ -222,6 +222,9 @@ export default function OperationDetailPage() {
   const [orderForm, setOrderForm] = useState<{ orderId?: number; file?: File } | null>(null);
   const [orderDrag, setOrderDrag] = useState(false);
   const orderFileRef = useRef<HTMLInputElement>(null);
+  // An updated version of the linked order — dropped on its card or chosen with the button
+  const updatedOrderRef = useRef<HTMLInputElement>(null);
+  const [updatedOrderDrag, setUpdatedOrderDrag] = useState(false);
   // Invoice upload / edit in a window on this page: { invoiceId } edits, {} adds
   const [invoiceForm, setInvoiceForm] = useState<{ invoiceId?: number } | null>(null);
   const [orderSearch, setOrderSearch] = useState('');
@@ -710,7 +713,23 @@ export default function OperationDetailPage() {
       {/* Require the joined order, not just the pointer: a reference to a deleted
           order must render the "no order linked" state, never an empty card. */}
       {operation.order_id && operation.order_number ? (
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div
+          onDragOver={e => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setUpdatedOrderDrag(true); } }}
+          onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setUpdatedOrderDrag(false); }}
+          onDrop={e => {
+            const f = e.dataTransfer.files?.[0];
+            if (!f) return;
+            e.preventDefault(); setUpdatedOrderDrag(false);
+            setOrderForm({ orderId: operation.order_id!, file: f });
+          }}
+          className={`relative bg-white rounded-xl border shadow-sm overflow-hidden transition-colors ${updatedOrderDrag ? 'border-primary-400 ring-2 ring-primary-200' : 'border-gray-200'}`}>
+          {updatedOrderDrag && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-primary-50/90 pointer-events-none">
+              <p className="text-sm font-medium text-primary-700 flex items-center gap-2"><Upload size={16} /> Drop the updated order — it replaces {operation.order_file_name || 'the attached document'}</p>
+            </div>
+          )}
+          <input ref={updatedOrderRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) setOrderForm({ orderId: operation.order_id!, file: f }); }} />
           <div className="px-4 sm:px-5 py-3 sm:py-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center gap-2 sm:justify-between">
             <h2 className="font-semibold text-gray-800 flex items-center gap-2 text-sm sm:text-base">
               <ShoppingCart size={16} className="text-gray-500 shrink-0" />
@@ -739,6 +758,13 @@ export default function OperationDetailPage() {
                 title="Edit the order here"
               >
                 <Edit2 size={13} /> Edit
+              </button>
+              <button
+                onClick={() => updatedOrderRef.current?.click()}
+                className="flex items-center gap-1 text-xs sm:text-sm text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2 py-1"
+                title="Upload a new version of the client's order: it is read, you check the changes, and it replaces the attached document (the old one goes to the Archive). You can also drop it on this card."
+              >
+                <Upload size={13} /> Upload updated order
               </button>
               <button
                 onClick={openLinkOrder}
@@ -1371,7 +1397,7 @@ export default function OperationDetailPage() {
       {/* ── Order form (edit / new) ────────────────────────────────────────── */}
       {orderForm && (
         <Modal open onClose={() => setOrderForm(null)} size="xl" closeOnBackdrop={false}
-          title={orderForm.orderId ? `Edit Order ${operation.order_number || ''}` : `New Order for ${operation.operation_number}`}>
+          title={orderForm.orderId ? `${orderForm.file ? 'Updated order' : 'Edit Order'} ${operation.order_number || ''}` : `New Order for ${operation.operation_number}`}>
           <OrderFormPage embedded orderId={orderForm.orderId ?? null} operationNumber={operation.operation_number}
             operationId={operation.id} initialFile={orderForm.file ?? null}
             party={operation.customer_id ? { type: 'customer', id: operation.customer_id }

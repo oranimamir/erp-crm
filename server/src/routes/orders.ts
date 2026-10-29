@@ -274,6 +274,18 @@ router.put('/:id', (req: Request, res: Response) => {
   try {
     updateOrder();
 
+    // A new order document replaces the attached one: the old file goes to the Archive
+    if (file_path && existing.file_path && file_path !== existing.file_path) {
+      try {
+        archiveStored('orders', existing.file_path, {
+          section: 'Orders', context: contextOf(existing.operation_number, `Order ${existing.order_number}`),
+          fileName: existing.file_name, reason: 'replaced',
+        }, archivedBy(req));
+      } catch (err) {
+        console.warn('[orders] Failed to archive the replaced order document:', err);
+      }
+    }
+
     // Handle operation linking after the order is updated
     const orderId = parseInt(req.params.id as string);
     const resolvedType = type || existing.type;
@@ -303,7 +315,11 @@ router.put('/:id', (req: Request, res: Response) => {
     notifyAdmin({ action: 'updated', entity: 'Order', label: order.order_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
     res.json({ ...order, items: orderItems, operation_id: linked?.id ?? null });
   } catch (err: any) {
-    res.status(400).json({ error: err.message });
+    if (err.message?.includes('UNIQUE')) {
+      res.status(409).json({ error: `Order number ${order_number} is already used by another order` });
+    } else {
+      res.status(400).json({ error: err.message });
+    }
   }
 });
 
