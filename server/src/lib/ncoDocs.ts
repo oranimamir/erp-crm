@@ -29,6 +29,9 @@ export interface NcoLine {
   currency?: string | null;
   hs_code?: string | null;
   lots?: string[] | null;
+  /** From Inventory → Packaging: its id and its name as printed (e.g. "0.125l sample bottle") */
+  packaging_id?: number | null;
+  packaging?: string | null;
 }
 
 export function normalizeNcoLines(raw: unknown): NcoLine[] {
@@ -43,6 +46,8 @@ export function normalizeNcoLines(raw: unknown): NcoLine[] {
       currency: String(l?.currency ?? 'EUR').trim().toUpperCase() || 'EUR',
       hs_code: String(l?.hs_code ?? '').trim(),
       lots: Array.isArray(l?.lots) ? l.lots.map((x: unknown) => String(x ?? '').trim()).filter(Boolean) : [],
+      packaging_id: Number.isInteger(Number(l?.packaging_id)) && Number(l?.packaging_id) > 0 ? Number(l.packaging_id) : null,
+      packaging: String(l?.packaging ?? '').trim(),
     }))
     .filter(l => l.product || l.quantity);
 }
@@ -71,7 +76,7 @@ export function ncoDocLines(lines: NcoLine[]): DocLine[] {
     line: i + 1,
     reference: l.reference || '',
     commercial_name: l.product || '',
-    packaging: '',
+    packaging: l.packaging || '',
     quantity: Number(l.quantity) || 0,
     quantity_unit: l.quantity_unit || 'KG',
     unit_price: Number(l.unit_price) || 0,

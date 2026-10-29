@@ -32,7 +32,29 @@ import { missingRequired, sortForSending, docNumber, DOC_ACCEPT } from '../lib/o
 interface NcoLine {
   product: string; reference: string; quantity: string; quantity_unit: string;
   unit_price: string; currency: string; hs_code: string; lots: string;
+  /** Inventory → Packaging id ('' = none) and its name as printed */
+  packaging_id: string; packaging: string;
 }
+
+interface PackagingOption { id: number; type: string; code: string; product: string | null; units_per_pallet: number | null }
+
+const normName = (s: unknown) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+/** Packaging whose product list names this product (whole words), best match first. */
+function packagingFor(product: string, options: PackagingOption[]): PackagingOption[] {
+  const target = ` ${normName(product)} `;
+  if (!target.trim()) return [];
+  return options
+    .map(o => ({ o, score: Math.max(0, ...String(o.product || '').split(',').map(part => {
+      const p = normName(part);
+      return p && p !== 'all' && target.includes(` ${p} `) ? p.length : 0;
+    })) }))
+    .filter(x => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map(x => x.o);
+}
+
+const packagingName = (o: PackagingOption) => o.type || o.code;
 interface NcoDoc { id: number; file_path: string; file_name: string; category_id: number | null; category_name: string | null; notes: string | null; created_at: string; file_size?: number | null }
 interface Nco {
   id: number; nco_number: string; entity: string; type: 'samples' | 'shipping';
@@ -97,18 +119,20 @@ function EndPicker({ label, value, onChange, entities, suppliers }: {
   );
 }
 
-const blankLine = (): NcoLine => ({ product: '', reference: '', quantity: '', quantity_unit: 'KG', unit_price: '', currency: 'EUR', hs_code: '', lots: '' });
+const blankLine = (): NcoLine => ({ product: '', reference: '', quantity: '', quantity_unit: 'KG', unit_price: '', currency: 'EUR', hs_code: '', lots: '', packaging_id: '', packaging: '' });
 const toForm = (l: any): NcoLine => ({
   product: l.product || '', reference: l.reference || '',
   quantity: l.quantity ? String(l.quantity) : '', quantity_unit: l.quantity_unit || 'KG',
   unit_price: l.unit_price ? String(l.unit_price) : '', currency: l.currency || 'EUR',
   hs_code: l.hs_code || '', lots: (l.lots || []).join(', '),
+  packaging_id: l.packaging_id ? String(l.packaging_id) : '', packaging: l.packaging || '',
 });
 const toPayload = (l: NcoLine) => ({
   product: l.product.trim(), reference: l.reference.trim(),
   quantity: Number(l.quantity) || 0, quantity_unit: l.quantity_unit, unit_price: Number(l.unit_price) || 0,
   currency: l.currency, hs_code: l.hs_code.trim(),
   lots: l.lots.split(',').map(x => x.trim()).filter(Boolean),
+  packaging_id: l.packaging_id ? Number(l.packaging_id) : null, packaging: l.packaging.trim(),
 });
 
 export default function NcoDetailPage() {
@@ -123,6 +147,7 @@ export default function NcoDetailPage() {
   const [savedLines, setSavedLines] = useState('[]');
   const [savingLines, setSavingLines] = useState(false);
   const [products, setProducts] = useState<Array<{ id: number; name: string; sku: string | null }>>([]);
+  const [packagingOptions, setPackagingOptions] = useState<PackagingOption[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [uploadCategory, setUploadCategory] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -160,6 +185,7 @@ export default function NcoDetailPage() {
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
     api.get('/products', { params: { limit: 10000 } }).then(r => setProducts(r.data.data || [])).catch(() => {});
+    api.get('/packing-lists/packaging').then(r => setPackagingOptions(r.data || [])).catch(() => {});
     api.get('/company-entities').then(r => setEntities(r.data || [])).catch(() => {});
     api.get('/customers', { params: { limit: 10000 } })
       .then(r => setCustomers((r.data.data || []).sort((a: any, b: any) => a.name.localeCompare(b.name))))
@@ -181,10 +207,20 @@ export default function NcoDetailPage() {
 
   const setLine = (i: number, patch: Partial<NcoLine>) => setLines(prev => prev.map((l, j) => (j === i ? { ...l, ...patch } : l)));
 
-  /** Picking a catalogue product fills its SKU as the reference. */
+  /** Picking a catalogue product fills its SKU as the reference, and the packaging made for it when none is chosen yet. */
   const pickProduct = (i: number, name: string) => {
     const p = products.find(x => x.name.toLowerCase() === name.trim().toLowerCase());
-    setLine(i, { product: name, ...(p?.sku && !lines[i].reference ? { reference: p.sku } : {}) });
+    const suggested = p && !lines[i].packaging_id ? packagingFor(p.name, packagingOptions)[0] : undefined;
+    setLine(i, {
+      product: name,
+      ...(p?.sku && !lines[i].reference ? { reference: p.sku } : {}),
+      ...(suggested ? { packaging_id: String(suggested.id), packaging: packagingName(suggested) } : {}),
+    });
+  };
+
+  const pickPackaging = (i: number, value: string) => {
+    const o = packagingOptions.find(x => String(x.id) === value);
+    setLine(i, { packaging_id: o ? String(o.id) : '', packaging: o ? packagingName(o) : '' });
   };
 
   async function saveLines() {
@@ -398,11 +434,12 @@ export default function NcoDetailPage() {
           </Button>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[900px]">
+          <table className="w-full text-sm min-w-[1080px]">
             <thead>
               <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                 <th className="px-3 py-2 w-[26%]">Product</th>
                 <th className="px-3 py-2">Reference</th>
+                <th className="px-3 py-2 w-48">Packaging</th>
                 <th className="px-3 py-2 w-28">Quantity</th>
                 <th className="px-3 py-2 w-24">Unit</th>
                 <th className="px-3 py-2 w-28">Unit value</th>
@@ -419,6 +456,30 @@ export default function NcoDetailPage() {
                     <input list="nco-products" value={l.product} onChange={e => pickProduct(i, e.target.value)} placeholder="Product…" className={cell} />
                   </td>
                   <td className="px-3 py-2"><input value={l.reference} onChange={e => setLine(i, { reference: e.target.value })} className={cell} /></td>
+                  <td className="px-3 py-2">
+                    {(() => {
+                      const suggested = packagingFor(l.product, packagingOptions);
+                      const suggestedIds = new Set(suggested.map(o => o.id));
+                      const rest = packagingOptions.filter(o => !suggestedIds.has(o.id));
+                      const label = (o: PackagingOption) => `${packagingName(o)}${o.code && o.type ? ` (${o.code})` : ''}`;
+                      const unknown = l.packaging && !packagingOptions.some(o => String(o.id) === l.packaging_id);
+                      return (
+                        <select value={unknown ? '__kept' : l.packaging_id} onChange={e => e.target.value !== '__kept' && pickPackaging(i, e.target.value)}
+                          className={cell} title={l.packaging || 'Choose the packaging'}>
+                          <option value="">—</option>
+                          {unknown && <option value="__kept">{l.packaging} (not in Packaging)</option>}
+                          {suggested.length > 0 && (
+                            <optgroup label={`Made for ${l.product}`}>
+                              {suggested.map(o => <option key={o.id} value={o.id}>{label(o)}</option>)}
+                            </optgroup>
+                          )}
+                          <optgroup label={suggested.length ? 'Other packaging' : 'All packaging'}>
+                            {rest.map(o => <option key={o.id} value={o.id}>{label(o)}</option>)}
+                          </optgroup>
+                        </select>
+                      );
+                    })()}
+                  </td>
                   <td className="px-3 py-2"><input type="number" step="any" min={0} value={l.quantity} onChange={e => setLine(i, { quantity: e.target.value })} className={`${cell} text-right`} /></td>
                   <td className="px-3 py-2">
                     <select value={l.quantity_unit} onChange={e => setLine(i, { quantity_unit: e.target.value })} className={cell}>
