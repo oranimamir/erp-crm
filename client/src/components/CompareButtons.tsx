@@ -1,28 +1,21 @@
-import { useEffect, useState } from 'react';
-import { Columns2 } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { Columns2, ShoppingCart, FileCheck2, Receipt, Ship, FileText, Search } from 'lucide-react';
+import MenuPanel from './ui/MenuPanel';
 import api from '../lib/api';
 import OrderCompareModal, { type CompareChoice } from './OrderCompareModal';
 import { sortForSending } from '../lib/operationDocs';
 
 /**
- * The "Compare with …" buttons every generator carries: the document being
- * edited side by side with the customer's order, the order confirmation, the
- * invoice or the Bill of Lading. A button whose document does not exist yet
- * (or is still a draft, so has no PDF) stays in light grey. "Compare with
- * other documents" offers every PDF / image filed in the owner's documents
- * (operation, NCO or purchase operation), switchable inside the compare view.
+ * ONE "Compare" button on every generator: its panel offers the customer's
+ * order, the order confirmation, the invoice or the Bill of Lading (greyed with
+ * the reason when missing / still a draft), then every PDF / image filed in the
+ * owner's documents (operation, NCO or purchase operation; searchable when many)
+ * — the pick opens side by side with the document being edited.
  */
 
 export type CompareKind = 'order' | 'oc' | 'invoice' | 'bl';
 
 export interface CompareFile { number: string; file_path: string; file_name: string | null }
-
-const LABELS: Record<CompareKind, string> = {
-  order: 'Compare with order',
-  oc: 'Compare with OC',
-  invoice: 'Compare with invoice',
-  bl: 'Compare with BL',
-};
 
 const MISSING: Record<CompareKind, string> = {
   order: 'No order linked',
@@ -30,10 +23,6 @@ const MISSING: Record<CompareKind, string> = {
   invoice: 'No generated invoice for this order yet',
   bl: 'No Bill of Lading in the operation documents yet',
 };
-
-const cls = (available: boolean) => available
-  ? 'inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-semibold bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 hover:border-gray-400 transition-colors'
-  : 'inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-semibold bg-gray-50 text-gray-400 border border-gray-200 cursor-not-allowed';
 
 const previewable = (name: string) => /\.(pdf|png|jpe?g|gif|webp)$/i.test(name || '');
 
@@ -69,6 +58,7 @@ export default function CompareButtons({ kinds, orderId, operationId, ncoId, pur
     : purchaseOperationId ? `/purchase-operations/${purchaseOperationId}` : null;
   const [docs, setDocs] = useState<CompareChoice[]>([]);
   const [otherDoc, setOtherDoc] = useState<CompareChoice | null>(null);
+  const [search, setSearch] = useState('');
   useEffect(() => {
     if (!ownerUrl) { setDocs([]); return; }
     api.get(ownerUrl)
@@ -113,30 +103,72 @@ export default function CompareButtons({ kinds, orderId, operationId, ncoId, pur
     return { title: name, filePath: f.file_path, fileName: f.file_name || undefined, subfolder: 'operation-docs' };
   };
 
+  const ICON: Record<CompareKind, ReactNode> = {
+    order: <ShoppingCart size={16} />, oc: <FileCheck2 size={16} />, invoice: <Receipt size={16} />, bl: <Ship size={16} />,
+  };
+  const NAME: Record<CompareKind, string> = { order: "Customer's order", oc: 'Order confirmation', invoice: 'Invoice', bl: 'Bill of Lading' };
+  const term = search.trim().toLowerCase();
+  const shownDocs = term ? docs.filter(d => d.label.toLowerCase().includes(term)) : docs;
+  const availableCount = kinds.filter(available).length + (docs.length ? 1 : 0);
+
   return (
     <>
-      {kinds.map(kind => {
-        const ok = available(kind);
-        const f = files[kind];
-        return (
-          <button
-            key={kind} type="button" disabled={!ok} onClick={() => setOpen(kind)} className={cls(ok)}
-            title={ok ? (kind === 'order' ? "Show the customer's order side by side with this document"
-              : `Show ${f?.file_name || f?.number} next to this document`) : MISSING[kind]}
-          >
-            <Columns2 size={14} /> {LABELS[kind]}
-          </button>
-        );
-      })}
-      {ownerUrl && (
-        <button
-          type="button" disabled={!docs.length} onClick={() => setOtherDoc(docs[0])} className={cls(docs.length > 0)}
-          title={docs.length ? `Pick any of the ${docs.length} document${docs.length === 1 ? '' : 's'} filed here and show it next to this document`
-            : 'No PDF or image in the documents yet'}
-        >
-          <Columns2 size={14} /> Compare with other documents
-        </button>
-      )}
+      <MenuPanel label="Compare" icon={<Columns2 size={15} />} width={420} badge={availableCount ? null : '0'}
+        title={`Show another document side by side with this ${title.toLowerCase()}`}>
+        {close => (
+          <div className="py-1.5">
+            <p className="px-4 pt-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400">Side by side with this {title.toLowerCase()}</p>
+            {kinds.map(kind => {
+              const ok = available(kind);
+              const f = files[kind];
+              return (
+                <button key={kind} type="button" disabled={!ok} onClick={() => { close(); setOpen(kind); }}
+                  className="flex w-[calc(100%-12px)] items-center gap-3 mx-1.5 px-3 py-2 rounded-lg text-left hover:bg-gray-50 disabled:opacity-55 disabled:hover:bg-transparent disabled:cursor-not-allowed">
+                  <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${ok ? 'bg-primary-50 text-primary-600' : 'bg-gray-100 text-gray-400'}`}>{ICON[kind]}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-semibold text-gray-900">{NAME[kind]}</span>
+                    <span className="block truncate text-xs text-gray-500">
+                      {!ok ? MISSING[kind] : kind === 'order' ? 'The order the customer sent' : (f?.file_name || f?.number)}
+                    </span>
+                  </span>
+                  {ok && <span className="shrink-0 text-xs font-semibold text-primary-600">Compare →</span>}
+                </button>
+              );
+            })}
+            {ownerUrl && (
+              <div className="mt-1.5 border-t border-gray-100 pt-1.5">
+                <p className="px-4 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                  Other documents filed here {docs.length ? `(${docs.length})` : ''}
+                </p>
+                {docs.length > 6 && (
+                  <div className="px-3 pb-1.5">
+                    <div className="relative">
+                      <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Find a document…" autoFocus
+                        className="w-full rounded-lg border border-gray-200 py-1.5 pl-8 pr-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
+                    </div>
+                  </div>
+                )}
+                {docs.length === 0 ? (
+                  <p className="px-4 py-2 text-xs text-gray-400">No PDF or image in the documents yet.</p>
+                ) : shownDocs.length === 0 ? (
+                  <p className="px-4 py-2 text-xs text-gray-400">Nothing matches “{search}”.</p>
+                ) : (
+                  <div className="max-h-64 overflow-y-auto">
+                    {shownDocs.map(d => (
+                      <button key={d.id} type="button" onClick={() => { close(); setSearch(''); setOtherDoc(d); }}
+                        className="flex w-[calc(100%-12px)] items-center gap-2.5 mx-1.5 px-3 py-1.5 rounded-lg text-left hover:bg-gray-50">
+                        <FileText size={14} className="shrink-0 text-gray-400" />
+                        <span className="min-w-0 flex-1 truncate text-sm text-gray-700">{d.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </MenuPanel>
       {otherDoc && (
         <OrderCompareModal
           title={title}

@@ -1,14 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FileCheck2, ShoppingCart, Receipt, Package, Eye, Trash2 } from 'lucide-react';
+import { FileCheck2, ShoppingCart, Receipt, Package, Eye, Trash2, FilePlus2 } from 'lucide-react';
+import MenuPanel from './ui/MenuPanel';
 import api from '../lib/api';
 import PurchasePoPickerModal from './PurchasePoPickerModal';
 
 /**
- * The four documents generated from an order — order confirmation, supplier
- * PO, invoice, packing list — each opening its generator. The label says
- * where each stands: nothing yet, a saved draft, or ✓ finalized (and filed in
- * the operation's Documents). A draft can be deleted (bin beside it).
+ * The documents generated from an order (or NCO) — order confirmation, supplier
+ * PO, invoice, packing list — behind ONE "Generate" button: its panel lists
+ * each with where it stands (Not started / Draft / Generated), a preview eye,
+ * a bin for a draft, and Create / Continue / Open into its generator.
  */
 
 interface Doc {
@@ -24,10 +25,6 @@ interface Doc {
 export interface PreviewTarget { fileName: string; filePath: string; subfolder: string; label?: string }
 
 type State = { oc: Doc | null; po: Doc | null; invoice: Doc | null; pl: Doc | null };
-
-const btn = 'flex items-center gap-1 text-xs sm:text-sm text-primary-600 hover:text-primary-700 border border-primary-200 bg-primary-50 rounded-lg px-2 py-1 disabled:opacity-100 disabled:bg-gray-50 disabled:text-gray-300 disabled:border-gray-200 disabled:cursor-not-allowed';
-
-const mark = (doc: Doc | null) => (!doc ? '' : doc.status === 'draft' ? ' (draft)' : ' ✓');
 
 export default function DocumentGenerators({ orderId, operationId, ncoId, ncoType = 'samples', refreshKey, onPreview, onChanged, importedPo }: {
   orderId: number | null;
@@ -69,10 +66,6 @@ export default function DocumentGenerators({ orderId, operationId, ncoId, ncoTyp
   const poOnly = !!ncoId && ncoType === 'shipping';
   const invoiceFinal = !!docs.invoice && docs.invoice.status !== 'draft';
 
-  const title = (doc: Doc | null, what: string) => !doc
-    ? `Generate the ${what} from ${source}`
-    : doc.status === 'draft' ? `Continue the draft ${what}` : `Open the ${what}${doc.file_name ? ` (${doc.file_name})` : ''}`;
-
   /** The PDF to preview: a generated document's, a PL's final (else its draft). */
   const pdfOf = (doc: Doc | null): { path: string; name: string } | null => {
     if (!doc) return null;
@@ -81,14 +74,14 @@ export default function DocumentGenerators({ orderId, operationId, ncoId, ncoTyp
     if (doc.file_path) return { path: doc.file_path, name: doc.file_name || 'document.pdf' };
     return null;
   };
-  const eye = (doc: Doc | null, label: string) => {
+  const eye = (doc: Doc | null, label: string, close: () => void) => {
     const pdf = onPreview ? pdfOf(doc) : null;
     if (!pdf) return null;
     return (
       <button type="button" title={`Preview ${pdf.name}`}
-        onClick={() => onPreview!({ fileName: pdf.name, filePath: pdf.path, subfolder: 'operation-docs', label })}
-        className="-ml-1 p-1 rounded-lg text-gray-500 hover:text-gray-800 hover:bg-gray-100">
-        <Eye size={14} />
+        onClick={() => { close(); onPreview!({ fileName: pdf.name, filePath: pdf.path, subfolder: 'operation-docs', label }); }}
+        className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100">
+        <Eye size={15} />
       </button>
     );
   };
@@ -96,12 +89,13 @@ export default function DocumentGenerators({ orderId, operationId, ncoId, ncoTyp
   /** A bin beside a draft (a PL only while it was never finalized). */
   const ENDPOINT: Record<keyof State, string> = { oc: 'order-confirmations', po: 'purchase-orders', invoice: 'invoice-documents', pl: 'packing-lists' };
   const NAME: Record<keyof State, string> = { oc: 'order confirmation', po: 'supplier PO', invoice: ncoId ? 'sample invoice' : 'invoice', pl: 'packing list' };
-  const bin = (key: keyof State) => {
+  const bin = (key: keyof State, close: () => void) => {
     const doc = docs[key];
     if (!doc || doc.status !== 'draft' || doc.final_file_path) return null;
     return (
       <button type="button" title={`Delete the draft ${NAME[key]}`}
         onClick={async () => {
+          close();
           if (!window.confirm(`Delete the draft ${NAME[key]}? Its number becomes free again.`)) return;
           try {
             await api.delete(`/${ENDPOINT[key]}/${doc.id}`);
@@ -109,38 +103,95 @@ export default function DocumentGenerators({ orderId, operationId, ncoId, ncoTyp
             onChanged?.();
           } catch { window.alert(`Could not delete the draft ${NAME[key]}`); }
         }}
-        className="-ml-1 p-1 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50">
-        <Trash2 size={14} />
+        className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50">
+        <Trash2 size={15} />
       </button>
     );
   };
 
+  type Key = keyof State;
+  const rows: Array<{ key: Key; label: string; icon: ReactNode; doc: Doc | null; open: () => void; disabled?: string; extra?: ReactNode; note?: string }> = [
+    ...(!poOnly ? [{
+      key: 'oc' as Key, label: 'Order confirmation', icon: <FileCheck2 size={16} />, doc: docs.oc,
+      open: () => navigate(docs.oc ? `/order-confirmations/${docs.oc.id}` : `/order-confirmations/new?${q}`),
+    }] : []),
+    {
+      key: 'po', label: 'Supplier purchase order', icon: <ShoppingCart size={16} />, doc: docs.po,
+      note: !docs.po && importedPo ? `${importedPo.file_name} — from a purchase operation` : undefined,
+      open: () => {
+        if (docs.po) navigate(`/purchase-orders/${docs.po.id}`);
+        else if (operationId && !ncoId) setAskPurchasePo(true);
+        else navigate(`/purchase-orders/new?${q}`);
+      },
+    },
+    ...(!poOnly ? [{
+      key: 'invoice' as Key, label: ncoId ? 'Sample invoice' : 'Invoice', icon: <Receipt size={16} />, doc: docs.invoice,
+      open: () => navigate(docs.invoice ? `/invoices/documents/${docs.invoice.id}` : `/invoices/documents/new?${q}`),
+    }, {
+      key: 'pl' as Key, label: 'Packing list', icon: <Package size={16} />, doc: docs.pl,
+      disabled: !docs.pl && !invoiceFinal ? 'Generate the invoice first — the packing list is built from it' : undefined,
+      open: () => navigate(docs.pl ? `/packing-lists/${docs.pl.id}` : `/packing-lists/new?invoice_document_id=${docs.invoice?.id}`),
+    }] : []),
+  ];
+  const doneCount = rows.filter(r => (r.doc && r.doc.status !== 'draft') || (r.key === 'po' && !r.doc && importedPo)).length;
+
+  /** Where a document stands, as a coloured chip. */
+  const chip = (r: typeof rows[number]) => {
+    if (!r.doc && r.key === 'po' && importedPo) return <span className="rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-semibold text-green-700">Filed</span>;
+    if (!r.doc) return <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-500">Not started</span>;
+    if (r.doc.status === 'draft') return <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">Draft</span>;
+    return <span className="rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-semibold text-green-700">Generated</span>;
+  };
+  const sub = (r: typeof rows[number]) => r.disabled
+    ? r.disabled
+    : r.note ? r.note
+    : !r.doc ? `Create it from ${source}`
+    : r.doc.status === 'draft' ? (r.doc.final_file_name ? `Final ${r.doc.final_file_name} · edits saved as a draft` : 'Saved, not generated yet — continue it')
+    : r.doc.final_file_name || r.doc.file_name || 'Generated and filed';
+  const action = (r: typeof rows[number]) => !r.doc ? (r.key === 'po' && importedPo ? 'Change' : 'Create') : r.doc.status === 'draft' ? 'Continue' : 'Open';
+
   return (
     <>
-      {!poOnly && <>
-      <button className={btn} title={title(docs.oc, 'order confirmation')}
-        onClick={() => navigate(docs.oc ? `/order-confirmations/${docs.oc.id}` : `/order-confirmations/new?${q}`)}>
-        <FileCheck2 size={13} /> Order Confirmation{mark(docs.oc)}
-      </button>
-      {eye(docs.oc, 'Order confirmation')}
-      {bin('oc')}
-      </>}
-      <button className={btn}
-        title={!docs.po && importedPo ? `${importedPo.file_name} — from a purchase operation (click to use another or create one)` : title(docs.po, 'supplier purchase order')}
-        onClick={() => {
-          if (docs.po) navigate(`/purchase-orders/${docs.po.id}`);
-          else if (operationId && !ncoId) setAskPurchasePo(true);
-          else navigate(`/purchase-orders/new?${q}`);
-        }}>
-        <ShoppingCart size={13} /> Supplier PO{docs.po ? mark(docs.po) : importedPo ? ' ✓' : ''}
-      </button>
-      {docs.po ? eye(docs.po, 'Supplier purchase order') : importedPo && onPreview ? (
-        <button type="button" title={`Preview ${importedPo.file_name}`}
-          onClick={() => onPreview({ fileName: importedPo.file_name, filePath: importedPo.file_path, subfolder: 'operation-docs', label: 'Supplier purchase order' })}
-          className="-ml-1 p-1 rounded-lg text-gray-500 hover:text-gray-800 hover:bg-gray-100">
-          <Eye size={14} />
-        </button>
-      ) : null}
+      <MenuPanel label="Generate" icon={<FilePlus2 size={15} />} variant="primary" badge={`${doneCount}/${rows.length}`} width={400}
+        title="Create or open the documents generated from this order — order confirmation, supplier PO, invoice, packing list">
+        {close => (
+          <div className="py-1.5">
+            <p className="px-4 pt-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400">Documents from {source}</p>
+            {rows.map(r => {
+              const eyeBtn = r.key === 'po' && !r.doc && importedPo && onPreview ? (
+                <button type="button" title={`Preview ${importedPo.file_name}`}
+                  onClick={() => { close(); onPreview({ fileName: importedPo.file_name, filePath: importedPo.file_path, subfolder: 'operation-docs', label: 'Supplier purchase order' }); }}
+                  className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100"><Eye size={15} /></button>
+              ) : eye(r.doc, r.key === 'pl' && !r.doc?.final_file_path ? 'Packing list (draft)' : r.label, close);
+              return (
+                <div key={r.key} className={`group flex items-center gap-3 px-3 py-2 mx-1.5 rounded-lg ${r.disabled ? 'opacity-60' : 'hover:bg-gray-50'}`}>
+                  <button type="button" disabled={!!r.disabled} onClick={() => { close(); r.open(); }}
+                    className="flex flex-1 min-w-0 items-center gap-3 text-left disabled:cursor-not-allowed">
+                    <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${r.doc && r.doc.status !== 'draft' ? 'bg-green-50 text-green-600' : r.doc ? 'bg-amber-50 text-amber-600' : 'bg-primary-50 text-primary-600'}`}>
+                      {r.icon}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-gray-900">{r.label}</span>
+                        {chip(r)}
+                      </span>
+                      <span className="block truncate text-xs text-gray-500">{sub(r)}</span>
+                    </span>
+                  </button>
+                  {eyeBtn}
+                  {bin(r.key, close)}
+                  {!r.disabled && (
+                    <button type="button" onClick={() => { close(); r.open(); }}
+                      className="shrink-0 rounded-md px-2 py-1 text-xs font-semibold text-primary-600 hover:bg-primary-50">
+                      {action(r)} →
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </MenuPanel>
       {askPurchasePo && operationId && (
         <PurchasePoPickerModal
           operationId={operationId}
@@ -149,24 +200,6 @@ export default function DocumentGenerators({ orderId, operationId, ncoId, ncoTyp
           onFiled={() => { setAskPurchasePo(false); onChanged?.(); }}
         />
       )}
-      {bin('po')}
-      {!poOnly && <>
-      <button className={btn} title={title(docs.invoice, 'invoice')}
-        onClick={() => navigate(docs.invoice ? `/invoices/documents/${docs.invoice.id}` : `/invoices/documents/new?${q}`)}>
-        <Receipt size={13} /> {ncoId ? 'Sample invoice' : 'Invoice'}{mark(docs.invoice)}
-      </button>
-      {eye(docs.invoice, 'Invoice')}
-      {bin('invoice')}
-      {/* The packing list is built from the generated invoice */}
-      <button className={btn} disabled={!docs.pl && !invoiceFinal}
-        title={docs.pl ? title(docs.pl, 'packing list')
-          : invoiceFinal ? 'Generate the packing list from the invoice' : 'Generate the invoice first — the packing list is built from it'}
-        onClick={() => navigate(docs.pl ? `/packing-lists/${docs.pl.id}` : `/packing-lists/new?invoice_document_id=${docs.invoice?.id}`)}>
-        <Package size={13} /> Packing List{mark(docs.pl)}
-      </button>
-      {eye(docs.pl, docs.pl?.final_file_path ? 'Packing list' : 'Packing list (draft)')}
-      {bin('pl')}
-      </>}
     </>
   );
 }
