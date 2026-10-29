@@ -38,6 +38,14 @@ export function pruneBackups(keep = getBackupKeep()): string[] {
     .sort(); // ISO timestamps sort lexicographically = chronologically
   const gone = files.slice(0, Math.max(0, files.length - keep));
   for (const f of gone) { try { fs.unlinkSync(path.join(backupsDir, f)); } catch { /* left for next time */ } }
+  // ZIPs built for the backup email are deleted after sending; one left by a
+  // restart mid-send would otherwise stay on the disk for good
+  for (const f of fs.readdirSync(backupsDir).filter(f => f.startsWith('email-') && f.endsWith('.zip'))) {
+    try {
+      const full = path.join(backupsDir, f);
+      if (Date.now() - fs.statSync(full).mtimeMs > 6 * 3600 * 1000) { fs.unlinkSync(full); gone.push(f); }
+    } catch { /* left for next time */ }
+  }
   return gone;
 }
 
