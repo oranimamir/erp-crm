@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Pencil, Trash2, Loader2, PackageOpen, UserPlus, X } from 'lucide-react';
+import { Plus, Pencil, Trash2, Loader2, PackageOpen, UserPlus, X, Search, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
 import api from '../lib/api';
 import { formatDate, todayISO } from '../lib/dates';
 import { useToast } from '../contexts/ToastContext';
@@ -134,6 +134,17 @@ function EndPicker({ label, value, onChange, entities, suppliers }: {
   );
 }
 
+type SortKey = 'nco_number' | 'nco_date' | 'type' | 'party' | 'status' | 'notes';
+
+/** What the From / To column shows, as text (also what search and sorting use). */
+function partyText(r: Nco): string {
+  if (r.type === 'samples') return r.customer_name || '';
+  if (r.ship_from_label || r.ship_to_label) return `${r.ship_from_label || '?'} → ${r.ship_to_label || '?'}`;
+  return r.supplier_name || '';
+}
+
+const statusRank = (v: string) => { const i = NCO_STATUSES.findIndex(s => s.value === v); return i < 0 ? 99 : i; };
+
 export default function NonCommercialOperationsPage() {
   const { addToast } = useToast();
   const navigate = useNavigate();
@@ -141,6 +152,16 @@ export default function NonCommercialOperationsPage() {
   const [type, setType] = useState<'' | NcoType>('');
   const [status, setStatus] = useState('');
   const [rows, setRows] = useState<Nco[]>([]);
+  // Search and sorting work on the loaded list; the sort is remembered
+  const [search, setSearch] = useState('');
+  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>(() => {
+    try { return JSON.parse(localStorage.getItem('nco.sort') || '') || { key: 'nco_date', dir: 'desc' }; } catch { return { key: 'nco_date', dir: 'desc' }; }
+  });
+  const toggleSort = (key: SortKey) => setSort(prev => {
+    const next = { key, dir: prev.key === key && prev.dir === 'asc' ? 'desc' as const : prev.key === key ? 'asc' as const : key === 'nco_date' ? 'desc' as const : 'asc' as const };
+    try { localStorage.setItem('nco.sort', JSON.stringify(next)); } catch { /* not remembered */ }
+    return next;
+  });
   const [loading, setLoading] = useState(true);
   const [customers, setCustomers] = useState<Party[]>([]);
   const [suppliers, setSuppliers] = useState<Party[]>([]);
@@ -269,6 +290,32 @@ export default function NonCommercialOperationsPage() {
     }
   }
 
+  const term = search.trim().toLowerCase();
+  const shown = rows
+    .filter(r => !term || [r.nco_number, partyText(r), r.notes, TYPE_LABEL[r.type], NCO_STATUSES.find(x => x.value === r.status)?.label, formatDate(r.nco_date)]
+      .some(v => String(v || '').toLowerCase().includes(term)))
+    .sort((a, b) => {
+      const val = (r: Nco): string | number => sort.key === 'party' ? partyText(r).toLowerCase()
+        : sort.key === 'status' ? statusRank(r.status)
+        : sort.key === 'type' ? r.type
+        : String(r[sort.key] || '').toLowerCase();
+      const x = val(a), y = val(b);
+      // Blanks last either way
+      if (x === '' && y !== '') return 1;
+      if (y === '' && x !== '') return -1;
+      const c = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true });
+      return sort.dir === 'asc' ? c : -c;
+    });
+
+  const SortTh = ({ k, label }: { k: SortKey; label: string }) => (
+    <th className="px-4 py-3">
+      <button type="button" onClick={() => toggleSort(k)} className="inline-flex items-center gap-1 uppercase tracking-wide hover:text-gray-800">
+        {label}
+        {sort.key === k ? (sort.dir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />) : <ChevronsUpDown size={12} className="text-gray-300" />}
+      </button>
+    </th>
+  );
+
   const partyMissing = form.type === 'samples' ? !form.customer_id : !endSet(form.from) || !endSet(form.to);
   const dash = <span className="text-gray-300">—</span>;
 
@@ -276,10 +323,21 @@ export default function NonCommercialOperationsPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Non-Commercial Operations</h1>
-        <Button onClick={openNew}><Plus size={16} /> New NCO</Button>
+        <div className="flex items-center gap-3">
+          {!loading && rows.length > 0 && <span className="text-sm text-gray-500">{shown.length === rows.length ? rows.length : `${shown.length} of ${rows.length}`}</span>}
+          <Button onClick={openNew}><Plus size={16} /> New NCO</Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-4">
+        <div className="relative w-full sm:w-72">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search number, customer, from / to, notes…"
+            className="w-full rounded-full border border-gray-300 bg-white pl-8 pr-8 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
+          {search && (
+            <button onClick={() => setSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"><X size={14} /></button>
+          )}
+        </div>
         <Pills value={entity} onChange={setEntity} options={[['', 'All'], ['BE', 'BE'], ['NL', 'NL']] as const} />
         <Pills value={type} onChange={setType} options={[['', 'All types'], ['samples', 'Samples'], ['shipping', 'Shipping']] as const} />
         <select value={status} onChange={e => setStatus(e.target.value)}
@@ -297,22 +355,24 @@ export default function NonCommercialOperationsPage() {
             <PackageOpen size={24} className="mx-auto mb-2 text-gray-300" />
             No non-commercial operations yet.
           </div>
+        ) : shown.length === 0 ? (
+          <div className="py-16 text-center text-sm text-gray-400">Nothing matches “{search}”.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-200 bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  <th className="px-4 py-3">NCO #</th>
-                  <th className="px-4 py-3">Date</th>
-                  <th className="px-4 py-3">Type</th>
-                  <th className="px-4 py-3">From / To</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">Notes</th>
+                  <SortTh k="nco_number" label="NCO #" />
+                  <SortTh k="nco_date" label="Date" />
+                  <SortTh k="type" label="Type" />
+                  <SortTh k="party" label="Customer / From → To" />
+                  <SortTh k="status" label="Status" />
+                  <SortTh k="notes" label="Notes" />
                   <th className="px-4 py-3" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {rows.map(r => (
+                {shown.map(r => (
                   <tr key={r.id} onClick={() => navigate(`/non-commercial-operations/${r.id}`)} className="hover:bg-gray-50 cursor-pointer">
                     <td className="px-4 py-2.5 font-medium text-gray-900 whitespace-nowrap">{r.nco_number}</td>
                     <td className="px-4 py-2.5 text-gray-600 whitespace-nowrap">{formatDate(r.nco_date) || dash}</td>
