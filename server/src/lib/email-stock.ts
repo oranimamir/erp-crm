@@ -1,6 +1,6 @@
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
-import { parseAndInsertStockCsv } from './parse-stock-csv.js';
+import { parseAndInsertStockCsv, emailWarehouseId } from './parse-stock-csv.js';
 
 export function isEmailStockConfigured(): boolean {
   return !!(process.env.STOCK_EMAIL_USER && process.env.STOCK_EMAIL_PASS);
@@ -68,6 +68,8 @@ export async function checkEmailForStockUpdates(): Promise<void> {
           filename,
           uploadedBy: from,
           source: 'email',
+          // Emailed stock is NTG's
+          warehouseId: emailWarehouseId() ?? 0,
         });
 
         await client.messageFlagsAdd(`${uid}`, ['\\Seen'], { uid: true });

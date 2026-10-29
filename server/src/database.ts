@@ -1020,21 +1020,29 @@ export async function initializeDatabase() {
     )
   `);
 
-  // Backfill batches from existing warehouse_stock rows (one-time, idempotent)
+  // Batches are never created from warehouse stock: a stock upload only flags
+  // the batch numbers that are not in Batches (GET /api/warehouse-stock missing_batches)
+
+  // Several warehouses: each upload replaces only its own warehouse's stock; NTG holds the stock from before
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS warehouses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  try { db.exec(`ALTER TABLE warehouse_stock ADD COLUMN warehouse_id INTEGER`); } catch (_) {}
+  try { db.exec(`ALTER TABLE warehouse_stock_uploads ADD COLUMN warehouse_id INTEGER`); } catch (_) {}
   try {
-    const stockRows = db.prepare(`
-      SELECT DISTINCT batch_number, description
-      FROM warehouse_stock
-      WHERE batch_number IS NOT NULL AND batch_number != ''
-      ORDER BY batch_number
-    `).all() as any[];
-    for (const row of stockRows) {
-      db.prepare(`INSERT OR IGNORE INTO batches (batch_number, product) VALUES (?, ?)`).run(row.batch_number, row.description || null);
-      if (row.description) {
-        db.prepare(`UPDATE batches SET product = ? WHERE batch_number = ? AND product IS NULL`).run(row.description, row.batch_number);
-      }
+    if (!(db.prepare('SELECT 1 FROM warehouses LIMIT 1').get())) db.prepare(`INSERT INTO warehouses (name) VALUES ('NTG')`).run();
+    const ntg = (db.prepare(`SELECT id FROM warehouses WHERE name = 'NTG'`).get() as any)?.id
+      ?? (db.prepare('SELECT MIN(id) AS id FROM warehouses').get() as any)?.id;
+    if (ntg) {
+      db.prepare('UPDATE warehouse_stock SET warehouse_id = ? WHERE warehouse_id IS NULL').run(ntg);
+      db.prepare('UPDATE warehouse_stock_uploads SET warehouse_id = ? WHERE warehouse_id IS NULL').run(ntg);
     }
-  } catch (_) {}
+  } catch (err) { console.warn('[db] warehouses setup failed:', err); }
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_warehouse_stock_warehouse ON warehouse_stock(warehouse_id)`); } catch (_) {}
 
   // Performance indexes on frequently queried columns
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status)`); } catch (_) {}

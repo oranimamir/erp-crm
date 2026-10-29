@@ -12,7 +12,7 @@ import Pagination from '../components/ui/Pagination';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
 import Badge from '../components/ui/Badge';
-import { Plus, Warehouse, Pencil, Trash2, PackagePlus, FileSpreadsheet, Package, Box, Upload, Mail, RefreshCw, ChevronRight, ChevronDown, Tag, Download, Loader2, CheckCircle2, ArchiveRestore } from 'lucide-react';
+import { Plus, Warehouse, Pencil, Trash2, PackagePlus, FileSpreadsheet, Package, Box, Upload, Mail, RefreshCw, ChevronRight, ChevronDown, Tag, Download, Loader2, CheckCircle2, ArchiveRestore, AlertTriangle, X } from 'lucide-react';
 import SkuImportModal from '../components/SkuImportModal';
 import { downloadExcel } from '../lib/exportExcel';
 import { formatDate } from '../lib/dates';
@@ -827,12 +827,90 @@ function WarehouseStockTab() {
   const [emailConfig, setEmailConfig] = useState<{ configured: boolean; address: string | null }>({ configured: false, address: null });
   const [expandedArticles, setExpandedArticles] = useState<Set<string>>(new Set());
   const [batchLinksByArticle, setBatchLinksByArticle] = useState<Record<string, string[]>>({});
+  // Warehouses: All sums every warehouse; an upload goes into the one picked
+  const [warehouses, setWarehouses] = useState<Array<{ id: number; name: string; rows_count: number; last_upload: string | null }>>([]);
+  const [warehouse, setWarehouse] = useState<string>(() => {
+    try { return localStorage.getItem('inventory.warehouse') || 'all'; } catch { return 'all'; }
+  });
+  const [missingBatches, setMissingBatches] = useState<Array<{ batch_number: string; description: string | null; warehouses: string }>>([]);
+  const [addingBatches, setAddingBatches] = useState(false);
+  const [newWarehouse, setNewWarehouse] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const currentWarehouse = warehouses.find(w => String(w.id) === warehouse) || null;
+
+  const pickWarehouse = (key: string) => {
+    setWarehouse(key);
+    try { localStorage.setItem('inventory.warehouse', key); } catch { /* not remembered */ }
+  };
+
+  const fetchWarehouses = () =>
+    api.get('/warehouse-stock/warehouses').then(res => {
+      setWarehouses(res.data || []);
+      // A remembered warehouse that is gone falls back to All
+      if (warehouse !== 'all' && !(res.data || []).some((w: any) => String(w.id) === warehouse)) pickWarehouse('all');
+    }).catch(() => {});
 
   const fetchData = () => {
     setLoading(true);
-    api.get('/warehouse-stock')
-      .then(res => { setRows(res.data.data); setHistory(res.data.history ?? []); })
+    api.get('/warehouse-stock', { params: { warehouse } })
+      .then(res => { setRows(res.data.data); setHistory(res.data.history ?? []); setMissingBatches(res.data.missing_batches ?? []); })
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { fetchData(); }, [warehouse]);
+
+  const addWarehouse = async () => {
+    const name = (newWarehouse || '').trim();
+    if (!name) return;
+    try {
+      const { data } = await api.post('/warehouse-stock/warehouses', { name });
+      setNewWarehouse(null);
+      await fetchWarehouses();
+      pickWarehouse(String(data.id));
+      addToast(`Warehouse ${data.name} added — upload its stock file`, 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Could not add the warehouse', 'error');
+    }
+  };
+
+  const renameWarehouse = async () => {
+    if (!currentWarehouse || !renaming?.trim()) { setRenaming(null); return; }
+    try {
+      await api.put(`/warehouse-stock/warehouses/${currentWarehouse.id}`, { name: renaming.trim() });
+      setRenaming(null);
+      fetchWarehouses();
+      fetchData();
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Could not rename the warehouse', 'error');
+    }
+  };
+
+  const deleteWarehouse = async () => {
+    if (!currentWarehouse) return;
+    if (!confirm(`Delete warehouse ${currentWarehouse.name}? Its stock (${currentWarehouse.rows_count} rows) and upload history are removed.`)) return;
+    try {
+      await api.delete(`/warehouse-stock/warehouses/${currentWarehouse.id}`);
+      addToast(`Warehouse ${currentWarehouse.name} deleted`, 'success');
+      pickWarehouse('all');
+      fetchWarehouses();
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Could not delete the warehouse', 'error');
+    }
+  };
+
+  /** Adds flagged batch numbers to Batches — only when the user asks. */
+  const addMissingBatches = async (numbers: string[]) => {
+    setAddingBatches(true);
+    try {
+      const { data } = await api.post('/warehouse-stock/missing-batches/add', { batch_numbers: numbers });
+      addToast(`${data.added.length} batch${data.added.length === 1 ? '' : 'es'} added to Batches`, 'success');
+      fetchData();
+      fetchBatchLinks();
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Could not add the batches', 'error');
+    } finally {
+      setAddingBatches(false);
+    }
   };
 
   const fetchBatchLinks = () => {
@@ -849,7 +927,7 @@ function WarehouseStockTab() {
   };
 
   useEffect(() => {
-    fetchData();
+    fetchWarehouses();
     fetchBatchLinks();
     api.get('/warehouse-stock/email-config').then(res => setEmailConfig(res.data)).catch(() => {});
   }, []);
@@ -857,21 +935,22 @@ function WarehouseStockTab() {
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!currentWarehouse) { addToast('Pick the warehouse this stock belongs to first', 'error'); e.target.value = ''; return; }
     setUploading(true);
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('warehouse_id', String(currentWarehouse.id));
     try {
       const res = await api.post('/warehouse-stock/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      addToast(`Stock updated — ${res.data.inserted} rows imported`, 'success');
+      addToast(`${res.data.warehouse} stock updated — ${res.data.inserted} rows imported`, 'success');
       const missing: string[] = res.data.missingBatches || [];
       if (missing.length > 0) {
-        const preview = missing.slice(0, 4).join(', ');
-        const extra = missing.length > 4 ? ` +${missing.length - 4} more` : '';
-        addToast(`New batches not in Batches tab: ${preview}${extra}`, 'info');
+        addToast(`${missing.length} batch${missing.length === 1 ? '' : 'es'} in this file ${missing.length === 1 ? 'is' : 'are'} not in Batches — see the list above the stock`, 'info');
       }
       fetchData();
+      fetchWarehouses();
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Upload failed', 'error');
     } finally {
@@ -947,6 +1026,90 @@ function WarehouseStockTab() {
 
   return (
     <div className="space-y-4">
+      {/* Warehouses: All sums every warehouse's stock; uploads go into the one picked */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap gap-1 bg-gray-100 p-1 rounded-lg">
+          {[{ key: 'all', label: 'All' }, ...warehouses.map(w => ({ key: String(w.id), label: w.name }))].map(t => (
+            <button key={t.key} onClick={() => { pickWarehouse(t.key); setRenaming(null); }}
+              className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${warehouse === t.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        {newWarehouse === null ? (
+          <button onClick={() => setNewWarehouse('')} className="inline-flex items-center gap-1 text-sm text-primary-600 hover:text-primary-700 px-2 py-1">
+            <Plus size={14} /> Add warehouse
+          </button>
+        ) : (
+          <span className="inline-flex items-center gap-1.5">
+            <input value={newWarehouse} onChange={e => setNewWarehouse(e.target.value)} autoFocus placeholder="Warehouse name"
+              onKeyDown={e => { if (e.key === 'Enter') addWarehouse(); if (e.key === 'Escape') setNewWarehouse(null); }}
+              className="rounded-lg border border-gray-300 px-2.5 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
+            <Button size="sm" onClick={addWarehouse} disabled={!newWarehouse.trim()}>Add</Button>
+            <button onClick={() => setNewWarehouse(null)} className="text-gray-400 hover:text-gray-600 p-1"><X size={14} /></button>
+          </span>
+        )}
+        {currentWarehouse && (
+          renaming === null ? (
+            <span className="ml-auto inline-flex items-center gap-1 text-xs">
+              <button onClick={() => setRenaming(currentWarehouse.name)} className="px-2 py-1 rounded text-gray-500 hover:text-primary-600" title="Rename this warehouse">
+                <Pencil size={13} className="inline -mt-0.5" /> Rename
+              </button>
+              {warehouses.length > 1 && (
+                <button onClick={deleteWarehouse} className="px-2 py-1 rounded text-gray-500 hover:text-red-600" title="Delete this warehouse and its stock">
+                  <Trash2 size={13} className="inline -mt-0.5" /> Delete
+                </button>
+              )}
+            </span>
+          ) : (
+            <span className="ml-auto inline-flex items-center gap-1.5">
+              <input value={renaming} onChange={e => setRenaming(e.target.value)} autoFocus
+                onKeyDown={e => { if (e.key === 'Enter') renameWarehouse(); if (e.key === 'Escape') setRenaming(null); }}
+                className="rounded-lg border border-gray-300 px-2.5 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
+              <Button size="sm" onClick={renameWarehouse}>Save</Button>
+              <button onClick={() => setRenaming(null)} className="text-gray-400 hover:text-gray-600 p-1"><X size={14} /></button>
+            </span>
+          )
+        )}
+      </div>
+      {warehouse === 'all' && warehouses.length > 0 && (
+        <p className="text-xs text-gray-500 -mt-2">
+          All warehouses together ({warehouses.map(w => w.name).join(', ')}) — pick a warehouse to upload its stock.
+        </p>
+      )}
+
+      {/* Batch numbers in this stock that are not in Batches: flagged, never added on upload */}
+      {missingBatches.length > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 space-y-2">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <p className="text-sm text-amber-800 flex items-start gap-2">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+              <span>
+                <strong>{missingBatches.length} batch{missingBatches.length === 1 ? '' : 'es'} in this stock {missingBatches.length === 1 ? 'is' : 'are'} not in Batches.</strong>{' '}
+                Uploads never change your batches — add them here if they should be there.
+              </span>
+            </p>
+            <Button size="sm" variant="secondary" disabled={addingBatches}
+              onClick={() => confirm(`Add all ${missingBatches.length} to Batches (as ongoing, product = the stock description)?`) && addMissingBatches(missingBatches.map(m => m.batch_number))}>
+              {addingBatches ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} Add all to Batches
+            </Button>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {missingBatches.map(m => (
+              <span key={m.batch_number} className="inline-flex items-center gap-1 rounded-full bg-white border border-amber-200 pl-2 pr-1 py-0.5 text-xs text-amber-900"
+                title={`${m.description || 'No description'}${warehouse === 'all' ? ` — ${m.warehouses}` : ''}`}>
+                <span className="font-mono">{m.batch_number}</span>
+                {m.description && <span className="text-amber-700/70 max-w-[180px] truncate">· {m.description}</span>}
+                <button onClick={() => addMissingBatches([m.batch_number])} disabled={addingBatches}
+                  className="ml-0.5 rounded-full p-0.5 text-amber-600 hover:bg-amber-100 disabled:opacity-50" title="Add this batch to Batches">
+                  <Plus size={11} />
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Email info box */}
       {emailConfig.configured && (
         <div className="flex items-center gap-3 px-4 py-3 bg-blue-50 border border-blue-100 rounded-lg text-sm">
@@ -955,7 +1118,7 @@ function WarehouseStockTab() {
             <span className="text-blue-800 font-medium">Send CSV by email</span>
             <span className="text-blue-600 ml-2">Attach the CSV file and send to </span>
             <span className="font-mono text-blue-900 font-semibold">{emailConfig.address}</span>
-            <span className="text-blue-500 ml-2 text-xs">(checked every 15 min)</span>
+            <span className="text-blue-500 ml-2 text-xs">(checked every 15 min — goes into NTG)</span>
           </div>
           <button
             onClick={handleCheckEmail}
@@ -973,11 +1136,13 @@ function WarehouseStockTab() {
         <Card>
           <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-700">Update History</h3>
+            {currentWarehouse && (
             <label className={`inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg cursor-pointer transition-colors ${uploading ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-primary-600 text-white hover:bg-primary-700'}`}>
-              <Upload size={15} />
-              {uploading ? 'Uploading...' : 'Upload CSV'}
-              <input type="file" accept=".csv" className="hidden" disabled={uploading} onChange={handleUpload} />
-            </label>
+                <Upload size={15} />
+                {uploading ? 'Uploading...' : `Upload ${currentWarehouse?.name || ''} stock`}
+                <input type="file" accept=".csv,.xlsx" className="hidden" disabled={uploading} onChange={handleUpload} />
+              </label>
+            )}
           </div>
           <div className="divide-y divide-gray-50">
             {history.map((h: any, i: number) => (
@@ -987,6 +1152,9 @@ function WarehouseStockTab() {
                   <span className={`text-sm font-medium ${i === 0 ? 'text-green-800' : 'text-gray-700'}`}>
                     {fmtDateTime(h.uploaded_at)}
                   </span>
+                  {warehouse === 'all' && h.warehouse_name && (
+                    <span className="ml-2 text-xs font-medium text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded">{h.warehouse_name}</span>
+                  )}
                   {h.filename && (
                     <span className="ml-2 text-xs text-gray-400 font-mono truncate">{h.filename}</span>
                   )}
@@ -1001,7 +1169,7 @@ function WarehouseStockTab() {
                     <span className="text-xs text-gray-400 shrink-0">by {h.uploaded_by}</span>
                   )
                 )}
-                {i === 0 && (
+                {i === 0 && warehouse !== 'all' && (
                   <span className="text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full shrink-0">current</span>
                 )}
               </div>
@@ -1011,12 +1179,12 @@ function WarehouseStockTab() {
       )}
 
       {/* Upload button when no history yet */}
-      {history.length === 0 && (
+      {history.length === 0 && currentWarehouse && (
         <div className="flex justify-end">
           <label className={`inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg cursor-pointer transition-colors ${uploading ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-primary-600 text-white hover:bg-primary-700'}`}>
             <Upload size={15} />
-            {uploading ? 'Uploading...' : 'Upload CSV'}
-            <input type="file" accept=".csv" className="hidden" disabled={uploading} onChange={handleUpload} />
+            {uploading ? 'Uploading...' : `Upload ${currentWarehouse?.name || ''} stock`}
+            <input type="file" accept=".csv,.xlsx" className="hidden" disabled={uploading} onChange={handleUpload} />
           </label>
         </div>
       )}
@@ -1057,11 +1225,11 @@ function WarehouseStockTab() {
           <EmptyState
             icon={<Warehouse size={24} />}
             title="No warehouse stock data"
-            description="Upload a weekly CSV export to view current stock levels."
-            action={
+            description={currentWarehouse ? `Upload ${currentWarehouse.name}'s stock file (CSV or Excel) to view its stock levels.` : 'Pick a warehouse above and upload its stock file (CSV or Excel).'}
+            action={currentWarehouse &&
               <label className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg bg-primary-600 text-white hover:bg-primary-700 cursor-pointer">
-                <Upload size={14} /> Upload CSV
-                <input type="file" accept=".csv" className="hidden" onChange={handleUpload} />
+                <Upload size={14} /> Upload {currentWarehouse?.name || ''} stock
+                <input type="file" accept=".csv,.xlsx" className="hidden" onChange={handleUpload} />
               </label>
             }
           />
@@ -1121,7 +1289,7 @@ function WarehouseStockTab() {
                       {isExpanded && row.items.map((item: any, idx: number) => (
                         <tr key={`${row.key}-sub-${idx}`} className="bg-indigo-50/40 text-xs border-b border-indigo-100/50">
                           <td className="px-4 py-2" />
-                          <td className="px-4 py-2 font-mono text-indigo-600">{item.batch_number || '—'}</td>
+                          <td className="px-4 py-2 font-mono text-indigo-600">{item.batch_number || '—'}{warehouse === 'all' && item.warehouse_name && <span className="ml-1 font-sans text-gray-500">· {item.warehouse_name}</span>}</td>
                           <td className="px-4 py-2 font-mono text-gray-900">{item.article}</td>
                           <td className="px-4 py-2 text-gray-500">{item.searchname || '—'}</td>
                           <td className="px-4 py-2 text-gray-600 italic">{item.description || '—'}</td>
@@ -1145,6 +1313,7 @@ function WarehouseStockTab() {
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Batch</th>
+                  {warehouse === 'all' && <th className="text-left px-4 py-3 font-medium text-gray-600">Warehouse</th>}
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Principal</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Article</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Name</th>
@@ -1159,6 +1328,7 @@ function WarehouseStockTab() {
                 {(displayRows as any[]).map((row, i) => (
                   <tr key={i} className="hover:bg-gray-50">
                     <td className="px-4 py-3 text-xs font-mono text-indigo-700">{row.batch_number || '—'}</td>
+                    {warehouse === 'all' && <td className="px-4 py-3 text-xs font-medium text-gray-700">{row.warehouse_name || '—'}</td>}
                     <td className="px-4 py-3 text-xs text-gray-400">{row.principal || '—'}</td>
                     <td className="px-4 py-3 font-mono text-xs text-gray-900">{row.article}</td>
                     <td className="px-4 py-3 text-gray-600">{row.searchname || '—'}</td>
