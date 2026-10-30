@@ -689,6 +689,37 @@ export default function InvoiceDocumentPage() {
           <span className="text-xs text-gray-400">from the operation number</span>
         </div>
 
+        {/* The bank printed on the invoice: one of the issuing entity's banks */}
+        {(() => {
+          const code = (record ? (form.entity_code as string) || entity : entity) as string;
+          const banks = entities.find(e => e.code === code)?.banks || [];
+          const defaultIndex = entities.find(e => e.code === code)?.default_bank ?? 0;
+          if (!banks.length) return null;
+          const currency = String(form.items?.[0]?.currency || 'EUR').toUpperCase();
+          const tail = (b: typeof banks[number]) => {
+            const acc = (currency === 'USD' ? b.usd_account || b.eur_account : b.eur_account || b.usd_account).replace(/\s+/g, '');
+            return acc ? ` · …${acc.slice(-4)}` : ' · no account set';
+          };
+          const raw = form.bank_index;
+          const value = raw === null || raw === undefined || raw === '' ? '' : String(raw);
+          return (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-gray-500">Bank account</span>
+              <select value={value}
+                onChange={e => setForm(prev => ({ ...prev, bank_index: e.target.value === '' ? null : Number(e.target.value) }))}
+                className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                title={`The ${currency} account of the chosen bank is printed`}>
+                <option value="">
+                  {form.bank_override ? "Customer's bank (from their profile)" : `${banks[defaultIndex]?.bank_name || 'Default bank'} (default)${banks[defaultIndex] ? tail(banks[defaultIndex]) : ''}`}
+                </option>
+                {banks.map((b, i) => (
+                  <option key={i} value={i}>{b.bank_name || `Bank ${i + 1}`}{tail(b)}</option>
+                ))}
+              </select>
+              <span className="text-xs text-gray-400">{currency} account printed</span>
+            </div>
+          );
+        })()}
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">

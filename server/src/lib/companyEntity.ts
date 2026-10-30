@@ -92,8 +92,25 @@ export function entityFromOperationNumber(operationNumber?: string | null): Enti
   return contained || defaultEntityCode();
 }
 
+/** One of an entity's banks (TripleW Details), each with a USD and a EUR account. */
+export interface EntityBank { bank_name: string; bank_address: string; usd_account: string; usd_bic: string; eur_account: string; eur_bic: string }
+
+/** The entity's banks; one saved before there could be several has just the bank in its columns. */
+export function entityBanks(row: any): EntityBank[] {
+  const clean = (b: any): EntityBank => ({
+    bank_name: String(b?.bank_name ?? '').trim(), bank_address: String(b?.bank_address ?? '').trim(),
+    usd_account: String(b?.usd_account ?? '').trim(), usd_bic: String(b?.usd_bic ?? '').trim(),
+    eur_account: String(b?.eur_account ?? '').trim(), eur_bic: String(b?.eur_bic ?? '').trim(),
+  });
+  try {
+    const list = JSON.parse(row?.banks || 'null');
+    if (Array.isArray(list) && list.length) return list.map(clean);
+  } catch { /* unreadable list → the columns */ }
+  return [clean(row)];
+}
+
 /** The account a document in `currency` is paid into; USD → USD, anything else → EUR. */
-function accountFor(row: EntityRow, currency?: string | null): { iban: string; bic: string } {
+function accountFor(row: Pick<EntityRow, 'usd_account' | 'usd_bic' | 'eur_account' | 'eur_bic'>, currency?: string | null): { iban: string; bic: string } {
   const usd = { iban: row.usd_account || '', bic: row.usd_bic || '' };
   const eur = { iban: row.eur_account || '', bic: row.eur_bic || '' };
   const [preferred, fallback] = String(currency || '').toUpperCase() === 'USD' ? [usd, eur] : [eur, usd];
@@ -138,14 +155,21 @@ export function entityProfile(code: EntityCode, currency?: string | null): Entit
  * editable) and invoices carrying a bank from the customer's profile.
  */
 export function applyEntityBank<T extends DocumentData>(data: T): T {
-  if (!data?.entity_code || data.bank_override) return data;
+  if (!data?.entity_code) return data;
+  // A bank chosen on the document (`bank_index`: one of this entity's banks) wins over
+  // the default bank and over a customer-profile bank
+  const raw = (data as any).bank_index;
+  const index = raw === null || raw === undefined || raw === '' || !Number.isInteger(Number(raw)) ? null : Number(raw);
+  if (data.bank_override && index === null) return data;
   const row = entityRow(data.entity_code);
   if (!row) return data;
-  const account = accountFor(row, docCurrency(Array.isArray(data.items) ? data.items : []));
+  const chosen = index !== null ? entityBanks(row)[index] ?? null : null;
+  const source = chosen ?? row;
+  const account = accountFor(source, docCurrency(Array.isArray(data.items) ? data.items : []));
   return {
     ...data,
-    bank_name: row.bank_name || '',
-    bank_address: row.bank_address || '',
+    bank_name: source.bank_name || '',
+    bank_address: source.bank_address || '',
     iban: account.iban,
     bic: account.bic,
   };
