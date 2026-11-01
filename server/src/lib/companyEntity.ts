@@ -164,6 +164,8 @@ export function applyEntityBank<T extends DocumentData>(data: T): T {
   const row = entityRow(data.entity_code);
   if (!row) return data;
   const chosen = index !== null ? entityBanks(row)[index] ?? null : null;
+  // A chosen bank since removed on TripleW Details: the customer's bank stays
+  if (!chosen && data.bank_override) return data;
   const source = chosen ?? row;
   const account = accountFor(source, docCurrency(Array.isArray(data.items) ? data.items : []));
   return {

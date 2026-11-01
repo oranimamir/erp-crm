@@ -587,11 +587,12 @@ export default function PurchaseOrderPage() {
               </Button>
             </>
           ) : (
-            <Button size="sm" onClick={() => handleSave('final')} disabled={saving || (approvalMe.needs_approval && purchaseOrder?.approval_status === 'pending')}
+            <Button size="sm" onClick={() => handleSave('final')} disabled={saving || (!approvalMe.is_admin && purchaseOrder?.approval_status === 'pending')}
               title={approvalMe.needs_approval ? 'An admin checks it, then it is generated with their signature' : undefined}>
-              {saving ? <Loader2 size={14} className="animate-spin" /> : approvalMe.needs_approval ? <Send size={14} /> : <CheckCircle size={14} />}
-              {approvalMe.needs_approval
-                ? (purchaseOrder?.approval_status === 'pending' ? 'Waiting for approval' : 'Send for approval')
+              {saving ? <Loader2 size={14} className="animate-spin" /> : approvalMe.needs_approval || purchaseOrder?.approval_status === 'pending' ? <Send size={14} /> : <CheckCircle size={14} />}
+              {!approvalMe.is_admin && purchaseOrder?.approval_status === 'pending' ? 'Waiting for approval'
+                : approvalMe.needs_approval
+                ? 'Send for approval'
                 : generated ? 'Confirm & regenerate' : 'Confirm & generate'}
             </Button>
           )}

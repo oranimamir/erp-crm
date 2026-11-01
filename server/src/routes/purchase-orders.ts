@@ -385,7 +385,11 @@ router.get('/by-order/:orderId', (req: Request, res: Response) => {
  */
 function approvalGate(req: Request, res: Response): { isDraft: boolean } {
   const wantsFinal = req.body?.status !== 'draft';
-  const approvalNeeded = wantsFinal && needsPoApproval(req.user);
+  // A PO already waiting for an admin stays waiting when another non-admin generates it
+  const waiting = req.params?.id && req.user?.role !== 'admin'
+    ? (db.prepare('SELECT approval_status FROM purchase_orders WHERE id = ?').get(Number(req.params.id)) as any)?.approval_status === 'pending'
+    : false;
+  const approvalNeeded = wantsFinal && (needsPoApproval(req.user) || waiting);
   const isDraft = !wantsFinal || approvalNeeded;
   if (req.body?.data && typeof req.body.data === 'object') {
     const { signature: _ignored, ...clean } = req.body.data;
@@ -422,13 +426,13 @@ function withApproval(row: any) {
 // GET /approvals/pending — supplier POs waiting for an admin (admin only)
 router.get('/approvals/pending', (req: Request, res: Response) => {
   if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
-  const rows = db.prepare(`SELECT p.id, p.po_number, p.data, p.approval_requested_at, COALESCE(u.display_name, u.username) AS requested_by_name
+  const rows = db.prepare(`SELECT p.id, p.po_number, p.data, p.draft_data, p.approval_requested_at, COALESCE(u.display_name, u.username) AS requested_by_name
     FROM purchase_orders p LEFT JOIN users u ON u.id = p.approval_requested_by
     WHERE p.approval_status = 'pending' ORDER BY p.approval_requested_at DESC`).all() as any[];
   res.json(rows.map(r => {
     let supplier = '';
     try { supplier = JSON.parse(r.draft_data || r.data || '{}').client_name || ''; } catch { /* none */ }
-    const { data: _d, ...rest } = r;
+    const { data: _d, draft_data: _dd, ...rest } = r;
     return { ...rest, supplier };
   }));
 });
