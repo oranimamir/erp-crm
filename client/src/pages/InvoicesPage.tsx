@@ -317,16 +317,19 @@ export default function InvoicesPage() {
     const res = await api.get('/invoices', { params: { page: 1, limit: 9999, search, status: statusFilter.length ? statusFilter.join(',') : undefined, type: 'customer', year: yearFilter || undefined, month: monthFilter.length ? monthFilter.join(',') : undefined, wire: wireFilter || undefined, customer: customerFilter || undefined, date_from: dateFrom || undefined, date_to: dateTo || undefined } });
     const rows = res.data.data.map((inv: any) => [
       inv.invoice_number,
+      inv.order_number || inv.po_number || '',
       inv.customer_name || inv.supplier_name || '',
       inv.type,
       inv.amount,
       inv.currency,
+      // The amount as invoiced in USD (blank for an invoice in another currency)
+      String(inv.currency || '').toUpperCase() === 'USD' ? inv.amount : '',
       inv.eur_amount ?? '',
       inv.status,
       formatDateOrDash(inv.invoice_date),
       formatDateOrDash(inv.due_date),
     ]);
-    downloadExcel('invoices', ['Invoice #', 'Customer / Supplier', 'Type', 'Amount', 'Currency', 'EUR Amount', 'Status', 'Invoice Date', 'Due Date'], rows);
+    downloadExcel('invoices', ['Invoice #', 'Order #', 'Customer / Supplier', 'Type', 'Amount', 'Currency', 'Original amount (USD)', 'EUR Amount', 'Status', 'Invoice Date', 'Due Date'], rows);
   };
 
   const formatAmount = (amount: number, currency?: string) => {

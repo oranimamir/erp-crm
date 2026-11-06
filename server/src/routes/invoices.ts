@@ -92,7 +92,9 @@ router.get('/', (req: Request, res: Response) => {
   const invoices = db.prepare(`
     SELECT i.*, c.name as customer_name, s.name as supplier_name,
       COALESCE(wt.wire_transfer_count, 0) as wire_transfer_count,
-      wt.last_wire_date
+      wt.last_wire_date,
+      (SELECT o.order_number FROM operations op JOIN orders o ON o.id = op.order_id
+        WHERE op.id = COALESCE(i.operation_id, (SELECT id FROM operations WHERE operation_number = i.our_ref LIMIT 1))) AS order_number
     FROM invoices i
     LEFT JOIN customers c ON i.customer_id = c.id
     LEFT JOIN suppliers s ON i.supplier_id = s.id
