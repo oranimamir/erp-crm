@@ -152,7 +152,7 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - Document forms (invoice/OC/PO): Tab on an empty field accepts its grey placeholder (`client/src/lib/placeholderTab.ts`)
 
 ## Customer Invoices page
-- Invoices tab Export Excel: Invoice #, Order # (operation's order, else PO), customer, type, amount, currency, Original amount (USD) (USD invoices only), EUR amount, status, dates; `GET /api/invoices` rows carry `order_number`
+- Both Export Excel buttons (Invoices tab, Invoices list) carry what each invoice itself says (`POST /api/invoices/export-details {ids}`, client `lib/invoiceExport.ts`): a generated invoice from its filed document (final data, never draft edits) — products, references, quantities, unit prices, lots, tonnage (MT), subtotal / freight / insurance / VAT / total, incoterm, payment terms, customer PO; an uploaded one its recorded amount + tonnage (else the order's lines). Plus Order #, Original amount (USD), FX rate, EUR amount, status, dates; a Check column names a recorded amount / tonnage that differs from the document, or a non-EUR invoice with no real FX rate (fx 1 / none)
 - Sub-tabs Invoices | Invoices list (`components/InvoiceRegister.tsx`, `GET /api/invoices/register?entity=`): every customer invoice, every column sortable (client-side; default created date, newest first; blanks last) with created date, invoice date, client, country (operation's, else resolved from the order destination), order # (else PO), operation #, blending/trading; All / BE / NL by `entityFromOperationNumber(operation number, else invoice number)`; operation via `invoices.operation_id`, else `our_ref`
 
 ## Packing Lists

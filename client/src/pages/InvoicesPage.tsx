@@ -12,6 +12,7 @@ import EmptyState from '../components/ui/EmptyState';
 import { Plus, FileText, Eye, Trash2, FileDown, ChevronUp, ChevronDown, FileSpreadsheet, Landmark, Download, X, Loader2, Filter, CalendarDays, BarChart3 } from 'lucide-react';
 import { formatDate, todayISO } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
+import { invoiceExportDetails, invoiceDetailCells, INVOICE_DETAIL_HEADERS, fmtDate } from '../lib/invoiceExport';
 import InvoiceRegister from '../components/InvoiceRegister';
 
 const statusBadgeClasses: Record<string, string> = {
@@ -315,21 +316,25 @@ export default function InvoicesPage() {
 
   const handleExport = async () => {
     const res = await api.get('/invoices', { params: { page: 1, limit: 9999, search, status: statusFilter.length ? statusFilter.join(',') : undefined, type: 'customer', year: yearFilter || undefined, month: monthFilter.length ? monthFilter.join(',') : undefined, wire: wireFilter || undefined, customer: customerFilter || undefined, date_from: dateFrom || undefined, date_to: dateTo || undefined } });
-    const rows = res.data.data.map((inv: any) => [
-      inv.invoice_number,
-      inv.order_number || inv.po_number || '',
-      inv.customer_name || inv.supplier_name || '',
-      inv.type,
-      inv.amount,
-      inv.currency,
-      // The amount as invoiced in USD (blank for an invoice in another currency)
-      String(inv.currency || '').toUpperCase() === 'USD' ? inv.amount : '',
-      inv.eur_amount ?? '',
-      inv.status,
-      formatDateOrDash(inv.invoice_date),
-      formatDateOrDash(inv.due_date),
-    ]);
-    downloadExcel('invoices', ['Invoice #', 'Order #', 'Customer / Supplier', 'Type', 'Amount', 'Currency', 'Original amount (USD)', 'EUR Amount', 'Status', 'Invoice Date', 'Due Date'], rows);
+    const list = res.data.data as any[];
+    const details = await invoiceExportDetails(list.map(inv => inv.id));
+    const rows = list.map((inv: any) => {
+      const d = details[inv.id];
+      return [
+        inv.invoice_number,
+        inv.order_number || '',
+        d?.po_number || inv.po_number || '',
+        d?.our_ref || inv.our_ref || '',
+        inv.customer_name || inv.supplier_name || '',
+        ...invoiceDetailCells(inv, d),
+        inv.status,
+        fmtDate(inv.invoice_date),
+        fmtDate(inv.due_date),
+        fmtDate(inv.payment_date),
+      ];
+    });
+    await downloadExcel('invoices', ['Invoice #', 'Order #', 'Customer PO #', 'Operation #', 'Customer', ...INVOICE_DETAIL_HEADERS,
+      'Status', 'Invoice Date', 'Due Date', 'Payment Date'], rows);
   };
 
   const formatAmount = (amount: number, currency?: string) => {

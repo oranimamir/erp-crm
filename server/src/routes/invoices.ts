@@ -14,6 +14,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { todayISO } from '../lib/today.js';
 import { sendPaymentReceivedEmail } from '../lib/paymentEmail.js';
+import { computeTotals, lotsOf, type DocumentData } from '../lib/document-pdf.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
@@ -105,6 +106,90 @@ router.get('/', (req: Request, res: Response) => {
   res.json({ data: invoices, total, page, limit, totalPages: Math.ceil(total / limit) });
 });
 
+/** Quantity in metric tons, or null when the unit is not a weight. */
+function toMt(qty: number, unit?: string | null): number | null {
+  const u = String(unit || '').trim().toLowerCase();
+  if (['mt', 'metric ton', 'metric tons', 'tonne', 'tonnes', 'tons', 'ton', 't'].includes(u)) return qty;
+  if (['kg', 'kgs', 'kilogram', 'kilograms'].includes(u)) return qty / 1000;
+  if (['lb', 'lbs', 'pound', 'pounds'].includes(u)) return qty / 2204.6226218;
+  return null;
+}
+
+const round = (n: number, d = 2) => Math.round(n * 10 ** d) / 10 ** d;
+
+/**
+ * POST /export-details {ids} — what each invoice itself says, for the Excel
+ * exports: a generated invoice is read off its document (the filed version,
+ * never unsaved draft edits) — lines, tonnage, subtotal / freight / insurance /
+ * VAT / total, incoterm, payment terms; an uploaded one gives its recorded
+ * amount and tonnage (else the order's lines). `check` names any difference
+ * between the document and the recorded amount / tonnage.
+ */
+router.post('/export-details', (req: Request, res: Response) => {
+  const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter((n: number) => Number.isInteger(n) && n > 0).slice(0, 20000);
+  if (!ids.length) { res.json({}); return; }
+  const out: Record<number, any> = {};
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    const rows = db.prepare(`
+      SELECT i.*, op.operation_number, op.order_id AS op_order_id,
+        (SELECT d.data FROM invoice_documents d WHERE d.invoice_id = i.id AND d.status = 'final' ORDER BY d.id DESC LIMIT 1) AS doc_data
+      FROM invoices i
+      LEFT JOIN operations op ON op.id = COALESCE(i.operation_id, (SELECT id FROM operations WHERE operation_number = i.our_ref LIMIT 1))
+      WHERE i.id IN (${chunk.map(() => '?').join(',')})
+    `).all(...chunk) as any[];
+    for (const r of rows) {
+      // A non-EUR invoice converted at 1 (or not at all): the FX service was unreachable
+      const fxNote = String(r.currency || 'EUR').toUpperCase() !== 'EUR' && (r.fx_rate == null || Number(r.fx_rate) === 1)
+        ? `EUR amount without a real ${String(r.currency).toUpperCase()} rate — check it` : '';
+      let doc: DocumentData | null = null;
+      if (r.doc_data) { try { doc = JSON.parse(r.doc_data); } catch { doc = null; } }
+      const checks: string[] = [];
+      if (doc && Array.isArray(doc.items) && doc.items.length) {
+        const items = doc.items;
+        const t = computeTotals(doc);
+        const tonnes = items.map(it => toMt(Number(it.quantity) || 0, it.quantity_unit));
+        const mt = tonnes.some(x => x != null) ? tonnes.reduce((a: number, x) => a + (x || 0), 0) : null;
+        if (Math.abs((Number(r.amount) || 0) - t.total) > 0.01) checks.push(`recorded amount ${round(Number(r.amount) || 0)} ≠ invoice total ${round(t.total)}`);
+        if (mt != null && r.quantity_mt != null && Math.abs(Number(r.quantity_mt) - mt) > 0.001) checks.push(`recorded tonnage ${r.quantity_mt} ≠ invoice ${round(mt, 3)}`);
+        out[r.id] = {
+          source: 'Generated invoice',
+          products: items.map(it => it.commercial_name || it.description || it.reference || '').filter(Boolean).join('; '),
+          references: items.map(it => it.reference || '').filter(Boolean).join('; '),
+          quantities: items.map(it => `${Number(it.quantity) || 0} ${it.quantity_unit || ''}`.trim()).join('; '),
+          unit_prices: items.map(it => `${Number(it.unit_price) || 0}`).join('; '),
+          lots: items.flatMap(it => lotsOf(it as any)).join('; '),
+          tonnage_mt: mt != null ? round(mt, 3) : null,
+          subtotal: round(t.subtotal), freight: t.freight ? round(t.freight) : null, insurance: t.insurance ? round(t.insurance) : null,
+          vat: t.vat ? round(t.vat) : null, total: round(t.total), currency: t.currency,
+          incoterm: doc.incoterm || doc.delivery || '', payment_terms: doc.payment_terms || '',
+          po_number: doc.po_number || r.po_number || '', our_ref: doc.our_ref || r.our_ref || '',
+          check: [...checks, fxNote].filter(Boolean).join('; '),
+        };
+        continue;
+      }
+      // Uploaded invoice: its recorded figures; tonnage typed on it, else the order's lines
+      const orderId = r.op_order_id;
+      const lines = orderId ? db.prepare('SELECT description, quantity, unit, unit_price FROM order_items WHERE order_id = ? ORDER BY id').all(orderId) as any[] : [];
+      const lineMt = lines.map(l => toMt(Number(l.quantity) || 0, l.unit));
+      const orderMt = lineMt.some(x => x != null) ? lineMt.reduce((a: number, x) => a + (x || 0), 0) : null;
+      const mt = r.quantity_mt != null ? Number(r.quantity_mt) : orderMt;
+      out[r.id] = {
+        source: 'Uploaded invoice',
+        products: lines.map(l => l.description || '').filter(Boolean).join('; '),
+        references: '', quantities: lines.map(l => `${Number(l.quantity) || 0} ${l.unit || ''}`.trim()).join('; '),
+        unit_prices: lines.map(l => (l.unit_price != null ? String(l.unit_price) : '')).join('; '), lots: '',
+        tonnage_mt: mt != null ? round(mt, 3) : null,
+        subtotal: null, freight: null, insurance: null, vat: null,
+        total: r.amount != null ? round(Number(r.amount)) : null, currency: r.currency || 'EUR',
+        incoterm: '', payment_terms: '', po_number: r.po_number || '', our_ref: r.our_ref || '',
+        check: [r.quantity_mt == null && orderMt != null ? 'tonnage from the order (none typed on the invoice)' : '', fxNote].filter(Boolean).join('; '),
+      };
+    }
+  }
+  res.json(out);
+});
+
 /**
  * Register of customer invoices, by invoice number, to check the numbering:
  * client, country, order, operation and its category. `entity` (BE / NL) is
@@ -114,6 +199,7 @@ router.get('/register', (req: Request, res: Response) => {
   const entity = String(req.query.entity || '');
   const rows = db.prepare(`
     SELECT i.id, i.invoice_number, i.invoice_date, i.created_at, i.status, i.po_number,
+      i.amount, i.currency, i.fx_rate, i.eur_amount, i.quantity_mt, i.due_date, i.payment_date,
       c.name AS customer_name,
       op.id AS operation_id, op.operation_number, op.category, op.country AS operation_country,
       o.id AS order_id, o.order_number, o.destination AS order_destination,

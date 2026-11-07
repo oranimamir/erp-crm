@@ -6,6 +6,7 @@ import Card from './ui/Card';
 import Button from './ui/Button';
 import { formatDate } from '../lib/dates';
 import { downloadExcel } from '../lib/exportExcel';
+import { invoiceExportDetails, invoiceDetailCells, INVOICE_DETAIL_HEADERS, fmtDate } from '../lib/invoiceExport';
 
 interface RegisterRow {
   id: number;
@@ -22,6 +23,13 @@ interface RegisterRow {
   operation_number: string | null;
   category: 'blending' | 'trading' | 'technology' | null;
   technology_operation_id?: number | null;
+  amount: number | null;
+  currency: string | null;
+  fx_rate: number | null;
+  eur_amount: number | null;
+  quantity_mt: number | null;
+  due_date: string | null;
+  payment_date: string | null;
   entity: string;
 }
 
@@ -74,13 +82,27 @@ export default function InvoiceRegister() {
       .finally(() => setLoading(false));
   }, [entity]);
 
-  const handleExport = () => {
-    downloadExcel(`invoice-list${entity ? `-${entity}` : ''}`,
-      ['Invoice #', 'Created', 'Invoice date', 'Client', 'Country', 'Order #', 'Operation #', 'Category'],
-      sorted.map(r => [
-        r.invoice_number, formatDate(r.created_at) || '', formatDate(r.invoice_date || '') || '', r.customer_name || '', r.country || '',
-        r.order_number || r.po_number || '', r.operation_number || '', categoryLabel(r.category),
-      ]));
+  const [exporting, setExporting] = useState(false);
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const details = await invoiceExportDetails(sorted.map(r => r.id));
+      await downloadExcel(`invoice-list${entity ? `-${entity}` : ''}`,
+        ['Invoice #', 'Created', 'Invoice date', 'Due date', 'Client', 'Country', 'Order #', 'Customer PO #', 'Operation #', 'Category',
+          ...INVOICE_DETAIL_HEADERS, 'Status', 'Payment date'],
+        sorted.map(r => {
+          const d = details[r.id];
+          return [
+            r.invoice_number, fmtDate(r.created_at), fmtDate(r.invoice_date), fmtDate(r.due_date), r.customer_name || '', r.country || '',
+            r.order_number || '', d?.po_number || r.po_number || '', r.operation_number || '', categoryLabel(r.category),
+            ...invoiceDetailCells(r, d), r.status, fmtDate(r.payment_date),
+          ];
+        }));
+    } catch {
+      window.alert('Could not build the export — please try again');
+    } finally {
+      setExporting(false);
+    }
   };
 
   const dash = <span className="text-gray-300">—</span>;
@@ -104,7 +126,7 @@ export default function InvoiceRegister() {
           ))}
           {!loading && <span className="text-xs text-gray-500">{rows.length} invoices</span>}
         </div>
-        <Button variant="secondary" size="sm" onClick={handleExport} disabled={!rows.length}>
+        <Button variant="secondary" size="sm" onClick={handleExport} disabled={!rows.length || exporting}>
           <FileSpreadsheet size={14} /> Export Excel
         </Button>
       </div>
