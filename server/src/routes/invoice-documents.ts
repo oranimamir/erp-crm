@@ -381,6 +381,54 @@ export async function backfillRecordedInvoices(): Promise<void> {
     try { await syncRecordedInvoice(row.id); }
     catch (err: any) { console.error('[invoice-documents] backfill failed for', row.id, err?.message || err); }
   }
+  await reconcileRecordedTotals();
+}
+
+/**
+ * The recorded value of a generated invoice is its full total — lines plus
+ * transport / freight, insurance and VAT, as printed. A recorded amount that
+ * drifted from it (an older save, an edit on the Invoices list) is put back,
+ * with its EUR amount; the recorded tonnage follows the lines too.
+ */
+export async function reconcileRecordedTotals(): Promise<number> {
+  let rows: any[] = [];
+  try {
+    rows = db.prepare(`
+      SELECT d.id AS doc_id, d.data, d.to_id, i.id, i.amount, i.currency, i.fx_rate, i.eur_amount, i.invoice_date, i.quantity_mt
+      FROM invoice_documents d JOIN invoices i ON i.id = d.invoice_id
+      WHERE d.status = 'final' AND d.nco_id IS NULL
+    `).all() as any[];
+  } catch { return 0; }
+  let fixed = 0;
+  for (const r of rows) {
+    try {
+      const data = JSON.parse(r.data || '{}') as DocumentData;
+      if (!Array.isArray(data.items) || !data.items.length) continue;
+      const { total, currency } = computeTotals(data);
+      const mt = r.to_id ? null : linesTonnage(data.items);
+      const amountOff = Math.abs((Number(r.amount) || 0) - total) > 0.005;
+      const currencyOff = String(r.currency || '').toUpperCase() !== currency;
+      const tonnageOff = mt != null && (r.quantity_mt == null || Math.abs(Number(r.quantity_mt) - mt) > 0.0005);
+      if (!amountOff && !currencyOff && !tonnageOff) continue;
+      let fxRate: number | null = r.fx_rate ?? null;
+      let eurAmount: number | null = r.eur_amount ?? null;
+      if (currency === 'EUR') { fxRate = null; eurAmount = null; }
+      else if (amountOff || currencyOff) {
+        if (currencyOff || !fxRate) {
+          try { fxRate = await getEurRate(currency, data.doc_date || r.invoice_date || todayISO()); } catch { fxRate = null; }
+        }
+        eurAmount = fxRate ? total * fxRate : null;
+      }
+      db.prepare(`UPDATE invoices SET amount = ?, currency = ?, fx_rate = ?, eur_amount = ?, quantity_mt = COALESCE(?, quantity_mt), updated_at = datetime('now') WHERE id = ?`)
+        .run(total, currency, fxRate, eurAmount, mt, r.id);
+      console.log(`[invoice-documents] recorded invoice ${r.id}: amount ${r.amount} ${r.currency} → ${total} ${currency}${tonnageOff ? `, tonnage ${r.quantity_mt} → ${mt}` : ''}`);
+      fixed++;
+    } catch (err: any) {
+      console.error('[invoice-documents] total check failed for', r.id, err?.message || err);
+    }
+  }
+  if (fixed) db.saveToDisk();
+  return fixed;
 }
 
 // ── Prefill a draft from the order ────────────────────────────────────────

@@ -15,7 +15,7 @@ export async function invoiceExportDetails(ids: number[]): Promise<Record<number
 
 export const INVOICE_DETAIL_HEADERS = [
   'Source', 'Products', 'References', 'Quantities', 'Unit prices', 'Lots', 'Tonnage (MT)',
-  'Currency', 'Subtotal', 'Freight', 'Insurance', 'VAT', 'Total', 'Original amount (USD)', 'FX rate (to EUR)', 'EUR amount',
+  'Currency', 'Products subtotal', 'Transport / freight', 'Insurance', 'VAT / tax', 'Total (incl. transport, insurance, VAT)', 'Original amount (USD)', 'FX rate (to EUR)', 'EUR amount',
   'Incoterm / delivery', 'Payment terms', 'Check',
 ];
 
