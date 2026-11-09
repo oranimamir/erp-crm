@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
+import { withBalances } from '../lib/invoiceBalance.js';
 import { archiveStored, archiveFile, archiveBuffer, archivedBy, ownerOf, contextOf } from '../lib/archive.js';
 import { refreshEstimatedPaymentDate, dueDateForInvoice } from '../lib/paymentTerms.js';
 import { fileGeneratedForOperation, draftsForOperation } from '../lib/fileGenerated.js';
@@ -532,7 +533,7 @@ router.get('/:id', (req: Request, res: Response) => {
   `).all(operation.id);
 
   const invoices = db.prepare(`
-    SELECT i.id, i.invoice_number, i.type, i.amount, i.currency, i.status, i.due_date, i.invoice_date,
+    SELECT i.id, i.invoice_number, i.type, i.amount, i.currency, i.fx_rate, i.status, i.due_date, i.invoice_date,
       i.file_path, i.file_name,
       c.name as customer_name, s.name as supplier_name
     FROM invoices i
@@ -554,7 +555,7 @@ router.get('/:id', (req: Request, res: Response) => {
     ORDER BY wt.created_at DESC
   `).all(Number(req.params.id));
 
-  res.json({ ...operation, documents: withSizes(documents as any[]), invoices, order_items: orderItems, wire_transfers,
+  res.json({ ...operation, documents: withSizes(documents as any[]), invoices: withBalances(invoices as any[]), order_items: orderItems, wire_transfers,
     generated_drafts: draftsForOperation(operation.id) });
 });
 

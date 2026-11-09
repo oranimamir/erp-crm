@@ -15,6 +15,7 @@ import { fileURLToPath } from 'url';
 import { todayISO } from '../lib/today.js';
 import { sendPaymentReceivedEmail } from '../lib/paymentEmail.js';
 import { computeTotals, lotsOf, type DocumentData } from '../lib/document-pdf.js';
+import { balancesFor, withBalances } from '../lib/invoiceBalance.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
@@ -103,7 +104,7 @@ router.get('/', (req: Request, res: Response) => {
     ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?
   `).all(...params, limit, offset);
 
-  res.json({ data: invoices, total, page, limit, totalPages: Math.ceil(total / limit) });
+  res.json({ data: withBalances(invoices as any[]), total, page, limit, totalPages: Math.ceil(total / limit) });
 });
 
 /** Quantity in metric tons, or null when the unit is not a weight. */
@@ -225,7 +226,7 @@ router.get('/register', (req: Request, res: Response) => {
     }))
     .filter(r => !isEntityCode(entity) || r.entity === entity)
     .sort((a, b) => String(a.invoice_number).localeCompare(String(b.invoice_number), undefined, { numeric: true }));
-  res.json({ data });
+  res.json({ data: withBalances(data) });
 });
 
 // Monthly summary: invoices generated & wire transfers made (in EUR)
@@ -354,7 +355,7 @@ router.get('/:id', (req: Request, res: Response) => {
     WHERE wt.invoice_id = ? ORDER BY wt.created_at DESC
   `).all(invoiceId);
 
-  res.json({ ...invoice, payments, status_history: history, wire_transfers });
+  res.json({ ...invoice, ...(balancesFor([invoice]).get(invoice.id) || {}), payments, status_history: history, wire_transfers });
 });
 
 router.post('/', uploadInvoice.single('file'), async (req: Request, res: Response) => {
@@ -631,9 +632,11 @@ router.post('/:id/wire-transfers', uploadWireTransfer.single('file'), async (req
     }
 
     const result = db.prepare(`
-      INSERT INTO wire_transfers (invoice_id, amount, transfer_date, bank_reference, fx_rate, eur_amount, status, file_path, file_name)
-      VALUES (?, ?, ?, ?, ?, ?, 'approved', ?, ?)
-    `).run(Number(req.params.id), amount, payment_date, bank_reference, fx_rate, eur_amount, file_path, file_name);
+      INSERT INTO wire_transfers (invoice_id, amount, transfer_date, bank_reference, fx_rate, eur_amount, status, file_path, file_name, currency)
+      VALUES (?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?)
+    `).run(Number(req.params.id), amount, payment_date, bank_reference, fx_rate, eur_amount, file_path, file_name, wireCurrency);
+    // Less than the invoice (all its wires counted)? What is still owed, in the invoice's currency
+    const balance = balancesFor([invoice]).get(Number(invoice.id)) || { paid_amount: null, outstanding: null };
 
     // Force immediate disk save — do NOT rely on the 100ms debounce for critical financial data
     db.saveToDisk();
@@ -659,7 +662,9 @@ router.post('/:id/wire-transfers', uploadWireTransfer.single('file'), async (req
     notifyAdmin({ action: 'status changed', entity: 'Invoice',
       label: invoice.invoice_number,
       performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId,
-      detail: 'Paid via wire transfer upload' });
+      detail: balance.outstanding
+        ? `Wire transfer uploaded — ${balance.outstanding.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${invoiceCurrency} still outstanding`
+        : 'Paid via wire transfer upload' });
 
     // Money in: announce it to the people chosen in User Management → Payments
     if (invoice.type === 'customer') {
@@ -677,11 +682,12 @@ router.post('/:id/wire-transfers', uploadWireTransfer.single('file'), async (req
         paymentDate: payment_date, bankReference: bank_reference,
         recordedBy: req.user?.display_name || null,
         wireFilePath: file_path, wireFileName: file_name,
+        outstanding: balance.outstanding, invoiceAmount: Number(invoice.amount) || null, invoiceCurrency,
       });
     }
 
-    const transfer = db.prepare('SELECT * FROM wire_transfers WHERE id = ?').get(result.lastInsertRowid);
-    res.status(201).json(transfer);
+    const transfer = db.prepare('SELECT * FROM wire_transfers WHERE id = ?').get(result.lastInsertRowid) as any;
+    res.status(201).json({ ...transfer, invoice_amount: invoice.amount, invoice_currency: invoiceCurrency, ...balance });
   } catch (err: any) {
     console.error('[wire-transfer] Upload failed:', err);
     res.status(500).json({ error: err.message || 'Failed to process wire transfer' });

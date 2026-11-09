@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import api from '../lib/api';
+import OutstandingBadge from '../components/OutstandingBadge';
 import { useToast } from '../contexts/ToastContext';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
 import Card from '../components/ui/Card';
@@ -713,6 +714,7 @@ export default function InvoicesPage() {
                     </td>
                     <td className="px-4 py-3 text-right text-gray-900 font-medium">
                       {formatAmount(inv.amount, inv.currency)}
+                      {inv.outstanding ? <div className="mt-0.5"><OutstandingBadge outstanding={inv.outstanding} currency={inv.currency} /></div> : null}
                     </td>
                     <td className="px-4 py-3">
                       <select

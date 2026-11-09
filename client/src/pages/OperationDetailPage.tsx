@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import api from '../lib/api';
+import OutstandingBadge, { wireUploadMessage } from '../components/OutstandingBadge';
 import ShipOperationModal from '../components/ShipOperationModal';
 import { useToast } from '../contexts/ToastContext';
 import {
@@ -54,6 +55,7 @@ interface Invoice {
   file_name: string | null;
   customer_name?: string;
   supplier_name?: string;
+  outstanding?: number | null;
 }
 
 interface OrderItem {
@@ -292,10 +294,11 @@ export default function OperationDetailPage() {
       if (scannedAmount != null) formData.append('amount', String(scannedAmount));
       const bankRef = wireBankRef || scannedRef;
       if (bankRef) formData.append('bank_reference', bankRef);
-      await api.post(`/invoices/${invoiceId}/wire-transfers`, formData, {
+      const { data: wire } = await api.post(`/invoices/${invoiceId}/wire-transfers`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      addToast(alreadyPaid ? 'Wire transfer added to invoice' : 'Wire transfer uploaded — invoice marked as Paid', 'success');
+      const msg = wireUploadMessage(wire, alreadyPaid ? 'Wire transfer added to invoice' : 'Wire transfer uploaded — invoice marked as Paid');
+      addToast(msg.text, msg.partial ? 'info' : 'success');
       setWireUploadInvoiceId(null);
       setWireBankRef('');
       setWirePaymentDate(todayISO());
@@ -951,7 +954,10 @@ export default function OperationDetailPage() {
                 <tr key={inv.id} className="hover:bg-gray-50">
                   <td className="px-5 py-2.5 font-medium text-primary-700">{inv.invoice_number}</td>
                   <td className="px-4 py-2.5 text-gray-700">{inv.customer_name || inv.supplier_name || '—'}</td>
-                  <td className="px-4 py-2.5 text-right font-medium text-gray-900">{formatCurrency(inv.amount, inv.currency)}</td>
+                  <td className="px-4 py-2.5 text-right font-medium text-gray-900">
+                    {formatCurrency(inv.amount, inv.currency)}
+                    {inv.outstanding ? <div className="mt-0.5"><OutstandingBadge outstanding={inv.outstanding} currency={inv.currency} /></div> : null}
+                  </td>
                   <td className="px-4 py-2.5">
                     <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${INVOICE_STATUS_COLORS[inv.status] || 'bg-gray-100 text-gray-700'}`}>
                       {inv.status}

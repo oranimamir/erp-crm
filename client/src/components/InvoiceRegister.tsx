@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Loader2, FileSpreadsheet, ChevronUp, ChevronDown, ChevronsUpDown, FileArchive, Search, X } from 'lucide-react';
 import MenuPanel from './ui/MenuPanel';
+import OutstandingBadge from './OutstandingBadge';
 import api from '../lib/api';
 import Card from './ui/Card';
 import Button from './ui/Button';
@@ -33,6 +34,8 @@ interface RegisterRow {
   payment_date: string | null;
   has_file: number;
   wire_files: number;
+  paid_amount: number | null;
+  outstanding: number | null;
   entity: string;
 }
 
@@ -109,7 +112,7 @@ export default function InvoiceRegister() {
       if (filters.client && (r.customer_name || '') !== filters.client) return false;
       if (filters.country && (r.country || '') !== filters.country) return false;
       if (filters.category && (filters.category === 'none' ? !!r.category : r.category !== filters.category)) return false;
-      if (filters.status && r.status !== filters.status) return false;
+      if (filters.status === 'outstanding' ? !r.outstanding : filters.status && r.status !== filters.status) return false;
       return true;
     });
   }, [rows, filters]);
@@ -279,7 +282,8 @@ export default function InvoiceRegister() {
             ['client', 'All clients', options(r => r.customer_name).map(v => [v, v])],
             ['country', 'All countries', options(r => r.country).map(v => [v, v])],
             ['category', 'All categories', [['blending', 'Blending'], ['trading', 'Trading'], ['technology', 'Technology'], ['none', 'No category']]],
-            ['status', 'All statuses', options(r => r.status).map(v => [v, STATUS_LABELS[v] || v])],
+            ['status', 'All statuses', [...options(r => r.status).map(v => [v, STATUS_LABELS[v] || v]),
+              ...(rows.some(r => r.outstanding) ? [['outstanding', 'Outstanding balance']] : [])]],
           ] as Array<[keyof Filters, string, string[][]]>).map(([key, all, list]) => (
             <select key={key} value={filters[key]} onChange={e => setFilter(key, e.target.value)}
               className={`rounded-lg border px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 max-w-[200px] ${filters[key] ? 'border-primary-400 bg-primary-50 text-primary-800' : 'border-gray-300 bg-white text-gray-700'}`}>
@@ -351,6 +355,7 @@ export default function InvoiceRegister() {
                     </td>
                     <td className="px-4 py-2.5 font-medium">
                       <Link to={`/invoices/${r.id}`} className="text-primary-600 hover:underline">{r.invoice_number}</Link>
+                      {r.outstanding ? <div className="mt-0.5"><OutstandingBadge outstanding={r.outstanding} currency={r.currency} /></div> : null}
                     </td>
                     <td className="px-4 py-2.5 text-gray-600">{formatDate(r.created_at) || dash}</td>
                     <td className="px-4 py-2.5 text-gray-600">{formatDate(r.invoice_date || '') || dash}</td>

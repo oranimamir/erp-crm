@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import api from '../lib/api';
+import { wireUploadMessage } from '../components/OutstandingBadge';
 import ShipOperationModal from '../components/ShipOperationModal';
 import { useToast } from '../contexts/ToastContext';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
@@ -513,10 +514,11 @@ export default function OperationsPage() {
       if (wireScan.amount != null) form.append('amount', String(wireScan.amount));
       if (wireScan.currency) form.append('currency', wireScan.currency);
       if (wireScan.reference) form.append('bank_reference', wireScan.reference);
-      await api.post(`/invoices/${wireSelectedInvoice}/wire-transfers`, form, {
+      const { data: wire } = await api.post(`/invoices/${wireSelectedInvoice}/wire-transfers`, form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      addToast('Wire transfer associated — invoice marked as Paid', 'success');
+      const msg = wireUploadMessage(wire, 'Wire transfer associated — invoice marked as Paid');
+      addToast(msg.text, msg.partial ? 'info' : 'success');
       closeWireModal();
       fetchOperations();
     } catch (err: any) {

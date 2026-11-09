@@ -741,6 +741,8 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE invoices ADD COLUMN eur_amount REAL`); } catch (_) { /* column may already exist */ }
   try { db.exec(`ALTER TABLE wire_transfers ADD COLUMN fx_rate REAL`); } catch (_) { /* column may already exist */ }
   try { db.exec(`ALTER TABLE wire_transfers ADD COLUMN eur_amount REAL`); } catch (_) { /* column may already exist */ }
+  // The currency the wire was paid in (blank on older rows = the invoice's)
+  try { db.exec(`ALTER TABLE wire_transfers ADD COLUMN currency TEXT`); } catch (_) { /* column may already exist */ }
 
   // Tonnage recorded on the invoice itself, in metric tons. An invoice is the
   // billing document for a quantity actually shipped, so it carries its own

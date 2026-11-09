@@ -16,7 +16,7 @@ export async function invoiceExportDetails(ids: number[]): Promise<Record<number
 export const INVOICE_DETAIL_HEADERS = [
   'Source', 'Products', 'References', 'Quantities', 'Unit prices', 'Lots', 'Tonnage (MT)',
   'Currency', 'Products subtotal', 'Transport / freight', 'Insurance', 'VAT / tax', 'Total (incl. transport, insurance, VAT)', 'Original amount (USD)', 'FX rate (to EUR)', 'EUR amount',
-  'Incoterm / delivery', 'Payment terms', 'Check',
+  'Received (wire transfers)', 'Outstanding', 'Incoterm / delivery', 'Payment terms', 'Check',
 ];
 
 /** One row's detail cells, in INVOICE_DETAIL_HEADERS order; `inv` is the recorded invoice. */
@@ -30,6 +30,7 @@ export function invoiceDetailCells(inv: any, d: any): (string | number | null)[]
     currency === 'USD' ? total ?? '' : '',
     inv.fx_rate ?? (currency === 'EUR' ? 1 : ''),
     inv.eur_amount ?? (currency === 'EUR' ? total ?? '' : ''),
+    inv.paid_amount ?? '', inv.outstanding ?? '',
     d?.incoterm || '', d?.payment_terms || '', d?.check || '',
   ];
 }

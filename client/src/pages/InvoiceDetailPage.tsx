@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import api from '../lib/api';
+import { wireUploadMessage } from '../components/OutstandingBadge';
 import { useToast } from '../contexts/ToastContext';
 import { formatDate, todayISO } from '../lib/dates';
 import Card from '../components/ui/Card';
@@ -147,10 +148,11 @@ export default function InvoiceDetailPage() {
       const bankRef = wireBankRef || scannedRef;
       if (bankRef) formData.append('bank_reference', bankRef);
       const wasPaid = invoice.status === 'paid';
-      await api.post(`/invoices/${id}/wire-transfers`, formData, {
+      const { data: wire } = await api.post(`/invoices/${id}/wire-transfers`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      addToast(wasPaid ? 'Wire transfer attached' : 'Wire transfer uploaded — invoice marked as Paid', 'success');
+      const msg = wireUploadMessage(wire, wasPaid ? 'Wire transfer attached' : 'Wire transfer uploaded — invoice marked as Paid');
+      addToast(msg.text, msg.partial ? 'info' : 'success');
       setWireBankRef('');
       setWireDateManuallySet(false);
       fetchInvoice();
@@ -298,6 +300,12 @@ export default function InvoiceDetailPage() {
             {invoice.eur_amount != null && invoice.currency !== 'EUR' && (
               <p className="text-sm text-gray-400">≈ €{invoice.eur_amount.toFixed(2)}</p>
             )}
+            {invoice.outstanding ? (
+              <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-left">
+                <p className="text-xs text-amber-700">Received {formatAmount(invoice.paid_amount, invoice.currency)}</p>
+                <p className="text-sm font-semibold text-amber-900">Outstanding {formatAmount(invoice.outstanding, invoice.currency)}</p>
+              </div>
+            ) : null}
           </div>
         </div>
 

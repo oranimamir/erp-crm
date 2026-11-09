@@ -109,6 +109,10 @@ export interface PaymentInfo {
   recordedBy: string | null;
   wireFilePath: string | null;
   wireFileName: string | null;
+  /** Still owed on the invoice after this wire (invoice currency), when it fell short */
+  outstanding?: number | null;
+  invoiceAmount?: number | null;
+  invoiceCurrency?: string | null;
 }
 
 /** The payment-received email as {subject, html}; exported for the test email. */
@@ -129,6 +133,8 @@ export function paymentEmailContent(p: PaymentInfo): { subject: string; html: st
     ['Operation', esc(p.operationNumber || '')],
     ['Amount paid', esc(paid)],
     ['In EUR', esc(inEur || '')],
+    ['Invoice total', p.outstanding && p.invoiceAmount != null ? esc(money(p.invoiceAmount, p.invoiceCurrency || p.currency)) : ''],
+    ['Still outstanding', p.outstanding ? `<span style="color:#b45309;">${esc(money(p.outstanding, p.invoiceCurrency || p.currency))}</span>` : ''],
     ['Payment date', esc(euDate(p.paymentDate))],
     ['Bank reference', esc(p.bankReference || '')],
     ['Recorded by', esc(p.recordedBy || '')],
@@ -144,6 +150,8 @@ export function paymentEmailContent(p: PaymentInfo): { subject: string; html: st
       <strong>${esc(who)}</strong> just paid <strong style="color:#16a34a;font-size:22px;">${esc(paid)}</strong>${inEur ? ` <strong>(${esc(inEur)})</strong>` : ''}
       for invoice <strong>${esc(p.invoiceNumber)}</strong>${p.operationNumber ? ` — operation <strong>${esc(p.operationNumber)}</strong>` : ''}. <strong>Well done, team!</strong>
     </p>
+    ${p.outstanding ? `<p style="margin:0 0 16px;padding:10px 14px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:14px;color:#92400e;">
+      <strong>Partly paid:</strong> ${esc(money(p.outstanding, p.invoiceCurrency || p.currency))} of this invoice is still outstanding.</p>` : ''}
     <table style="width:100%;border-collapse:collapse;font-size:14px;border:1px solid #e5e7eb;">${rows.map(([l, v], i) => row(l, v, i % 2 === 0)).join('')}
     </table>
     <p style="margin:18px 0 0;font-size:15px;color:#15803d;"><strong>${pick(SIGN_OFFS)}</strong></p>
