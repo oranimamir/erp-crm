@@ -13,6 +13,7 @@ import {
   resolveInvoiceLayout,
 } from '../lib/documentPrefill.js';
 import { matchProfile } from '../lib/profileMatch.js';
+import { duplicateSourceData, fillFromDuplicate } from '../lib/duplicateSource.js';
 import {
   buildDocumentPdf,
   computeTotals,
@@ -575,6 +576,8 @@ router.get('/prepare', (req: Request, res: Response) => {
   }
   // "Our ref" on the invoice is the operation number
   if (operation?.operation_number) draft.our_ref = operation.operation_number;
+  // A duplicated operation: the earlier one's invoice fills what is still blank
+  Object.assign(draft, fillFromDuplicate(draft, duplicateSourceData(orderId, 'invoice')));
 
   res.json({
     existing: null,

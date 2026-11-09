@@ -8,6 +8,7 @@ import {
   Download, Eye, X, Plus, Receipt, ExternalLink, CheckCircle,
   AlertCircle, Loader2, Edit2, Link2, Search, Truck, Landmark,
   FileCheck2, Receipt as ReceiptIcon, Package, Library, Send, Columns2, Type,
+  CopyPlus,
 } from 'lucide-react';
 import { formatDate, todayISO } from '../lib/dates';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
@@ -661,6 +662,13 @@ export default function OperationDetailPage() {
               title="Delete operation and all linked records"
             >
               <Trash2 size={13} /> Delete operation
+            </button>
+            <button
+              onClick={() => navigate(`/operations/new?from=${operation.id}`)}
+              className="flex items-center gap-1 text-xs sm:text-sm text-primary-700 hover:text-primary-900 border border-primary-200 bg-primary-50 hover:bg-primary-100 rounded-lg px-2 py-1"
+              title="Start a new operation pre-filled from this one (recurring sale)"
+            >
+              <CopyPlus size={13} /> Duplicate
             </button>
             <select
               value={STATUS_OPTIONS.includes(operation.status) ? operation.status : ''}

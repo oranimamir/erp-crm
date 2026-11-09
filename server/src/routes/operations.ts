@@ -476,6 +476,24 @@ export function nextOperationNumber(entity: string, year: number = new Date().ge
 }
 
 // GET /api/operations/next-number?entity=BE — preview of the automatic number
+// GET /duplicate-sources — every operation with an order, newest first, for
+// New Operation → "Start from a previous operation" (client, order, products)
+router.get('/duplicate-sources', (_req: Request, res: Response) => {
+  const rows = db.prepare(`
+    SELECT op.id, op.operation_number, op.category, op.status, op.created_at,
+      COALESCE(c.name, s.name) AS party, o.order_number, o.order_date,
+      (SELECT GROUP_CONCAT(oi.description, ' · ') FROM order_items oi WHERE oi.order_id = op.order_id) AS products,
+      (SELECT COALESCE(SUM(oi.quantity * oi.unit_price), 0) FROM order_items oi WHERE oi.order_id = op.order_id) AS order_total,
+      (SELECT UPPER(COALESCE(oi.currency, 'USD')) FROM order_items oi WHERE oi.order_id = op.order_id ORDER BY oi.id LIMIT 1) AS currency
+    FROM operations op
+    LEFT JOIN customers c ON c.id = op.customer_id
+    LEFT JOIN suppliers s ON s.id = op.supplier_id
+    LEFT JOIN orders o ON o.id = op.order_id
+    ORDER BY COALESCE(o.order_date, op.created_at) DESC, op.id DESC
+  `).all();
+  res.json(rows);
+});
+
 router.get('/next-number', (req: Request, res: Response) => {
   const entity = String(req.query.entity || '').toUpperCase();
   if (!isEntityCode(entity)) { res.status(400).json({ error: 'Choose the entity (BE or NL)' }); return; }
@@ -564,10 +582,15 @@ router.post('/', (req: Request, res: Response) => {
     return;
   }
   try {
+    // A copy of an earlier operation remembers it (its documents fill the new drafts) and takes its country
+    const dupId = Number(req.body?.duplicated_from);
+    const source = Number.isInteger(dupId) && dupId > 0
+      ? db.prepare('SELECT id, country FROM operations WHERE id = ?').get(dupId) as any : null;
     const result = db.prepare(`
-      INSERT INTO operations (operation_number, order_id, customer_id, supplier_id, notes, status, category)
-      VALUES (?, ?, ?, ?, ?, COALESCE(?, 'ordered'), ?)
-    `).run(operation_number, order_id || null, customer_id || null, supplier_id || null, notes || null, status || null, category);
+      INSERT INTO operations (operation_number, order_id, customer_id, supplier_id, notes, status, category, duplicated_from, country)
+      VALUES (?, ?, ?, ?, ?, COALESCE(?, 'ordered'), ?, ?, ?)
+    `).run(operation_number, order_id || null, customer_id || null, supplier_id || null, notes || null, status || null, category,
+      source?.id ?? null, source?.country ?? null);
     const op = db.prepare('SELECT * FROM operations WHERE id = ?').get(result.lastInsertRowid);
     notifyAdmin({ action: 'created', entity: 'Operation', label: operation_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
     res.status(201).json(op);

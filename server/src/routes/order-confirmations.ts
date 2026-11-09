@@ -10,6 +10,7 @@ import { notifyAdmin } from '../lib/notify.js';
 import { applyEntityBank, entityFromOperationNumber, entityProfile, isEntityCode, type EntityCode } from '../lib/companyEntity.js';
 import { deliveryTerms, listProfiles, prefillLines } from '../lib/documentPrefill.js';
 import { matchProfile } from '../lib/profileMatch.js';
+import { duplicateSourceData, fillFromDuplicate } from '../lib/duplicateSource.js';
 import {
   buildOrderConfirmationPdf,
   computeTotals,
@@ -215,10 +216,12 @@ router.get('/prepare', (req: Request, res: Response) => {
     vat: 0,
     terms: order.payment_terms || ocDefaults.terms || '',
   };
+  // A duplicated operation: the earlier one's confirmation fills what is still blank
+  const filled = fillFromDuplicate(draft, duplicateSourceData(orderId, 'oc'));
 
   res.json({
     existing: null,
-    draft,
+    draft: filled,
     entity,
     profiles: listProfiles(isSupplier ? null : order.customer_id),
     profile_id: profile?.id ?? null,

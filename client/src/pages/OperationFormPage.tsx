@@ -1,12 +1,13 @@
-import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
-import { ArrowLeft, Upload, Loader2, FileText, X, CheckCircle } from 'lucide-react';
+import { ArrowLeft, Upload, Loader2, FileText, X, CheckCircle, Copy, Search } from 'lucide-react';
+import { formatDate, todayISO } from '../lib/dates';
 
 const statusOptions = [
   { value: 'pre-ordered',  label: 'Pre-ordered' },
@@ -50,6 +51,15 @@ interface PendingOrder {
   scan_file_path: string | null;
   scan_file_name: string | null;
   items: ScannedItem[];
+  /** Copied from an earlier operation (no file) — its number */
+  copiedFrom?: string;
+}
+
+/** An earlier operation offered as a starting point (`GET /operations/duplicate-sources`). */
+interface DuplicateSource {
+  id: number; operation_number: string; category: string | null; status: string; created_at: string;
+  party: string | null; order_number: string | null; order_date: string | null; products: string | null;
+  order_total: number; currency: string | null;
 }
 
 export default function OperationFormPage() {
@@ -81,6 +91,24 @@ export default function OperationFormPage() {
   const [scanning, setScanning] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [order, setOrder] = useState<PendingOrder | null>(null);
+
+  // ── Start from a previous operation (recurring sales) ────────────────
+  const [searchParams] = useSearchParams();
+  const [duplicatedFrom, setDuplicatedFrom] = useState<number | null>(null);
+  const [sources, setSources] = useState<DuplicateSource[] | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [sourceSearch, setSourceSearch] = useState('');
+  const [copying, setCopying] = useState(false);
+  useEffect(() => {
+    if (!pickerOpen || sources) return;
+    api.get('/operations/duplicate-sources').then(({ data }) => setSources(data || [])).catch(() => setSources([]));
+  }, [pickerOpen, sources]);
+  const shownSources = useMemo(() => {
+    const term = sourceSearch.trim().toLowerCase();
+    const list = sources || [];
+    return (term ? list.filter(s => [s.operation_number, s.party, s.order_number, s.products]
+      .some(v => String(v || '').toLowerCase().includes(term))) : list).slice(0, 60);
+  }, [sources, sourceSearch]);
 
   useEffect(() => {
     Promise.all([
@@ -118,6 +146,61 @@ export default function OperationFormPage() {
 
   const setOrderField = (field: keyof PendingOrder, value: string) =>
     setOrder(prev => (prev ? { ...prev, [field]: value } : prev));
+
+  /** Prefills everything from an earlier operation: client, category, entity and its order (lines, prices, terms). */
+  const applyDuplicate = async (id: number) => {
+    setCopying(true);
+    try {
+      const { data: op } = await api.get(`/operations/${id}`);
+      const code = entities.map(e => e.code).sort((a, b) => b.length - a.length)
+        .find(c => String(op.operation_number || '').toUpperCase().startsWith(`SO${c}`));
+      if (code) setEntity(code);
+      setDuplicatedFrom(op.id);
+      setForm(prev => ({
+        ...prev,
+        category: op.category === 'blending' || op.category === 'trading' ? op.category : prev.category,
+        status: 'ordered',
+        partyType: op.customer_id ? 'customer' : op.supplier_id ? 'supplier' : prev.partyType,
+        customer_id: op.customer_id ? String(op.customer_id) : '',
+        supplier_id: op.supplier_id ? String(op.supplier_id) : '',
+      }));
+      const items: ScannedItem[] = (op.order_items || []).map((i: any) => ({
+        description: i.description || '', client_product_name: i.client_product_name || null,
+        quantity: Number(i.quantity) || 0, unit: i.unit || 'tons', currency: i.currency || 'USD',
+        unit_price: Number(i.unit_price) || 0, packaging: i.packaging || null,
+      }));
+      setOrder(op.order_id ? {
+        fileName: '', copiedFrom: op.operation_number,
+        order_number: '', order_date: todayISO(),
+        inco_terms: op.inco_terms || '', destination: op.destination || '', transport: op.transport || '',
+        delivery_date: '', payment_terms: op.payment_terms || '', notes: '',
+        scan_file_path: null, scan_file_name: null, items,
+      } : null);
+      setPickerOpen(false);
+      addToast(op.order_id
+        ? `Copied from ${op.operation_number} — enter the client's new order number, check quantities and prices`
+        : `Copied from ${op.operation_number} (it has no order to copy)`, 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Could not copy that operation', 'error');
+    } finally {
+      setCopying(false);
+    }
+  };
+
+  // ?from=<id> (Duplicate on an operation page) starts the copy at once
+  const fromParam = Number(searchParams.get('from'));
+  const fromApplied = useRef(false);
+  useEffect(() => {
+    if (fromApplied.current || !fromParam || !entities.length) return;
+    fromApplied.current = true;
+    applyDuplicate(fromParam);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromParam, entities.length]);
+
+  const setItem = (index: number, field: 'quantity' | 'unit_price', value: string) =>
+    setOrder(prev => (prev ? { ...prev, items: prev.items.map((it, i) => (i === index ? { ...it, [field]: value as any } : it)) } : prev));
+  const removeItem = (index: number) =>
+    setOrder(prev => (prev ? { ...prev, items: prev.items.filter((_, i) => i !== index) } : prev));
 
   // ── Upload + scan the client's order ──────────────────────────────────
   const handleFile = async (file: File | null) => {
@@ -205,7 +288,7 @@ export default function OperationFormPage() {
       : form.partyType === 'supplier' ? form.supplier_id : '';
 
     if (order) {
-      if (!order.order_number.trim()) { addToast('Order number is required', 'error'); return; }
+      if (!order.order_number.trim()) { addToast(order.copiedFrom ? "Enter the client's new order number" : 'Order number is required', 'error'); return; }
       if (!partyId) { addToast('Select the customer or supplier the order belongs to', 'error'); return; }
       if (!order.items.length) { addToast('No products were read from the order — add the order from the operation page instead', 'error'); return; }
     }
@@ -221,6 +304,7 @@ export default function OperationFormPage() {
         status: form.status,
         category: form.category,
         notes: form.notes || null,
+        ...(duplicatedFrom ? { duplicated_from: duplicatedFrom } : {}),
       };
       if (form.partyType === 'customer' && form.customer_id) payload.customer_id = Number(form.customer_id);
       if (form.partyType === 'supplier' && form.supplier_id) payload.supplier_id = Number(form.supplier_id);
@@ -249,7 +333,7 @@ export default function OperationFormPage() {
           transport:     order.transport     || null,
           delivery_date: order.delivery_date || null,
           payment_terms: order.payment_terms || null,
-          notes:         order.notes         || null,
+          notes:         order.notes || (order.copiedFrom ? `Copied from ${order.copiedFrom}` : null),
           file_path:     order.scan_file_path,
           file_name:     order.scan_file_name,
           items: order.items.map(item => ({
@@ -296,6 +380,65 @@ export default function OperationFormPage() {
 
       <Card className="p-6">
         <form onSubmit={handleSubmit} className="space-y-5">
+          {/* ── Start from a previous operation ─────────────────────────── */}
+          <div className="rounded-xl border border-primary-100 bg-primary-50/40 px-4 py-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <Copy size={16} className="text-primary-600" />
+              <div className="flex-1 min-w-[200px]">
+                <p className="text-sm font-semibold text-gray-900">Recurring sale? Start from a previous operation</p>
+                <p className="text-xs text-gray-500">
+                  {duplicatedFrom && order?.copiedFrom
+                    ? <>Copied from <strong>{order.copiedFrom}</strong> — client, category, products, prices and terms are filled in; the order confirmation and invoice will reuse its wording.</>
+                    : 'Copies the client, category, products, quantities, prices and terms — and later the OC / invoice wording.'}
+                </p>
+              </div>
+              <Button type="button" variant="secondary" size="sm" onClick={() => setPickerOpen(v => !v)} disabled={copying}>
+                {copying ? <Loader2 size={14} className="animate-spin" /> : <Copy size={14} />}
+                {duplicatedFrom ? 'Choose another' : 'Choose operation'}
+              </Button>
+            </div>
+            {pickerOpen && (
+              <div className="mt-3 rounded-lg border border-gray-200 bg-white">
+                <div className="relative border-b border-gray-100 p-2">
+                  <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input autoFocus value={sourceSearch} onChange={e => setSourceSearch(e.target.value)}
+                    placeholder="Search by operation, client, order or product…"
+                    className="w-full rounded-md border border-gray-200 py-1.5 pl-8 pr-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
+                </div>
+                <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
+                  {!sources ? (
+                    <div className="flex justify-center py-6"><Loader2 size={18} className="animate-spin text-primary-600" /></div>
+                  ) : shownSources.length === 0 ? (
+                    <p className="px-4 py-4 text-sm text-gray-400">No operation matches.</p>
+                  ) : shownSources.map(src => (
+                    <button key={src.id} type="button" onClick={() => applyDuplicate(src.id)}
+                      className={`flex w-full items-start gap-3 px-4 py-2.5 text-left hover:bg-primary-50/60 ${duplicatedFrom === src.id ? 'bg-primary-50' : ''}`}>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-semibold text-gray-900">{src.operation_number}</span>
+                          <span className="text-sm text-gray-700">{src.party || '—'}</span>
+                          {src.category && (
+                            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${src.category === 'blending' ? 'bg-purple-50 text-purple-700' : 'bg-sky-50 text-sky-700'}`}>
+                              {src.category === 'blending' ? 'Blending' : 'Trading'}
+                            </span>
+                          )}
+                        </span>
+                        <span className="block truncate text-xs text-gray-500">
+                          {src.products || 'No order lines'}
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-right text-xs text-gray-500">
+                        {src.order_number && <span className="block">Order {src.order_number}</span>}
+                        <span className="block">{formatDate(src.order_date || src.created_at)}</span>
+                        {src.order_total > 0 && <span className="block font-medium text-gray-700">{Number(src.order_total).toLocaleString('en-US', { maximumFractionDigits: 0 })} {src.currency}</span>}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* ── Client order ───────────────────────────────────────────── */}
           <div className="space-y-3">
             <label className="block text-sm font-medium text-gray-700">Client Order (optional)</label>
@@ -336,10 +479,16 @@ export default function OperationFormPage() {
               <div className="rounded-xl border border-green-200 bg-green-50/50 overflow-hidden">
                 <div className="flex items-center gap-2 px-4 py-2.5 border-b border-green-200 bg-green-50">
                   <CheckCircle size={15} className="text-green-600 flex-shrink-0" />
-                  <span className="text-sm text-green-900 font-medium flex-1 truncate">{order.fileName}</span>
+                  <span className="text-sm text-green-900 font-medium flex-1 truncate">
+                    {order.copiedFrom ? `Order copied from ${order.copiedFrom} — upload the client's new order to replace it, or adjust below` : order.fileName}
+                  </span>
+                  {order.copiedFrom && (
+                    <button type="button" onClick={() => fileInputRef.current?.click()}
+                      className="rounded px-2 py-0.5 text-xs font-medium text-green-800 hover:bg-green-100">Upload new order</button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => setOrder(null)}
+                    onClick={() => { setOrder(null); setDuplicatedFrom(null); }}
                     className="p-1 rounded text-green-700 hover:bg-green-100"
                     title="Remove the order"
                   >
@@ -347,8 +496,10 @@ export default function OperationFormPage() {
                   </button>
                 </div>
 
+                <input ref={order.copiedFrom ? fileInputRef : undefined} type="file" accept={ACCEPTED} className="hidden"
+                  onChange={e => handleFile(e.target.files?.[0] || null)} />
                 <div className="p-4 space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <Input
                       label="Order Number *"
                       value={order.order_number}
@@ -360,6 +511,12 @@ export default function OperationFormPage() {
                       type="date"
                       value={order.order_date}
                       onChange={e => setOrderField('order_date', e.target.value)}
+                    />
+                    <Input
+                      label="Delivery Date"
+                      type="date"
+                      value={/^\d{4}-\d{2}-\d{2}$/.test(order.delivery_date) ? order.delivery_date : ''}
+                      onChange={e => setOrderField('delivery_date', e.target.value)}
                     />
                   </div>
 
@@ -377,9 +534,23 @@ export default function OperationFormPage() {
                         <tbody className="divide-y divide-gray-100">
                           {order.items.map((item, i) => (
                             <tr key={i}>
-                              <td className="px-3 py-2 text-gray-800">{item.description || '—'}</td>
-                              <td className="px-3 py-2 text-right text-gray-600">{item.quantity} {item.unit}</td>
-                              <td className="px-3 py-2 text-right text-gray-600">{item.unit_price} {item.currency}</td>
+                              <td className="px-3 py-2 text-gray-800">
+                                <span className="flex items-center gap-1.5">
+                                  {order.items.length > 1 && (
+                                    <button type="button" onClick={() => removeItem(i)} title="Remove this line"
+                                      className="p-0.5 rounded text-gray-300 hover:text-red-600"><X size={13} /></button>
+                                  )}
+                                  {item.description || '—'}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-right text-gray-600 whitespace-nowrap">
+                                <input type="number" step="any" value={item.quantity} onChange={e => setItem(i, 'quantity', e.target.value)}
+                                  className="w-24 rounded border border-gray-200 px-1.5 py-0.5 text-right text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" /> {item.unit}
+                              </td>
+                              <td className="px-3 py-2 text-right text-gray-600 whitespace-nowrap">
+                                <input type="number" step="any" value={item.unit_price} onChange={e => setItem(i, 'unit_price', e.target.value)}
+                                  className="w-24 rounded border border-gray-200 px-1.5 py-0.5 text-right text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" /> {item.currency}
+                              </td>
                               <td className="px-3 py-2 text-right font-medium text-gray-900">
                                 {((Number(item.quantity) || 0) * (Number(item.unit_price) || 0)).toLocaleString('en-US', { maximumFractionDigits: 2 })} {item.currency}
                               </td>
