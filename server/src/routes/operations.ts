@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import db from '../database.js';
-import { withBalances } from '../lib/invoiceBalance.js';
+import { withBalances, outstandingByOperation } from '../lib/invoiceBalance.js';
 import { archiveStored, archiveFile, archiveBuffer, archivedBy, ownerOf, contextOf } from '../lib/archive.js';
 import { refreshEstimatedPaymentDate, dueDateForInvoice } from '../lib/paymentTerms.js';
 import { fileGeneratedForOperation, draftsForOperation } from '../lib/fileGenerated.js';
@@ -213,7 +213,7 @@ router.get('/', async (req: Request, res: Response) => {
 
   // Totals across ALL matching operations (not just current page)
   const allForTotals = db.prepare(`
-    SELECT
+    SELECT op.id as op_id,
       COALESCE((SELECT COALESCE(SUM(
         CASE
           WHEN LOWER(oi.unit) IN ('mt','metric ton','metric tons','tonne','tonnes','tons','ton','t') THEN oi.quantity
@@ -278,7 +278,15 @@ router.get('/', async (req: Request, res: Response) => {
     return acc;
   }, { quantity_mt: 0, invoice_eur: 0, order_eur: 0 });
 
-  res.json({ data, total, page, limit, totalPages: Math.ceil(total / limit), totals });
+  // What customers still owe after their wire transfers (an invoice paid short)
+  const owed = outstandingByOperation(allForTotals.map(r => Number(r.op_id)));
+  const dataWithOwed = data.map((op: any) => {
+    const o = owed.get(Number(op.id));
+    return { ...op, outstanding_eur: o?.eur ?? 0, outstanding_items: o?.items ?? [] };
+  });
+  const outstandingEur = Math.round([...owed.values()].reduce((sum, o) => sum + o.eur, 0) * 100) / 100;
+  res.json({ data: dataWithOwed, total, page, limit, totalPages: Math.ceil(total / limit),
+    totals: { ...totals, outstanding_eur: outstandingEur, outstanding_count: owed.size } });
 });
 
 // ── Distinct completion years (for the Completed tab's year sub-tabs) ──────────

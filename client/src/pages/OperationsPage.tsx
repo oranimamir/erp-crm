@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import api from '../lib/api';
-import { wireUploadMessage } from '../components/OutstandingBadge';
+import OutstandingBadge, { wireUploadMessage } from '../components/OutstandingBadge';
 import ShipOperationModal from '../components/ShipOperationModal';
 import { useToast } from '../contexts/ToastContext';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
@@ -54,6 +54,9 @@ interface Operation {
   category?: 'blending' | 'trading' | null;
   invoice_date?: string;
   wire_transfer_date?: string;
+  /** Left unpaid on its customer invoices after their wire transfers (≈ EUR, and per currency) */
+  outstanding_eur?: number;
+  outstanding_items?: Array<{ currency: string; amount: number }>;
   etd?: string;
   eta?: string;
   estimated_payment_date?: string;
@@ -125,7 +128,9 @@ export default function OperationsPage() {
   const wireFileRef = useRef<HTMLInputElement>(null);
   const [operations, setOperations] = useState<Operation[]>([]);
   const [total, setTotal] = useState(0);
-  const [tabTotals, setTabTotals] = useState<{ quantity_mt: number; invoice_eur: number; order_eur: number } | null>(null);
+  const [tabTotals, setTabTotals] = useState<{ quantity_mt: number; invoice_eur: number; order_eur: number; outstanding_eur?: number; outstanding_count?: number } | null>(null);
+  // Only the operations whose invoices were paid short
+  const [onlyOutstanding, setOnlyOutstanding] = useState(false);
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<SortField>('order_date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -638,7 +643,7 @@ export default function OperationsPage() {
               }
               const { data } = await api.get('/operations', { params });
               downloadExcel('operations',
-                ['Operation #', 'Order #', 'Country', 'Customer', 'Status', 'ETD', 'ETA', 'Docs', 'Invoices', 'Quantity (MT)', 'Invoice Total (EUR)', 'Order Date', 'Invoice Date', 'Est. Payment Date', 'Wire Transfer Date'],
+                ['Operation #', 'Order #', 'Country', 'Customer', 'Status', 'ETD', 'ETA', 'Docs', 'Invoices', 'Quantity (MT)', 'Invoice Total (EUR)', 'Outstanding', 'Outstanding (≈ EUR)', 'Order Date', 'Invoice Date', 'Est. Payment Date', 'Wire Transfer Date'],
                 data.data.map((op: any) => [
                   op.operation_number, op.order_number || '',
                   op.country || '',
@@ -649,6 +654,8 @@ export default function OperationsPage() {
                   op.doc_count, op.invoice_count,
                   op.quantity_mt > 0 ? Number(op.quantity_mt).toFixed(2) : '',
                   op.invoice_total > 0 ? Number(op.invoice_total).toFixed(2) : '',
+                  (op.outstanding_items || []).map((o: any) => `${Number(o.amount).toFixed(2)} ${o.currency}`).join('; '),
+                  op.outstanding_eur > 0 ? Number(op.outstanding_eur).toFixed(2) : '',
                   formatDate(op.order_date || op.created_at) || '',
                   formatDate(op.invoice_date) || '',
                   formatDate(op.estimated_payment_date) || '',
@@ -893,7 +900,7 @@ export default function OperationsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {operations.map(op => (
+              {(onlyOutstanding ? operations.filter(op => (op.outstanding_eur || 0) > 0) : operations).map(op => (
                 <tr
                   key={op.id}
                   onClick={() => navigate(`/operations/${op.id}`)}
@@ -1085,6 +1092,11 @@ export default function OperationsPage() {
                             ? <span className="font-medium text-amber-600 italic" title="Based on order (no invoice)">{Number(op.order_total_eur).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                             : <span className="text-gray-400">—</span>)
                     }
+                    {(op.outstanding_items || []).map(o => (
+                      <div key={o.currency} className="mt-0.5">
+                        <OutstandingBadge outstanding={o.amount} currency={o.currency} />
+                      </div>
+                    ))}
                   </td>
                   <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                     <div className="leading-tight space-y-0.5">
@@ -1197,7 +1209,7 @@ export default function OperationsPage() {
       </div>
 
       {/* Totals summary */}
-      {tabTotals && (tabTotals.quantity_mt > 0 || tabTotals.invoice_eur > 0 || tabTotals.order_eur > 0) && (
+      {tabTotals && (tabTotals.quantity_mt > 0 || tabTotals.invoice_eur > 0 || tabTotals.order_eur > 0 || (tabTotals.outstanding_eur || 0) > 0) && (
         <div className="flex items-center justify-end gap-6 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm">
           <span className="text-gray-500 font-medium mr-auto">
             {activeTab === 'active' ? 'Active operations total' : 'Completed operations total'} ({total})
@@ -1219,6 +1231,17 @@ export default function OperationsPage() {
                 {tabTotals.invoice_eur.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
             </div>
+          )}
+          {(tabTotals.outstanding_eur || 0) > 0 && (
+            <button type="button" onClick={() => setOnlyOutstanding(v => !v)}
+              title={onlyOutstanding ? 'Show every operation again' : 'Show only the operations with an unpaid balance'}
+              className={`flex items-center gap-1.5 rounded-lg px-2 py-1 ${onlyOutstanding ? 'bg-amber-100 ring-1 ring-amber-300' : 'hover:bg-amber-50'}`}>
+              <span className="text-gray-500">Outstanding ({tabTotals.outstanding_count}):</span>
+              <span className="font-bold text-amber-700">
+                ≈ €{(tabTotals.outstanding_eur || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+              <span className="text-xs text-amber-700 underline">{onlyOutstanding ? 'show all' : 'show them'}</span>
+            </button>
           )}
           {tabTotals.order_eur > 0 && (
             <div className="flex items-center gap-1.5">

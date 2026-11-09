@@ -53,3 +53,28 @@ export function withBalances<T extends Record<string, any>>(rows: T[]): Array<T 
   const balances = balancesFor(rows);
   return rows.map(r => ({ ...r, ...(balances.get(Number(r.id)) || { paid_amount: null, outstanding: null }) }));
 }
+
+/** Per operation: what its customer invoices still have outstanding, per currency and ≈ EUR. */
+export function outstandingByOperation(operationIds: number[]): Map<number, { eur: number; items: Array<{ currency: string; amount: number }> }> {
+  const out = new Map<number, { eur: number; items: Array<{ currency: string; amount: number }> }>();
+  const ids = [...new Set(operationIds.filter(n => Number.isInteger(n)))];
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    const invoices = db.prepare(`SELECT id, operation_id, amount, currency, fx_rate, eur_amount, status FROM invoices
+      WHERE type = 'customer' AND operation_id IN (${chunk.map(() => '?').join(',')})`).all(...chunk) as any[];
+    const balances = balancesFor(invoices);
+    for (const inv of invoices) {
+      const left = balances.get(Number(inv.id))?.outstanding;
+      if (!left) continue;
+      const currency = String(inv.currency || 'USD').toUpperCase();
+      const rate = currency === 'EUR' ? 1 : inv.fx_rate ? Number(inv.fx_rate)
+        : inv.eur_amount && inv.amount ? Number(inv.eur_amount) / Number(inv.amount) : 1;
+      const entry = out.get(Number(inv.operation_id)) || { eur: 0, items: [] };
+      entry.eur = round2(entry.eur + left * rate);
+      const same = entry.items.find(x => x.currency === currency);
+      if (same) same.amount = round2(same.amount + left); else entry.items.push({ currency, amount: left });
+      out.set(Number(inv.operation_id), entry);
+    }
+  }
+  return out;
+}
