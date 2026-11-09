@@ -549,8 +549,22 @@ export default function InvoiceDocumentPage() {
   const vat = Number(form.vat) || 0;
   const insurance = Number(form.insurance) || 0;
   // The summary mirrors whatever the layout actually prints
+  // A charge with a value but no row of its own gets one (as on the PDF)
   const totalsShown = layout.totals.length
-    ? layout.totals
+    ? (() => {
+        const rows: Array<{ label: string; field: string }> = layout.totals.map(r => ({ label: r.label, field: r.field }));
+        const has = (f: string) => rows.some(r => r.field === f);
+        const add = (field: string, label: string, after: string[]) => {
+          let at = -1;
+          for (const a of after) { const i = rows.map(r => r.field).lastIndexOf(a); if (i > at) at = i; }
+          if (at < 0) { const t = rows.findIndex(r => r.field === 'total'); at = t < 0 ? rows.length - 1 : t - 1; }
+          rows.splice(at + 1, 0, { label, field });
+        };
+        if (freight && !has('freight')) add('freight', 'Freight', ['subtotal']);
+        if (insurance && !has('insurance')) add('insurance', 'Insurance', ['subtotal', 'freight']);
+        if (vat && !has('vat')) add('vat', 'Vat', ['subtotal', 'freight', 'insurance']);
+        return rows;
+      })()
     : [{ label: 'Total', field: 'total' as const }];
   const totalValues: Record<string, number> = {
     subtotal, freight, vat, insurance, total: subtotal + freight + vat + insurance,

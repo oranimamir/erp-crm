@@ -26,6 +26,32 @@ export type DetailField =
 /** A row in the totals block. `total` is always subtotal + freight + insurance + vat. */
 export type TotalField = 'subtotal' | 'freight' | 'insurance' | 'vat' | 'total';
 
+const CHARGE_LABELS: Record<'freight' | 'insurance' | 'vat', string> = { freight: 'Freight', insurance: 'Insurance', vat: 'Vat' };
+
+/**
+ * The totals rows to print: the layout's, plus a row for any charge that has a
+ * value but no row of its own (insurance goes under freight, freight under the
+ * subtotal, VAT before the total) — the total always includes them, so the
+ * block must show them.
+ */
+export function totalRowsWithCharges<T extends { label: string; field: TotalField }>(
+  rows: T[], amounts: { freight: number; insurance: number; vat: number },
+): Array<{ label: string; field: TotalField }> {
+  const out: Array<{ label: string; field: TotalField }> = rows.map(r => ({ label: r.label, field: r.field }));
+  if (!out.length) return out;
+  const has = (f: TotalField) => out.some(r => r.field === f);
+  const insertAfter = (field: TotalField, after: TotalField[]) => {
+    let at = -1;
+    for (const a of after) { const i = out.map(r => r.field).lastIndexOf(a); if (i > at) at = i; }
+    if (at < 0) { const t = out.findIndex(r => r.field === 'total'); at = t < 0 ? out.length - 1 : t - 1; }
+    out.splice(at + 1, 0, { label: CHARGE_LABELS[field as 'freight' | 'insurance' | 'vat'], field });
+  };
+  if (amounts.freight && !has('freight')) insertAfter('freight', ['subtotal']);
+  if (amounts.insurance && !has('insurance')) insertAfter('insurance', ['subtotal', 'freight']);
+  if (amounts.vat && !has('vat')) insertAfter('vat', ['subtotal', 'freight', 'insurance']);
+  return out;
+}
+
 export type ColumnKey =
   | 'line' | 'reference' | 'commercial_name' | 'packaging' | 'packing_note'
   | 'hs_code' | 'lot' | 'quantity' | 'unit_price' | 'amount';

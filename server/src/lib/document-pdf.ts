@@ -22,6 +22,7 @@ import {
   DEFAULT_LAYOUT,
   ORIGINAL_COLUMNS,
   normalizeLayout,
+  totalRowsWithCharges,
   type InvoiceLayout,
   type LayoutColumn,
 } from './invoiceLayout.js';
@@ -961,7 +962,7 @@ function drawDetailPanel(doc: any, layout: InvoiceLayout, data: DocumentData, to
     .map(row => [row.label, detailValue(row.field, data)] as [string, string])
     .filter(([, value]) => !!value);
 
-  const totalRows = layout.totals.map(row => {
+  const totalRows = totalRowsWithCharges(layout.totals, totals).map(row => {
     const value = row.field === 'total' ? totals.total : (totals as any)[row.field] ?? 0;
     // A zero Freight/VAT line still prints — the masters show them as "0"
     const text = row.field === 'subtotal' || row.field === 'total' || value
