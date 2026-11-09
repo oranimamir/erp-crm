@@ -200,6 +200,8 @@ router.get('/register', (req: Request, res: Response) => {
   const rows = db.prepare(`
     SELECT i.id, i.invoice_number, i.invoice_date, i.created_at, i.status, i.po_number,
       i.amount, i.currency, i.fx_rate, i.eur_amount, i.quantity_mt, i.due_date, i.payment_date,
+      CASE WHEN i.file_path IS NOT NULL THEN 1 ELSE 0 END AS has_file,
+      (SELECT COUNT(*) FROM wire_transfers w WHERE w.invoice_id = i.id AND w.file_path IS NOT NULL) AS wire_files,
       c.name AS customer_name,
       op.id AS operation_id, op.operation_number, op.category, op.country AS operation_country,
       o.id AS order_id, o.order_number, o.destination AS order_destination,
@@ -254,6 +256,55 @@ router.get('/monthly-summary', (_req: Request, res: Response) => {
 
 // Bulk-download the attached files of multiple invoices as a single ZIP.
 // Registered before '/:id' so the literal path isn't captured as an id.
+/**
+ * POST /bulk-download {ids, folders?, include_wire_transfers?} — the chosen
+ * invoices' files in one ZIP (Customer Invoices → Invoices list): named
+ * "<invoice#> - <client>", flat or in a folder per client / month / operation,
+ * optionally with each invoice's wire transfer files beside it.
+ */
+router.post('/bulk-download', (req: Request, res: Response) => {
+  const ids = (Array.isArray(req.body?.ids) ? req.body.ids : [])
+    .map(Number).filter((n: number) => Number.isInteger(n) && n > 0).slice(0, 5000);
+  if (!ids.length) { res.status(400).json({ error: 'No invoices chosen' }); return; }
+  const folders = ['client', 'month', 'operation'].includes(String(req.body?.folders)) ? String(req.body.folders) : 'none';
+  const withWires = req.body?.include_wire_transfers === true;
+
+  const files: { absPath: string; name: string }[] = [];
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    const rows = db.prepare(`
+      SELECT i.id, i.invoice_number, i.invoice_date, i.file_path, i.file_name,
+        COALESCE(c.name, s.name) AS party, COALESCE(op.operation_number, t.to_number) AS operation_number
+      FROM invoices i
+      LEFT JOIN customers c ON c.id = i.customer_id
+      LEFT JOIN suppliers s ON s.id = i.supplier_id
+      LEFT JOIN operations op ON op.id = COALESCE(i.operation_id, (SELECT id FROM operations WHERE operation_number = i.our_ref LIMIT 1))
+      LEFT JOIN technology_operations t ON t.id = i.technology_operation_id
+      WHERE i.id IN (${chunk.map(() => '?').join(',')})
+    `).all(...chunk) as any[];
+    for (const r of rows) {
+      const folder = folders === 'client' ? safeName(r.party || 'No client')
+        : folders === 'month' ? (String(r.invoice_date || '').slice(0, 7) || 'No date')
+        : folders === 'operation' ? safeName(r.operation_number || 'No operation') : '';
+      const prefix = folder ? `${folder}/` : '';
+      const base = safeName(`${r.invoice_number || `invoice-${r.id}`}${r.party ? ` - ${r.party}` : ''}`);
+      const absPath = r.file_path ? resolveUpload('invoices', r.file_path) : null;
+      if (absPath) files.push({ absPath, name: `${prefix}${base}${path.extname(r.file_name || r.file_path) || '.pdf'}` });
+      if (withWires) {
+        const wires = db.prepare('SELECT id, transfer_date, file_path, file_name FROM wire_transfers WHERE invoice_id = ? AND file_path IS NOT NULL ORDER BY transfer_date, id').all(r.id) as any[];
+        wires.forEach((w, n) => {
+          const wirePath = resolveUpload('wire-transfers', w.file_path);
+          if (!wirePath) return;
+          const suffix = wires.length > 1 ? ` ${n + 1}` : '';
+          files.push({ absPath: wirePath, name: `${prefix}${safeName(`${r.invoice_number || `invoice-${r.id}`} - wire transfer${suffix}`)}${path.extname(w.file_name || w.file_path) || '.pdf'}` });
+        });
+      }
+    }
+  }
+  if (!files.length) { res.status(404).json({ error: 'None of the chosen invoices has a file attached' }); return; }
+  streamZip(res, `invoices-${todayISO()}.zip`, files);
+});
+
 router.get('/bulk-download', (req: Request, res: Response) => {
   const ids = String(req.query.ids || '')
     .split(',')
