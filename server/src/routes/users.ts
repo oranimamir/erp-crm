@@ -3,7 +3,7 @@ import { removeBackupRecipientUser } from '../lib/backupEmail.js';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import db from '../database.js';
-import { removeMutesForUser } from '../lib/notify.js';
+import { removeMutesForUser, sendTestEmail } from '../lib/notify.js';
 import { removePaymentRecipientUser } from '../lib/paymentEmail.js';
 
 const router = Router();
@@ -151,6 +151,15 @@ router.patch('/:id/notify', requireAdmin, (req: Request, res: Response) => {
   const newValue = existing.notify_on_changes ? 0 : 1;
   db.prepare(`UPDATE users SET notify_on_changes = ?, updated_at = datetime('now') WHERE id = ?`).run(newValue, req.params.id);
   res.json({ notify_on_changes: newValue });
+});
+
+// POST /:id/test-email — sends a sample to the user's address and returns Resend's answer
+router.post('/:id/test-email', requireAdmin, async (req: Request, res: Response) => {
+  const user = db.prepare('SELECT id, email FROM users WHERE id = ?').get(req.params.id) as any;
+  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+  if (!user.email) { res.status(400).json({ error: 'This user has no email address' }); return; }
+  const result = await sendTestEmail(user.email);
+  res.json({ ...result, to: user.email });
 });
 
 // ── Invite user ───────────────────────────────────────────────────────────────

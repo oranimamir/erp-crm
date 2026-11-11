@@ -135,12 +135,20 @@ async function _sendOtp(to: string, code: string): Promise<void> {
   </div>
 </div>`;
   const resend = new Resend(apiKey);
-  await resend.emails.send({
+  // Resend doesn't throw when it refuses a message (unverified sender domain,
+  // suppressed / bounced address…) — it returns the reason; a code that never
+  // left must not look sent
+  const { data, error } = await resend.emails.send({
     from,
-    to,
+    to: to.trim(),
     subject: `[CirculERP] Your login code: ${code}`,
     html,
   });
+  if (error) {
+    console.error(`[notify] OTP email to ${to} refused by Resend:`, error.name || '', error.message || error);
+    throw new Error(error.message || 'Email refused');
+  }
+  console.log(`[notify] OTP email to ${to} accepted by Resend (id ${data?.id ?? '?'})`);
 }
 
 /** Fire-and-forget: logs activity and sends an email to all admin users with an email set. */
@@ -259,10 +267,33 @@ async function _send(payload: NotifyPayload): Promise<void> {
 </div>`;
 
   const resend = new Resend(apiKey);
-  await resend.emails.send({
+  const { error } = await resend.emails.send({
     from,
     to,
     subject: `[CirculERP] ${payload.entity} ${payload.action}: ${payload.label}`,
     html,
   });
+  if (error) throw new Error(`Resend refused it: ${error.message || error.name || 'unknown error'}`);
+}
+
+/**
+ * User Management → Test email: sends a sample to a user's address and says
+ * exactly what Resend answered (refusal reason or message id), to find out
+ * why someone gets no login codes. Never throws.
+ */
+export async function sendTestEmail(to: string): Promise<{ ok: boolean; message: string; from: string }> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.RESEND_FROM_EMAIL || 'CirculERP <onboarding@resend.dev>';
+  if (!apiKey) return { ok: false, message: 'RESEND_API_KEY is not set on the server', from };
+  try {
+    const { data, error } = await new Resend(apiKey).emails.send({
+      from, to: to.trim(),
+      subject: '[CirculERP] Test email',
+      html: `<div style="font-family:sans-serif;font-size:15px;color:#111827;">This is a test from CirculERP. If it arrived, login codes will arrive at this address too.</div>`,
+    });
+    if (error) return { ok: false, message: `${error.name ? `${error.name}: ` : ''}${error.message || 'refused'}`, from };
+    return { ok: true, message: `Accepted by Resend (id ${data?.id ?? '?'}) — if it doesn't arrive, look in spam / quarantine, or look up this id in the Resend dashboard`, from };
+  } catch (err: any) {
+    return { ok: false, message: err?.message || String(err), from };
+  }
 }

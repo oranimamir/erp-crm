@@ -75,7 +75,8 @@ export function requestPoApproval(poId: number, requestedBy: { userId?: number; 
   ${link ? `<p><a href="${esc(link)}" style="background:#2563eb;color:white;padding:10px 18px;text-decoration:none;border-radius:8px;font-weight:600;">Review ${esc(po?.po_number)} →</a></p>` : ''}
 </div>`;
       const from = process.env.RESEND_FROM_EMAIL || 'CirculERP <onboarding@resend.dev>';
-      await new Resend(apiKey).emails.send({ from, to, subject: `Approval needed: supplier PO ${po?.po_number || ''}`, html });
+      const { error } = await new Resend(apiKey).emails.send({ from, to, subject: `Approval needed: supplier PO ${po?.po_number || ''}`, html });
+      if (error) console.error('[po-approval] email refused by Resend:', error.message || error);
     } catch (err: any) {
       console.error('[po-approval] email failed:', err?.message || err);
     }
@@ -102,7 +103,8 @@ export function notifyPoRequester(poId: number, requesterId: number | null | und
   ${link ? `<p><a href="${esc(link)}" style="color:#2563eb;">Open ${esc(po?.po_number)} →</a></p>` : ''}
 </div>`;
       const from = process.env.RESEND_FROM_EMAIL || 'CirculERP <onboarding@resend.dev>';
-      await new Resend(apiKey).emails.send({ from, to: [user.email], subject: `Supplier PO ${po?.po_number || ''} ${approved ? 'approved' : 'not approved'}`, html });
+      const { error } = await new Resend(apiKey).emails.send({ from, to: [user.email], subject: `Supplier PO ${po?.po_number || ''} ${approved ? 'approved' : 'not approved'}`, html });
+      if (error) console.error('[po-approval] requester email refused by Resend:', error.message || error);
     } catch (err: any) {
       console.error('[po-approval] requester email failed:', err?.message || err);
     }

@@ -172,6 +172,22 @@ export default function AdminUsersPage() {
     }
   };
 
+  // Sends a sample email and shows what the email service answered (why codes may not arrive)
+  const [testingEmail, setTestingEmail] = useState<number | null>(null);
+  const handleTestEmail = async (userId: number) => {
+    setTestingEmail(userId);
+    try {
+      const { data } = await api.post(`/users/${userId}/test-email`, {});
+      window.alert(data.ok
+        ? `Test email sent to ${data.to}.\n\n${data.message}`
+        : `The email service refused the test email to ${data.to}:\n\n${data.message}\n\nSender: ${data.from}`);
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Could not send the test email', 'error');
+    } finally {
+      setTestingEmail(null);
+    }
+  };
+
   const handleRevokeInvite = async (inviteId: number) => {
     try {
       await api.delete(`/users/invitations/${inviteId}`);
@@ -322,6 +338,11 @@ export default function AdminUsersPage() {
                     <td className="px-4 py-3 text-gray-600">{formatDate(u.created_at)}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
+                        {u.email && (
+                          <button onClick={() => handleTestEmail(u.id)} disabled={testingEmail === u.id}
+                            title={`Send a test email to ${u.email} (checks that login codes can reach it)`}
+                            className="p-1.5 text-gray-400 hover:text-primary-600 rounded disabled:opacity-50"><Mail size={16} /></button>
+                        )}
                         <button onClick={() => openEdit(u)} className="p-1.5 text-gray-400 hover:text-primary-600 rounded"><Pencil size={16} /></button>
                         {u.id !== currentUser?.id && (
                           <button onClick={() => setDeleteId(u.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded"><Trash2 size={16} /></button>

@@ -30,6 +30,7 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 
 ## Security
 - No public sign-up: accounts come from admin create or invite only; login is password + emailed OTP (5 wrong codes burn it; 10 wrong per user in 30 min locks the code step; compare dates with `datetime(expires_at)`). `/login` returns a 15-min signed `challenge` (`generateOtpChallenge`, purpose 'otp' — never accepted as a session); `/verify-otp` and `/resend-otp` require it, so the code step can't be reached without the password
+- Resend's `emails.send` does NOT throw when it refuses a message — it returns `{error}`: always check it (the OTP mail throws → login 503 "Failed to send login code", logged with the reason; the accepted id is logged). User Management → Users: envelope icon = **Test email** (`POST /api/users/:id/test-email`, admin, `sendTestEmail` in `lib/notify.ts`) shows Resend's answer for that address
 - A first admin is seeded only when there are no users (random password in the log) — never re-created
 - `uncaughtException` / `unhandledRejection` are logged, not fatal (`lib/asyncErrors.ts`); binding an object/array to SQL → 400; sort / paging query values are allowlisted (`Object.hasOwn`) or clamped
 - `server/package.json` `overrides.qs` pins the patched qs under Express 4
