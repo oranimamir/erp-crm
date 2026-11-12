@@ -4,6 +4,8 @@ import Anthropic from '@anthropic-ai/sdk';
 // @ts-ignore — import lib directly to avoid pdf-parse's debug-mode crash in ESM
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import db from '../database.js';
+import { readCustomerInvoice, type CustomerInvoiceReading } from '../lib/customerInvoiceReader.js';
+import { AiBudgetError } from '../lib/aiBudget.js';
 
 const router = Router();
 
@@ -155,7 +157,22 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
       return;
     }
 
-    const extracted = await extractWithClaude(req.file);
+    // The page itself is read (totals can be a picture beside the table, which the
+    // text layer misses); the text-only reading is the fallback
+    let reading: CustomerInvoiceReading | null = null;
+    try {
+      reading = await readCustomerInvoice(req.file.buffer);
+    } catch (err: any) {
+      if (err?.message === 'NO_API_KEY') throw err;
+      console.warn('[invoice-scan] page reading failed, falling back to the text:', err instanceof AiBudgetError ? 'AI budget reached' : err?.message || err);
+    }
+    const extracted: Record<string, any> = reading?.total != null
+      ? {
+          invoice_number: reading.invoice_number, amount: reading.total, currency: reading.currency,
+          invoice_date: reading.invoice_date, due_date: reading.due_date,
+          vendor_or_customer_name: reading.customer_name, po_number: reading.po_number, notes: reading.notes,
+        }
+      : await extractWithClaude(req.file);
 
     const entityMatch = fuzzyMatchEntity(extracted.vendor_or_customer_name);
 
@@ -176,6 +193,11 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
       po_number: extracted.po_number || null,
       notes: extracted.notes || null,
       vendor_or_customer_name: extracted.vendor_or_customer_name || null,
+      // How the total is made up, when the page was read
+      ...(reading?.total != null ? {
+        subtotal: reading.subtotal, freight: reading.freight, insurance: reading.insurance, vat: reading.vat,
+        other_charges: reading.other_charges, parts_gap: reading.parts_gap,
+      } : {}),
       ...entityMatch,
     };
 

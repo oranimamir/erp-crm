@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 import OutstandingBadge from '../components/OutstandingBadge';
+import InvoiceAmountCheck from '../components/InvoiceAmountCheck';
+import { ScanSearch } from 'lucide-react';
 import { useToast } from '../contexts/ToastContext';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
 import Card from '../components/ui/Card';
@@ -259,6 +261,7 @@ export default function InvoicesPage() {
     return sortDir === 'asc' ? <ChevronUp size={12} className="text-primary-600" /> : <ChevronDown size={12} className="text-primary-600" />;
   };
 
+  const [amountCheckOpen, setAmountCheckOpen] = useState(false);
   const fetchInvoices = () => {
     setLoading(true);
     api.get('/invoices', {
@@ -354,6 +357,9 @@ export default function InvoicesPage() {
               <Download size={16} /> Download Selected ({selected.size})
             </Button>
           )}
+          <Button variant="secondary" onClick={() => setAmountCheckOpen(true)} title="Read the uploaded invoices again and list the ones recorded at a different amount">
+            <ScanSearch size={16} /> Check amounts
+          </Button>
           <Button variant="secondary" onClick={handleExport}><FileSpreadsheet size={16} /> Export Excel</Button>
           <Link to="/invoices/generate">
             <Button variant="secondary"><FileDown size={16} /> Generate PDF</Button>
@@ -795,6 +801,7 @@ export default function InvoicesPage() {
         />
       )}
 
+      <InvoiceAmountCheck open={amountCheckOpen} onClose={() => setAmountCheckOpen(false)} onChanged={fetchInvoices} />
     </div>
   );
 }

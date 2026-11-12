@@ -16,6 +16,7 @@ import { todayISO } from '../lib/today.js';
 import { sendPaymentReceivedEmail } from '../lib/paymentEmail.js';
 import { computeTotals, lotsOf, type DocumentData } from '../lib/document-pdf.js';
 import { balancesFor, withBalances } from '../lib/invoiceBalance.js';
+import { ensureAmountCheckTable, amountCheckOverview, startAmountCheck, applyAmountCheck, keepAmountCheck } from '../lib/invoiceAmountCheck.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsBase = process.env.UPLOADS_PATH || path.join(__dirname, '..', '..', 'uploads');
@@ -330,6 +331,40 @@ router.get('/bulk-download', (req: Request, res: Response) => {
   if (!files.length) { res.status(404).json({ error: 'None of the selected invoices have an attached file' }); return; }
 
   streamZip(res, `invoices-${todayISO()}.zip`, files);
+});
+
+// ── Check amounts (lib/invoiceAmountCheck.ts) ────────────────────────────────
+// Uploaded customer invoices re-read from their file: the ones whose recorded
+// amount differs from the total on the page, to correct one by one
+
+router.get('/amount-check', (_req: Request, res: Response) => {
+  ensureAmountCheckTable();
+  res.json(amountCheckOverview());
+});
+
+router.post('/amount-check/run', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  if (!process.env.ANTHROPIC_API_KEY) { res.status(501).json({ error: 'AI reading is not set up on the server (no API key)' }); return; }
+  ensureAmountCheckTable();
+  res.json({ ...startAmountCheck(), ...amountCheckOverview() });
+});
+
+router.post('/:id/amount-check/apply', async (req: Request, res: Response) => {
+  ensureAmountCheckTable();
+  const amount = req.body?.amount != null && req.body.amount !== '' ? Number(req.body.amount) : undefined;
+  const result = await applyAmountCheck(Number(req.params.id), amount);
+  if (!result) { res.status(404).json({ error: 'No reading to apply for this invoice' }); return; }
+  notifyAdmin({ action: 'updated', entity: 'Invoice', label: result.invoice.invoice_number,
+    detail: `Amount corrected ${result.from} → ${result.to} ${result.invoice.currency || ''} (read from the invoice file)`,
+    performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
+  refreshEstimatedPaymentDate(db, result.invoice.operation_id ?? null);
+  res.json({ ...result.invoice, ...(balancesFor([result.invoice]).get(result.invoice.id) || {}) });
+});
+
+router.post('/:id/amount-check/keep', (req: Request, res: Response) => {
+  ensureAmountCheckTable();
+  if (!keepAmountCheck(Number(req.params.id))) { res.status(404).json({ error: 'No reading for this invoice' }); return; }
+  res.json({ ok: true });
 });
 
 router.get('/:id', (req: Request, res: Response) => {
