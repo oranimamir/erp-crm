@@ -17,15 +17,16 @@ import Button from './ui/Button';
 
 interface Row {
   invoice_id: number; invoice_number: string; customer_name: string | null; invoice_date: string | null;
-  recorded_amount: number; recorded_currency: string; file_path: string; file_name: string | null;
+  recorded_amount: number; recorded_currency: string; file_subfolder: string | null; file_path: string | null; file_name: string | null;
   read_total: number | null; read_currency: string | null;
   subtotal: number | null; freight: number | null; insurance: number | null; vat: number | null; other_charges: number | null;
   message: string | null;
+  corrected_to?: number | null;
 }
 interface Overview {
   run: { running: boolean; total: number; done: number; read: number; stopped: string | null; finished_at: string | null };
   candidates: number; not_checked: number; matching: number; decided: number; estimated_usd: number;
-  differing: Row[]; unreadable: Row[];
+  differing: Row[]; unreadable: Row[]; auto_corrected: Row[];
 }
 
 const money = (n: number | null | undefined, currency?: string | null) =>
@@ -115,8 +116,9 @@ export default function InvoiceAmountCheck({ open, onClose, onChanged }: { open:
   };
 
   const viewPdf = async (row: Row) => {
+    if (!row.file_path || !row.file_subfolder) { addToast('No PDF found for this invoice', 'error'); return; }
     try {
-      const resp = await api.get(`/files/invoices/${row.file_path}`, { responseType: 'blob' });
+      const resp = await api.get(`/files/${row.file_subfolder}/${row.file_path}`, { responseType: 'blob' });
       const url = URL.createObjectURL(new Blob([resp.data], { type: String(resp.headers['content-type'] || 'application/pdf') }));
       window.open(url, '_blank', 'noopener');
     } catch {
@@ -225,6 +227,24 @@ export default function InvoiceAmountCheck({ open, onClose, onChanged }: { open:
             </>
           )}
 
+          {data.auto_corrected.length > 0 && (
+            <details className="rounded-lg border border-green-200 bg-green-50/40 px-3 py-2 text-sm" open={!data.differing.length}>
+              <summary className="cursor-pointer text-green-800 font-medium">
+                {data.auto_corrected.length} corrected automatically — the subtotal had been recorded as the total
+              </summary>
+              <ul className="mt-2 space-y-1">
+                {data.auto_corrected.map(r => (
+                  <li key={r.invoice_id} className="flex flex-wrap items-center gap-2 text-gray-700">
+                    <Link to={`/invoices/${r.invoice_id}`} className="font-medium text-primary-600 hover:underline">{r.invoice_number}</Link>
+                    <span>{r.customer_name || ''}</span>
+                    <span className="text-xs text-gray-500">now {money(r.corrected_to ?? r.recorded_amount, r.recorded_currency)}{parts(r) ? ` · ${parts(r)}` : ''}</span>
+                    {r.file_path && <button type="button" onClick={() => viewPdf(r)} className="ml-auto p-1 text-gray-400 hover:text-gray-700"><Eye size={14} /></button>}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+
           {data.unreadable.length > 0 && (
             <details className="rounded-lg border border-gray-200 px-3 py-2 text-sm">
               <summary className="cursor-pointer text-gray-600">{data.unreadable.length} could not be read — check these by hand</summary>
@@ -234,7 +254,7 @@ export default function InvoiceAmountCheck({ open, onClose, onChanged }: { open:
                     <Link to={`/invoices/${r.invoice_id}`} className="font-medium text-primary-600 hover:underline">{r.invoice_number}</Link>
                     <span>{r.customer_name || ''}</span>
                     <span className="text-xs text-gray-400">{r.message}</span>
-                    <button type="button" onClick={() => viewPdf(r)} className="ml-auto p-1 text-gray-400 hover:text-gray-700"><Eye size={14} /></button>
+                    {r.file_path && <button type="button" onClick={() => viewPdf(r)} className="ml-auto p-1 text-gray-400 hover:text-gray-700"><Eye size={14} /></button>}
                   </li>
                 ))}
               </ul>

@@ -21,6 +21,7 @@ import orderRoutes from './routes/orders.js';
 import orderScanRoutes from './routes/order-scan.js';
 import orderConfirmationRoutes from './routes/order-confirmations.js';
 import invoiceDocumentRoutes, { backfillRecordedInvoices } from './routes/invoice-documents.js';
+import { scheduleAmountCheck } from './lib/invoiceAmountCheck.js';
 import purchaseOrderRoutes from './routes/purchase-orders.js';
 import declarationRoutes from './routes/declarations.js';
 import packingListRoutes, { backfillPackingListFiling } from './routes/packing-lists.js';
@@ -343,6 +344,7 @@ const server = app.listen(PORT, () => {
   backfillRecordedInvoices()
     .then(() => backfillPackingListFiling())
     .then(() => db.saveToDisk())
+    .then(() => scheduleAmountCheck())
     .catch((err: any) => console.warn('[startup] Recorded-invoice backfill skipped:', err?.message || err));
   // Fire-and-forget: normalize any non-EUR demo invoices that still
   // lack an eur_amount (e.g. uploaded before the multi-currency fix).
