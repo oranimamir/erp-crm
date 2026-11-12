@@ -1225,10 +1225,10 @@ export default function OperationsPage() {
             </div>
           )}
           {tabTotals.invoice_eur > 0 && (
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5" title="Customer invoices in EUR — each at the rate of its invoice date (today's rate when none was stored)">
               <span className="text-gray-500">Invoiced:</span>
               <span className="font-bold text-green-700">
-                {tabTotals.invoice_eur.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                €{tabTotals.invoice_eur.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
             </div>
           )}
@@ -1244,10 +1244,10 @@ export default function OperationsPage() {
             </button>
           )}
           {tabTotals.order_eur > 0 && (
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5" title="Orders not invoiced yet, in EUR at today's rate">
               <span className="text-gray-500">Expected (order):</span>
               <span className="font-bold text-amber-600">
-                {tabTotals.order_eur.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                €{tabTotals.order_eur.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
             </div>
           )}
