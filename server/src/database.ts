@@ -1889,6 +1889,7 @@ export async function initializeDatabase() {
       notes TEXT,
       fx_rate REAL,
       eur_amount REAL,
+      currency TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE RESTRICT,
