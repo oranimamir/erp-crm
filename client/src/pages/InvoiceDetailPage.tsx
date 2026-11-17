@@ -310,7 +310,7 @@ export default function InvoiceDetailPage() {
               <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-left">
                 <p className="text-xs text-amber-700">Received {formatAmount(invoice.paid_amount, invoice.currency)}</p>
                 <p className="text-sm font-semibold text-amber-900">Outstanding {formatAmount(invoice.outstanding, invoice.currency)}</p>
-                <SettleButton invoiceId={invoice.id} outstanding={invoice.outstanding} currency={invoice.currency} onDone={fetchInvoice} className="mt-1.5" />
+                <SettleButton invoiceId={invoice.id} outstanding={invoice.outstanding} currency={invoice.currency} invoiceNumber={invoice.invoice_number} amount={invoice.amount} paid={invoice.paid_amount} onDone={fetchInvoice} className="mt-1.5" />
               </div>
             ) : null}
             {invoice.settled_amount ? (

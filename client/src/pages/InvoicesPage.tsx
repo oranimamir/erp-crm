@@ -649,6 +649,7 @@ export default function InvoicesPage() {
                     />
                   </th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Invoice #</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600">Operation</th>
                   <th
                     className="text-left px-4 py-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900 select-none"
                     onClick={() => handleSort('name')}
@@ -705,6 +706,19 @@ export default function InvoicesPage() {
                         )}
                       </div>
                     </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      {inv.linked_operation_id ? (
+                        <Link to={`/operations/${inv.linked_operation_id}`} onClick={e => e.stopPropagation()}
+                          className="font-medium text-primary-600 hover:text-primary-700 hover:underline" title="Open the operation">
+                          {inv.linked_operation_number}
+                        </Link>
+                      ) : inv.technology_operation_id ? (
+                        <Link to={`/technology-operations/${inv.technology_operation_id}`} onClick={e => e.stopPropagation()}
+                          className="font-medium text-primary-600 hover:text-primary-700 hover:underline" title="Open the technology operation">
+                          {inv.linked_to_number || 'Technology op'}
+                        </Link>
+                      ) : <span className="text-gray-300">—</span>}
+                    </td>
                     <td className="px-4 py-3 text-gray-600">
                       {(inv.customer_id || inv.supplier_id) ? (
                         <Link
@@ -723,7 +737,7 @@ export default function InvoicesPage() {
                       {inv.outstanding ? (
                         <div className="mt-0.5 flex flex-wrap justify-end gap-1" onClick={e => e.stopPropagation()}>
                           <OutstandingBadge outstanding={inv.outstanding} currency={inv.currency} />
-                          <SettleButton invoiceId={inv.id} outstanding={inv.outstanding} currency={inv.currency} onDone={fetchInvoices} />
+                          <SettleButton invoiceId={inv.id} outstanding={inv.outstanding} currency={inv.currency} invoiceNumber={inv.invoice_number} amount={inv.amount} paid={inv.paid_amount} onDone={fetchInvoices} />
                         </div>
                       ) : null}
                     </td>

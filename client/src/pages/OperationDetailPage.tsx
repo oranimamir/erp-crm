@@ -996,7 +996,7 @@ export default function OperationDetailPage() {
                     {inv.outstanding ? (
                       <div className="mt-0.5 flex flex-wrap justify-end gap-1">
                         <OutstandingBadge outstanding={inv.outstanding} currency={inv.currency} />
-                        <SettleButton invoiceId={inv.id} outstanding={inv.outstanding} currency={inv.currency} onDone={fetchOperation} />
+                        <SettleButton invoiceId={inv.id} outstanding={inv.outstanding} currency={inv.currency} invoiceNumber={inv.invoice_number} amount={inv.amount} paid={(inv as any).paid_amount} onDone={fetchOperation} />
                       </div>
                     ) : null}
                   </td>
