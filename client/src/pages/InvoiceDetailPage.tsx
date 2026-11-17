@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import api from '../lib/api';
-import { wireUploadMessage } from '../components/OutstandingBadge';
+import { wireUploadMessage, SettleButton } from '../components/OutstandingBadge';
 import { useToast } from '../contexts/ToastContext';
 import { formatDate, todayISO } from '../lib/dates';
 import Card from '../components/ui/Card';
@@ -164,6 +164,12 @@ export default function InvoiceDetailPage() {
     }
   };
 
+  const undoSettle = async () => {
+    if (!confirm('Undo the settled amount? It will show as outstanding again.')) return;
+    try { await api.delete(`/invoices/${id}/settle`); fetchInvoice(); }
+    catch (err: any) { addToast(err.response?.data?.error || 'Could not undo', 'error'); }
+  };
+
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(true);
@@ -304,6 +310,16 @@ export default function InvoiceDetailPage() {
               <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-left">
                 <p className="text-xs text-amber-700">Received {formatAmount(invoice.paid_amount, invoice.currency)}</p>
                 <p className="text-sm font-semibold text-amber-900">Outstanding {formatAmount(invoice.outstanding, invoice.currency)}</p>
+                <SettleButton invoiceId={invoice.id} outstanding={invoice.outstanding} currency={invoice.currency} onDone={fetchInvoice} className="mt-1.5" />
+              </div>
+            ) : null}
+            {invoice.settled_amount ? (
+              <div className="mt-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-left text-xs text-gray-600">
+                <p><strong className="text-gray-800">Settled {formatAmount(invoice.settled_amount, invoice.currency)}</strong> — not received{invoice.settled_note ? `: ${invoice.settled_note}` : ''}</p>
+                <p className="mt-0.5 text-gray-400">
+                  {invoice.settled_by ? `by ${invoice.settled_by} · ` : ''}{invoice.settled_at ? formatDate(invoice.settled_at.slice(0, 10)) : ''}
+                  {' · '}<button type="button" onClick={undoSettle} className="text-primary-600 hover:underline">Undo</button>
+                </p>
               </div>
             ) : null}
           </div>

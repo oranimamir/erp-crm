@@ -2381,6 +2381,11 @@ export async function initializeDatabase() {
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_tech_expenses_to ON technology_expenses(to_id)`); } catch (_) {}
   try { db.exec(`ALTER TABLE invoice_documents ADD COLUMN to_id INTEGER`); } catch (_) { /* column may already exist */ }
   try { db.exec(`ALTER TABLE invoices ADD COLUMN technology_operation_id INTEGER`); } catch (_) { /* column may already exist */ }
+  // "Amount settled": a short payment's remainder closed on purpose (bank fees, a deduction…) — not money received
+  try { db.exec(`ALTER TABLE invoices ADD COLUMN settled_amount REAL`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE invoices ADD COLUMN settled_note TEXT`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE invoices ADD COLUMN settled_at TEXT`); } catch (_) { /* column may already exist */ }
+  try { db.exec(`ALTER TABLE invoices ADD COLUMN settled_by TEXT`); } catch (_) { /* column may already exist */ }
   // A fresh database loses quantity_mt in the invoices CHECK rebuild above — add it back
   try { db.exec(`ALTER TABLE invoices ADD COLUMN quantity_mt REAL`); } catch (_) { /* column may already exist */ }
 

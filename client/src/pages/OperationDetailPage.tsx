@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import api from '../lib/api';
-import OutstandingBadge, { wireUploadMessage } from '../components/OutstandingBadge';
+import OutstandingBadge, { wireUploadMessage, SettleButton } from '../components/OutstandingBadge';
 import ShipOperationModal from '../components/ShipOperationModal';
 import LinkInvoiceModal from '../components/LinkInvoiceModal';
 import { useToast } from '../contexts/ToastContext';
@@ -993,7 +993,12 @@ export default function OperationDetailPage() {
                   <td className="px-4 py-2.5 text-gray-700">{inv.customer_name || inv.supplier_name || '—'}</td>
                   <td className="px-4 py-2.5 text-right font-medium text-gray-900">
                     {formatCurrency(inv.amount, inv.currency)}
-                    {inv.outstanding ? <div className="mt-0.5"><OutstandingBadge outstanding={inv.outstanding} currency={inv.currency} /></div> : null}
+                    {inv.outstanding ? (
+                      <div className="mt-0.5 flex flex-wrap justify-end gap-1">
+                        <OutstandingBadge outstanding={inv.outstanding} currency={inv.currency} />
+                        <SettleButton invoiceId={inv.id} outstanding={inv.outstanding} currency={inv.currency} onDone={fetchOperation} />
+                      </div>
+                    ) : null}
                   </td>
                   <td className="px-4 py-2.5">
                     <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${INVOICE_STATUS_COLORS[inv.status] || 'bg-gray-100 text-gray-700'}`}>

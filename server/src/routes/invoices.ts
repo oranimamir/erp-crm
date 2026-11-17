@@ -333,6 +333,41 @@ router.get('/bulk-download', (req: Request, res: Response) => {
   streamZip(res, `invoices-${todayISO()}.zip`, files);
 });
 
+// ── Amount settled ────────────────────────────────────────────────────────────
+// A payment that fell short (bank fees, a small deduction): the remainder is
+// closed on purpose, so the invoice no longer shows a balance. Recorded apart
+// from the wire transfers — it is not money received — and can be undone.
+
+// POST /:id/settle {note?} — settles what is outstanding now
+router.post('/:id/settle', (req: Request, res: Response) => {
+  const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id) as any;
+  if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
+  const left = balancesFor([inv]).get(inv.id)?.outstanding;
+  if (!left) { res.status(400).json({ error: 'Nothing is outstanding on this invoice' }); return; }
+  const note = String(req.body?.note ?? '').trim().slice(0, 300) || null;
+  const total = Math.round(((Number(inv.settled_amount) || 0) + left) * 100) / 100;
+  db.prepare(`UPDATE invoices SET settled_amount = ?, settled_note = COALESCE(?, settled_note), settled_at = datetime('now'), settled_by = ?, updated_at = datetime('now') WHERE id = ?`)
+    .run(total, note, req.user?.display_name || null, inv.id);
+  notifyAdmin({ action: 'updated', entity: 'Invoice', label: inv.invoice_number,
+    detail: `Amount settled: ${left.toFixed(2)} ${inv.currency || ''}${note ? ` — ${note}` : ''}`,
+    performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
+  db.saveToDisk();
+  const row = db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id) as any;
+  res.json({ ...row, ...(balancesFor([row]).get(row.id) || {}), settled_now: left });
+});
+
+// DELETE /:id/settle — undo: the remainder is outstanding again
+router.delete('/:id/settle', (req: Request, res: Response) => {
+  const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id) as any;
+  if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
+  db.prepare(`UPDATE invoices SET settled_amount = NULL, settled_note = NULL, settled_at = NULL, settled_by = NULL, updated_at = datetime('now') WHERE id = ?`).run(inv.id);
+  notifyAdmin({ action: 'updated', entity: 'Invoice', label: inv.invoice_number, detail: 'Settled amount undone',
+    performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
+  db.saveToDisk();
+  const row = db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id) as any;
+  res.json({ ...row, ...(balancesFor([row]).get(row.id) || {}) });
+});
+
 // ── Check amounts (lib/invoiceAmountCheck.ts) ────────────────────────────────
 // Uploaded customer invoices re-read from their file: the ones whose recorded
 // amount differs from the total on the page, to correct one by one

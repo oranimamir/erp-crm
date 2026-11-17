@@ -45,7 +45,6 @@ export default function DashboardPage() {
   const [tonsYTD, setTonsYTD] = useState(0);
   const [tonsByCustomer, setTonsByCustomer] = useState<any[]>([]);
   const [tonsBreakdownOpen, setTonsBreakdownOpen] = useState(false);
-  const [priorYearOverdue, setPriorYearOverdue] = useState<{ invoices: any[]; total: number }>({ invoices: [], total: 0 });
   const [demoExpensesMonthly, setDemoExpensesMonthly] = useState<any[]>([]);
   // Demo expenses chart: salaries and cars can be ticked off
   const [demoInclude, setDemoInclude] = useState<{ salaries: boolean; cars: boolean }>(() => {
@@ -88,11 +87,10 @@ export default function DashboardPage() {
       api.get('/dashboard/monthly-payments'),
       api.get('/dashboard/forecast'),
       api.get('/dashboard/tons-ytd'),
-      api.get('/dashboard/prior-year-overdue'),
       api.get('/dashboard/customer-forecast'),
       api.get('/dashboard/demo-expenses-monthly'),
       api.get('/dashboard/working-capital-forecast'),
-    ]).then(([s, o, i, mp, fc, ty, pyo, cf, dem, wc]) => {
+    ]).then(([s, o, i, mp, fc, ty, cf, dem, wc]) => {
       setStats(s.data);
       setOpenOperations(o.data);
       setPendingInvoices(i.data);
@@ -103,7 +101,6 @@ export default function DashboardPage() {
       setForecastExpected(fcData.expected ?? 0);
       setTonsYTD(ty.data.total_tons ?? 0);
       setTonsByCustomer(ty.data.by_customer ?? []);
-      setPriorYearOverdue(pyo.data);
       setCustomerForecast(cf.data);
       setDemoExpensesMonthly(dem.data);
       setWcForecast(wc.data?.months ?? []);
@@ -167,37 +164,6 @@ export default function DashboardPage() {
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
 
-      {/* ── Prior-year overdue banner ──────────────────────────────────────── */}
-      {priorYearOverdue.invoices.length > 0 && (
-        <div className="rounded-lg border border-red-300 bg-red-50 p-4">
-          <div className="flex items-start gap-3">
-            <AlertTriangle size={18} className="text-red-600 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-red-800">
-                {priorYearOverdue.invoices.length} overdue invoice{priorYearOverdue.invoices.length > 1 ? 's' : ''} from prior year{priorYearOverdue.invoices.length > 1 ? 's' : ''} — {fmt(priorYearOverdue.total)} outstanding
-              </p>
-              <p className="text-xs text-red-600 mt-0.5 mb-2">These invoices had a due date before {year} and remain unpaid.</p>
-              <div className="flex flex-wrap gap-2">
-                {priorYearOverdue.invoices.map((inv: any) => (
-                  <Link
-                    key={inv.id}
-                    to={`/invoices/${inv.id}`}
-                    className="inline-flex items-center gap-1.5 text-xs bg-white border border-red-200 text-red-800 rounded px-2 py-1 hover:bg-red-100 transition-colors"
-                  >
-                    <span className="font-medium">{inv.invoice_number}</span>
-                    <span className="text-red-500">·</span>
-                    <span>{inv.customer_name || '—'}</span>
-                    <span className="text-red-500">·</span>
-                    <span>Due {formatDate(inv.due_date)}</span>
-                    <span className="text-red-500">·</span>
-                    <span className="font-medium">€{(inv.eur_val ?? inv.amount)?.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                  </Link>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ── Financial summary ─────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import api from '../lib/api';
-import OutstandingBadge from '../components/OutstandingBadge';
+import OutstandingBadge, { SettleButton } from '../components/OutstandingBadge';
 import InvoiceAmountCheck from '../components/InvoiceAmountCheck';
 import { ScanSearch } from 'lucide-react';
 import { useToast } from '../contexts/ToastContext';
@@ -720,7 +720,12 @@ export default function InvoicesPage() {
                     </td>
                     <td className="px-4 py-3 text-right text-gray-900 font-medium">
                       {formatAmount(inv.amount, inv.currency)}
-                      {inv.outstanding ? <div className="mt-0.5"><OutstandingBadge outstanding={inv.outstanding} currency={inv.currency} /></div> : null}
+                      {inv.outstanding ? (
+                        <div className="mt-0.5 flex flex-wrap justify-end gap-1" onClick={e => e.stopPropagation()}>
+                          <OutstandingBadge outstanding={inv.outstanding} currency={inv.currency} />
+                          <SettleButton invoiceId={inv.id} outstanding={inv.outstanding} currency={inv.currency} onDone={fetchInvoices} />
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-4 py-3">
                       <select
