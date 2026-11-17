@@ -101,6 +101,12 @@ type SortField = 'order_date' | 'invoice_date' | 'wire_transfer_date' | 'status'
 type DateFilterField = 'order_date' | 'invoice_date' | 'wire_transfer_date';
 type Tab = 'active' | 'completed';
 
+/** A payment came in (a wire transfer on its invoices) but the goods are not delivered yet. */
+const NOT_DELIVERED = ['pre-ordered', 'ordered', 'in production', 'shipped', 'in clearance'];
+function paidNotDelivered(op: { status: string; wire_transfer_count: number }): boolean {
+  return (op.wire_transfer_count || 0) > 0 && NOT_DELIVERED.includes(op.status);
+}
+
 export default function OperationsPage() {
   const navigate = useNavigate();
   const { addToast } = useToast();
@@ -131,6 +137,9 @@ export default function OperationsPage() {
   const [tabTotals, setTabTotals] = useState<{ quantity_mt: number; invoice_eur: number; order_eur: number; outstanding_eur?: number; outstanding_count?: number } | null>(null);
   // Only the operations whose invoices were paid short
   const [onlyOutstanding, setOnlyOutstanding] = useState(false);
+  // Money in, goods not yet with the customer
+  const [onlyPaidNotDelivered, setOnlyPaidNotDelivered] = useState(false);
+  const paidCount = operations.filter(paidNotDelivered).length;
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<SortField>('order_date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -900,11 +909,17 @@ export default function OperationsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {(onlyOutstanding ? operations.filter(op => (op.outstanding_eur || 0) > 0) : operations).map(op => (
+              {operations
+                .filter(op => !onlyOutstanding || (op.outstanding_eur || 0) > 0)
+                .filter(op => !onlyPaidNotDelivered || paidNotDelivered(op))
+                .map(op => (
                 <tr
                   key={op.id}
                   onClick={() => navigate(`/operations/${op.id}`)}
-                  className="hover:bg-gray-50 cursor-pointer transition-colors"
+                  className={`cursor-pointer transition-colors ${paidNotDelivered(op)
+                    ? 'bg-emerald-50/70 hover:bg-emerald-50 shadow-[inset_4px_0_0_0_#10b981]'
+                    : 'hover:bg-gray-50'}`}
+                  title={paidNotDelivered(op) ? 'Paid, but not delivered yet' : undefined}
                 >
                   <td className="px-4 py-3">
                     <span className="font-semibold text-primary-700">{op.operation_number}</span>
@@ -1034,6 +1049,13 @@ export default function OperationsPage() {
                         </option>
                       ))}
                     </select>
+                    {paidNotDelivered(op) && (
+                      <div className="mt-1">
+                        <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800 ring-1 ring-emerald-200">
+                          <Landmark size={10} /> {(op.outstanding_eur || 0) > 0 ? 'Partly paid' : 'Paid'} · not delivered
+                        </span>
+                      </div>
+                    )}
                   </td>
                   {visibleCols.etd && (
                   <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
@@ -1209,7 +1231,7 @@ export default function OperationsPage() {
       </div>
 
       {/* Totals summary */}
-      {tabTotals && (tabTotals.quantity_mt > 0 || tabTotals.invoice_eur > 0 || tabTotals.order_eur > 0 || (tabTotals.outstanding_eur || 0) > 0) && (
+      {tabTotals && (tabTotals.quantity_mt > 0 || tabTotals.invoice_eur > 0 || tabTotals.order_eur > 0 || (tabTotals.outstanding_eur || 0) > 0 || paidCount > 0) && (
         <div className="flex items-center justify-end gap-6 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm">
           <span className="text-gray-500 font-medium mr-auto">
             {activeTab === 'active' ? 'Active operations total' : 'Completed operations total'} ({total})
@@ -1241,6 +1263,15 @@ export default function OperationsPage() {
                 ≈ €{(tabTotals.outstanding_eur || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
               <span className="text-xs text-amber-700 underline">{onlyOutstanding ? 'show all' : 'show them'}</span>
+            </button>
+          )}
+          {paidCount > 0 && (
+            <button type="button" onClick={() => setOnlyPaidNotDelivered(v => !v)}
+              title={onlyPaidNotDelivered ? 'Show every operation again' : 'Show only the operations that are paid but not delivered yet'}
+              className={`flex items-center gap-1.5 rounded-lg px-2 py-1 ${onlyPaidNotDelivered ? 'bg-emerald-100 ring-1 ring-emerald-300' : 'hover:bg-emerald-50'}`}>
+              <span className="text-gray-500">Paid, not delivered:</span>
+              <span className="font-bold text-emerald-700">{paidCount}</span>
+              <span className="text-xs text-emerald-700 underline">{onlyPaidNotDelivered ? 'show all' : 'show them'}</span>
             </button>
           )}
           {tabTotals.order_eur > 0 && (

@@ -3,13 +3,14 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import api from '../lib/api';
 import OutstandingBadge, { wireUploadMessage } from '../components/OutstandingBadge';
 import ShipOperationModal from '../components/ShipOperationModal';
+import LinkInvoiceModal from '../components/LinkInvoiceModal';
 import { useToast } from '../contexts/ToastContext';
 import {
   ArrowLeft, Briefcase, ShoppingCart, FileText, Upload, Trash2,
   Download, Eye, X, Plus, Receipt, ExternalLink, CheckCircle,
   AlertCircle, Loader2, Edit2, Link2, Search, Truck, Landmark,
   FileCheck2, Receipt as ReceiptIcon, Package, Library, Send, Columns2, Type,
-  CopyPlus,
+  CopyPlus, Unlink,
 } from 'lucide-react';
 import { formatDate, todayISO } from '../lib/dates';
 import FilePreviewModal from '../components/ui/FilePreviewModal';
@@ -230,6 +231,7 @@ export default function OperationDetailPage() {
   const [updatedOrderDrag, setUpdatedOrderDrag] = useState(false);
   // Invoice upload / edit in a window on this page: { invoiceId } edits, {} adds
   const [invoiceForm, setInvoiceForm] = useState<{ invoiceId?: number } | null>(null);
+  const [linkInvoiceOpen, setLinkInvoiceOpen] = useState(false);
   const [orderSearch, setOrderSearch] = useState('');
   const [availableOrders, setAvailableOrders] = useState<any[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
@@ -530,6 +532,17 @@ export default function OperationDetailPage() {
 
   // ── Delete invoice ───────────────────────────────────────────────────────────
 
+  async function handleUnlinkInvoice(invoiceId: number, invoiceNumber: string) {
+    if (!confirm(`Unlink invoice ${invoiceNumber} from this operation? The invoice and its wire transfers are kept — you can link it to another operation.`)) return;
+    try {
+      await api.post(`/operations/${id}/invoices/${invoiceId}/unlink`, {});
+      addToast(`${invoiceNumber} unlinked`, 'success');
+      fetchOperation();
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Could not unlink the invoice', 'error');
+    }
+  }
+
   async function handleDeleteInvoice(invoiceId: number, invoiceNumber: string) {
     if (!confirm(`Delete invoice ${invoiceNumber}? This cannot be undone.`)) return;
     try {
@@ -719,6 +732,17 @@ export default function OperationDetailPage() {
           </p>
         </div>
       </div>
+
+      {/* Money in, goods not yet with the customer */}
+      {(operation.wire_transfers?.length || 0) > 0 && ['pre-ordered', 'ordered', 'in production', 'shipped', 'in clearance'].includes(operation.status) && (
+        <div className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+          <Landmark size={18} className="shrink-0 text-emerald-600" />
+          <span>
+            <strong>{operation.invoices.some((i: any) => i.outstanding) ? 'Partly paid' : 'Paid'}, not delivered yet</strong>
+            {' '}— {operation.wire_transfers.length} wire transfer{operation.wire_transfers.length === 1 ? '' : 's'} received while the operation is <strong>{operation.status}</strong>.
+          </span>
+        </div>
+      )}
 
       {/* ── Linked Order ───────────────────────────────────────────────────── */}
       {/* Require the joined order, not just the pointer: a reference to a deleted
@@ -915,12 +939,21 @@ export default function OperationDetailPage() {
             <Receipt size={16} className="text-gray-500" />
             Invoices ({operation.invoices.length})
           </h2>
-          <button
-            onClick={() => setInvoiceForm({})}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-primary-600 text-white rounded-lg hover:bg-primary-700"
-          >
-            <Plus size={13} /> New Invoice
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setLinkInvoiceOpen(true)}
+              title="Connect an invoice that was recorded without this operation (its wire transfers come along)"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+            >
+              <Link2 size={13} /> Link existing invoice
+            </button>
+            <button
+              onClick={() => setInvoiceForm({})}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+            >
+              <Plus size={13} /> New Invoice
+            </button>
+          </div>
         </div>
 
         {operation.invoices.length === 0 ? (
@@ -931,6 +964,10 @@ export default function OperationDetailPage() {
               className="text-primary-600 hover:underline"
             >
               Create one
+            </button>
+            {' '}or{' '}
+            <button onClick={() => setLinkInvoiceOpen(true)} className="text-primary-600 hover:underline">
+              link an existing invoice
             </button>
           </div>
         ) : (
@@ -994,6 +1031,13 @@ export default function OperationDetailPage() {
                         className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
                       >
                         <Edit2 size={13} /> Edit
+                      </button>
+                      <button
+                        onClick={() => handleUnlinkInvoice(inv.id, inv.invoice_number)}
+                        title="Unlink from this operation (the invoice is kept)"
+                        className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700"
+                      >
+                        <Unlink size={13} />
                       </button>
                       <button
                         onClick={() => handleDeleteInvoice(inv.id, inv.invoice_number)}
@@ -1429,6 +1473,12 @@ export default function OperationDetailPage() {
       )}
 
       {/* ── Invoice form (upload / edit) ───────────────────────────────────── */}
+      {linkInvoiceOpen && (
+        <LinkInvoiceModal operationId={operation.id} operationNumber={operation.operation_number}
+          onClose={() => setLinkInvoiceOpen(false)}
+          onLinked={() => { setLinkInvoiceOpen(false); fetchOperation(); }} />
+      )}
+
       {invoiceForm && (
         <Modal open onClose={() => setInvoiceForm(null)} size="xl" closeOnBackdrop={false}
           title={invoiceForm.invoiceId ? 'Edit Invoice' : `New Invoice for ${operation.operation_number}`}>

@@ -509,6 +509,91 @@ router.get('/next-number', (req: Request, res: Response) => {
   res.json({ operation_number: nextOperationNumber(entity) });
 });
 
+// ── Link existing invoices (older operations) ─────────────────────────────────
+// An invoice recorded before it was tied to its operation: pick it here and it
+// joins the operation — with its wire transfers, which hang off the invoice.
+
+const digitsOf = (v: unknown) => String(v || '').replace(/\D/g, '');
+
+// GET /:id/invoice-candidates?search= — customer invoices not on this operation, likely ones first
+router.get('/:id/invoice-candidates', (req: Request, res: Response) => {
+  const op = db.prepare(`SELECT op.id, op.operation_number, op.customer_id, o.order_number
+    FROM operations op LEFT JOIN orders o ON o.id = op.order_id WHERE op.id = ?`).get(req.params.id) as any;
+  if (!op) { res.status(404).json({ error: 'Operation not found' }); return; }
+  const term = String(req.query.search || '').trim().toLowerCase();
+  const rows = db.prepare(`
+    SELECT i.id, i.invoice_number, i.amount, i.currency, i.status, i.invoice_date, i.our_ref, i.po_number, i.customer_id,
+      c.name AS customer_name, lo.id AS linked_operation_id, lo.operation_number AS linked_operation_number,
+      (SELECT COUNT(*) FROM wire_transfers w WHERE w.invoice_id = i.id) AS wire_count
+    FROM invoices i
+    LEFT JOIN customers c ON c.id = i.customer_id
+    LEFT JOIN operations lo ON lo.id = i.operation_id
+    WHERE i.type = 'customer' AND (i.operation_id IS NULL OR i.operation_id != ?)
+    ORDER BY COALESCE(i.invoice_date, i.created_at) DESC
+  `).all(op.id) as any[];
+  const opDigits = digitsOf(op.operation_number);
+  const scored = rows.map(r => {
+    const reasons: string[] = [];
+    if (r.our_ref && String(r.our_ref).trim().toUpperCase() === String(op.operation_number).toUpperCase()) reasons.push('names this operation');
+    if (opDigits.length >= 6 && digitsOf(r.invoice_number) === opDigits) reasons.push('same number as the operation');
+    if (op.order_number && r.po_number && String(r.po_number).replace(/\s/g, '').toLowerCase() === String(op.order_number).replace(/\s/g, '').toLowerCase()) reasons.push('same order number');
+    if (op.customer_id && r.customer_id === op.customer_id) reasons.push('same client');
+    const score = (reasons.includes('names this operation') ? 8 : 0) + (reasons.includes('same number as the operation') ? 8 : 0)
+      + (reasons.includes('same order number') ? 5 : 0) + (reasons.includes('same client') ? 2 : 0) + (r.linked_operation_id ? -3 : 0);
+    return { ...r, reasons, suggested: score >= 5, score };
+  });
+  const filtered = term
+    ? scored.filter(r => [r.invoice_number, r.customer_name, r.po_number, r.our_ref, r.linked_operation_number].some(v => String(v || '').toLowerCase().includes(term)))
+    : scored.filter(r => r.score > 0 || !r.linked_operation_id);
+  filtered.sort((a, b) => b.score - a.score);
+  res.json({ invoices: filtered.slice(0, 150), total: filtered.length });
+});
+
+// POST /:id/invoices/link {invoice_ids} — these invoices (and their wire transfers) join this operation
+router.post('/:id/invoices/link', (req: Request, res: Response) => {
+  const op = db.prepare('SELECT id, operation_number, customer_id, status FROM operations WHERE id = ?').get(req.params.id) as any;
+  if (!op) { res.status(404).json({ error: 'Operation not found' }); return; }
+  const ids = (Array.isArray(req.body?.invoice_ids) ? req.body.invoice_ids : []).map(Number).filter((n: number) => Number.isInteger(n) && n > 0);
+  if (!ids.length) { res.status(400).json({ error: 'Choose at least one invoice' }); return; }
+  const moved: string[] = [];
+  const formerOps = new Set<number>();
+  for (const id of ids) {
+    const inv = db.prepare(`SELECT id, invoice_number, operation_id, customer_id FROM invoices WHERE id = ? AND type = 'customer'`).get(id) as any;
+    if (!inv || inv.operation_id === op.id) continue;
+    if (inv.operation_id) formerOps.add(inv.operation_id);
+    db.prepare(`UPDATE invoices SET operation_id = ?, customer_id = COALESCE(customer_id, ?), updated_at = datetime('now') WHERE id = ?`)
+      .run(op.id, op.customer_id ?? null, inv.id);
+    moved.push(inv.invoice_number);
+  }
+  if (!moved.length) { res.json({ linked: 0 }); return; }
+  if (!op.customer_id) {
+    const cust = db.prepare(`SELECT customer_id FROM invoices WHERE operation_id = ? AND customer_id IS NOT NULL LIMIT 1`).get(op.id) as any;
+    if (cust?.customer_id) db.prepare(`UPDATE operations SET customer_id = ? WHERE id = ?`).run(cust.customer_id, op.id);
+  }
+  refreshEstimatedPaymentDate(db, op.id);
+  for (const f of formerOps) refreshEstimatedPaymentDate(db, f);
+  notifyAdmin({ action: 'updated', entity: 'Operation', label: op.operation_number,
+    detail: `Invoice${moved.length === 1 ? '' : 's'} linked: ${moved.join(', ')}`,
+    performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
+  db.saveToDisk();
+  res.json({ linked: moved.length, invoices: moved });
+});
+
+// POST /:id/invoices/:invoiceId/unlink — the invoice stays, it just no longer belongs to this operation
+router.post('/:id/invoices/:invoiceId/unlink', (req: Request, res: Response) => {
+  const op = db.prepare('SELECT id, operation_number FROM operations WHERE id = ?').get(req.params.id) as any;
+  const inv = db.prepare('SELECT id, invoice_number, operation_id, our_ref FROM invoices WHERE id = ?').get(req.params.invoiceId) as any;
+  if (!op || !inv || inv.operation_id !== op.id) { res.status(404).json({ error: 'This invoice is not on this operation' }); return; }
+  // "Our ref" naming the operation would tie it back on the invoice lists — clear it with the link
+  const clearRef = inv.our_ref && String(inv.our_ref).trim().toUpperCase() === String(op.operation_number).toUpperCase();
+  db.prepare(`UPDATE invoices SET operation_id = NULL${clearRef ? ', our_ref = NULL' : ''}, updated_at = datetime('now') WHERE id = ?`).run(inv.id);
+  refreshEstimatedPaymentDate(db, op.id);
+  notifyAdmin({ action: 'updated', entity: 'Operation', label: op.operation_number, detail: `Invoice unlinked: ${inv.invoice_number}`,
+    performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
+  db.saveToDisk();
+  res.json({ ok: true });
+});
+
 router.get('/:id', (req: Request, res: Response) => {
   // An OC / PO generated before the order had this operation is filed now
   try { if (fileGeneratedForOperation(Number(req.params.id))) db.saveToDisk(); } catch (err: any) { console.error('[operations] filing generated documents failed:', err?.message || err); }
