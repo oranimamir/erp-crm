@@ -549,6 +549,139 @@ router.get('/:id/invoice-candidates', (req: Request, res: Response) => {
   res.json({ invoices: filtered.slice(0, 150), total: filtered.length });
 });
 
+// ── Allocate existing records (order + invoices + their wire transfers) ───────
+// For operations created after the fact: everything that already exists for
+// it — its order, its invoices and, through them, their wire transfers — is
+// suggested in one list and allocated in one go.
+
+const compactNo = (v: unknown) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+// GET /:id/allocation-candidates?search=
+router.get('/:id/allocation-candidates', (req: Request, res: Response) => {
+  const op = db.prepare(`SELECT op.id, op.operation_number, op.customer_id, op.order_id, o.order_number
+    FROM operations op LEFT JOIN orders o ON o.id = op.order_id WHERE op.id = ?`).get(req.params.id) as any;
+  if (!op) { res.status(404).json({ error: 'Operation not found' }); return; }
+  const term = String(req.query.search || '').trim().toLowerCase();
+  const opNo = compactNo(op.operation_number);
+  const opDigits = digitsOf(op.operation_number);
+
+  // Invoices (customer) not on this operation, with their wire transfers
+  const invRows = db.prepare(`
+    SELECT i.id, i.invoice_number, i.amount, i.currency, i.status, i.invoice_date, i.our_ref, i.po_number, i.customer_id,
+      c.name AS customer_name, lo.id AS linked_operation_id, lo.operation_number AS linked_operation_number
+    FROM invoices i
+    LEFT JOIN customers c ON c.id = i.customer_id
+    LEFT JOIN operations lo ON lo.id = i.operation_id
+    WHERE i.type = 'customer' AND (i.operation_id IS NULL OR i.operation_id != ?)
+    ORDER BY COALESCE(i.invoice_date, i.created_at) DESC
+  `).all(op.id) as any[];
+  const invoices = invRows.map(r => {
+    const reasons: string[] = []; let score = 0;
+    const no = compactNo(r.invoice_number);
+    if (opNo.length >= 6 && no.includes(opNo)) { reasons.push('invoice number contains the operation number'); score += 12; }
+    else if (opDigits.length >= 6 && digitsOf(r.invoice_number) === opDigits) { reasons.push('same number as the operation'); score += 8; }
+    if (r.our_ref && compactNo(r.our_ref) === opNo) { reasons.push('names this operation'); score += 8; }
+    if (op.order_number && r.po_number && compactNo(r.po_number) === compactNo(op.order_number)) { reasons.push('same order number'); score += 5; }
+    if (op.customer_id && r.customer_id === op.customer_id) { reasons.push('same client'); score += 2; }
+    if (r.linked_operation_id) score -= 3;
+    return { ...r, reasons, score, suggested: score >= 5 };
+  });
+
+  // Orders not on this operation
+  const ordRows = db.prepare(`
+    SELECT o.id, o.order_number, o.order_date, o.status, o.total_amount, o.operation_number, o.customer_id, o.type,
+      COALESCE(c.name, s.name) AS party,
+      (SELECT op2.id FROM operations op2 WHERE op2.order_id = o.id LIMIT 1) AS linked_operation_id,
+      (SELECT op2.operation_number FROM operations op2 WHERE op2.order_id = o.id LIMIT 1) AS linked_operation_number,
+      (SELECT UPPER(COALESCE(oi.currency, 'USD')) FROM order_items oi WHERE oi.order_id = o.id ORDER BY oi.id LIMIT 1) AS currency
+    FROM orders o
+    LEFT JOIN customers c ON c.id = o.customer_id
+    LEFT JOIN suppliers s ON s.id = o.supplier_id
+    WHERE o.id != COALESCE(?, -1)
+    ORDER BY COALESCE(o.order_date, o.created_at) DESC
+  `).all(op.order_id ?? null) as any[];
+  const invoicePos = new Set(invoices.filter(i => i.score >= 8).map(i => compactNo(i.po_number)).filter(Boolean));
+  const orders = ordRows.map(r => {
+    const reasons: string[] = []; let score = 0;
+    if (r.operation_number && compactNo(r.operation_number) === opNo) { reasons.push('carries this operation number'); score += 10; }
+    if (invoicePos.has(compactNo(r.order_number))) { reasons.push("is the PO on this operation's invoice"); score += 8; }
+    if (op.customer_id && r.customer_id === op.customer_id) { reasons.push('same client'); score += 2; }
+    if (r.linked_operation_id) score -= 3;
+    return { ...r, reasons, score, suggested: score >= 8 };
+  });
+
+  const match = (vals: unknown[]) => !term || vals.some(v => String(v || '').toLowerCase().includes(term));
+  const pickInv = invoices.filter(r => match([r.invoice_number, r.customer_name, r.po_number, r.our_ref, r.linked_operation_number]))
+    .filter(r => term || r.score > 0 || !r.linked_operation_id).sort((a, b) => b.score - a.score).slice(0, 100);
+  const pickOrd = orders.filter(r => match([r.order_number, r.party, r.operation_number, r.linked_operation_number]))
+    .filter(r => term || r.score > 0 || !r.linked_operation_id).sort((a, b) => b.score - a.score).slice(0, 60);
+
+  // The wire transfers each listed invoice brings along
+  const wires = pickInv.length ? db.prepare(`SELECT id, invoice_id, amount, currency, transfer_date, bank_reference, file_name
+    FROM wire_transfers WHERE invoice_id IN (${pickInv.map(() => '?').join(',')}) ORDER BY transfer_date`).all(...pickInv.map(i => i.id)) as any[] : [];
+  res.json({
+    operation: { id: op.id, operation_number: op.operation_number, has_order: !!op.order_id, order_number: op.order_number || null },
+    orders: pickOrd,
+    invoices: pickInv.map(i => ({ ...i, wire_transfers: wires.filter(w => w.invoice_id === i.id) })),
+  });
+});
+
+// POST /:id/allocate {order_id?, invoice_ids?} — the order and invoices join this operation (wire transfers come with their invoice)
+router.post('/:id/allocate', (req: Request, res: Response) => {
+  const op = db.prepare('SELECT id, operation_number, customer_id, supplier_id, order_id FROM operations WHERE id = ?').get(req.params.id) as any;
+  if (!op) { res.status(404).json({ error: 'Operation not found' }); return; }
+  const orderId = Number(req.body?.order_id);
+  const invoiceIds = (Array.isArray(req.body?.invoice_ids) ? req.body.invoice_ids : []).map(Number).filter((n: number) => Number.isInteger(n) && n > 0);
+  const done: string[] = [];
+  const touched = new Set<number>([op.id]);
+
+  if (Number.isInteger(orderId) && orderId > 0 && orderId !== op.order_id) {
+    const order = db.prepare('SELECT id, order_number, customer_id, supplier_id FROM orders WHERE id = ?').get(orderId) as any;
+    if (!order) { res.status(404).json({ error: 'Order not found' }); return; }
+    // An order belongs to one operation: it leaves the one it was on
+    for (const other of db.prepare('SELECT id FROM operations WHERE order_id = ? AND id != ?').all(order.id, op.id) as any[]) {
+      db.prepare(`UPDATE operations SET order_id = NULL, updated_at = datetime('now') WHERE id = ?`).run(other.id);
+      touched.add(other.id);
+    }
+    db.prepare(`UPDATE operations SET order_id = ?, customer_id = COALESCE(customer_id, ?), supplier_id = COALESCE(supplier_id, ?), updated_at = datetime('now') WHERE id = ?`)
+      .run(order.id, order.customer_id ?? null, order.supplier_id ?? null, op.id);
+    db.prepare(`UPDATE orders SET operation_number = ? WHERE id = ?`).run(op.operation_number, order.id);
+    done.push(`order ${order.order_number}`);
+  }
+
+  let wireCount = 0;
+  for (const id of invoiceIds) {
+    const inv = db.prepare(`SELECT id, invoice_number, operation_id FROM invoices WHERE id = ? AND type = 'customer'`).get(id) as any;
+    if (!inv || inv.operation_id === op.id) continue;
+    if (inv.operation_id) touched.add(inv.operation_id);
+    const cust = db.prepare('SELECT customer_id FROM operations WHERE id = ?').get(op.id) as any;
+    db.prepare(`UPDATE invoices SET operation_id = ?, customer_id = COALESCE(customer_id, ?), updated_at = datetime('now') WHERE id = ?`)
+      .run(op.id, cust?.customer_id ?? null, inv.id);
+    wireCount += (db.prepare('SELECT COUNT(*) AS n FROM wire_transfers WHERE invoice_id = ?').get(inv.id) as any).n;
+    done.push(`invoice ${inv.invoice_number}`);
+  }
+  if (!done.length) { res.json({ allocated: [], wire_transfers: 0 }); return; }
+  // The operation takes the client of what it now holds when it had none
+  const opNow = db.prepare('SELECT customer_id FROM operations WHERE id = ?').get(op.id) as any;
+  if (!opNow?.customer_id) {
+    const c = db.prepare(`SELECT customer_id FROM invoices WHERE operation_id = ? AND customer_id IS NOT NULL LIMIT 1`).get(op.id) as any;
+    if (c?.customer_id) db.prepare('UPDATE operations SET customer_id = ? WHERE id = ?').run(c.customer_id, op.id);
+  }
+  for (const t of touched) refreshEstimatedPaymentDate(db, t);
+  // As on a wire upload: delivered + a wire transfer = completed
+  let completed = false;
+  const st = db.prepare('SELECT status FROM operations WHERE id = ?').get(op.id) as any;
+  if (st?.status === 'delivered' && (db.prepare(`SELECT COUNT(*) AS n FROM wire_transfers w JOIN invoices i ON i.id = w.invoice_id WHERE i.operation_id = ?`).get(op.id) as any).n > 0) {
+    db.prepare(`UPDATE operations SET status = 'completed', updated_at = datetime('now') WHERE id = ?`).run(op.id);
+    completed = true;
+  }
+  notifyAdmin({ action: 'updated', entity: 'Operation', label: op.operation_number,
+    detail: `Allocated: ${done.join(', ')}${wireCount ? ` (+ ${wireCount} wire transfer${wireCount === 1 ? '' : 's'})` : ''}`,
+    performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
+  db.saveToDisk();
+  res.json({ allocated: done, wire_transfers: wireCount, completed });
+});
+
 // POST /:id/invoices/link {invoice_ids} — these invoices (and their wire transfers) join this operation
 router.post('/:id/invoices/link', (req: Request, res: Response) => {
   const op = db.prepare('SELECT id, operation_number, customer_id, status FROM operations WHERE id = ?').get(req.params.id) as any;

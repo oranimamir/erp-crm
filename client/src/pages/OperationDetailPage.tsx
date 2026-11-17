@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import api from '../lib/api';
 import OutstandingBadge, { wireUploadMessage, SettleButton } from '../components/OutstandingBadge';
 import ShipOperationModal from '../components/ShipOperationModal';
-import LinkInvoiceModal from '../components/LinkInvoiceModal';
+import AllocateRecordsModal from '../components/AllocateRecordsModal';
 import { useToast } from '../contexts/ToastContext';
 import {
   ArrowLeft, Briefcase, ShoppingCart, FileText, Upload, Trash2,
@@ -686,6 +686,13 @@ export default function OperationDetailPage() {
             >
               <CopyPlus size={13} /> Duplicate
             </button>
+            <button
+              onClick={() => setLinkInvoiceOpen(true)}
+              className="flex items-center gap-1 text-xs sm:text-sm text-gray-700 hover:text-gray-900 border border-gray-300 bg-white hover:bg-gray-50 rounded-lg px-2 py-1"
+              title="Allocate the order, invoices and wire transfers already in the system to this operation"
+            >
+              <Link2 size={13} /> Allocate existing records
+            </button>
             <select
               value={STATUS_OPTIONS.includes(operation.status) ? operation.status : ''}
               onChange={e => handleStatusChange(e.target.value)}
@@ -923,7 +930,8 @@ export default function OperationDetailPage() {
               <Plus size={14} /> New Order
             </button>
             <button
-              onClick={openLinkOrder}
+              onClick={() => setLinkInvoiceOpen(true)}
+              title="Allocate the order, invoices and wire transfers already in the system"
               className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50"
             >
               <Link2 size={14} /> Link Existing
@@ -1479,9 +1487,9 @@ export default function OperationDetailPage() {
 
       {/* ── Invoice form (upload / edit) ───────────────────────────────────── */}
       {linkInvoiceOpen && (
-        <LinkInvoiceModal operationId={operation.id} operationNumber={operation.operation_number}
+        <AllocateRecordsModal operationId={operation.id} operationNumber={operation.operation_number}
           onClose={() => setLinkInvoiceOpen(false)}
-          onLinked={() => { setLinkInvoiceOpen(false); fetchOperation(); }} />
+          onDone={() => { setLinkInvoiceOpen(false); fetchOperation(); }} />
       )}
 
       {invoiceForm && (
