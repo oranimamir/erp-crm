@@ -1646,6 +1646,8 @@ export async function initializeDatabase() {
   try { db.exec(`ALTER TABLE operations ADD COLUMN category TEXT`); } catch (_) {}
   // New Operation → "Start from a previous operation": the operation it was copied from
   try { db.exec(`ALTER TABLE operations ADD COLUMN duplicated_from INTEGER`); } catch (_) {}
+  // A date the user sets on the operation; blank = the order date, else when it was created
+  try { db.exec(`ALTER TABLE operations ADD COLUMN operation_date TEXT`); } catch (_) {}
 
   // ── Supplier purchase orders ────────────────────────────────────────────
   // Trading operations buy the customer's order from a supplier. Same shape and

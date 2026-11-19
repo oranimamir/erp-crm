@@ -75,7 +75,7 @@ router.get('/', async (req: Request, res: Response) => {
   const search = (req.query.search as string) || '';
   const sortDir = (req.query.sort_dir as string) === 'asc' ? 'ASC' : 'DESC';
   const sortByMap: Record<string, string> = {
-    order_date:         'COALESCE(o.order_date, op.created_at)',
+    order_date:         'COALESCE(op.operation_date, o.order_date, op.created_at)',
     created_at:         'op.created_at',
     operation_number:   'op.operation_number',
     status:            'op.status',
@@ -104,7 +104,7 @@ router.get('/', async (req: Request, res: Response) => {
     // Year sub-tabs: an order starts the operation, so bucket completed ops by the
     // order date (falling back to the op's created_at when no order date exists).
     if (filterYear) {
-      conditions.push("strftime('%Y', COALESCE(o.order_date, date(op.created_at))) = ?");
+      conditions.push("strftime('%Y', COALESCE(op.operation_date, o.order_date, date(op.created_at))) = ?");
       params.push(filterYear);
     }
   } else {
@@ -132,7 +132,7 @@ router.get('/', async (req: Request, res: Response) => {
   }
   if (dateFrom || dateTo) {
     const dateExprMap: Record<string, string> = {
-      order_date:         'COALESCE(o.order_date, date(op.created_at))',
+      order_date:         'COALESCE(op.operation_date, o.order_date, date(op.created_at))',
       invoice_date:       'inv_dates.latest_invoice_date',
       wire_transfer_date: 'wt_dates.latest_wt_date',
     };
@@ -293,7 +293,7 @@ router.get('/', async (req: Request, res: Response) => {
 // Registered before '/:id' so the literal path isn't captured as an id.
 router.get('/completed-years', (_req: Request, res: Response) => {
   const rows = db.prepare(`
-    SELECT DISTINCT strftime('%Y', COALESCE(o.order_date, date(op.created_at))) as year
+    SELECT DISTINCT strftime('%Y', COALESCE(op.operation_date, o.order_date, date(op.created_at))) as year
     FROM operations op
     LEFT JOIN orders o ON op.order_id = o.id
     WHERE op.status = 'completed'
@@ -498,7 +498,7 @@ router.get('/duplicate-sources', (_req: Request, res: Response) => {
     LEFT JOIN customers c ON c.id = op.customer_id
     LEFT JOIN suppliers s ON s.id = op.supplier_id
     LEFT JOIN orders o ON o.id = op.order_id
-    ORDER BY COALESCE(o.order_date, op.created_at) DESC, op.id DESC
+    ORDER BY COALESCE(op.operation_date, o.order_date, op.created_at) DESC, op.id DESC
   `).all();
   res.json(rows);
 });
@@ -1003,6 +1003,12 @@ router.put('/:id', (req: Request, res: Response) => {
   if (!existing) { res.status(404).json({ error: 'Operation not found' }); return; }
 
   const { operation_number, status, notes, order_id, customer_id, supplier_id, category } = req.body;
+  const operationDate = req.body.operation_date;
+  if (operationDate !== undefined && operationDate !== null && operationDate !== '' &&
+      (typeof operationDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(operationDate) || isNaN(Date.parse(operationDate)))) {
+    res.status(400).json({ error: 'Operation date must be a date (YYYY-MM-DD)' });
+    return;
+  }
   if (category !== undefined && category !== null && !VALID_CATEGORIES.includes(category)) {
     res.status(400).json({ error: 'Category must be blending or trading' });
     return;
@@ -1013,7 +1019,7 @@ router.put('/:id', (req: Request, res: Response) => {
   }
   try {
     db.prepare(`
-      UPDATE operations SET operation_number=?, status=?, notes=?, order_id=?, customer_id=?, supplier_id=?, category=?, updated_at=datetime('now') WHERE id=?
+      UPDATE operations SET operation_number=?, status=?, notes=?, order_id=?, customer_id=?, supplier_id=?, category=?, operation_date=?, updated_at=datetime('now') WHERE id=?
     `).run(
       operation_number || existing.operation_number,
       status || existing.status,
@@ -1022,11 +1028,12 @@ router.put('/:id', (req: Request, res: Response) => {
       customer_id !== undefined ? (customer_id || null) : existing.customer_id,
       supplier_id !== undefined ? (supplier_id || null) : existing.supplier_id,
       category !== undefined ? (category || null) : existing.category,
+      operationDate !== undefined ? (operationDate || null) : existing.operation_date,
       req.params.id
     );
     const op = db.prepare('SELECT * FROM operations WHERE id = ?').get(req.params.id) as any;
     const detail = describeChanges(existing, op, {
-      operation_number: 'Number', status: 'Status', category: 'Category', notes: 'Notes',
+      operation_date: 'Operation date', operation_number: 'Number', status: 'Status', category: 'Category', notes: 'Notes',
       order_id: 'Order', customer_id: 'Customer', supplier_id: 'Supplier',
     });
     notifyAdmin({ action: 'updated', entity: 'Operation', label: op.operation_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId, detail: detail || undefined });

@@ -70,14 +70,14 @@ router.get('/trading', async (req: Request, res: Response) => {
       `).all(dateStart, dateEnd, ...params)
     : db.prepare(`
         SELECT op.id, op.operation_number, op.status, o.id as order_id,
-          c.name as customer_name, o.order_number, COALESCE(o.order_date, date(op.created_at)) as order_date
+          c.name as customer_name, o.order_number, COALESCE(op.operation_date, o.order_date, date(op.created_at)) as order_date
         FROM operations op
         LEFT JOIN customers c ON op.customer_id = c.id
         LEFT JOIN orders o ON op.order_id = o.id
         WHERE op.category = 'trading'
-          AND COALESCE(o.order_date, date(op.created_at)) BETWEEN ? AND ?
+          AND COALESCE(op.operation_date, o.order_date, date(op.created_at)) BETWEEN ? AND ?
           ${customerClause}
-        ORDER BY COALESCE(o.order_date, op.created_at) DESC
+        ORDER BY COALESCE(op.operation_date, o.order_date, op.created_at) DESC
       `).all(...params)) as any[];
 
   const rows = ops.map(op => {

@@ -24,6 +24,7 @@ import DocumentCompareModal from '../components/DocumentCompareModal';
 import DocxTextEditModal from '../components/DocxTextEditModal';
 import SendDocumentsModal from '../components/SendDocumentsModal';
 import Modal from '../components/ui/Modal';
+import OperationDateEdit from '../components/OperationDateEdit';
 import OrderFormPage from './OrderFormPage';
 import InvoiceFormPage from './InvoiceFormPage';
 import { missingRequired, sortForSending, docNumber, DOC_ACCEPT } from '../lib/operationDocs';
@@ -109,6 +110,7 @@ interface Operation {
   ship_date?: string;
   notes?: string;
   created_at: string;
+  operation_date?: string | null;
   documents: OperationDoc[];
   invoices: Invoice[];
   order_items: OrderItem[];
@@ -735,7 +737,7 @@ export default function OperationDetailPage() {
               <Link to={`/customers/${operation.customer_id}`} className="hover:text-primary-600 hover:underline">{operation.customer_name}</Link>
             ) : operation.supplier_id && operation.supplier_name ? (
               <Link to={`/suppliers/${operation.supplier_id}`} className="hover:text-primary-600 hover:underline">{operation.supplier_name}</Link>
-            ) : (operation.customer_name || operation.supplier_name || '—')} · Created {formatDate(operation.created_at) || '-'}
+            ) : (operation.customer_name || operation.supplier_name || '—')} · <OperationDateEdit operation={operation} onSaved={fetchOperation} />
           </p>
         </div>
       </div>
