@@ -111,6 +111,7 @@ export default function InvoicesPage() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [listTotals, setListTotals] = useState<any>(null);
   const [search, setSearch] = useState(saved.search || '');
   const [statusFilter, setStatusFilter] = useState<string[]>(saved.statusFilter || []);
   const [yearFilter,  setYearFilter]  = useState(saved.yearFilter || '');
@@ -287,6 +288,7 @@ export default function InvoicesPage() {
         setInvoices(res.data.data);
         setTotal(res.data.total);
         setTotalPages(res.data.totalPages);
+        setListTotals(res.data.totals || null);
       })
       .catch((err) => console.error('[Invoices] load failed:', err))
       .finally(() => setLoading(false));
@@ -623,6 +625,31 @@ export default function InvoicesPage() {
             )}
           </div>
         </div>
+
+        {listTotals && listTotals.count > 0 && (() => {
+          const money = (n: number, cur = 'EUR') => `${cur === 'EUR' ? '\u20AC' : cur === 'USD' ? '$' : cur + ' '}${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+          const filtered = !!(statusFilter.length > 0 || yearFilter || monthFilter.length > 0 || wireFilter || customerFilter || dateFrom || dateTo || wireDateFrom || wireDateTo || search);
+          const onlyEur = listTotals.by_currency.length === 1 && listTotals.by_currency[0].currency === 'EUR';
+          return (
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 px-4 py-2.5 border-b border-gray-100 bg-primary-50/40 text-sm" data-testid="invoice-totals">
+              <span className="text-gray-500">
+                {filtered ? 'Matching' : 'All'}: <span className="font-semibold text-gray-800">{listTotals.count} invoice{listTotals.count === 1 ? '' : 's'}</span>
+                {listTotals.cancelled_count > 0 && <span className="text-xs text-gray-400"> ({listTotals.cancelled_count} cancelled, not counted)</span>}
+              </span>
+              <span className="text-gray-500">
+                Total: {listTotals.by_currency.map((c: any, i: number) => (
+                  <span key={c.currency} className="font-semibold text-gray-900">{i > 0 && <span className="text-gray-400 font-normal"> + </span>}{money(c.amount, c.currency)}</span>
+                ))}
+                {!onlyEur && <span className="text-gray-500"> ≈ <span className="font-semibold text-gray-900">{money(listTotals.eur)}</span></span>}
+              </span>
+              <span className="text-gray-500">Paid ({listTotals.paid_count}): <span className="font-semibold text-green-700">{money(listTotals.paid_eur)}</span></span>
+              <span className="text-gray-500">Unpaid ({listTotals.unpaid_count}): <span className="font-semibold text-red-600">{money(listTotals.unpaid_eur)}</span></span>
+              {listTotals.outstanding_count > 0 && (
+                <span className="text-gray-500">Outstanding ({listTotals.outstanding_count}): <span className="font-semibold text-amber-700">{money(listTotals.outstanding_eur)}</span></span>
+              )}
+            </div>
+          );
+        })()}
 
         {loading ? (
           <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" /></div>

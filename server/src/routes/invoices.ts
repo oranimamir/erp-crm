@@ -110,7 +110,36 @@ router.get('/', (req: Request, res: Response) => {
     ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?
   `).all(...params, limit, offset);
 
-  res.json({ data: withBalances(invoices as any[]), total, page, limit, totalPages: Math.ceil(total / limit) });
+  // Totals over EVERY matching invoice (not just this page): per currency, ≈ EUR, paid / unpaid, outstanding
+  const all = db.prepare(`SELECT i.id, i.amount, i.currency, i.fx_rate, i.eur_amount, i.status, i.settled_amount
+    FROM invoices i LEFT JOIN customers c ON i.customer_id = c.id LEFT JOIN suppliers s ON i.supplier_id = s.id ${wtJoin} ${where}`).all(...params) as any[];
+  const balances = balancesFor(all);
+  const eurOf = (r: any, amt: number) => {
+    const cur = String(r.currency || 'EUR').toUpperCase();
+    if (cur === 'EUR') return amt;
+    if (r.eur_amount != null && Number(r.amount)) return amt * (Number(r.eur_amount) / Number(r.amount));
+    if (Number(r.fx_rate) > 0) return amt * Number(r.fx_rate);
+    return amt;
+  };
+  const per = new Map<string, number>();
+  const totals = { count: all.length, eur: 0, paid_count: 0, paid_eur: 0, unpaid_count: 0, unpaid_eur: 0, cancelled_count: 0,
+    outstanding_count: 0, outstanding_eur: 0, by_currency: [] as Array<{ currency: string; amount: number }> };
+  for (const r of all) {
+    if (r.status === 'cancelled') { totals.cancelled_count++; continue; }
+    const amt = Number(r.amount) || 0;
+    const cur = String(r.currency || 'EUR').toUpperCase();
+    per.set(cur, (per.get(cur) || 0) + amt);
+    const eur = eurOf(r, amt);
+    totals.eur += eur;
+    if (r.status === 'paid') { totals.paid_count++; totals.paid_eur += eur; }
+    else { totals.unpaid_count++; totals.unpaid_eur += eur; }
+    const out = balances.get(Number(r.id))?.outstanding;
+    if (out != null && out > 0) { totals.outstanding_count++; totals.outstanding_eur += eurOf(r, out); }
+  }
+  totals.by_currency = [...per.entries()].map(([currency, amount]) => ({ currency, amount: round(amount) })).sort((a, b) => b.amount - a.amount);
+  for (const k of ['eur', 'paid_eur', 'unpaid_eur', 'outstanding_eur'] as const) totals[k] = round(totals[k]);
+
+  res.json({ data: withBalances(invoices as any[]), total, page, limit, totalPages: Math.ceil(total / limit), totals });
 });
 
 /** Quantity in metric tons, or null when the unit is not a weight. */
