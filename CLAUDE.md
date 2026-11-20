@@ -236,5 +236,9 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 - Tonnage on invoices (by invoice date): generated invoice lines, else the invoice's `quantity_mt` shared over the operation's order lines, else "Unspecified product"; on orders: customer order lines by order date. Both give month / customer / region / product
 - Trading on invoices: operations with a customer invoice in the period; sale = invoice amounts (lines only from generated invoices)
 
+## Daily revenue report
+- `lib/revenueReport.ts`: every day (default 07:00 Europe/Brussels, node-cron, started in `index.ts`) builds the TripleW Revenues workbook from the ERP and emails it via Resend (attachment `TripleW Revenues <date>.xlsx`, short summary in the body). Sheets: Summary (USD→EUR rate cell `C5`, default **0.91** for every non-EUR amount — not the invoices' own FX; Invoiced, Orders not yet invoiced, Revenues = both, paid / unpaid; region / customer / quarter tables with SUMIFS formulas that each total to Revenues; Checks block), Invoices (customer invoices not draft / cancelled, technology invoices excluded; EUR formula, country, region, quarter), Open orders (customer order lines whose operation has no invoice yet). "Paid" includes `paid_with_other`. Region = operation `country`, else the order destination (`resolveCountry`), else the customer's region from its other invoices, else "Unmatched"; Mexico counts as LATAM
+- Settings `app_settings.revenue_report` = `{enabled, recipients: [email], hour, minute, usd_eur}` (default enabled, amir.oranim@triplew.co); `GET/PUT /api/settings/revenue-report` (admin, a field left out keeps its value), `POST …/send` sends now; last outcome in `revenue_report_last`. No Settings UI yet. Needs `RESEND_API_KEY`; the Resend `{error}` is checked
+
 ## Deployment
 Railway, auto-deploys from `main` on push. Commit and push immediately after every change.

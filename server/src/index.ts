@@ -59,6 +59,7 @@ import { checkEmailForStockUpdates } from './lib/email-stock.js';
 import { startBackupScheduler, buildCronExpr } from './lib/backup-scheduler.js';
 import { pruneBackups } from './lib/backup.js';
 import { startBackupEmailScheduler } from './lib/backupEmail.js';
+import { startRevenueReportScheduler } from './lib/revenueReport.js';
 import { getEurRate } from './lib/fx.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -219,6 +220,9 @@ try {
 
 // The weekly backup by email — Monday 06:00 Brussels time unless an admin changed it
 try { startBackupEmailScheduler(); } catch (err) { console.warn('[BackupEmail] scheduler not started:', err); }
+
+// The daily revenue workbook by email — 07:00 Brussels time unless an admin changed it
+try { startRevenueReportScheduler(); } catch (err) { console.warn('[RevenueReport] scheduler not started:', err); }
 
 // Sent invoices past their due date become overdue — at startup, then nightly
 {
