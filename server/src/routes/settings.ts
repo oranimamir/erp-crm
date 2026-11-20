@@ -11,6 +11,8 @@ import { archiveStored, archivedBy } from '../lib/archive.js';
 import { getPaymentNotifySettings, setPaymentNotifySettings, normalizePaymentNotify, sendPaymentReceivedEmail } from '../lib/paymentEmail.js';
 import { getOperationNotifySettings, setOperationNotifySettings, normalizeOperationNotify, getNotificationMutes, normalizeMutes, setMutesForRecipient } from '../lib/notify.js';
 
+import { getRevenueReportSettings, saveRevenueReportSettings, normalizeRevenueReportSettings, getLastRevenueReport, sendRevenueReport } from '../lib/revenueReport.js';
+
 /**
  * App-wide settings edited on the Settings page. For now: the default
  * recipients pre-filled when an invoice or a packing list is emailed.
@@ -124,6 +126,29 @@ router.post('/payment-notifications/test', async (req: Request, res: Response) =
     amount: 12345.67, currency: 'USD', eurAmount: 11400, paymentDate: todayISO(),
     bankReference: 'This is a test email', recordedBy: req.user?.display_name || null, wireFilePath: null, wireFileName: null,
   });
+  res.status(result.ok ? 200 : 400).json(result.ok ? result : { ...result, error: result.message });
+});
+
+// GET /api/settings/revenue-report — daily revenue workbook email: recipients, time, USD→EUR rate, last outcome (admin)
+router.get('/revenue-report', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  res.json({ ...getRevenueReportSettings(), last: getLastRevenueReport(), email_configured: !!process.env.RESEND_API_KEY });
+});
+
+// PUT /api/settings/revenue-report {enabled?, recipients?, hour?, minute?, usd_eur?} — a field left out keeps its value
+router.put('/revenue-report', (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const bad = (Array.isArray(req.body?.recipients) ? req.body.recipients : []).map((e: any) => String(e ?? '').trim()).filter((e: string) => e && !EMAIL_RE.test(e));
+  if (bad.length) { res.status(400).json({ error: `Invalid email address: ${bad.join(', ')}` }); return; }
+  const value = normalizeRevenueReportSettings({ ...getRevenueReportSettings(), ...req.body });
+  saveRevenueReportSettings(value);
+  res.json({ ...value, last: getLastRevenueReport(), email_configured: !!process.env.RESEND_API_KEY });
+});
+
+// POST /api/settings/revenue-report/send — send today's workbook now (admin)
+router.post('/revenue-report/send', async (req: Request, res: Response) => {
+  if (req.user?.role !== 'admin') { res.status(403).json({ error: 'Admin access required' }); return; }
+  const result = await sendRevenueReport();
   res.status(result.ok ? 200 : 400).json(result.ok ? result : { ...result, error: result.message });
 });
 
