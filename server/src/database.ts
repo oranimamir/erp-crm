@@ -1589,6 +1589,35 @@ export async function initializeDatabase() {
     db.prepare(`INSERT OR IGNORE INTO document_categories (name) VALUES ('Order Confirmation')`).run();
   } catch { /* ignore */ }
 
+  // ── Proforma invoices ───────────────────────────────────────────────────
+  // Issued on an operation BEFORE the customer's order exists, in the order
+  // confirmation's format; `data` uses the confirmation's field names.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS proforma_invoices (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pi_number TEXT NOT NULL UNIQUE,
+      operation_id INTEGER NOT NULL,
+      profile_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'draft',
+      data TEXT NOT NULL,
+      draft_data TEXT,
+      source TEXT,
+      file_path TEXT,
+      file_name TEXT,
+      document_id INTEGER,
+      sent_to TEXT,
+      sent_at TEXT,
+      created_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (operation_id) REFERENCES operations(id)          ON DELETE CASCADE,
+      FOREIGN KEY (document_id)  REFERENCES operation_documents(id) ON DELETE SET NULL,
+      FOREIGN KEY (created_by)   REFERENCES users(id)               ON DELETE SET NULL
+    )
+  `);
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_pi_operation ON proforma_invoices(operation_id)`); } catch (_) {}
+  try { db.prepare(`INSERT OR IGNORE INTO document_categories (name) VALUES ('Proforma Invoice')`).run(); } catch { /* ignore */ }
+
   // ── Commercial invoices ─────────────────────────────────────────────────
   // Same shape as order_confirmations — the two documents share a PDF builder.
   db.exec(`

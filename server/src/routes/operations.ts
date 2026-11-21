@@ -17,6 +17,7 @@ import { saveDeclarationToLibrary } from '../lib/documentSources.js';
 import { mountOwnerDocumentRoutes } from '../lib/ownerDocumentRoutes.js';
 import { getOwner } from '../lib/docOwner.js';
 import { deleteDeclaration } from './declarations.js';
+import { deleteProformaRow } from './proforma-invoices.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -1079,6 +1080,9 @@ router.delete('/:id', (req: Request, res: Response) => {
     LEFT JOIN document_categories c ON c.id = d.category_id WHERE d.operation_id = ?`).all(op.id) as any[];
   for (const doc of docs) unlinkSafe('operation-docs', doc.file_path, doc.file_name, doc.category_name);
 
+  // Proformas (their PDFs were archived with the documents above)
+  db.prepare('DELETE FROM proforma_invoices WHERE operation_id = ?').run(op.id);
+
   // 4. Operation row
   db.prepare('DELETE FROM operations WHERE id = ?').run(op.id);
   db.saveToDisk();
@@ -1184,6 +1188,15 @@ router.delete('/:id/documents/:docId', (req: Request, res: Response) => {
     deleteDeclaration(declaration);
     notifyAdmin({ action: 'deleted', entity: 'Declaration', label: declaration.title, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
     res.json({ message: 'Declaration deleted' });
+    return;
+  }
+
+  // A proforma's PDF is the proforma — deleting it deletes the proforma
+  const proforma = db.prepare('SELECT * FROM proforma_invoices WHERE document_id = ?').get(doc.id) as any;
+  if (proforma) {
+    deleteProformaRow(proforma);
+    notifyAdmin({ action: 'deleted', entity: 'Proforma Invoice', label: proforma.pi_number, performedBy: req.user?.display_name || 'Unknown', performedById: req.user?.userId });
+    res.json({ message: 'Proforma invoice deleted' });
     return;
   }
 

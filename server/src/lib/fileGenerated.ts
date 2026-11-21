@@ -79,6 +79,8 @@ export function draftsForOperation(operationId: number): Array<{ kind: string; i
   ofOrder('order_confirmations', 'oc_number', 'Order Confirmation', 'oc', '/order-confirmations');
   ofOrder('purchase_orders', 'po_number', 'Purchase Order', 'po', '/purchase-orders');
   ofOrder('invoice_documents', 'invoice_number', 'Commercial Invoice', 'invoice', '/invoices/documents');
+  const pis = db.prepare(`SELECT id, pi_number, updated_at FROM proforma_invoices WHERE operation_id = ? AND status = 'draft' ORDER BY id`).all(op.id) as any[];
+  for (const p of pis) out.push({ kind: 'proforma', id: p.id, label: 'Proforma Invoice', number: p.pi_number || null, updated_at: p.updated_at || null, path: `/proforma-invoices/${p.id}` });
   const decls = db.prepare(`SELECT id, title, kind, updated_at FROM declarations WHERE operation_id = ? AND status = 'draft' ORDER BY id`).all(op.id) as any[];
   for (const d of decls) {
     out.push({ kind: d.kind === 'coa' ? 'coa' : 'declaration', id: d.id, label: d.kind === 'coa' ? 'COA' : 'Declaration',

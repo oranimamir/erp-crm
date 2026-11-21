@@ -25,6 +25,7 @@ import DocxTextEditModal from '../components/DocxTextEditModal';
 import SendDocumentsModal from '../components/SendDocumentsModal';
 import Modal from '../components/ui/Modal';
 import OperationDateEdit from '../components/OperationDateEdit';
+import ProformaInvoicesCard from '../components/ProformaInvoicesCard';
 import OrderFormPage from './OrderFormPage';
 import InvoiceFormPage from './InvoiceFormPage';
 import { missingRequired, sortForSending, docNumber, DOC_ACCEPT } from '../lib/operationDocs';
@@ -941,6 +942,10 @@ export default function OperationDetailPage() {
           </div>
         </div>
       )}
+
+      {/* ── Proforma invoices (before the order) ─────────────────────────────── */}
+      <ProformaInvoicesCard operationId={operation.id} hasOrder={!!operation.order_id} refreshKey={operation.documents.length}
+        onPreview={openPreview} onChanged={fetchOperation} />
 
       {/* ── Linked Invoices ─────────────────────────────────────────────────── */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">

@@ -9,9 +9,9 @@ import Button from '../components/ui/Button';
 import EntityConfirmStep from '../components/EntityConfirmStep';
 import {
   ArrowLeft, Plus, Trash2, Loader2, Eye, X, FileDown, Mail,
-  CheckCircle, FileText, RefreshCw, User, Package, Truck, Save,
+  CheckCircle, FileText, RefreshCw, User, Package, Truck, Save, Copy, Search,
 } from 'lucide-react';
-import { todayISO } from '../lib/dates';
+import { todayISO, formatDate } from '../lib/dates';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -46,6 +46,7 @@ interface OcData {
   delivery_contact: string;
   delivery_date_text: string;
   freight: string;
+  insurance: string;
   vat: string;
   terms: string;
   /** Free text printed under the table. */
@@ -67,6 +68,15 @@ interface Confirmation {
   data: Partial<OcData>;
   /** Edits saved as a draft on top of the generated document. */
   draft?: Partial<OcData> | null;
+  /** Proforma invoices: their number (the form edits it as oc_number). */
+  pi_number?: string;
+}
+
+/** An earlier order confirmation / proforma a new proforma can start from. */
+interface ProformaSource {
+  type: 'oc' | 'proforma'; id: number; number: string; status?: string; date: string;
+  operation_number: string | null; same_client: boolean; client_name: string;
+  products: string[]; lines: number; total: number; currency: string;
 }
 
 const UNITS = ['KG', 'TONS', 'MT', 'LBS', 'L', 'PAIL', 'DRUM', 'IBC'];
@@ -77,7 +87,7 @@ const FORM_KEYS = [
   'oc_number', 'oc_date', 'sq_number', 'our_ref', 'po_number', 'client_code',
   'client_name', 'billing_address', 'client_phone', 'tax_id', 'contact_email',
   'delivery', 'delivery_address', 'delivery_contact', 'delivery_date_text',
-  'freight', 'vat', 'terms', 'notes',
+  'freight', 'insurance', 'vat', 'terms', 'notes',
 ] as const;
 
 const emptyLine = (n: number): OcLine => ({
@@ -92,7 +102,7 @@ const blankData = (): OcData => ({
   client_name: '', billing_address: '', client_phone: '', tax_id: '', contact_email: '',
   items: [emptyLine(1)],
   delivery: '', delivery_address: '', delivery_contact: '', delivery_date_text: '',
-  freight: '0', vat: '0', terms: '', notes: '',
+  freight: '0', insurance: '0', vat: '0', terms: '', notes: '',
 });
 
 /** Server values arrive loosely typed (numbers, nulls) — normalise for the form. */
@@ -123,6 +133,7 @@ function toPayload(form: OcData) {
   return {
     ...form,
     freight: Number(form.freight) || 0,
+    insurance: Number(form.insurance) || 0,
     vat: Number(form.vat) || 0,
     items: form.items.map((item, index) => ({
       ...item,
@@ -185,7 +196,12 @@ function Section({ icon, title, children }: {
 
 // ── Page ──────────────────────────────────────────────────────────────────
 
-export default function OrderConfirmationPage() {
+export default function OrderConfirmationPage({ proforma = false }: {
+  /** Proforma invoice: issued on an operation before its order, in this same format. */
+  proforma?: boolean;
+} = {}) {
+  const base = proforma ? '/proforma-invoices' : '/order-confirmations';
+  const docName = proforma ? 'proforma invoice' : 'order confirmation';
   const { id } = useParams<{ id: string }>();
   const [params] = useSearchParams();
   const navigate = useNavigate();
@@ -202,7 +218,16 @@ export default function OrderConfirmationPage() {
   const [orderId, setOrderId] = useState<number | null>(orderIdParam ? Number(orderIdParam) : null);
   const [ncoId, setNcoId] = useState<number | null>(ncoIdParam ? Number(ncoIdParam) : null);
   /** What the draft is prepared from: the NCO, else the order. */
-  const sourceParams = () => (ncoIdParam || ncoId) ? { nco_id: ncoIdParam || ncoId } : { order_id: orderIdParam || orderId };
+  const sourceParams = (): Record<string, unknown> => proforma
+    ? { operation_id: operationIdParam || operationId, ...(fromSource ? { from_type: fromSource.type, from_id: fromSource.id } : {}) }
+    : (ncoIdParam || ncoId) ? { nco_id: ncoIdParam || ncoId } : { order_id: orderIdParam || orderId };
+  // Proforma: which earlier confirmation / proforma the new one was filled from
+  const [fromSource, setFromSource] = useState<{ type: string; id: number; label: string } | null>(null);
+  const [sourcePicker, setSourcePicker] = useState(false);
+  const [sources, setSources] = useState<ProformaSource[] | null>(null);
+  const [sourceClient, setSourceClient] = useState<string | null>(null);
+  const [sourceSearch, setSourceSearch] = useState('');
+  const [sourceAll, setSourceAll] = useState(false);
   const [operationId, setOperationId] = useState<number | null>(operationIdParam ? Number(operationIdParam) : null);
   const [operationNumber, setOperationNumber] = useState('');
   const [entity, setEntity] = useState<string>('BE');
@@ -244,14 +269,16 @@ export default function OrderConfirmationPage() {
       items: prev.items.length === 1 ? prev.items : prev.items.filter((_, i) => i !== index),
     }));
 
-  const adopt = useCallback((record: Confirmation) => {
+  const adopt = useCallback((raw: Confirmation) => {
+    const record = { ...raw, oc_number: raw.oc_number ?? raw.pi_number ?? '' };
     setConfirmation(record);
     setEntityConfirmed(true);
     // Edits saved as a draft on a generated confirmation pick up where they were left
     setForm(toFormData(record.draft || record.data));
-    setOrderId(record.order_id);
+    setOrderId(record.order_id ?? null);
     setNcoId(record.nco_id ?? null);
     setOperationId(record.operation_id);
+    if ((raw as any).operation_number) setOperationNumber((raw as any).operation_number);
   }, []);
 
   useEffect(() => {
@@ -260,8 +287,20 @@ export default function OrderConfirmationPage() {
     async function load() {
       try {
         if (id) {
-          const { data } = await api.get(`/order-confirmations/${id}`);
+          const { data } = await api.get(`${base}/${id}`);
           if (!cancelled) adopt(data);
+          return;
+        }
+        if (proforma) {
+          if (!operationIdParam) { addToast('No operation selected', 'error'); navigate('/operations'); return; }
+          const [{ data }, src] = await Promise.all([
+            api.get('/proforma-invoices/prepare', { params: { operation_id: operationIdParam } }),
+            api.get('/proforma-invoices/sources', { params: { operation_id: operationIdParam } }).then(r => r.data).catch(() => null),
+          ]);
+          if (cancelled) return;
+          applyPrepared(data);
+          // Suggest starting from the client's earlier order confirmations
+          if (src?.sources?.length) { setSources(src.sources); setSourceClient(src.client); setSourcePicker(true); }
           return;
         }
         if (!orderIdParam && !ncoIdParam) {
@@ -269,7 +308,7 @@ export default function OrderConfirmationPage() {
           navigate('/operations');
           return;
         }
-        const { data } = await api.get('/order-confirmations/prepare', { params: sourceParams() });
+        const { data } = await api.get(`${base}/prepare`, { params: sourceParams() });
         if (cancelled) return;
         if (data.existing) {
           adopt(data.existing);
@@ -289,7 +328,7 @@ export default function OrderConfirmationPage() {
         }
       } catch (err: any) {
         if (!cancelled) {
-          addToast(err.response?.data?.error || 'Failed to load the order confirmation', 'error');
+          addToast(err.response?.data?.error || `Failed to load the ${docName}`, 'error');
           navigate('/operations');
         }
       } finally {
@@ -304,16 +343,55 @@ export default function OrderConfirmationPage() {
   useEffect(() => {
     if (!showEmail) return;
     setEmailTo(prev => prev || form.contact_email || '');
-    setEmailSubject(prev => prev || `Order Confirmation ${form.oc_number}${form.client_name ? ` — ${form.client_name}` : ''}`);
+    setEmailSubject(prev => prev || `${proforma ? 'Proforma Invoice' : 'Order Confirmation'} ${form.oc_number}${form.client_name ? ` — ${form.client_name}` : ''}`);
   }, [showEmail]);
 
   // ── Actions ─────────────────────────────────────────────────────────────
+
+  function applyPrepared(data: any) {
+    setForm(toFormData(data.draft));
+    setEntity(data.entity);
+    setProfiles(data.profiles || []);
+    setProfileId(data.profile_id ?? null);
+    setProfileName(data.profile_name ?? null);
+    setMatchedBy(data.matched_by || '');
+    setMatchConfident(!!data.match_confident);
+    if (data.operation) {
+      setOperationId(data.operation.id);
+      setOperationNumber(data.operation.operation_number);
+    }
+  }
+
+  /** Proforma: the earlier documents to start from (this client's first). */
+  async function loadSources(search = sourceSearch, all = sourceAll) {
+    try {
+      const { data } = await api.get('/proforma-invoices/sources', { params: { operation_id: operationId || operationIdParam, search: search || undefined, all: all ? 1 : undefined } });
+      setSources(data.sources || []);
+      setSourceClient(data.client || null);
+    } catch { setSources([]); }
+  }
+
+  /** Proforma: refill the form from an earlier confirmation / proforma (lines, prices, terms…). */
+  async function fillFromSource(src: ProformaSource | null) {
+    setSourcePicker(false);
+    try {
+      const params: Record<string, unknown> = { operation_id: operationId || operationIdParam, entity, ...(src ? { from_type: src.type, from_id: src.id } : {}) };
+      const { data } = await api.get('/proforma-invoices/prepare', { params });
+      const keepNumber = confirmation ? form.oc_number : null;
+      applyPrepared(data);
+      if (keepNumber) setForm(prev => ({ ...prev, oc_number: keepNumber }));
+      setFromSource(src ? { type: src.type, id: src.id, label: data.source || src.number } : null);
+      addToast(src ? `Filled from ${data.source || src.number} — check the quantities and prices` : 'Started blank with the client details', 'success');
+    } catch (err: any) {
+      addToast(err.response?.data?.error || 'Failed to fill from that document', 'error');
+    }
+  }
 
   /** Re-fetch the draft when the entity or billing profile changes. */
   async function reDraft(opts: { entity?: string; profile_id?: number }) {
     if (confirmation) { addToast('Already generated — edit the fields directly', 'info'); return; }
     try {
-      const { data } = await api.get('/order-confirmations/prepare', {
+      const { data } = await api.get(`${base}/prepare`, {
         params: { ...sourceParams(), ...opts },
       });
       if (data.draft) {
@@ -336,7 +414,7 @@ export default function OrderConfirmationPage() {
     setProfileId(nextId);
     setChooseEntity(false);
     try {
-      const { data } = await api.get('/order-confirmations/prepare', {
+      const { data } = await api.get(`${base}/prepare`, {
         params: { ...sourceParams(), entity, profile_id: nextId },
       });
       if (data.draft) {
@@ -353,7 +431,7 @@ export default function OrderConfirmationPage() {
   async function handlePreview() {
     setPreviewing(true);
     try {
-      const res = await api.post('/order-confirmations/preview', { data: toPayload(form) }, { responseType: 'blob' });
+      const res = await api.post(`${base}/preview`, { data: toPayload(form) }, { responseType: 'blob' });
       if (previewUrl) URL.revokeObjectURL(previewUrl);
       setPreviewUrl(URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' })));
     } catch {
@@ -364,20 +442,23 @@ export default function OrderConfirmationPage() {
   }
 
   async function handleSave(status: 'draft' | 'final') {
-    if (!orderId && !ncoId) { addToast('No order linked', 'error'); return; }
+    if (proforma ? !operationId : (!orderId && !ncoId)) { addToast(proforma ? 'No operation linked' : 'No order linked', 'error'); return; }
     setSaving(true);
     try {
-      const body = { order_id: orderId, nco_id: ncoId, operation_id: operationId, profile_id: profileId, status, data: toPayload(form) };
+      const body = { order_id: orderId, nco_id: ncoId, operation_id: operationId, profile_id: profileId, status, data: toPayload(form),
+        ...(proforma && fromSource ? { source: fromSource.label } : {}) };
       const { data } = confirmation
-        ? await api.put(`/order-confirmations/${confirmation.id}`, body)
-        : await api.post('/order-confirmations', body);
+        ? await api.put(`${base}/${confirmation.id}`, body)
+        : await api.post(base, body);
       adopt(data);
+      const number = data.oc_number ?? data.pi_number;
+      if (data.renumbered_from) addToast(`${data.renumbered_from} was taken — saved as ${number}`, 'info');
       addToast(status === 'draft'
-        ? `Draft ${data.oc_number} saved`
+        ? `Draft ${number} saved`
         : `Generated ${data.file_name}${operationId ? ' — filed under the operation documents' : ''}`, 'success');
-      if (!confirmation) navigate(`/order-confirmations/${data.id}`, { replace: true });
+      if (!confirmation) navigate(`${base}/${data.id}`, { replace: true });
     } catch (err: any) {
-      addToast(err.response?.data?.error || (status === 'draft' ? 'Failed to save the draft' : 'Failed to generate the order confirmation'), 'error');
+      addToast(err.response?.data?.error || (status === 'draft' ? 'Failed to save the draft' : `Failed to generate the ${docName}`), 'error');
     } finally {
       setSaving(false);
     }
@@ -386,11 +467,11 @@ export default function OrderConfirmationPage() {
   async function handleDownload() {
     if (!confirmation) return;
     try {
-      const res = await api.get(`/order-confirmations/${confirmation.id}/pdf`, { responseType: 'blob' });
+      const res = await api.get(`${base}/${confirmation.id}/pdf`, { responseType: 'blob' });
       const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
       const a = document.createElement('a');
       a.href = url;
-      a.download = confirmation.file_name || `${form.oc_number}OC.pdf`;
+      a.download = confirmation.file_name || `${form.oc_number}${proforma ? '' : 'OC'}.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -405,10 +486,10 @@ export default function OrderConfirmationPage() {
     if (!emailTo.trim()) { addToast('Enter at least one recipient', 'error'); return; }
     setSending(true);
     try {
-      const { data } = await api.post(`/order-confirmations/${confirmation.id}/email`, {
+      const { data } = await api.post(`${base}/${confirmation.id}/email`, {
         to: emailTo, subject: emailSubject, message: emailMessage,
       });
-      setConfirmation(data.confirmation);
+      adopt(data.confirmation || data.proforma);
       addToast(data.message, 'success');
       setShowEmail(false);
     } catch (err: any) {
@@ -426,6 +507,7 @@ export default function OrderConfirmationPage() {
 
   const subtotal = form.items.reduce((sum, item) => sum + lineTotal(item), 0);
   const freight = Number(form.freight) || 0;
+  const insurance = Number(form.insurance) || 0;
   const vat = Number(form.vat) || 0;
   const currency = form.items.find(i => i.currency)?.currency || 'EUR';
 
@@ -438,10 +520,10 @@ export default function OrderConfirmationPage() {
   /** A draft (never generated) can be thrown away; its number becomes free. */
   async function handleDeleteDraft() {
     if (!confirmation || !isDraft) return;
-    if (!window.confirm(`Delete the draft order confirmation ${confirmation.oc_number || ''}?`)) return;
+    if (!window.confirm(`Delete the draft ${docName} ${confirmation.oc_number || ''}?`)) return;
     try {
-      await api.delete(`/order-confirmations/${confirmation.id}`);
-      addToast('Draft order confirmation deleted', 'success');
+      await api.delete(`${base}/${confirmation.id}`);
+      addToast(`Draft ${docName} deleted`, 'success');
       navigate(backTo);
     } catch (err: any) {
       addToast(err.response?.data?.error || 'Failed to delete the draft', 'error');
@@ -458,18 +540,24 @@ export default function OrderConfirmationPage() {
           <Button variant="secondary" size="sm" onClick={handlePreview} disabled={previewing}>
             {previewing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
           </Button>
-          <CompareButtons
+          {!proforma && <CompareButtons
             kinds={['order']}
             orderId={orderId}
             operationId={operationId}
             ncoId={ncoId}
             title="Order confirmation"
             renderPreview={async () => (await api.post('/order-confirmations/preview', { data: toPayload(form) }, { responseType: 'blob' })).data as Blob}
-          />
+          />}
+          {proforma && (!confirmation || isDraft) && (
+            <Button variant="secondary" size="sm" onClick={() => { setSourcePicker(true); if (!sources) loadSources(); }}
+              title="Fill the lines, prices and terms from an earlier order confirmation or proforma of this client">
+              <Copy size={14} /> Fill from previous
+            </Button>
+          )}
           <Button variant="secondary" size="sm" onClick={() => handleSave('draft')} disabled={saving}
             title={generated
               ? 'Keep these edits as a draft — the generated PDF stays as it is until you regenerate'
-              : 'Keep this order confirmation as a draft — nothing is generated or filed yet'}>
+              : `Keep this ${docName} as a draft — nothing is generated or filed yet`}>
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save draft
           </Button>
           <Button
@@ -533,15 +621,25 @@ export default function OrderConfirmationPage() {
       />
 
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Order Confirmation</h1>
+        <h1 className="text-2xl font-bold text-gray-900">{proforma ? 'Proforma Invoice' : 'Order Confirmation'}</h1>
         <p className="text-sm text-gray-500 mt-1">
+          {proforma && <>Issued before the client's order — same format as the order confirmation, with the bank details for payment. </>}
           Check the details below, then confirm to produce the PDF. It is saved as{' '}
           <strong className="text-gray-700">
-            {(operationNumber || form.oc_number || 'operation').replace(/[^A-Za-z0-9._-]+/g, '-')}OC.pdf
+            {proforma
+              ? `${(form.oc_number || `${operationNumber}PI`).replace(/[^A-Za-z0-9._-]+/g, '-')}.pdf`
+              : `${(operationNumber || form.oc_number || 'operation').replace(/[^A-Za-z0-9._-]+/g, '-')}OC.pdf`}
           </strong>
           {operationId && ' under the operation documents'}.
         </p>
       </div>
+
+      {proforma && fromSource && !generated && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-primary-200 bg-primary-50 px-4 py-3 text-sm text-primary-800">
+          <Copy size={16} className="flex-shrink-0" />
+          Filled from <strong>{fromSource.label}</strong> — check the quantities, prices and delivery before generating.
+        </div>
+      )}
 
       {confirmation && isDraft && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
@@ -573,11 +671,11 @@ export default function OrderConfirmationPage() {
         <div className="space-y-5">
           <Section icon={<FileText size={16} />} title="Document">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Field label="Confirmation number" value={form.oc_number} onChange={v => set('oc_number', v)} placeholder={operationNumber || 'Operation number'} />
+              <Field label={proforma ? 'Proforma number' : 'Confirmation number'} value={form.oc_number} onChange={v => set('oc_number', v)} placeholder={proforma ? `${operationNumber}PI` : (operationNumber || 'Operation number')} />
               <Field label="Date" type="date" value={form.oc_date} onChange={v => set('oc_date', v)} />
               <Field label="SQ" value={form.sq_number} onChange={v => set('sq_number', v)} placeholder="LA001" />
               <Field label="Our ref" value={form.our_ref} onChange={v => set('our_ref', v)} />
-              <Field label="PO number" value={form.po_number} onChange={v => set('po_number', v)} />
+              <Field label={proforma ? 'Your ref (optional)' : 'PO number'} value={form.po_number} onChange={v => set('po_number', v)} placeholder={proforma ? 'The client\'s enquiry / reference' : undefined} />
               <Field label="Client code" value={form.client_code} onChange={v => set('client_code', v)} placeholder="00FR02" />
             </div>
           </Section>
@@ -598,7 +696,8 @@ export default function OrderConfirmationPage() {
               <Field label="Delivery date" value={form.delivery_date_text} onChange={v => set('delivery_date_text', v)} placeholder="September, 28 2026" />
               <Field label="Delivery address" value={form.delivery_address} onChange={v => set('delivery_address', v)} className="sm:col-span-2" />
               <Field label="Contact" value={form.delivery_contact} onChange={v => set('delivery_contact', v)} className="sm:col-span-2" />
-              <Field label={`Freight (${currency})`} type="number" value={form.freight} onChange={v => set('freight', v)} />
+              <Field label={`Freight / shipping (${currency})`} type="number" value={form.freight} onChange={v => set('freight', v)} />
+              <Field label={`Insurance (${currency})`} type="number" value={form.insurance} onChange={v => set('insurance', v)} />
               <Field label={`VAT (${currency})`} type="number" value={form.vat} onChange={v => set('vat', v)} />
               <AreaField label="Terms & conditions" value={form.terms} onChange={v => set('terms', v)} className="sm:col-span-2" placeholder="100% payable at 30 days" />
             </div>
@@ -606,9 +705,10 @@ export default function OrderConfirmationPage() {
             <div className="mt-4 border-t border-gray-100 pt-3 space-y-1 text-sm">
               <div className="flex justify-between text-gray-600"><span>Subtotal</span><span>{money(subtotal)} {currency}</span></div>
               <div className="flex justify-between text-gray-600"><span>Freight</span><span>{money(freight)} {currency}</span></div>
+              {insurance !== 0 && <div className="flex justify-between text-gray-600"><span>Insurance</span><span>{money(insurance)} {currency}</span></div>}
               <div className="flex justify-between text-gray-600"><span>VAT</span><span>{money(vat)} {currency}</span></div>
               <div className="flex justify-between font-semibold text-gray-900 pt-1 border-t border-gray-100">
-                <span>Total Order</span><span>{money(subtotal + freight + vat)} {currency}</span>
+                <span>{proforma ? 'Total' : 'Total Order'}</span><span>{money(subtotal + freight + insurance + vat)} {currency}</span>
               </div>
             </div>
           </Section>
@@ -672,7 +772,7 @@ export default function OrderConfirmationPage() {
           <Section icon={<Eye size={16} />} title="Preview">
             {previewUrl ? (
               <div className="space-y-3">
-                <iframe src={previewUrl} title="Order confirmation preview" className="w-full rounded-lg border border-gray-200 bg-white" style={{ height: '70vh' }} />
+                <iframe src={previewUrl} title={`${docName} preview`} className="w-full rounded-lg border border-gray-200 bg-white" style={{ height: '70vh' }} />
                 <button type="button" onClick={handlePreview} disabled={previewing}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50">
                   {previewing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} Refresh preview
@@ -681,12 +781,76 @@ export default function OrderConfirmationPage() {
             ) : (
               <div className="text-center py-10 text-sm text-gray-400">
                 <Eye size={24} className="mx-auto mb-2 text-gray-300" />
-                Click <strong className="text-gray-600">Preview</strong> to render the confirmation.
+                Click <strong className="text-gray-600">Preview</strong> to render the {proforma ? 'proforma' : 'confirmation'}.
               </div>
             )}
           </Section>
         </div>
       </div>
+
+      {proforma && sourcePicker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setSourcePicker(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[85vh]" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-gray-100 flex items-start justify-between gap-3">
+              <div>
+                <h3 className="font-semibold text-gray-900 flex items-center gap-2"><Copy size={16} className="text-primary-600" /> Start from a previous order confirmation?</h3>
+                <p className="text-xs text-gray-500 mt-1">
+                  The client details, products, prices, freight and terms are copied — you then adjust quantities and prices.
+                  {sourceClient && !sourceAll && <> Showing <strong className="text-gray-700">{sourceClient}</strong>'s documents.</>}
+                </p>
+              </div>
+              <button onClick={() => setSourcePicker(false)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><X size={18} /></button>
+            </div>
+            <div className="px-5 py-3 border-b border-gray-100 flex flex-wrap items-center gap-3">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input value={sourceSearch} placeholder="Search number, client, product…"
+                  onChange={e => { setSourceSearch(e.target.value); loadSources(e.target.value, sourceAll); }}
+                  className="w-full rounded-lg border border-gray-300 pl-8 pr-3 py-1.5 text-sm" />
+              </div>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600">
+                <input type="checkbox" checked={sourceAll} onChange={e => { setSourceAll(e.target.checked); loadSources(sourceSearch, e.target.checked); }} />
+                Every client
+              </label>
+            </div>
+            <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
+              {sources === null ? (
+                <div className="py-10 flex justify-center"><Loader2 size={18} className="animate-spin text-gray-400" /></div>
+              ) : sources.length === 0 ? (
+                <p className="py-10 text-center text-sm text-gray-400">
+                  No earlier order confirmations{sourceClient && !sourceAll ? ` for ${sourceClient}` : ''} — tick "Every client" or start blank.
+                </p>
+              ) : sources.map((src, i) => (
+                <button key={`${src.type}-${src.id}`} type="button" onClick={() => fillFromSource(src)}
+                  className={`w-full text-left px-5 py-3 hover:bg-primary-50 flex items-center gap-3 ${i === 0 && src.same_client ? 'bg-primary-50/50' : ''}`}>
+                  <FileText size={18} className={src.type === 'oc' ? 'text-primary-500' : 'text-violet-500'} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium text-gray-900">{src.number}</span>
+                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${src.type === 'oc' ? 'bg-primary-100 text-primary-700' : 'bg-violet-100 text-violet-700'}`}>
+                        {src.type === 'oc' ? 'Order confirmation' : 'Proforma'}
+                      </span>
+                      {src.status === 'draft' && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">Draft</span>}
+                      {i === 0 && src.same_client && <span className="rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-medium text-green-700">Suggested — latest</span>}
+                    </div>
+                    <p className="text-xs text-gray-500 truncate">
+                      {[src.client_name, src.date ? formatDate(src.date) : '', src.operation_number].filter(Boolean).join(' · ')}
+                    </p>
+                    {src.products.length > 0 && <p className="text-xs text-gray-600 truncate">{src.products.join(', ')}{src.lines > src.products.length ? ` +${src.lines - src.products.length}` : ''}</p>}
+                  </div>
+                  <span className="text-sm font-semibold text-gray-800 whitespace-nowrap">{money(src.total)} {src.currency}</span>
+                </button>
+              ))}
+            </div>
+            <div className="px-5 py-3 border-t border-gray-100 flex justify-between items-center gap-2">
+              <span className="text-xs text-gray-400">{fromSource ? `Currently filled from ${fromSource.label}` : ''}</span>
+              <Button variant="secondary" size="sm" onClick={() => (confirmation || fromSource) ? fillFromSource(null) : setSourcePicker(false)}>
+                Start blank
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showEmail && generated && confirmation && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => !sending && setShowEmail(false)}>

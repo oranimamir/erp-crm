@@ -74,6 +74,8 @@ export default function App() {
               <Route path="/orders/:id/edit" element={<OrderFormPage />} />
               <Route path="/order-confirmations/new" element={<OrderConfirmationPage />} />
               <Route path="/order-confirmations/:id" element={<OrderConfirmationPage />} />
+              <Route path="/proforma-invoices/new" element={<OrderConfirmationPage key="pi-new" proforma />} />
+              <Route path="/proforma-invoices/:id" element={<OrderConfirmationPage key="pi" proforma />} />
               <Route path="/purchase-orders/new" element={<PurchaseOrderPage />} />
               <Route path="/purchase-orders/:id" element={<PurchaseOrderPage />} />
               <Route path="/declarations/new" element={<DeclarationPage />} />

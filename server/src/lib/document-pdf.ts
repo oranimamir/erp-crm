@@ -62,7 +62,7 @@ function ensureRoom(doc: any, y: number, needed: number): number {
   return PAGE_TOP;
 }
 
-export type DocumentKind = 'order_confirmation' | 'invoice' | 'purchase_order' | 'packing_list';
+export type DocumentKind = 'order_confirmation' | 'proforma_invoice' | 'invoice' | 'purchase_order' | 'packing_list';
 
 /** One packing-list row: a product line with its packaging, counts and weights (kg). */
 export interface PackingRow {
@@ -208,6 +208,28 @@ const OC_LAYOUT: InvoiceLayout = {
   bank_inline: false,
 };
 
+/**
+ * A proforma invoice, issued before the customer's order: the confirmation's
+ * shape and bank block (the customer may pay on it), titled as a proforma.
+ */
+const PROFORMA_LAYOUT: InvoiceLayout = {
+  ...OC_LAYOUT,
+  title: 'Proforma Invoice',
+  meta: [
+    { label: 'Date:', field: 'doc_date' },
+    { label: 'SQ:', field: 'sq_number' },
+    { label: 'Our ref:', field: 'our_ref' },
+    { label: 'Your ref:', field: 'po_number' },
+    { label: 'Client:', field: 'client_code' },
+  ],
+  totals: [
+    { label: 'Subtotal', field: 'subtotal' },
+    { label: 'Freight', field: 'freight' },
+    { label: 'Vat', field: 'vat' },
+    { label: 'Total', field: 'total' },
+  ],
+};
+
 /** A supplier purchase order: the confirmation's shape, addressed to the supplier. */
 const PO_LAYOUT: InvoiceLayout = {
   ...OC_LAYOUT,
@@ -286,6 +308,7 @@ export function computeTotals(data: DocumentData) {
 /** The layout in force: the customer's for an invoice, the fixed one for a confirmation. */
 function layoutFor(kind: DocumentKind, data: DocumentData): InvoiceLayout {
   if (kind === 'invoice') return normalizeLayout(data.layout);
+  if (kind === 'proforma_invoice') return PROFORMA_LAYOUT;
   return kind === 'purchase_order' ? PO_LAYOUT : OC_LAYOUT;
 }
 
@@ -513,6 +536,12 @@ export interface OrderConfirmationData extends Omit<DocumentData, 'doc_number' |
 export function buildOrderConfirmationPdf(data: OrderConfirmationData): Promise<Buffer> {
   const { oc_number, oc_date, ...rest } = data;
   return buildDocumentPdf('order_confirmation', { ...rest, doc_number: oc_number, doc_date: oc_date });
+}
+
+/** A proforma invoice: stored with the confirmation's field names (pi_number / pi_date map onto them). */
+export function buildProformaInvoicePdf(data: OrderConfirmationData): Promise<Buffer> {
+  const { oc_number, oc_date, ...rest } = data;
+  return buildDocumentPdf('proforma_invoice', { ...rest, doc_number: oc_number, doc_date: oc_date });
 }
 
 export interface PurchaseOrderData extends Omit<DocumentData, 'doc_number' | 'doc_date'> {

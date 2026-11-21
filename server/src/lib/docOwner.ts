@@ -131,6 +131,7 @@ export function isGeneratedDocument(owner: DocOwner, docId: number): boolean {
       UNION SELECT 1 FROM invoice_documents WHERE document_id = ?1
       UNION SELECT 1 FROM packing_lists WHERE document_id = ?1 OR final_document_id = ?1
       UNION SELECT 1 FROM declarations WHERE document_id = ?1
+      UNION SELECT 1 FROM proforma_invoices WHERE document_id = ?1
     `).get(docId);
   }
   return !!db.prepare(`
