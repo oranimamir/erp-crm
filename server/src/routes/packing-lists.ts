@@ -48,6 +48,19 @@ export interface PackingLineInput {
   pallet_weight_override?: number | null;
   /** The line's whole packaging weight (gross − net); blank = computed. */
   packaging_weight_override?: number | null;
+  /** The line's net weight in kg as weighed; blank = the invoice quantity. */
+  net_weight_override?: number | null;
+  /** Content of one unit (kg); blank = the packaging's fill. */
+  unit_net_override?: number | null;
+  /** Empty packaging of one unit (kg); blank = the packaging's weight. */
+  unit_packaging_override?: number | null;
+  /** Units on a pallet; blank = the packaging's. */
+  units_per_pallet_override?: number | null;
+  /** The line's gross weight (kg) as weighed; wins over the packaging weight. */
+  gross_weight_override?: number | null;
+  /** One pallet's net / gross weight as printed; blank = calculated. */
+  pallet_net_override?: number | null;
+  pallet_gross_override?: number | null;
   /** Volume CBM as typed. */
   volume_cbm?: string | null;
 }
@@ -135,9 +148,17 @@ function linesFromInvoice(items: any[], rows: PackagingRow[], keep: PackingLineI
       : matchPackaging(source, rows).best?.id ?? null;
     return {
       ...source, packaging_id: packagingId, units_override: null, pallets_override: null,
-      // Follows the quantity, so it is computed again
-      packaging_weight_override: null,
-      // What was typed for the pallet and volume is not on the invoice, so it stays
+      // Follow the quantity, so they are computed again
+      packaging_weight_override: null, net_weight_override: null, gross_weight_override: null,
+      // What was typed for the packaging, pallet and volume is not on the invoice, so it stays
+      // (only while the line keeps the same packaging)
+      ...(previous && previous.packaging_id === packagingId ? {
+        unit_net_override: previous.unit_net_override ?? null,
+        unit_packaging_override: previous.unit_packaging_override ?? null,
+        units_per_pallet_override: previous.units_per_pallet_override ?? null,
+        pallet_net_override: previous.pallet_net_override ?? null,
+        pallet_gross_override: previous.pallet_gross_override ?? null,
+      } : {}),
       pallet_weight_override: previous?.pallet_weight_override ?? null,
       volume_cbm: previous?.volume_cbm ?? '',
     };
@@ -153,7 +174,16 @@ function packingRows(lines: PackingLineInput[]): PackingRow[] {
       pallets: optionalCount(line.pallets_override),
       pallet_weight: optionalWeight(line.pallet_weight_override),
       packaging_weight: optionalWeight(line.packaging_weight_override),
+      net_weight: optionalWeight(line.net_weight_override),
+      unit_net: optionalWeight(line.unit_net_override),
+      unit_packaging: optionalWeight(line.unit_packaging_override),
+      units_per_pallet: optionalCount(line.units_per_pallet_override),
+      gross_weight: optionalWeight(line.gross_weight_override),
+      pallet_net: optionalWeight(line.pallet_net_override),
+      pallet_gross: optionalWeight(line.pallet_gross_override),
     });
+    // Units and per-unit weights print once there is a packaging — or figures typed for one
+    const known = !!pkg || figures.unit_net_kg > 0 || optionalCount(line.units_override) != null;
     return {
       reference: line.reference || '',
       product: line.commercial_name || '',
@@ -161,13 +191,13 @@ function packingRows(lines: PackingLineInput[]): PackingRow[] {
       hs_code: line.hs_code || '',
       description: line.description || '',
       packaging_type: pkg ? pkg.type : (line.packaging || ''),
-      units: pkg ? figures.units : null,
+      units: known ? figures.units : null,
       units_per_pallet: figures.units_per_pallet,
-      pallets: pkg ? figures.pallets : null,
-      unit_net_kg: pkg ? figures.unit_net_kg : null,
-      unit_gross_kg: pkg ? figures.unit_gross_kg : null,
-      pallet_net_kg: pkg ? figures.pallet_net_kg : null,
-      pallet_gross_kg: pkg ? figures.pallet_gross_kg : null,
+      pallets: known || optionalCount(line.pallets_override) != null ? figures.pallets : null,
+      unit_net_kg: known ? figures.unit_net_kg : null,
+      unit_gross_kg: known ? figures.unit_gross_kg : null,
+      pallet_net_kg: known || optionalWeight(line.pallet_net_override) != null ? figures.pallet_net_kg : null,
+      pallet_gross_kg: known || optionalWeight(line.pallet_gross_override) != null ? figures.pallet_gross_kg : null,
       pallet_weight_kg: figures.pallet_weight_kg,
       volume_cbm: String(line.volume_cbm ?? '').trim() || null,
       net_kg: figures.net_kg,

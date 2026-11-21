@@ -14,19 +14,28 @@ export interface PackagingOption {
 
 export interface PackingFigures {
   net_kg: number;
+  /** The invoice quantity in kg (what net is unless typed). */
+  computed_net_kg: number;
   units: number;
   computed_units: number;
   units_per_pallet: number | null;
+  computed_units_per_pallet: number;
   pallets: number;
   computed_pallets: number;
   /** Content of one unit. */
   unit_net_kg: number;
+  computed_unit_net_kg: number;
+  /** Empty packaging of one unit. */
+  unit_packaging_kg: number;
+  computed_unit_packaging_kg: number;
   /** Content + packaging of one unit. */
   unit_gross_kg: number;
   /** Units per pallet × unit net. */
   pallet_net_kg: number;
+  computed_pallet_net_kg: number;
   /** Units per pallet × unit gross + the pallet. */
   pallet_gross_kg: number;
+  computed_pallet_gross_kg: number;
   pallet_weight_kg: number;
   empty_kg: number;
   pallet_kg: number;
@@ -35,6 +44,23 @@ export interface PackingFigures {
   /** Gross − net: the computed packaging weight unless typed. */
   packaging_kg: number;
   gross_kg: number;
+  /** Net + computed packaging — what gross is unless typed. */
+  computed_gross_kg: number;
+}
+
+/** Every figure a line can be given by hand (blank / null = calculated). */
+export interface PackingOverrides {
+  net_weight?: unknown;
+  unit_net?: unknown;
+  unit_packaging?: unknown;
+  units_per_pallet?: unknown;
+  units?: unknown;
+  pallets?: unknown;
+  pallet_weight?: unknown;
+  packaging_weight?: unknown;
+  gross_weight?: unknown;
+  pallet_net?: unknown;
+  pallet_gross?: unknown;
 }
 
 /** An empty pallet, unless the line says otherwise. */
@@ -64,34 +90,50 @@ const weight = (v: unknown): number | null => {
  * Unit net = content; unit gross = content + packaging; pallet net = units per
  * pallet × unit net; pallet gross = units per pallet × unit gross + pallet
  * (20 kg unless typed); line gross = net + packaging weight (empty units +
- * pallets unless typed). Counts and weights typed by hand win.
+ * pallets unless typed). Anything typed by hand wins, and the figures after it
+ * follow from it: a typed net weight drives the units, a typed content per unit
+ * or units per pallet drive units / pallets, a typed gross weight sets the
+ * packaging weight (gross − net).
  */
 export function computePacking(
-  net: number,
+  invoiceNet: number,
   pkg: PackagingOption | null | undefined,
-  overrides: { units?: unknown; pallets?: unknown; pallet_weight?: unknown; packaging_weight?: unknown } = {},
+  o: PackingOverrides = {},
 ): PackingFigures {
-  const mass = Number(pkg?.product_mass) || 0;
-  const perPallet = Number(pkg?.units_per_pallet) || 0;
-  const packagingKg = Number(pkg?.weight_packaging) || 0;
-  const palletWeight = weight(overrides.pallet_weight) ?? DEFAULT_PALLET_KG;
+  const net = weight(o.net_weight) ?? invoiceNet;
+  const catalogueMass = Number(pkg?.product_mass) || 0;
+  const cataloguePerPallet = Number(pkg?.units_per_pallet) || 0;
+  const cataloguePackaging = Number(pkg?.weight_packaging) || 0;
+  const mass = weight(o.unit_net) ?? catalogueMass;
+  const perPallet = count(o.units_per_pallet) ?? cataloguePerPallet;
+  const packagingKg = weight(o.unit_packaging) ?? cataloguePackaging;
+  const palletWeight = weight(o.pallet_weight) ?? DEFAULT_PALLET_KG;
   const computedUnits = mass > 0 ? Math.ceil(net / mass - 1e-9) : 0;
-  const units = count(overrides.units) ?? computedUnits;
+  const units = count(o.units) ?? computedUnits;
   const computedPallets = perPallet > 0 ? Math.ceil(units / perPallet - 1e-9) : 0;
-  const pallets = count(overrides.pallets) ?? computedPallets;
+  const pallets = count(o.pallets) ?? computedPallets;
   const unitGross = mass + packagingKg;
   const empty = units * packagingKg;
   const palletKg = pallets * palletWeight;
   const computedPackaging = empty + palletKg;
-  const packaging = weight(overrides.packaging_weight) ?? computedPackaging;
+  const typedGross = weight(o.gross_weight);
+  const packaging = typedGross != null ? Math.max(0, typedGross - net) : (weight(o.packaging_weight) ?? computedPackaging);
+  const computedPalletNet = perPallet * mass;
+  const computedPalletGross = perPallet ? perPallet * unitGross + palletWeight : 0;
   return {
-    net_kg: net, units, computed_units: computedUnits, units_per_pallet: perPallet || null,
+    net_kg: net, computed_net_kg: invoiceNet,
+    units, computed_units: computedUnits,
+    units_per_pallet: perPallet || null, computed_units_per_pallet: cataloguePerPallet,
     pallets, computed_pallets: computedPallets,
-    unit_net_kg: mass, unit_gross_kg: unitGross,
-    pallet_net_kg: perPallet * mass, pallet_gross_kg: perPallet ? perPallet * unitGross + palletWeight : 0,
+    unit_net_kg: mass, computed_unit_net_kg: catalogueMass,
+    unit_packaging_kg: packagingKg, computed_unit_packaging_kg: cataloguePackaging,
+    unit_gross_kg: unitGross,
+    pallet_net_kg: weight(o.pallet_net) ?? computedPalletNet, computed_pallet_net_kg: computedPalletNet,
+    pallet_gross_kg: weight(o.pallet_gross) ?? computedPalletGross, computed_pallet_gross_kg: computedPalletGross,
     pallet_weight_kg: palletWeight,
     empty_kg: empty, pallet_kg: palletKg,
-    computed_packaging_kg: computedPackaging, packaging_kg: packaging, gross_kg: net + packaging,
+    computed_packaging_kg: computedPackaging, packaging_kg: packaging,
+    gross_kg: typedGross ?? net + packaging, computed_gross_kg: net + (weight(o.packaging_weight) ?? computedPackaging),
   };
 }
 

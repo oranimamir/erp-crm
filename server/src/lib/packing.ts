@@ -34,6 +34,8 @@ export interface PackingFigures {
   pallets: number;
   /** Content of one unit. */
   unit_net_kg: number;
+  /** Empty packaging of one unit. */
+  unit_packaging_kg: number;
   /** Content + packaging of one unit. */
   unit_gross_kg: number;
   /** Units per pallet × unit net weight. */
@@ -49,6 +51,21 @@ export interface PackingFigures {
   /** Gross − net: the computed packaging weight unless typed by hand. */
   packaging_kg: number;
   gross_kg: number;
+}
+
+/** Every figure a packing-list line can be given by hand (null = calculated). */
+export interface PackingOverrides {
+  net_weight?: number | null;
+  unit_net?: number | null;
+  unit_packaging?: number | null;
+  units_per_pallet?: number | null;
+  units?: number | null;
+  pallets?: number | null;
+  pallet_weight?: number | null;
+  packaging_weight?: number | null;
+  gross_weight?: number | null;
+  pallet_net?: number | null;
+  pallet_gross?: number | null;
 }
 
 /** An empty pallet, unless the line says otherwise. */
@@ -127,44 +144,44 @@ const round = (n: number) => Math.round(n * 1000) / 1000;
  *   Gross weight (unit)  = content + packaging
  *   Pallet net weight    = units per pallet × unit net
  *   Pallet gross weight  = units per pallet × unit gross + pallet (20 kg unless set)
- * The line's gross = product + packaging weight (empty units + pallets, unless
- * typed). Units, pallets, the pallet weight and the line's packaging weight
- * typed by hand replace the computed / default ones.
+ * The line's gross = net + packaging weight (empty units + pallets, unless
+ * typed). Anything typed by hand wins and what follows from it is recomputed:
+ * a typed net weight drives the units, a typed content per unit / units per
+ * pallet drive units / pallets, a typed gross sets packaging = gross − net.
+ * Same maths as client/src/lib/packing.ts.
  */
-export function computePacking(
-  net: number,
-  pkg: PackagingRow | null,
-  overrides: { units?: number | null; pallets?: number | null; pallet_weight?: number | null; packaging_weight?: number | null } = {}
-): PackingFigures {
-  const mass = Number(pkg?.product_mass) || 0;
-  const perPallet = Number(pkg?.units_per_pallet) || 0;
-  const packagingKg = Number(pkg?.weight_packaging) || 0;
-  const palletWeight = overrides.pallet_weight != null && overrides.pallet_weight >= 0
-    ? overrides.pallet_weight : DEFAULT_PALLET_KG;
+export function computePacking(net0: number, pkg: PackagingRow | null, o: PackingOverrides = {}): PackingFigures {
+  const ok = (v: number | null | undefined): v is number => v != null && Number.isFinite(v) && v >= 0;
+  const net = ok(o.net_weight) ? o.net_weight : net0;
+  const mass = ok(o.unit_net) ? o.unit_net : (Number(pkg?.product_mass) || 0);
+  const perPallet = ok(o.units_per_pallet) ? o.units_per_pallet : (Number(pkg?.units_per_pallet) || 0);
+  const packagingKg = ok(o.unit_packaging) ? o.unit_packaging : (Number(pkg?.weight_packaging) || 0);
+  const palletWeight = ok(o.pallet_weight) ? o.pallet_weight : DEFAULT_PALLET_KG;
   const computedUnits = mass > 0 ? Math.ceil(net / mass - 1e-9) : 0;
-  const units = overrides.units != null && overrides.units >= 0 ? overrides.units : computedUnits;
+  const units = ok(o.units) ? o.units : computedUnits;
   const computedPallets = perPallet > 0 ? Math.ceil(units / perPallet - 1e-9) : 0;
-  const pallets = overrides.pallets != null && overrides.pallets >= 0 ? overrides.pallets : computedPallets;
+  const pallets = ok(o.pallets) ? o.pallets : computedPallets;
   const unitGross = mass + packagingKg;
   const empty = units * packagingKg;
   const palletKg = pallets * palletWeight;
   const computedPackaging = empty + palletKg;
-  const packaging = overrides.packaging_weight != null && overrides.packaging_weight >= 0
-    ? overrides.packaging_weight : computedPackaging;
+  const packaging = ok(o.gross_weight) ? Math.max(0, o.gross_weight - net)
+    : ok(o.packaging_weight) ? o.packaging_weight : computedPackaging;
   return {
     net_kg: round(net),
     units,
     units_per_pallet: perPallet || null,
     pallets,
     unit_net_kg: round(mass),
+    unit_packaging_kg: round(packagingKg),
     unit_gross_kg: round(unitGross),
-    pallet_net_kg: round(perPallet * mass),
-    pallet_gross_kg: perPallet ? round(perPallet * unitGross + palletWeight) : 0,
+    pallet_net_kg: round(ok(o.pallet_net) ? o.pallet_net : perPallet * mass),
+    pallet_gross_kg: round(ok(o.pallet_gross) ? o.pallet_gross : (perPallet ? perPallet * unitGross + palletWeight : 0)),
     pallet_weight_kg: round(palletWeight),
     empty_kg: round(empty),
     pallet_kg: round(palletKg),
     computed_packaging_kg: round(computedPackaging),
     packaging_kg: round(packaging),
-    gross_kg: round(net + packaging),
+    gross_kg: round(ok(o.gross_weight) ? o.gross_weight : net + packaging),
   };
 }
