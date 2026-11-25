@@ -94,6 +94,7 @@ React + TS + Vite client / Node + Express + TS server. sql.js (SQLite in-memory 
 ## Inventory → Warehouse Stock
 - Several warehouses (`warehouses` table; NTG seeded and holds the stock from before; `warehouse_stock.warehouse_id`, `warehouse_stock_uploads.warehouse_id`): sub-tabs All | NTG | … | + Add warehouse (rename / delete the picked one; never the last; delete removes its stock + upload history), picked one remembered in localStorage `inventory.warehouse`. All = every warehouse's rows (Warehouse column; Grouped sums per article across warehouses)
 - Upload (.csv or .xlsx — first sheet; `POST /api/warehouse-stock/upload` multipart `file` + `warehouse_id`) replaces ONLY that warehouse's rows (`insertStockRows` in `lib/parse-stock-csv.ts`); emailed CSVs go into NTG (`emailWarehouseId`). `GET /api/warehouse-stock?warehouse=all|<id>`, `/warehouses` (+ POST / PUT / DELETE)
+- Totals row at the bottom of the stock table (both Ungrouped and Grouped): pallets (rows), gross and nett weight in metric tons (kg underneath), over the rows shown (warehouse + search applied)
 - Stock NEVER creates or changes batches (the old startup backfill from stock is gone): batch numbers in the stock that are not in Batches come back as `missing_batches` and are shown as a flag above the stock; "Add" / "Add all to Batches" (`POST /missing-batches/add {batch_numbers}`, product = stock description) only on the user's click
 
 ## Inventory → Batches

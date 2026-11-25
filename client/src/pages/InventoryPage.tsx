@@ -1026,6 +1026,34 @@ function WarehouseStockTab() {
   const displayRows = grouped ? groupedRows : afterSearch;
   const rowCount    = displayRows.length;
 
+  // Totals of what is shown (search + warehouse applied), weights in metric tons
+  const stockTotals = afterSearch.reduce((acc, r) => ({
+    pallets: acc.pallets + 1,
+    gross: acc.gross + (Number(r.gross_weight) || 0),
+    nett: acc.nett + (Number(r.nett_weight) || 0),
+  }), { pallets: 0, gross: 0, nett: 0 });
+  const tons = (kg: number) => (kg / 1000).toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+  const totalsRow = (leadCols: number, palletsCol: boolean) => (
+    <tfoot>
+      <tr className="border-t-2 border-gray-200 bg-gray-50 font-semibold text-gray-900">
+        <td className="px-4 py-3" colSpan={leadCols}>
+          Total{search ? ' (filtered)' : ''}
+          {!palletsCol && <span className="ml-2 text-xs font-normal text-gray-500">{stockTotals.pallets} pallets</span>}
+        </td>
+        {palletsCol && <td className="px-4 py-3 text-right">{stockTotals.pallets}</td>}
+        <td className="px-4 py-3" colSpan={palletsCol ? 2 : 2} />
+        <td className="px-4 py-3 text-right whitespace-nowrap" data-testid="stock-total-gross">
+          {tons(stockTotals.gross)} t
+          <div className="text-[11px] font-normal text-gray-500">{fmtNum(stockTotals.gross)} kg</div>
+        </td>
+        <td className="px-4 py-3 text-right whitespace-nowrap" data-testid="stock-total-nett">
+          {tons(stockTotals.nett)} t
+          <div className="text-[11px] font-normal text-gray-500">{fmtNum(stockTotals.nett)} kg</div>
+        </td>
+      </tr>
+    </tfoot>
+  );
+
   return (
     <div className="space-y-4">
       {/* Warehouses: All sums every warehouse's stock; uploads go into the one picked */}
@@ -1306,6 +1334,7 @@ function WarehouseStockTab() {
                   );
                 })}
               </tbody>
+              {totalsRow(5, true)}
             </table>
           </div>
         ) : (
@@ -1342,6 +1371,7 @@ function WarehouseStockTab() {
                   </tr>
                 ))}
               </tbody>
+              {totalsRow(warehouse === 'all' ? 6 : 5, false)}
             </table>
           </div>
         )}
